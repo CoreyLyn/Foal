@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/CoreyLyn/Foal/internal/analyze"
 )
 
 const (
@@ -71,6 +73,21 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			Command:     command,
 			Args:        args,
 		})
+	}
+
+	if command == "analyze" {
+		root := "."
+		if len(positional) > 1 {
+			root = positional[1]
+		}
+		result := analyze.Run(root)
+		if opts.json {
+			return writeJSON(stdout, envelope{Command: command, Result: result})
+		}
+
+		_, _ = fmt.Fprintf(stdout, "Foal analyze\nRoot: %s\nFiles: %d\nDirectories: %d\nSkipped: %d\n",
+			result.Root, result.Totals.FileCount, result.Totals.DirectoryCount, len(result.Skipped))
+		return exitOK
 	}
 
 	result := commandResult{
