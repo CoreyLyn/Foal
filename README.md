@@ -25,6 +25,8 @@ foal history
 foal uninstall
 ```
 
+`foal status --json` returns a read-only snapshot with disk capacity, OS runtime, Foal command state, elapsed time, and structured `skipped` / `errors` arrays for automation consumers.
+
 ## Scope
 
 Foal is inspired by tools like Mole, but it is not "Mole for Windows". The roadmap is ordered by Windows risk and Foal's safety model rather than feature parity.

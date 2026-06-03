@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/CoreyLyn/Foal/internal/analyze"
+	"github.com/CoreyLyn/Foal/internal/status"
+	"github.com/CoreyLyn/Foal/internal/uninstall"
 )
 
 const (
@@ -71,6 +75,41 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			Command:     command,
 			Args:        args,
 		})
+	}
+
+	if command == "status" {
+		result := status.Capture()
+		if opts.json {
+			return writeJSON(stdout, envelope{Command: command, Result: result})
+		}
+
+		_, _ = fmt.Fprintf(stdout, "Foal status\nOS: %s/%s\nDisk: %s\n", result.OS.GOOS, result.OS.GOARCH, result.Disk.Path)
+		return exitOK
+	}
+
+	if command == "analyze" {
+		root := "."
+		if len(positional) > 1 {
+			root = positional[1]
+		}
+		result := analyze.Run(root)
+		if opts.json {
+			return writeJSON(stdout, envelope{Command: command, Result: result})
+		}
+
+		_, _ = fmt.Fprintf(stdout, "Foal analyze\nRoot: %s\nFiles: %d\nDirectories: %d\nSkipped: %d\n",
+			result.Root, result.Totals.FileCount, result.Totals.DirectoryCount, len(result.Skipped))
+		return exitOK
+	}
+
+	if command == "uninstall" {
+		result := uninstall.Review()
+		if opts.json {
+			return writeJSON(stdout, envelope{Command: command, Result: result})
+		}
+
+		_, _ = fmt.Fprint(stdout, "Foal uninstall\nPreview only. No uninstallers, process stops, or leftover deletion actions were executed.\n")
+		return exitOK
 	}
 
 	result := commandResult{
