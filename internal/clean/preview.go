@@ -3,6 +3,7 @@ package clean
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/CoreyLyn/Foal/internal/core/delete"
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
+	"github.com/CoreyLyn/Foal/internal/history"
 )
 
 const plannedRecycleBinAction = "move_to_recycle_bin"
@@ -17,6 +19,8 @@ const plannedRecycleBinAction = "move_to_recycle_bin"
 type Options struct {
 	Rules             []Rule
 	RecycleBinAdapter delete.Adapter
+	HistoryRecorder   history.Recorder
+	CommandParameters history.CommandParameters
 }
 
 type Rule struct {
@@ -83,6 +87,10 @@ type Totals struct {
 }
 
 func DryRun(ctx context.Context, opts Options) Result {
+	return dryRun(ctx, opts, true)
+}
+
+func dryRun(ctx context.Context, opts Options, recordHistory bool) Result {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -136,6 +144,9 @@ func DryRun(ctx context.Context, opts Options) Result {
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
+	if recordHistory {
+		recordHistorySession(ctx, opts, result, start, time.Now())
+	}
 	return result
 }
 
@@ -144,7 +155,7 @@ func Execute(ctx context.Context, opts Options) Result {
 		ctx = context.Background()
 	}
 	start := time.Now()
-	result := DryRun(ctx, opts)
+	result := dryRun(ctx, opts, false)
 	result.Status = "ok"
 	result.Mode = "execute"
 	result.Deleted = []DeletedItem{}
@@ -184,7 +195,95 @@ func Execute(ctx context.Context, opts Options) Result {
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
+	recordHistorySession(ctx, opts, result, start, time.Now())
 	return result
+}
+
+func recordHistorySession(ctx context.Context, opts Options, result Result, startedAt, endedAt time.Time) {
+	if opts.HistoryRecorder == nil {
+		return
+	}
+	session := history.SessionRecord{
+		ID:        newHistorySessionID(result.Mode, endedAt),
+		Command:   opts.CommandParameters,
+		StartedAt: startedAt.UTC(),
+		EndedAt:   endedAt.UTC(),
+		Mode:      result.Mode,
+		Aggregate: history.AggregateOutcomes{
+			CandidateCount: result.Totals.CandidateCount,
+			DeletedCount:   result.Totals.DeletedCount,
+			SkippedCount:   result.Totals.SkippedCount,
+			ErrorCount:     len(result.Errors),
+			CandidateBytes: result.Totals.CandidateBytes,
+			AffectedBytes:  result.Totals.AffectedBytes,
+		},
+	}
+	_ = opts.HistoryRecorder.Record(ctx, session, historyItems(session.ID, result))
+}
+
+func newHistorySessionID(mode string, at time.Time) string {
+	return fmt.Sprintf("clean-%s-%s", mode, at.UTC().Format("20060102T150405.000000000Z"))
+}
+
+func historyItems(sessionID string, result Result) []history.ItemRecord {
+	items := make([]history.ItemRecord, 0, len(result.Candidates)+len(result.Deleted)+len(result.Skipped)+len(result.Errors))
+	if result.Mode == "dry_run" {
+		for _, candidate := range result.Candidates {
+			bytes := candidate.Bytes
+			items = append(items, history.ItemRecord{
+				SessionID:     sessionID,
+				Path:          candidate.Path,
+				Rule:          candidate.Rule,
+				PlannedAction: candidate.PlannedAction,
+				Bytes:         &bytes,
+				Result:        "candidate",
+			})
+		}
+	}
+	for _, deleted := range result.Deleted {
+		bytes := deleted.Bytes
+		items = append(items, history.ItemRecord{
+			SessionID: sessionID,
+			Path:      deleted.Path,
+			Rule:      deleted.Rule,
+			Action:    plannedRecycleBinAction,
+			Bytes:     &bytes,
+			Result:    "deleted",
+		})
+	}
+	for _, skipped := range result.Skipped {
+		item := history.ItemRecord{
+			SessionID:     sessionID,
+			Path:          skipped.Path,
+			Rule:          skipped.Rule,
+			PlannedAction: plannedRecycleBinAction,
+			Result:        "skipped",
+			SkippedReason: historyIssue(skipped.Reason),
+		}
+		if skipped.Bytes > 0 {
+			bytes := skipped.Bytes
+			item.Bytes = &bytes
+		}
+		items = append(items, item)
+	}
+	for _, err := range result.Errors {
+		items = append(items, history.ItemRecord{
+			SessionID: sessionID,
+			Path:      err.Path,
+			Rule:      err.Rule,
+			Result:    "error",
+			Error:     historyIssue(err),
+		})
+	}
+	return items
+}
+
+func historyIssue(issue StructuredIssue) *history.Issue {
+	return &history.Issue{
+		Code:        issue.Code,
+		Message:     issue.Message,
+		Recoverable: issue.Recoverable,
+	}
 }
 
 func DefaultRuleCatalog() []Rule {

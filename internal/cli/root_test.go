@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/history"
 )
 
 func TestHelpUsesFoalNamingOnly(t *testing.T) {
@@ -34,6 +35,7 @@ func TestHelpUsesFoalNamingOnly(t *testing.T) {
 }
 
 func TestKnownCommandRoutesAsJSON(t *testing.T) {
+	disableHistoryRecording(t)
 	var stdout, stderr bytes.Buffer
 
 	code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr)
@@ -276,6 +278,7 @@ func TestUninstallJSONReportsPreviewOnlyReviewContract(t *testing.T) {
 }
 
 func TestCommandSpecificArgumentsAreRouted(t *testing.T) {
+	disableHistoryRecording(t)
 	var stdout, stderr bytes.Buffer
 
 	code := Run([]string{"clean", "--dry-run"}, &stdout, &stderr)
@@ -309,6 +312,7 @@ func TestCleanRequiresDryRun(t *testing.T) {
 }
 
 func TestCleanExecuteJSONRoutesConfirmedExecution(t *testing.T) {
+	disableHistoryRecording(t)
 	originalExecute := executeClean
 	defer func() { executeClean = originalExecute }()
 
@@ -354,6 +358,52 @@ func TestCleanExecuteJSONRoutesConfirmedExecution(t *testing.T) {
 	deleted := result["deleted"].([]interface{})
 	if len(deleted) != 1 {
 		t.Fatalf("deleted = %#v, want one item", deleted)
+	}
+}
+
+func TestCleanDryRunCreatesHistoryWithCommandParameters(t *testing.T) {
+	original := newHistoryRecorder
+	historyDir := t.TempDir()
+	newHistoryRecorder = func() (history.Recorder, error) {
+		recorder := history.NewFileRecorder(historyDir)
+		return recorder, nil
+	}
+	t.Cleanup(func() { newHistoryRecorder = original })
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	files, err := os.ReadDir(historyDir)
+	if err != nil {
+		t.Fatalf("read history dir: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("history files = %v, want one session file", files)
+	}
+	data, err := os.ReadFile(filepath.Join(historyDir, files[0].Name()))
+	if err != nil {
+		t.Fatalf("read history file: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) == 0 {
+		t.Fatal("history file is empty")
+	}
+	var record history.Record
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("decode session record: %v\n%s", err, lines[0])
+	}
+	if record.Type != "session" || record.Session == nil {
+		t.Fatalf("record = %#v, want session", record)
+	}
+	if record.Session.Command.Command != "clean" || record.Session.Mode != "dry_run" {
+		t.Fatalf("session = %#v, want clean dry_run", record.Session)
+	}
+	if got := record.Session.Command.Args; len(got) != 3 || got[0] != "clean" || got[1] != "--dry-run" || got[2] != "--json" {
+		t.Fatalf("args = %#v, want original clean invocation args", got)
 	}
 }
 
@@ -421,4 +471,13 @@ func readResultObject(t *testing.T, data []byte) map[string]interface{} {
 		t.Fatalf("result has type %T, want object", got.Result)
 	}
 	return result
+}
+
+func disableHistoryRecording(t *testing.T) {
+	t.Helper()
+	original := newHistoryRecorder
+	newHistoryRecorder = func() (history.Recorder, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { newHistoryRecorder = original })
 }

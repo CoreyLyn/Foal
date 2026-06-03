@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/history"
 )
 
 type recordingRecycleBinAdapter struct {
@@ -54,6 +55,51 @@ func TestExecuteMovesEligibleCandidatesThroughRecycleBin(t *testing.T) {
 	}
 	if result.Totals.CandidateCount != 1 || result.Totals.DeletedCount != 1 || result.Totals.AffectedBytes != 5 {
 		t.Fatalf("totals = %#v, want one candidate/deleted and five affected bytes", result.Totals)
+	}
+}
+
+func TestExecuteRecordsHistorySessionAndDeletedItem(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "cache.tmp")
+	if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		RecycleBinAdapter: &recordingRecycleBinAdapter{},
+		HistoryRecorder:   recorder,
+		CommandParameters: history.CommandParameters{
+			Command: "clean",
+			Args:    []string{"clean", "--execute"},
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+
+	if result.Totals.DeletedCount != 1 {
+		t.Fatalf("deleted count = %d, want 1", result.Totals.DeletedCount)
+	}
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("sessions = %#v, want exactly one execute history session", recorder.sessions)
+	}
+	session := recorder.sessions[0]
+	if session.Mode != "execute" || session.Aggregate.DeletedCount != 1 || session.Aggregate.AffectedBytes != 5 {
+		t.Fatalf("session = %#v, want execute aggregate with deleted item", session)
+	}
+	if len(recorder.items) != 1 {
+		t.Fatalf("items = %#v, want one final execution item", recorder.items)
+	}
+	item := recorder.items[0]
+	if item.Path != candidate || item.Rule != "test_default_rule" || item.Action != "move_to_recycle_bin" || item.Result != "deleted" {
+		t.Fatalf("item = %#v, want deleted item with Recycle Bin action", item)
+	}
+	if item.Bytes == nil || *item.Bytes != 5 {
+		t.Fatalf("item bytes = %#v, want 5", item.Bytes)
 	}
 }
 
@@ -113,6 +159,45 @@ func TestExecuteReportsRecycleBinPermissionFailureAsSkipped(t *testing.T) {
 	}
 	if skipped.Reason.Code != "permission_denied" || skipped.Reason.Message == "" || !skipped.Reason.Recoverable {
 		t.Fatalf("reason = %#v, want recoverable permission_denied", skipped.Reason)
+	}
+}
+
+func TestExecuteRecordsSkippedHistoryItemForRecycleBinFailure(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "locked.tmp")
+	if err := os.WriteFile(candidate, []byte("locked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		RecycleBinAdapter: failingRecycleBinAdapter{err: fs.ErrPermission},
+		HistoryRecorder:   recorder,
+		CommandParameters: history.CommandParameters{
+			Command: "clean",
+			Args:    []string{"clean", "--execute"},
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+
+	if result.Totals.SkippedCount != 1 || result.Totals.DeletedCount != 0 {
+		t.Fatalf("totals = %#v, want one skipped and no deleted", result.Totals)
+	}
+	if len(recorder.items) != 1 {
+		t.Fatalf("items = %#v, want one skipped execution item", recorder.items)
+	}
+	item := recorder.items[0]
+	if item.Result != "skipped" || item.Path != candidate || item.Rule != "test_default_rule" {
+		t.Fatalf("item = %#v, want skipped execution item", item)
+	}
+	mustHaveIssue(t, item.SkippedReason, "permission_denied")
+	if item.Bytes == nil || *item.Bytes != 6 {
+		t.Fatalf("item bytes = %#v, want size metadata", item.Bytes)
 	}
 }
 

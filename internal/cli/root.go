@@ -9,6 +9,7 @@ import (
 
 	"github.com/CoreyLyn/Foal/internal/analyze"
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/history"
 	"github.com/CoreyLyn/Foal/internal/status"
 	"github.com/CoreyLyn/Foal/internal/uninstall"
 )
@@ -32,8 +33,15 @@ var commands = []commandSpec{
 }
 
 var (
-	dryRunClean  = clean.DryRun
-	executeClean = clean.Execute
+	dryRunClean        = clean.DryRun
+	executeClean       = clean.Execute
+	newHistoryRecorder = func() (history.Recorder, error) {
+		recorder, err := history.NewDefaultFileRecorder()
+		if err != nil {
+			return nil, err
+		}
+		return recorder, nil
+	}
 )
 
 // Run executes the Foal command line with output streams supplied by the caller.
@@ -131,11 +139,20 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			})
 		}
 
+		recorder, _ := newHistoryRecorder()
+		cleanOptions := clean.Options{
+			HistoryRecorder: recorder,
+			CommandParameters: history.CommandParameters{
+				Command: "clean",
+				Args:    append([]string(nil), args...),
+			},
+		}
+
 		var result clean.Result
 		if invocation.execute {
-			result = executeClean(context.Background(), clean.Options{})
+			result = executeClean(context.Background(), cleanOptions)
 		} else {
-			result = dryRunClean(context.Background(), clean.Options{})
+			result = dryRunClean(context.Background(), cleanOptions)
 		}
 		if opts.json {
 			return writeJSON(stdout, envelope{Command: command, Result: result})
