@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/CoreyLyn/Foal/internal/analyze"
+	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/status"
 	"github.com/CoreyLyn/Foal/internal/uninstall"
 )
@@ -112,6 +114,27 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 
+	if command == "clean" {
+		if err := validateCleanArgs(positional[1:]); err != nil {
+			return writeError(stderr, opts.json, command, args, jsonError{
+				Code:        "invalid_clean_invocation",
+				Message:     err.Error(),
+				Recoverable: true,
+				Command:     command,
+				Args:        args,
+			})
+		}
+
+		result := clean.DryRun(context.Background(), clean.Options{})
+		if opts.json {
+			return writeJSON(stdout, envelope{Command: command, Result: result})
+		}
+
+		_, _ = fmt.Fprintf(stdout, "Foal clean\nDry-run preview. Candidates: %d, skipped: %d, planned action: Recycle Bin.\n",
+			result.Totals.CandidateCount, result.Totals.SkippedCount)
+		return exitOK
+	}
+
 	result := commandResult{
 		Status:  "preview",
 		Message: command + " is routed but not implemented yet.",
@@ -168,6 +191,22 @@ func isKnownCommand(name string) bool {
 		}
 	}
 	return false
+}
+
+func validateCleanArgs(args []string) error {
+	dryRun := false
+	for _, arg := range args {
+		switch arg {
+		case "--dry-run":
+			dryRun = true
+		default:
+			return fmt.Errorf("unknown clean option: %s", arg)
+		}
+	}
+	if !dryRun {
+		return fmt.Errorf("clean execution is not implemented; use --dry-run for the preview contract")
+	}
+	return nil
 }
 
 func helpText() string {
