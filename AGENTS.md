@@ -16,7 +16,7 @@ This repository uses a single-context domain documentation layout. See `docs/age
 
 - The project name is **Foal**.
 - The CLI command name is `foal`.
-- This is a pre-release hard rename from Wole: do not keep a `wole` alias, and do not add legacy config or history migration unless explicitly requested.
+- This is a pre-release hard rename: do not add legacy command aliases, config compatibility, or history compatibility unless explicitly requested.
 - User-facing docs, help text, examples, build outputs, and command paths should prefer `Foal`, `foal`, and `foal.exe`.
 
 ## Product boundaries
@@ -30,6 +30,15 @@ Foal is a safe, preview-first cleanup CLI for Windows. It is inspired by tools l
 - `uninstall` is preview-only until a future execution model is explicitly designed.
 - `optimize` is not in the current implementation scope. Future optimize work starts as read-only health checks and recommendations.
 - Future TUI work must consume read models and call shared command/core execution paths; it must not own deletion, uninstall, or path-safety logic.
+
+## Implemented command boundaries
+
+- `foal --help` is the current help surface and should use Foal/foal/foal.exe naming only.
+- `foal status --json` is read-only and reports disk, OS, Foal command state, elapsed time, skipped items, and errors.
+- `foal analyze --json <path>` is read-only and reports directory totals, top children, skipped entries, and elapsed time.
+- `foal clean --dry-run --json` previews conservative cleanup candidates; `foal clean --execute` is the explicit confirmation path and uses the Recycle Bin. Do not document permanent deletion or automatic elevation paths.
+- `foal history --json` reads operation history and reports sessions plus structured errors.
+- `foal uninstall --json` is preview-only. Do not document uninstall execution, process stopping, or leftover deletion as supported behavior.
 
 ## Engineering constraints
 
