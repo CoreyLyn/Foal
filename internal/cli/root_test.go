@@ -33,7 +33,7 @@ func TestHelpUsesFoalNamingOnly(t *testing.T) {
 func TestKnownCommandRoutesAsJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"clean", "--json"}, &stdout, &stderr)
+	code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr)
 
 	if code != exitOK {
 		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
@@ -282,6 +282,26 @@ func TestCommandSpecificArgumentsAreRouted(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Foal clean") {
 		t.Fatalf("stdout = %q, want routed clean output", stdout.String())
+	}
+}
+
+func TestCleanRequiresDryRun(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--json"}, &stdout, &stderr)
+
+	if code != exitUsage {
+		t.Fatalf("Run returned %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	var got envelope
+	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON error: %v\n%s", err, stderr.String())
+	}
+	if got.Error == nil || got.Error.Code != "invalid_clean_invocation" {
+		t.Fatalf("error = %+v, want invalid_clean_invocation", got.Error)
 	}
 }
 
