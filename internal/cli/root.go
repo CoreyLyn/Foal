@@ -42,6 +42,9 @@ var (
 		}
 		return recorder, nil
 	}
+	newHistoryQuery = func() (history.FileQuery, error) {
+		return history.NewDefaultFileQuery()
+	}
 )
 
 // Run executes the Foal command line with output streams supplied by the caller.
@@ -124,6 +127,26 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		_, _ = fmt.Fprint(stdout, "Foal uninstall\nPreview only. No uninstallers, process stops, or leftover deletion actions were executed.\n")
+		return exitOK
+	}
+
+	if command == "history" {
+		query, err := newHistoryQuery()
+		if err != nil {
+			return writeError(stderr, opts.json, command, args, jsonError{
+				Code:        "history_read_failed",
+				Message:     err.Error(),
+				Recoverable: true,
+				Command:     command,
+				Args:        args,
+			})
+		}
+		result := query.Recent(context.Background())
+		if opts.json {
+			return writeJSON(stdout, envelope{Command: command, Result: result})
+		}
+
+		_, _ = fmt.Fprintf(stdout, "Foal history\nSessions: %d\nStatus: %s\n", len(result.Sessions), result.Status)
 		return exitOK
 	}
 

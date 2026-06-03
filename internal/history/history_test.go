@@ -56,6 +56,102 @@ func TestFileRecorderWritesSessionAndItemRecords(t *testing.T) {
 	}
 }
 
+func TestQueryReturnsEmptyHistoryForMissingDirectory(t *testing.T) {
+	result := history.NewFileQuery(filepath.Join(t.TempDir(), "missing")).Recent(context.Background())
+
+	if result.Status != "ok" {
+		t.Fatalf("status = %q, want ok", result.Status)
+	}
+	if len(result.Sessions) != 0 {
+		t.Fatalf("sessions = %#v, want empty", result.Sessions)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("errors = %#v, want empty", result.Errors)
+	}
+}
+
+func TestQueryReturnsRecentSessionsWithItemOutcomes(t *testing.T) {
+	dir := t.TempDir()
+	recorder := history.NewFileRecorder(dir)
+	bytes := int64(42)
+
+	older := history.SessionRecord{
+		ID:        "older",
+		Command:   history.CommandParameters{Command: "clean", Args: []string{"clean", "--dry-run"}},
+		Mode:      "dry_run",
+		StartedAt: time.Date(2026, 6, 3, 9, 0, 0, 0, time.UTC),
+		EndedAt:   time.Date(2026, 6, 3, 9, 0, 1, 0, time.UTC),
+		Aggregate: history.AggregateOutcomes{CandidateCount: 1, CandidateBytes: bytes},
+	}
+	newer := history.SessionRecord{
+		ID:        "newer",
+		Command:   history.CommandParameters{Command: "clean", Args: []string{"clean", "--execute"}},
+		Mode:      "execute",
+		StartedAt: time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
+		EndedAt:   time.Date(2026, 6, 3, 10, 0, 1, 0, time.UTC),
+		Aggregate: history.AggregateOutcomes{DeletedCount: 1, AffectedBytes: bytes},
+	}
+	if err := recorder.Record(context.Background(), older, []history.ItemRecord{{
+		Path:          filepath.Join(dir, "candidate.tmp"),
+		Rule:          "foal_owned_temp_sandboxes",
+		PlannedAction: "move_to_recycle_bin",
+		Bytes:         &bytes,
+		Result:        "candidate",
+	}}); err != nil {
+		t.Fatalf("record older history: %v", err)
+	}
+	if err := recorder.Record(context.Background(), newer, []history.ItemRecord{{
+		Path:   filepath.Join(dir, "deleted.tmp"),
+		Rule:   "foal_owned_temp_sandboxes",
+		Action: "move_to_recycle_bin",
+		Bytes:  &bytes,
+		Result: "deleted",
+	}}); err != nil {
+		t.Fatalf("record newer history: %v", err)
+	}
+
+	result := history.NewFileQuery(dir).Recent(context.Background())
+
+	if result.Status != "ok" {
+		t.Fatalf("status = %q, want ok; result=%#v", result.Status, result)
+	}
+	if len(result.Sessions) != 2 {
+		t.Fatalf("sessions = %#v, want two sessions", result.Sessions)
+	}
+	if result.Sessions[0].ID != "newer" || result.Sessions[0].Mode != "execute" {
+		t.Fatalf("first session = %#v, want newer execute session", result.Sessions[0])
+	}
+	if len(result.Sessions[0].Items) != 1 {
+		t.Fatalf("newer items = %#v, want one item", result.Sessions[0].Items)
+	}
+	item := result.Sessions[0].Items[0]
+	if item.Action != "move_to_recycle_bin" || item.Result != "deleted" || item.Bytes == nil || *item.Bytes != bytes {
+		t.Fatalf("item = %#v, want deleted recycle-bin item with bytes", item)
+	}
+	if result.Sessions[1].Mode != "dry_run" || result.Sessions[1].Items[0].PlannedAction != "move_to_recycle_bin" {
+		t.Fatalf("older session = %#v, want dry-run candidate", result.Sessions[1])
+	}
+}
+
+func TestQueryReportsMalformedHistoryAsStructuredError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "broken.jsonl"), []byte("{not-json\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := history.NewFileQuery(dir).Recent(context.Background())
+
+	if result.Status != "partial" {
+		t.Fatalf("status = %q, want partial", result.Status)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("errors = %#v, want one structured error", result.Errors)
+	}
+	if result.Errors[0].Code != "history_decode_failed" || !result.Errors[0].Recoverable {
+		t.Fatalf("error = %#v, want recoverable history_decode_failed", result.Errors[0])
+	}
+}
+
 func readHistoryRecords(t *testing.T, path string) []history.Record {
 	t.Helper()
 

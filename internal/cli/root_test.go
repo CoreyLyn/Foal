@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/history"
@@ -407,6 +408,162 @@ func TestCleanDryRunCreatesHistoryWithCommandParameters(t *testing.T) {
 	}
 }
 
+func TestHistoryJSONReportsEmptyHistory(t *testing.T) {
+	t.Setenv("FOAL_HISTORY_DIR", filepath.Join(t.TempDir(), "missing-history"))
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"history", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	if result["status"] != "ok" {
+		t.Fatalf("status = %v, want ok", result["status"])
+	}
+	if sessions := result["sessions"].([]interface{}); len(sessions) != 0 {
+		t.Fatalf("sessions = %#v, want empty", sessions)
+	}
+	if errors := result["errors"].([]interface{}); len(errors) != 0 {
+		t.Fatalf("errors = %#v, want empty", errors)
+	}
+}
+
+func TestHistoryJSONReportsRecentSessionsAndItemOutcomes(t *testing.T) {
+	historyDir := t.TempDir()
+	t.Setenv("FOAL_HISTORY_DIR", historyDir)
+	recorder := history.NewFileRecorder(historyDir)
+	itemBytes := int64(12)
+	skippedBytes := int64(7)
+	dryRunSession := history.SessionRecord{
+		ID:        "clean-dry-run",
+		Command:   history.CommandParameters{Command: "clean", Args: []string{"clean", "--dry-run", "--json"}},
+		Mode:      "dry_run",
+		StartedAt: mustTime(t, "2026-06-03T09:00:00Z"),
+		EndedAt:   mustTime(t, "2026-06-03T09:00:01Z"),
+		Aggregate: history.AggregateOutcomes{CandidateCount: 1, CandidateBytes: itemBytes},
+	}
+	executeSession := history.SessionRecord{
+		ID:        "clean-execute",
+		Command:   history.CommandParameters{Command: "clean", Args: []string{"clean", "--execute", "--json"}},
+		Mode:      "execute",
+		StartedAt: mustTime(t, "2026-06-03T10:00:00Z"),
+		EndedAt:   mustTime(t, "2026-06-03T10:00:01Z"),
+		Aggregate: history.AggregateOutcomes{DeletedCount: 1, SkippedCount: 1, ErrorCount: 1, AffectedBytes: itemBytes},
+	}
+	if err := recorder.Record(context.Background(), dryRunSession, []history.ItemRecord{{
+		Path:          `C:\Users\corey\AppData\Local\Temp\foal-candidate.tmp`,
+		Rule:          "foal_owned_temp_sandboxes",
+		PlannedAction: "move_to_recycle_bin",
+		Bytes:         &itemBytes,
+		Result:        "candidate",
+	}}); err != nil {
+		t.Fatalf("record dry-run history: %v", err)
+	}
+	if err := recorder.Record(context.Background(), executeSession, []history.ItemRecord{
+		{
+			Path:   `C:\Users\corey\AppData\Local\Temp\foal-deleted.tmp`,
+			Rule:   "foal_owned_temp_sandboxes",
+			Action: "move_to_recycle_bin",
+			Bytes:  &itemBytes,
+			Result: "deleted",
+		},
+		{
+			Path:          `C:\Users\corey\AppData\Local\Temp\foal-skipped.tmp`,
+			Rule:          "foal_owned_temp_sandboxes",
+			PlannedAction: "move_to_recycle_bin",
+			Bytes:         &skippedBytes,
+			Result:        "skipped",
+			SkippedReason: &history.Issue{Code: "permission_denied", Message: "access denied", Recoverable: true},
+		},
+		{
+			Path:   `C:\Users\corey\AppData\Local\Temp\foal-error.tmp`,
+			Rule:   "foal_owned_temp_sandboxes",
+			Result: "error",
+			Error:  &history.Issue{Code: "inspection_failed", Message: "inspection failed", Recoverable: true},
+		},
+	}); err != nil {
+		t.Fatalf("record execute history: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"history", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	if result["status"] != "ok" {
+		t.Fatalf("status = %v, want ok", result["status"])
+	}
+	sessions := result["sessions"].([]interface{})
+	if len(sessions) != 2 {
+		t.Fatalf("sessions = %#v, want two sessions", sessions)
+	}
+	latest := sessions[0].(map[string]interface{})
+	if latest["id"] != "clean-execute" || latest["mode"] != "execute" {
+		t.Fatalf("latest session = %#v, want execute session first", latest)
+	}
+	items := latest["items"].([]interface{})
+	if len(items) != 3 {
+		t.Fatalf("items = %#v, want deleted/skipped/error items", items)
+	}
+	deleted := items[0].(map[string]interface{})
+	if deleted["path"] == "" || deleted["rule"] != "foal_owned_temp_sandboxes" || deleted["action"] != "move_to_recycle_bin" || deleted["result"] != "deleted" {
+		t.Fatalf("deleted item = %#v, want path/rule/action/result metadata", deleted)
+	}
+	skipped := items[1].(map[string]interface{})
+	if skipped["planned_action"] != "move_to_recycle_bin" || skipped["bytes"] != float64(skippedBytes) {
+		t.Fatalf("skipped item = %#v, want planned action and bytes", skipped)
+	}
+	reason := skipped["skipped_reason"].(map[string]interface{})
+	if reason["code"] != "permission_denied" {
+		t.Fatalf("skipped reason = %#v, want permission_denied", reason)
+	}
+	errorItem := items[2].(map[string]interface{})
+	if errorItem["result"] != "error" || errorItem["error"].(map[string]interface{})["code"] != "inspection_failed" {
+		t.Fatalf("error item = %#v, want structured error", errorItem)
+	}
+	older := sessions[1].(map[string]interface{})
+	if older["mode"] != "dry_run" {
+		t.Fatalf("older session mode = %v, want dry_run", older["mode"])
+	}
+}
+
+func TestHistoryJSONReportsMalformedHistoryErrors(t *testing.T) {
+	historyDir := t.TempDir()
+	t.Setenv("FOAL_HISTORY_DIR", historyDir)
+	if err := os.WriteFile(filepath.Join(historyDir, "broken.jsonl"), []byte("{not-json\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"history", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	if result["status"] != "partial" {
+		t.Fatalf("status = %v, want partial", result["status"])
+	}
+	errors := result["errors"].([]interface{})
+	if len(errors) != 1 {
+		t.Fatalf("errors = %#v, want one error", errors)
+	}
+	first := errors[0].(map[string]interface{})
+	if first["code"] != "history_decode_failed" || first["recoverable"] != true {
+		t.Fatalf("error = %#v, want recoverable history_decode_failed", first)
+	}
+}
+
 func TestUnknownCommandJSONErrorShape(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
@@ -471,6 +628,16 @@ func readResultObject(t *testing.T, data []byte) map[string]interface{} {
 		t.Fatalf("result has type %T, want object", got.Result)
 	}
 	return result
+}
+
+func mustTime(t *testing.T, value string) time.Time {
+	t.Helper()
+
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("parse time %q: %v", value, err)
+	}
+	return parsed
 }
 
 func disableHistoryRecording(t *testing.T) {
