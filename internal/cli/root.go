@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/CoreyLyn/Foal/internal/uninstall"
 )
 
 const (
@@ -71,6 +73,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			Command:     command,
 			Args:        args,
 		})
+	}
+
+	if command == "uninstall" {
+		result := uninstall.Review()
+		if opts.json {
+			return writeJSON(stdout, envelope{Command: command, Result: result})
+		}
+
+		_, _ = fmt.Fprint(stdout, "Foal uninstall\nPreview only. No uninstallers, process stops, or leftover deletion actions were executed.\n")
+		return exitOK
 	}
 
 	result := commandResult{

@@ -68,6 +68,60 @@ func TestCommandSpecificArgumentsAreRouted(t *testing.T) {
 	}
 }
 
+func TestUninstallJSONReportsPreviewOnlyReviewContract(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"uninstall", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	var got envelope
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
+	}
+	if got.Command != "uninstall" {
+		t.Fatalf("command = %q, want uninstall", got.Command)
+	}
+	result, ok := got.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result has type %T, want object", got.Result)
+	}
+	if result["status"] != "preview" {
+		t.Fatalf("result.status = %v, want preview", result["status"])
+	}
+	for _, key := range []string{
+		"applications",
+		"evidence_sources",
+		"possible_leftovers",
+		"shared_state_concerns",
+		"unknown_state",
+		"skipped",
+		"execution",
+	} {
+		if _, ok := result[key]; !ok {
+			t.Fatalf("result missing %q: %#v", key, result)
+		}
+	}
+	execution, ok := result["execution"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("execution has type %T, want object", result["execution"])
+	}
+	if execution["allowed"] != false {
+		t.Fatalf("execution.allowed = %v, want false", execution["allowed"])
+	}
+	actions, ok := execution["actions"].([]interface{})
+	if !ok {
+		t.Fatalf("execution.actions has type %T, want array", execution["actions"])
+	}
+	if len(actions) != 0 {
+		t.Fatalf("execution.actions = %#v, want empty", actions)
+	}
+}
+
 func TestUnknownCommandJSONErrorShape(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
