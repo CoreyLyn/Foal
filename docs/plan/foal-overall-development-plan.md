@@ -1,6 +1,6 @@
 # Foal Overall Development Plan
 
-Foal is a safe, preview-first cleanup CLI for Windows. The project is a pre-release hard rename from Wole: project name `Foal`, command name `foal`, and executable name `foal.exe`.
+Foal is a safe, preview-first cleanup CLI for Windows. The project is a pre-release hard rename: project name `Foal`, command name `foal`, and executable name `foal.exe`.
 
 Foal may reference Mole as inspiration, but should not position itself as "Mole for Windows". Feature order follows Windows-specific risk and Foal's safety model.
 
@@ -26,11 +26,23 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 | `optimize` | Future read-only health checks and recommendations; not current implementation scope. |
 | `status` | Read-only system snapshot; realtime monitoring is future TUI work. |
 
+## Implemented Command Boundaries
+
+| Command | Current behavior |
+| --- | --- |
+| `foal --help` | Shows the implemented command list and Foal/foal/foal.exe examples. |
+| `foal status --json` | Read-only system and Foal state snapshot with disk, OS, elapsed time, skipped items, and errors. |
+| `foal analyze --json <path>` | Read-only directory insight with totals, top children, skipped entries, and elapsed time. |
+| `foal clean --dry-run --json` | Preview-only cleanup candidate review for conservative default rules. |
+| `foal clean --execute` | Explicit cleanup confirmation path; default execution is Recycle Bin-only and still subject to path-safety validation. |
+| `foal history --json` | Reads Foal operation history and reports sessions or structured history errors. |
+| `foal uninstall --json` | Preview-only uninstall review; execution is not allowed and actions remain empty. |
+
 ## Phase 1: Rename and Safety Baseline
 
-- Rename user-visible product references from Wole to Foal.
+- Keep user-visible product references aligned on Foal naming.
 - Prefer `foal`, `foal.exe`, and `cmd/foal` for command and build examples.
-- Do not keep a `wole` alias or legacy migration layer during the pre-release rename.
+- Do not keep legacy command aliases or compatibility layers during the pre-release rename.
 - Keep README, AGENTS, and plan docs aligned.
 - Preserve preview-first cleanup and Recycle Bin-only execution.
 - Preserve protected path and path validation invariants.
