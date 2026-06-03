@@ -70,6 +70,11 @@ func Execute(ctx context.Context, candidates []Candidate, adapter Adapter) Resul
 					Code:    "permission_denied",
 					Message: "permission denied while moving item to the Recycle Bin",
 				}
+			} else if errors.Is(err, fs.ErrInvalid) {
+				reason = pathsafe.Reason{
+					Code:    "unsupported_target",
+					Message: "target cannot be moved to the Recycle Bin",
+				}
 			}
 			result.Skipped = append(result.Skipped, SkippedItem{
 				Path:   candidate.Path,
