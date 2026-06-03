@@ -103,6 +103,35 @@ func TestExecuteModelsPermissionFailureAsSkipped(t *testing.T) {
 	}
 }
 
+func TestExecuteModelsUnsupportedTargetAsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unsupported.tmp")
+	if err := os.WriteFile(path, []byte("unsupported"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := failingAdapter{err: fs.ErrInvalid}
+
+	result := delete.Execute(context.Background(), []delete.Candidate{
+		{Path: path, Bytes: 11},
+	}, adapter)
+
+	if result.AffectedBytes != 0 {
+		t.Fatalf("AffectedBytes = %d, want 0", result.AffectedBytes)
+	}
+	if len(result.Deleted) != 0 {
+		t.Fatalf("Deleted length = %d, want 0", len(result.Deleted))
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("Skipped length = %d, want 1", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "unsupported_target" {
+		t.Fatalf("Skipped[0].Reason.Code = %q, want unsupported_target", result.Skipped[0].Reason.Code)
+	}
+	if result.Skipped[0].Reason.Message == "" {
+		t.Fatal("Skipped[0].Reason.Message is empty")
+	}
+}
+
 type failingAdapter struct {
 	err error
 }

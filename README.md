@@ -20,6 +20,7 @@ The planned command surface is:
 ```powershell
 foal analyze
 foal clean --dry-run
+foal clean --execute
 foal status --json
 foal history
 foal uninstall

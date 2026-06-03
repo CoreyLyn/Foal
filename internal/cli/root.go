@@ -25,11 +25,16 @@ type commandSpec struct {
 
 var commands = []commandSpec{
 	{name: "analyze", description: "Inspect disk usage and cleanup opportunities without changing files."},
-	{name: "clean", description: "Preview conservative cleanup candidates; execution will remain Recycle Bin-only."},
+	{name: "clean", description: "Preview or execute conservative cleanup candidates through the Recycle Bin."},
 	{name: "status", description: "Report a read-only system and Foal state snapshot."},
 	{name: "history", description: "Show previous Foal operation records."},
 	{name: "uninstall", description: "Preview application uninstall evidence without executing uninstallers."},
 }
+
+var (
+	dryRunClean  = clean.DryRun
+	executeClean = clean.Execute
+)
 
 // Run executes the Foal command line with output streams supplied by the caller.
 func Run(args []string, stdout, stderr io.Writer) int {
@@ -115,7 +120,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if command == "clean" {
-		if err := validateCleanArgs(positional[1:]); err != nil {
+		invocation, err := validateCleanArgs(positional[1:])
+		if err != nil {
 			return writeError(stderr, opts.json, command, args, jsonError{
 				Code:        "invalid_clean_invocation",
 				Message:     err.Error(),
@@ -125,11 +131,21 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			})
 		}
 
-		result := clean.DryRun(context.Background(), clean.Options{})
+		var result clean.Result
+		if invocation.execute {
+			result = executeClean(context.Background(), clean.Options{})
+		} else {
+			result = dryRunClean(context.Background(), clean.Options{})
+		}
 		if opts.json {
 			return writeJSON(stdout, envelope{Command: command, Result: result})
 		}
 
+		if invocation.execute {
+			_, _ = fmt.Fprintf(stdout, "Foal clean\nExecution complete. Deleted: %d, skipped: %d, action: Recycle Bin.\n",
+				result.Totals.DeletedCount, result.Totals.SkippedCount)
+			return exitOK
+		}
 		_, _ = fmt.Fprintf(stdout, "Foal clean\nDry-run preview. Candidates: %d, skipped: %d, planned action: Recycle Bin.\n",
 			result.Totals.CandidateCount, result.Totals.SkippedCount)
 		return exitOK
@@ -193,20 +209,33 @@ func isKnownCommand(name string) bool {
 	return false
 }
 
-func validateCleanArgs(args []string) error {
+type cleanInvocation struct {
+	dryRun  bool
+	execute bool
+}
+
+func validateCleanArgs(args []string) (cleanInvocation, error) {
+	var invocation cleanInvocation
 	dryRun := false
+	execute := false
 	for _, arg := range args {
 		switch arg {
 		case "--dry-run":
 			dryRun = true
+		case "--execute":
+			execute = true
 		default:
-			return fmt.Errorf("unknown clean option: %s", arg)
+			return invocation, fmt.Errorf("unknown clean option: %s", arg)
 		}
 	}
-	if !dryRun {
-		return fmt.Errorf("clean execution is not implemented; use --dry-run for the preview contract")
+	invocation = cleanInvocation{dryRun: dryRun, execute: execute}
+	if dryRun && execute {
+		return invocation, fmt.Errorf("clean accepts either --dry-run or --execute, not both")
 	}
-	return nil
+	if !dryRun && !execute {
+		return invocation, fmt.Errorf("clean requires explicit --dry-run preview or --execute confirmation")
+	}
+	return invocation, nil
 }
 
 func helpText() string {
@@ -222,6 +251,7 @@ func helpText() string {
 	builder.WriteString("\nExamples:\n")
 	builder.WriteString("  foal status --json\n")
 	builder.WriteString("  foal clean --dry-run\n")
+	builder.WriteString("  foal clean --execute\n")
 	builder.WriteString("  foal.exe analyze\n")
 	return builder.String()
 }

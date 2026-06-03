@@ -8,13 +8,15 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/CoreyLyn/Foal/internal/core/delete"
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 )
 
 const plannedRecycleBinAction = "move_to_recycle_bin"
 
 type Options struct {
-	Rules []Rule
+	Rules             []Rule
+	RecycleBinAdapter delete.Adapter
 }
 
 type Rule struct {
@@ -31,6 +33,7 @@ type Result struct {
 	Mode               string             `json:"mode"`
 	DefaultRuleCatalog []RuleSummary      `json:"default_rule_catalog"`
 	Candidates         []CandidatePreview `json:"candidates"`
+	Deleted            []DeletedItem      `json:"deleted"`
 	Skipped            []SkippedItem      `json:"skipped"`
 	Errors             []StructuredIssue  `json:"errors"`
 	Totals             Totals             `json:"totals"`
@@ -57,6 +60,12 @@ type SkippedItem struct {
 	Reason StructuredIssue `json:"reason"`
 }
 
+type DeletedItem struct {
+	Path  string `json:"path"`
+	Bytes int64  `json:"bytes"`
+	Rule  string `json:"rule"`
+}
+
 type StructuredIssue struct {
 	Code        string `json:"code"`
 	Message     string `json:"message"`
@@ -67,8 +76,10 @@ type StructuredIssue struct {
 
 type Totals struct {
 	CandidateCount int   `json:"candidate_count"`
+	DeletedCount   int   `json:"deleted_count"`
 	SkippedCount   int   `json:"skipped_count"`
 	CandidateBytes int64 `json:"candidate_bytes"`
+	AffectedBytes  int64 `json:"affected_bytes"`
 }
 
 func DryRun(ctx context.Context, opts Options) Result {
@@ -86,6 +97,7 @@ func DryRun(ctx context.Context, opts Options) Result {
 		Mode:               "dry_run",
 		DefaultRuleCatalog: defaultRuleSummaries(rules),
 		Candidates:         []CandidatePreview{},
+		Deleted:            []DeletedItem{},
 		Skipped:            []SkippedItem{},
 		Errors:             []StructuredIssue{},
 	}
@@ -120,6 +132,54 @@ func DryRun(ctx context.Context, opts Options) Result {
 				previewCandidate(ctx, path, rule.ID, &result)
 			}
 		}
+	}
+
+	result.ElapsedMS = time.Since(start).Milliseconds()
+	result.Totals = totals(result)
+	return result
+}
+
+func Execute(ctx context.Context, opts Options) Result {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	start := time.Now()
+	result := DryRun(ctx, opts)
+	result.Status = "ok"
+	result.Mode = "execute"
+	result.Deleted = []DeletedItem{}
+
+	adapter := opts.RecycleBinAdapter
+	if adapter == nil {
+		adapter = delete.WindowsRecycleBinAdapter{}
+	}
+
+	candidates := make([]delete.Candidate, 0, len(result.Candidates))
+	rulesByPath := make(map[string]string, len(result.Candidates))
+	for _, candidate := range result.Candidates {
+		candidates = append(candidates, delete.Candidate{
+			Path:  candidate.Path,
+			Bytes: candidate.Bytes,
+		})
+		rulesByPath[candidate.Path] = candidate.Rule
+	}
+
+	deleteResult := delete.Execute(ctx, candidates, adapter)
+	for _, item := range deleteResult.Deleted {
+		result.Deleted = append(result.Deleted, DeletedItem{
+			Path:  item.Path,
+			Bytes: item.Bytes,
+			Rule:  rulesByPath[item.Path],
+		})
+	}
+	for _, item := range deleteResult.Skipped {
+		ruleID := rulesByPath[item.Path]
+		result.Skipped = append(result.Skipped, SkippedItem{
+			Path:   item.Path,
+			Bytes:  item.Bytes,
+			Rule:   ruleID,
+			Reason: issue(item.Reason.Code, item.Reason.Message, true, item.Path, ruleID),
+		})
 	}
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
@@ -256,9 +316,15 @@ func totals(result Result) Totals {
 	for _, candidate := range result.Candidates {
 		bytes += candidate.Bytes
 	}
+	var affectedBytes int64
+	for _, deleted := range result.Deleted {
+		affectedBytes += deleted.Bytes
+	}
 	return Totals{
 		CandidateCount: len(result.Candidates),
+		DeletedCount:   len(result.Deleted),
 		SkippedCount:   len(result.Skipped),
 		CandidateBytes: bytes,
+		AffectedBytes:  affectedBytes,
 	}
 }

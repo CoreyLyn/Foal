@@ -2,11 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/CoreyLyn/Foal/internal/clean"
 )
 
 func TestHelpUsesFoalNamingOnly(t *testing.T) {
@@ -302,6 +305,55 @@ func TestCleanRequiresDryRun(t *testing.T) {
 	}
 	if got.Error == nil || got.Error.Code != "invalid_clean_invocation" {
 		t.Fatalf("error = %+v, want invalid_clean_invocation", got.Error)
+	}
+}
+
+func TestCleanExecuteJSONRoutesConfirmedExecution(t *testing.T) {
+	originalExecute := executeClean
+	defer func() { executeClean = originalExecute }()
+
+	called := false
+	executeClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		called = true
+		return clean.Result{
+			Status:     "ok",
+			Mode:       "execute",
+			Candidates: []clean.CandidatePreview{},
+			Deleted: []clean.DeletedItem{{
+				Path:  `C:\Users\corey\AppData\Local\Temp\foal-owned.tmp`,
+				Bytes: 5,
+				Rule:  "foal_owned_temp_sandboxes",
+			}},
+			Skipped: []clean.SkippedItem{},
+			Errors:  []clean.StructuredIssue{},
+			Totals: clean.Totals{
+				CandidateCount: 1,
+				DeletedCount:   1,
+				AffectedBytes:  5,
+			},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--execute", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if !called {
+		t.Fatal("executeClean was not called")
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	if result["status"] != "ok" || result["mode"] != "execute" {
+		t.Fatalf("result status/mode = %v/%v, want ok/execute", result["status"], result["mode"])
+	}
+	deleted := result["deleted"].([]interface{})
+	if len(deleted) != 1 {
+		t.Fatalf("deleted = %#v, want one item", deleted)
 	}
 }
 
