@@ -303,3 +303,63 @@ func TestPreviewReadModelUsesExistingDefaultCandidatesForPotentialSpace(t *testi
 		t.Fatalf("summary = %q, want dry-run no-changes language without Whitelist", model.Summary)
 	}
 }
+
+func TestPreviewReadModelRepresentsSkippedUnsafePathsAndRecoverableErrors(t *testing.T) {
+	result := clean.Result{
+		Status: "preview",
+		Mode:   "dry_run",
+		DefaultRuleCatalog: []clean.RuleSummary{{
+			ID:             "foal_owned_temp_sandboxes",
+			Description:    "Foal-owned temporary sandbox entries",
+			DefaultEnabled: true,
+		}},
+		Candidates: []clean.CandidatePreview{{
+			Path:          filepath.Join(t.TempDir(), "foal-candidate.tmp"),
+			Bytes:         12,
+			Rule:          "foal_owned_temp_sandboxes",
+			PlannedAction: "move_to_recycle_bin",
+		}},
+		Skipped: []clean.SkippedItem{{
+			Path:  `\\?\C:\Windows\System32`,
+			Bytes: 4096,
+			Rule:  "foal_owned_temp_sandboxes",
+			Reason: clean.StructuredIssue{
+				Code:        "protected_path",
+				Message:     "protected Windows location",
+				Recoverable: true,
+				Path:        `\\?\C:\Windows\System32`,
+				Rule:        "foal_owned_temp_sandboxes",
+			},
+		}},
+		Errors: []clean.StructuredIssue{{
+			Code:        "inspection_failed",
+			Message:     "could not inspect root",
+			Recoverable: true,
+			Path:        filepath.Join(t.TempDir(), "missing-root"),
+			Rule:        "foal_owned_temp_sandboxes",
+		}},
+	}
+
+	model := clean.NewPreviewReadModel(result)
+
+	if model.PotentialSpaceBytes != 12 {
+		t.Fatalf("potential space = %d, want candidate bytes only", model.PotentialSpaceBytes)
+	}
+	if len(model.Skipped) != 1 {
+		t.Fatalf("skipped = %#v, want one skipped unsafe path", model.Skipped)
+	}
+	skipped := model.Skipped[0]
+	if skipped.Path != `\\?\C:\Windows\System32` || skipped.Rule != "foal_owned_temp_sandboxes" || skipped.Reason.Code != "protected_path" {
+		t.Fatalf("skipped = %#v, want protected path skip with rule and reason", skipped)
+	}
+	if len(model.Errors) != 1 {
+		t.Fatalf("errors = %#v, want one recoverable inspection error", model.Errors)
+	}
+	err := model.Errors[0]
+	if err.Code != "inspection_failed" || !err.Recoverable || err.Path == "" {
+		t.Fatalf("error = %#v, want recoverable inspection error metadata", err)
+	}
+	if len(model.Notices) != 1 || model.Notices[0].Kind != "permission_boundary" {
+		t.Fatalf("notices = %#v, want one permission boundary notice", model.Notices)
+	}
+}

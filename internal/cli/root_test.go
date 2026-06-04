@@ -343,6 +343,77 @@ func TestCleanDryRunNonJSONRendersPreviewReadModelReport(t *testing.T) {
 	}
 }
 
+func TestCleanDryRunNonJSONGroupsSkippedErrorsAndPermissionBoundary(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	defer func() { dryRunClean = originalDryRun }()
+
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		return clean.Result{
+			Status: "preview",
+			Mode:   "dry_run",
+			DefaultRuleCatalog: []clean.RuleSummary{{
+				ID:             "foal_owned_temp_sandboxes",
+				Description:    "Foal-owned temporary sandbox entries",
+				DefaultEnabled: true,
+			}},
+			Candidates: []clean.CandidatePreview{{
+				Path:          `C:\Users\corey\AppData\Local\Temp\foal-preview.tmp`,
+				Bytes:         12,
+				Rule:          "foal_owned_temp_sandboxes",
+				PlannedAction: "move_to_recycle_bin",
+			}},
+			Skipped: []clean.SkippedItem{{
+				Path:  `\\?\C:\Windows\System32`,
+				Bytes: 4096,
+				Rule:  "foal_owned_temp_sandboxes",
+				Reason: clean.StructuredIssue{
+					Code:        "protected_path",
+					Message:     "protected Windows location",
+					Recoverable: true,
+					Path:        `\\?\C:\Windows\System32`,
+					Rule:        "foal_owned_temp_sandboxes",
+				},
+			}},
+			Errors: []clean.StructuredIssue{{
+				Code:        "inspection_failed",
+				Message:     "could not inspect root",
+				Recoverable: true,
+				Path:        `C:\Users\corey\AppData\Local\Temp\foal-missing-root`,
+				Rule:        "foal_owned_temp_sandboxes",
+			}},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--dry-run"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Potential space: 12 bytes",
+		"Permission boundary",
+		"Skipped items",
+		`\\?\C:\Windows\System32`,
+		"protected_path",
+		"Inspection errors",
+		`C:\Users\corey\AppData\Local\Temp\foal-missing-root`,
+		"inspection_failed",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{"Potential space: 4108 bytes", "Run as Administrator", "run as administrator"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains forbidden text %q:\n%s", forbidden, output)
+		}
+	}
+}
+
 func TestCleanDryRunJSONDoesNotIncludeHumanReportText(t *testing.T) {
 	disableHistoryRecording(t)
 	originalDryRun := dryRunClean
@@ -363,9 +434,26 @@ func TestCleanDryRunJSONDoesNotIncludeHumanReportText(t *testing.T) {
 				Rule:          "foal_owned_temp_sandboxes",
 				PlannedAction: "move_to_recycle_bin",
 			}},
-			Skipped: []clean.SkippedItem{},
-			Errors:  []clean.StructuredIssue{},
-			Totals:  clean.Totals{CandidateCount: 1, CandidateBytes: 12},
+			Skipped: []clean.SkippedItem{{
+				Path:  `\\?\C:\Windows\System32`,
+				Bytes: 4096,
+				Rule:  "foal_owned_temp_sandboxes",
+				Reason: clean.StructuredIssue{
+					Code:        "protected_path",
+					Message:     "protected Windows location",
+					Recoverable: true,
+					Path:        `\\?\C:\Windows\System32`,
+					Rule:        "foal_owned_temp_sandboxes",
+				},
+			}},
+			Errors: []clean.StructuredIssue{{
+				Code:        "inspection_failed",
+				Message:     "could not inspect root",
+				Recoverable: true,
+				Path:        `C:\Users\corey\AppData\Local\Temp\foal-missing-root`,
+				Rule:        "foal_owned_temp_sandboxes",
+			}},
+			Totals: clean.Totals{CandidateCount: 1, CandidateBytes: 12},
 		}
 	}
 
@@ -381,7 +469,7 @@ func TestCleanDryRunJSONDoesNotIncludeHumanReportText(t *testing.T) {
 		t.Fatalf("result status/mode = %v/%v, want preview/dry_run", result["status"], result["mode"])
 	}
 	encoded := stdout.String()
-	for _, forbidden := range []string{"Protection rules", "Potential space", "No changes were made", "Preview only"} {
+	for _, forbidden := range []string{"Protection rules", "Potential space", "No changes were made", "Preview only", "Permission boundary", "Skipped items", "Inspection errors"} {
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("JSON contains human report text %q:\n%s", forbidden, encoded)
 		}
