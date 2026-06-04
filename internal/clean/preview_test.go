@@ -3,6 +3,7 @@ package clean_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -500,6 +501,113 @@ func TestPreviewReportRendersReviewOnlySectionsWithoutExecutionSemantics(t *test
 	} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("output contains forbidden execution semantics %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestPreviewReportCapsHighVolumePathSectionsAtTenEntries(t *testing.T) {
+	model := clean.PreviewReadModel{
+		Title:               "Foal clean",
+		Status:              "preview_only",
+		PotentialSpaceBytes: 66,
+		CandidateCount:      11,
+		SkippedCount:        11,
+		DetailedListPath:    `C:\Users\corey\AppData\Roaming\Foal\history\clean-dry-run-detail.txt`,
+		Summary:             "Dry-run summary: No changes were made.",
+	}
+	for i := 0; i < 11; i++ {
+		model.Candidates = append(model.Candidates, clean.PreviewCandidate{
+			Path:          fmt.Sprintf(`C:\Users\corey\AppData\Local\Temp\foal-candidate-%02d.tmp`, i),
+			Bytes:         int64(i + 1),
+			Rule:          "foal_owned_temp_sandboxes",
+			PlannedAction: "move_to_recycle_bin",
+		})
+		model.Skipped = append(model.Skipped, clean.PreviewSkippedItem{
+			Path:  fmt.Sprintf(`\\?\C:\Windows\System32\foal-skip-%02d.tmp`, i),
+			Bytes: int64(i + 1),
+			Rule:  "foal_owned_temp_sandboxes",
+			Reason: clean.StructuredIssue{
+				Code:        "protected_path",
+				Message:     "protected Windows location",
+				Recoverable: true,
+			},
+		})
+		model.Errors = append(model.Errors, clean.StructuredIssue{
+			Code:        "inspection_failed",
+			Message:     "could not inspect root",
+			Recoverable: true,
+			Path:        fmt.Sprintf(`C:\Users\corey\AppData\Local\Temp\foal-error-%02d`, i),
+			Rule:        "foal_owned_temp_sandboxes",
+		})
+	}
+
+	output := clean.RenderPreviewReport(model)
+
+	for _, want := range []string{
+		"Potential space: 66 bytes",
+		"Candidates: 11, skipped: 11, errors: 11.",
+		`C:\Users\corey\AppData\Local\Temp\foal-candidate-09.tmp`,
+		`\\?\C:\Windows\System32\foal-skip-09.tmp`,
+		`C:\Users\corey\AppData\Local\Temp\foal-error-09`,
+		`1 omitted. See detailed candidate list for full path detail: C:\Users\corey\AppData\Roaming\Foal\history\clean-dry-run-detail.txt`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{
+		`C:\Users\corey\AppData\Local\Temp\foal-candidate-10.tmp`,
+		`\\?\C:\Windows\System32\foal-skip-10.tmp`,
+		`C:\Users\corey\AppData\Local\Temp\foal-error-10`,
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains truncated path %q:\n%s", forbidden, output)
+		}
+	}
+	if got := strings.Count(output, "omitted. See detailed candidate list for full path detail:"); got != 3 {
+		t.Fatalf("omitted detail lines = %d, want 3:\n%s", got, output)
+	}
+}
+
+func TestDryRunDetailedCandidateListStaysCompleteWhenTerminalReportWouldBeCapped(t *testing.T) {
+	root := t.TempDir()
+	missingRoot := filepath.Join(root, "missing")
+	detailedListDir := filepath.Join(t.TempDir(), "Foal", "history")
+	var candidatePaths []string
+	var skippedPaths []string
+	var errorRoots []string
+	for i := 0; i < 11; i++ {
+		candidate := filepath.Join(root, fmt.Sprintf("foal-candidate-%02d.tmp", i))
+		if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		candidatePaths = append(candidatePaths, candidate)
+		skippedPaths = append(skippedPaths, fmt.Sprintf(`\\?\C:\Windows\System32\foal-skip-%02d.tmp`, i))
+		errorRoots = append(errorRoots, filepath.Join(missingRoot, fmt.Sprintf("foal-error-%02d", i)))
+	}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		DetailedListDir: detailedListDir,
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: append(candidatePaths, skippedPaths...),
+			Roots:          errorRoots,
+		}},
+	})
+
+	if result.Totals.CandidateCount != 11 || result.Totals.SkippedCount != 11 || len(result.Errors) != 11 {
+		t.Fatalf("result counts = candidates %d skipped %d errors %d, want 11/11/11", result.Totals.CandidateCount, result.Totals.SkippedCount, len(result.Errors))
+	}
+	data, err := os.ReadFile(result.DetailedListPath)
+	if err != nil {
+		t.Fatalf("read detailed list: %v", err)
+	}
+	text := string(data)
+	for _, path := range append(append(candidatePaths, skippedPaths...), errorRoots...) {
+		if !strings.Contains(text, path) {
+			t.Fatalf("detailed list missing path %q:\n%s", path, text)
 		}
 	}
 }
