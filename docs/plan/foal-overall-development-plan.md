@@ -9,6 +9,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Target users are Windows developers and power users.
 - The CLI is the primary interface. Future TUI work is planned, but it must remain read-model driven and call shared command/core execution paths.
 - Human output should be readable; JSON contracts are the stable automation surface.
+- Rich human reports may borrow Mole's grouped dry-run style, but the reporting experience must not imply Mole feature parity or expand Foal's default cleanup rules.
 - Default cleanup rules are conservative. Higher-risk rule groups require explicit opt-in.
 - Real deletion defaults to Windows Recycle Bin-only.
 - Automatic elevation is out of scope.
@@ -53,6 +54,8 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Add contract tests around structured outputs and error semantics.
 - Keep default-enabled cleanup behavior frozen unless a change is explicitly approved.
 - Treat safety, skipped reasons, and recoverability as part of the command contract.
+- Define a clean preview read model that can represent default candidates, skipped-by-default items, review clues, review suggestions, protection rules, permission boundary notices, running application skips, detailed candidate list metadata, and report totals.
+- Keep `Potential space` scoped to default candidates only; skipped-by-default items, review clues, external suggestions, and permission-boundary skips must not be counted as Foal-cleanable space.
 
 ## Phase 3: Verification Sprint
 
@@ -60,6 +63,18 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Verify dry-run and real execution paths both validate candidates.
 - Keep real Recycle Bin integration tests explicitly opt-in.
 - Validate docs and command examples after rename.
+- Verify rich human report rendering as presentation behavior over the clean preview read model, while keeping JSON contracts as the stable automation surface.
+
+## Phase 3A: Clean Dry-Run Human Report
+
+- Start with the clean preview read model and human report renderer over existing conservative clean data; do not introduce new scanner rules in the first implementation slice.
+- Add a Mole-inspired but Windows-native non-JSON `foal clean --dry-run` report with grouped sections, scan-friendly symbols, clear preview-only wording, and a final summary.
+- Display `Protection rules` instead of `Whitelist`, using Foal's Windows path-safety boundaries as the primary language.
+- Include a permission boundary notice when administrator-only or protected locations are skipped, without recommending elevation as the normal path.
+- Write a detailed candidate list under Foal's config/history area as a human-readable companion artifact, not as an execution manifest.
+- Surface external tool commands as review suggestions only. Foal must not execute them, delegate cleanup to them, or count their estimates as `Potential space`.
+- Treat browser, IDE, package-manager, AI-tool, Docker, WSL, virtualization, sync-client, project-artifact, and application-leftover findings as skipped-by-default or review clues unless an explicit future opt-in rule group is approved.
+- Treat running application state as a skip reason, not as a close-and-clean prompt or default cleanup condition.
 
 ## Phase 4: Uninstall Preview Quality
 
