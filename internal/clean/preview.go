@@ -43,7 +43,7 @@ type Result struct {
 	Skipped            []SkippedItem      `json:"skipped"`
 	Errors             []StructuredIssue  `json:"errors"`
 	Totals             Totals             `json:"totals"`
-	DetailedListPath   string             `json:"detailed_list_path,omitempty"`
+	DetailedListPath   string             `json:"-"`
 	ElapsedMS          int64              `json:"elapsed_ms"`
 }
 

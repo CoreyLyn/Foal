@@ -478,6 +478,59 @@ func TestCleanDryRunJSONDoesNotIncludeHumanReportText(t *testing.T) {
 	}
 }
 
+func TestCleanDryRunJSONDoesNotWriteOrExposeDetailedCandidateList(t *testing.T) {
+	historyDir := t.TempDir()
+	t.Setenv("FOAL_HISTORY_DIR", historyDir)
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	encoded := stdout.String()
+	if strings.Contains(encoded, "detailed_list_path") || strings.Contains(encoded, "Detailed candidate list") {
+		t.Fatalf("JSON leaked detailed list metadata:\n%s", encoded)
+	}
+	for _, name := range readDirNames(t, historyDir) {
+		if strings.HasSuffix(name, "-detailed-candidates.txt") {
+			t.Fatalf("JSON dry-run wrote detailed candidate list %q; files=%v", name, readDirNames(t, historyDir))
+		}
+	}
+}
+
+func TestCleanDryRunNonJSONWritesAndDisplaysDetailedCandidateList(t *testing.T) {
+	historyDir := t.TempDir()
+	t.Setenv("FOAL_HISTORY_DIR", historyDir)
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--dry-run"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Detailed candidate list: ") {
+		t.Fatalf("output missing detailed candidate list path:\n%s", output)
+	}
+	var detailedLists []string
+	for _, name := range readDirNames(t, historyDir) {
+		if strings.HasSuffix(name, "-detailed-candidates.txt") {
+			detailedLists = append(detailedLists, name)
+		}
+	}
+	if len(detailedLists) != 1 {
+		t.Fatalf("detailed list files = %v, want one; all files=%v", detailedLists, readDirNames(t, historyDir))
+	}
+	path := filepath.Join(historyDir, detailedLists[0])
+	if !strings.Contains(output, path) {
+		t.Fatalf("output = %q, want detailed list path %q", output, path)
+	}
+}
+
 func TestCleanRequiresDryRun(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
@@ -833,4 +886,21 @@ func disableHistoryRecording(t *testing.T) {
 		return nil, nil
 	}
 	t.Cleanup(func() { newHistoryRecorder = original })
+}
+
+func readDirNames(t *testing.T, dir string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatalf("read dir %q: %v", dir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
 }

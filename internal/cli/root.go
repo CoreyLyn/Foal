@@ -165,7 +165,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 		recorder, _ := newHistoryRecorder()
 		detailedListDir := ""
-		if invocation.dryRun {
+		if invocation.dryRun && !opts.json {
 			detailedListDir, _ = newHistoryDir()
 		}
 		cleanOptions := clean.Options{

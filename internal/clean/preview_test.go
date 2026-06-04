@@ -2,6 +2,7 @@ package clean_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,6 +223,13 @@ func TestDryRunWritesDetailedCandidateListUnderConfiguredHistoryArea(t *testing.
 	}
 	if strings.Contains(text, "SECRET-CACHE-CONTENT") {
 		t.Fatalf("detailed list leaked file contents:\n%s", text)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal dry-run result: %v", err)
+	}
+	if strings.Contains(string(encoded), "detailed_list_path") || strings.Contains(string(encoded), result.DetailedListPath) {
+		t.Fatalf("dry-run JSON leaked detailed list path:\n%s", encoded)
 	}
 }
 
