@@ -45,7 +45,8 @@ var (
 	newHistoryQuery = func() (history.FileQuery, error) {
 		return history.NewDefaultFileQuery()
 	}
-	newHistoryDir = history.DefaultDir
+	newHistoryDir   = history.DefaultDir
+	reviewUninstall = uninstall.Review
 )
 
 // Run executes the Foal command line with output streams supplied by the caller.
@@ -122,7 +123,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if command == "uninstall" {
-		result := uninstall.Review()
+		result := reviewUninstall()
 		if opts.json {
 			return writeJSON(stdout, envelope{Command: command, Result: result})
 		}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/history"
+	"github.com/CoreyLyn/Foal/internal/uninstall"
 )
 
 func TestHelpUsesFoalNamingOnly(t *testing.T) {
@@ -274,6 +275,70 @@ func TestUninstallJSONReportsPreviewOnlyReviewContract(t *testing.T) {
 		t.Fatalf("execution.actions has type %T, want array", execution["actions"])
 	}
 	if len(actions) != 0 {
+		t.Fatalf("execution.actions = %#v, want empty", actions)
+	}
+}
+
+func TestUninstallJSONReportsRegistryDiscoveredApplications(t *testing.T) {
+	original := reviewUninstall
+	reviewUninstall = func() uninstall.Result {
+		return uninstall.Result{
+			Status: "preview",
+			Applications: []uninstall.Application{{
+				Name:       "Registry App",
+				Version:    "2.4.6",
+				Publisher:  "Registry Publisher",
+				Evidence:   []string{"windows_registry_uninstall_keys:HKLM64"},
+				Confidence: "medium",
+				Ownership:  "unknown",
+			}},
+			EvidenceSources: []uninstall.EvidenceSource{{
+				Source: "windows_registry_uninstall_keys:HKLM64",
+				Status: "reported",
+			}},
+			PossibleLeftovers:   []uninstall.LeftoverCandidate{},
+			SharedStateConcerns: []uninstall.SharedStateConcern{},
+			UnknownState:        []uninstall.UnknownStateCandidate{},
+			Skipped:             []uninstall.SkippedReason{},
+			Execution: uninstall.ExecutionPolicy{
+				Allowed: false,
+				Actions: []string{},
+				Reason:  "uninstall is preview-only",
+			},
+		}
+	}
+	t.Cleanup(func() { reviewUninstall = original })
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"uninstall", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	applications := result["applications"].([]interface{})
+	if len(applications) != 1 {
+		t.Fatalf("applications = %#v, want one registry app", applications)
+	}
+	app := applications[0].(map[string]interface{})
+	if app["name"] != "Registry App" || app["version"] != "2.4.6" || app["publisher"] != "Registry Publisher" {
+		t.Fatalf("app = %#v, want registry app metadata", app)
+	}
+	evidence := app["evidence"].([]interface{})
+	if len(evidence) != 1 || evidence[0] != "windows_registry_uninstall_keys:HKLM64" {
+		t.Fatalf("evidence = %#v, want registry evidence source", evidence)
+	}
+	sources := result["evidence_sources"].([]interface{})
+	firstSource := sources[0].(map[string]interface{})
+	if firstSource["source"] != "windows_registry_uninstall_keys:HKLM64" || firstSource["status"] != "reported" {
+		t.Fatalf("evidence source = %#v, want reported registry source", firstSource)
+	}
+	execution := result["execution"].(map[string]interface{})
+	if execution["allowed"] != false {
+		t.Fatalf("execution.allowed = %v, want false", execution["allowed"])
+	}
+	if actions := execution["actions"].([]interface{}); len(actions) != 0 {
 		t.Fatalf("execution.actions = %#v, want empty", actions)
 	}
 }
