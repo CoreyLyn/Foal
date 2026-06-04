@@ -239,3 +239,67 @@ func TestDryRunRootRuleHonorsCandidateNamePrefixes(t *testing.T) {
 		t.Fatalf("dry-run touched unrelated temp path: %v", err)
 	}
 }
+
+func TestPreviewReadModelUsesExistingDefaultCandidatesForPotentialSpace(t *testing.T) {
+	result := clean.Result{
+		Status: "preview",
+		Mode:   "dry_run",
+		DefaultRuleCatalog: []clean.RuleSummary{
+			{
+				ID:             "foal_owned_temp_sandboxes",
+				Description:    "Foal-owned temporary sandbox entries",
+				DefaultEnabled: true,
+			},
+			{
+				ID:             "future_opt_in_rule",
+				Description:    "future opt-in rule",
+				DefaultEnabled: false,
+			},
+		},
+		Candidates: []clean.CandidatePreview{
+			{
+				Path:          filepath.Join(t.TempDir(), "foal-a.tmp"),
+				Bytes:         7,
+				Rule:          "foal_owned_temp_sandboxes",
+				PlannedAction: "move_to_recycle_bin",
+			},
+			{
+				Path:          filepath.Join(t.TempDir(), "foal-b.tmp"),
+				Bytes:         11,
+				Rule:          "foal_owned_temp_sandboxes",
+				PlannedAction: "move_to_recycle_bin",
+			},
+		},
+		Skipped: []clean.SkippedItem{{
+			Path:  filepath.Join(t.TempDir(), "skipped.tmp"),
+			Bytes: 4096,
+			Rule:  "future_opt_in_rule",
+			Reason: clean.StructuredIssue{
+				Code:        "permission_denied",
+				Message:     "access denied",
+				Recoverable: true,
+			},
+		}},
+	}
+
+	model := clean.NewPreviewReadModel(result)
+
+	if model.Status != "preview_only" {
+		t.Fatalf("status = %q, want preview_only", model.Status)
+	}
+	if model.PotentialSpaceBytes != 18 {
+		t.Fatalf("potential space = %d, want candidate bytes only", model.PotentialSpaceBytes)
+	}
+	if model.CandidateCount != 2 || model.SkippedCount != 1 {
+		t.Fatalf("counts = candidates %d skipped %d, want 2/1", model.CandidateCount, model.SkippedCount)
+	}
+	if len(model.ProtectionRules) != 1 {
+		t.Fatalf("protection rules = %#v, want one default-enabled rule", model.ProtectionRules)
+	}
+	if model.ProtectionRules[0].ID != "foal_owned_temp_sandboxes" {
+		t.Fatalf("protection rule = %#v, want default Foal rule", model.ProtectionRules[0])
+	}
+	if strings.Contains(model.Summary, "Whitelist") || !strings.Contains(model.Summary, "No changes were made") {
+		t.Fatalf("summary = %q, want dry-run no-changes language without Whitelist", model.Summary)
+	}
+}

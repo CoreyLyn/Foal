@@ -292,6 +292,102 @@ func TestCommandSpecificArgumentsAreRouted(t *testing.T) {
 	}
 }
 
+func TestCleanDryRunNonJSONRendersPreviewReadModelReport(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	defer func() { dryRunClean = originalDryRun }()
+
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		return clean.Result{
+			Status: "preview",
+			Mode:   "dry_run",
+			DefaultRuleCatalog: []clean.RuleSummary{{
+				ID:             "foal_owned_temp_sandboxes",
+				Description:    "Foal-owned temporary sandbox entries",
+				DefaultEnabled: true,
+			}},
+			Candidates: []clean.CandidatePreview{{
+				Path:          `C:\Users\corey\AppData\Local\Temp\foal-preview.tmp`,
+				Bytes:         12,
+				Rule:          "foal_owned_temp_sandboxes",
+				PlannedAction: "move_to_recycle_bin",
+			}},
+			Skipped: []clean.SkippedItem{},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--dry-run"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Foal clean",
+		"Preview only",
+		"Protection rules",
+		"Potential space: 12 bytes",
+		`C:\Users\corey\AppData\Local\Temp\foal-preview.tmp`,
+		"No changes were made",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{"Whitelist", "Mole for Windows", "Wole", "wole"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains forbidden text %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestCleanDryRunJSONDoesNotIncludeHumanReportText(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	defer func() { dryRunClean = originalDryRun }()
+
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		return clean.Result{
+			Status: "preview",
+			Mode:   "dry_run",
+			DefaultRuleCatalog: []clean.RuleSummary{{
+				ID:             "foal_owned_temp_sandboxes",
+				Description:    "Foal-owned temporary sandbox entries",
+				DefaultEnabled: true,
+			}},
+			Candidates: []clean.CandidatePreview{{
+				Path:          `C:\Users\corey\AppData\Local\Temp\foal-preview.tmp`,
+				Bytes:         12,
+				Rule:          "foal_owned_temp_sandboxes",
+				PlannedAction: "move_to_recycle_bin",
+			}},
+			Skipped: []clean.SkippedItem{},
+			Errors:  []clean.StructuredIssue{},
+			Totals:  clean.Totals{CandidateCount: 1, CandidateBytes: 12},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	if result["status"] != "preview" || result["mode"] != "dry_run" {
+		t.Fatalf("result status/mode = %v/%v, want preview/dry_run", result["status"], result["mode"])
+	}
+	encoded := stdout.String()
+	for _, forbidden := range []string{"Protection rules", "Potential space", "No changes were made", "Preview only"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("JSON contains human report text %q:\n%s", forbidden, encoded)
+		}
+	}
+}
+
 func TestCleanRequiresDryRun(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
