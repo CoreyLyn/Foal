@@ -186,8 +186,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 				result.Totals.DeletedCount, result.Totals.SkippedCount)
 			return exitOK
 		}
-		_, _ = fmt.Fprintf(stdout, "Foal clean\nDry-run preview. Candidates: %d, skipped: %d, planned action: Recycle Bin.\n",
-			result.Totals.CandidateCount, result.Totals.SkippedCount)
+		_, _ = fmt.Fprint(stdout, clean.RenderPreviewReport(clean.NewPreviewReadModel(result)))
 		return exitOK
 	}
 
