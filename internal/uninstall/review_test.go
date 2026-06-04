@@ -72,7 +72,7 @@ func TestReviewReportsKnownLeftoverProviderAsSkipped(t *testing.T) {
 	}
 }
 
-func TestReviewReportsRegistryDiscoveredApplicationsWithoutExecution(t *testing.T) {
+func TestReviewKeepsKnownLeftoverProviderSkippedAfterRegistryDiscovery(t *testing.T) {
 	original := discoverUninstallEvidence
 	discoverUninstallEvidence = func() DiscoveryResult {
 		return DiscoveryResult{
@@ -109,6 +109,27 @@ func TestReviewReportsRegistryDiscoveredApplicationsWithoutExecution(t *testing.
 	}
 	if result.EvidenceSources[0].Source != "windows_registry_uninstall_keys:HKLM64" || result.EvidenceSources[0].Status != "reported" {
 		t.Fatalf("registry evidence source = %#v, want reported HKLM64 source", result.EvidenceSources[0])
+	}
+	if result.EvidenceSources[1].Source != "known_leftover_locations" || result.EvidenceSources[1].Status != "skipped" {
+		t.Fatalf("leftover evidence source = %#v, want skipped known_leftover_locations", result.EvidenceSources[1])
+	}
+	if result.EvidenceSources[1].Reason != "discovery provider not implemented" {
+		t.Fatalf("leftover evidence source reason = %q, want discovery provider not implemented", result.EvidenceSources[1].Reason)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("skipped = %#v, want known leftover discovery skip only", result.Skipped)
+	}
+	if result.Skipped[0].Source != "known_leftover_locations" || result.Skipped[0].Reason != "discovery_provider_not_implemented" || !result.Skipped[0].Recoverable {
+		t.Fatalf("skipped[0] = %#v, want recoverable known leftover discovery skip", result.Skipped[0])
+	}
+	if len(result.PossibleLeftovers) != 0 {
+		t.Fatalf("possible leftovers = %#v, want empty after registry metadata discovery", result.PossibleLeftovers)
+	}
+	if len(result.SharedStateConcerns) != 0 {
+		t.Fatalf("shared state concerns = %#v, want empty after registry metadata discovery", result.SharedStateConcerns)
+	}
+	if len(result.UnknownState) != 0 {
+		t.Fatalf("unknown state = %#v, want empty after registry metadata discovery", result.UnknownState)
 	}
 	if result.Execution.Allowed {
 		t.Fatal("execution allowed = true, want false")
