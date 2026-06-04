@@ -24,6 +24,7 @@ type Result struct {
 	Status              string                  `json:"status"`
 	Applications        []Application           `json:"applications"`
 	EvidenceSources     []EvidenceSource        `json:"evidence_sources"`
+	ReviewSections      []ReviewSection         `json:"review_sections"`
 	PossibleLeftovers   []LeftoverCandidate     `json:"possible_leftovers"`
 	SharedStateConcerns []SharedStateConcern    `json:"shared_state_concerns"`
 	UnknownState        []UnknownStateCandidate `json:"unknown_state"`
@@ -45,6 +46,12 @@ type EvidenceSource struct {
 	Source string `json:"source"`
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
+}
+
+type ReviewSection struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Count int    `json:"count"`
 }
 
 type LeftoverCandidate struct {
@@ -84,6 +91,7 @@ type DiscoveryResult struct {
 }
 
 var discoverUninstallEvidence = discoverPlatformUninstallEvidence
+var runtimeGOOS = runtime.GOOS
 
 func Review() Result {
 	discovery := discoverUninstallEvidence()
@@ -98,12 +106,12 @@ func Review() Result {
 	result.EvidenceSources = append(result.EvidenceSources, EvidenceSource{Source: "known_leftover_locations", Status: "skipped", Reason: "discovery provider not implemented"})
 	result.Skipped = append(result.Skipped, SkippedReason{Source: "known_leftover_locations", Reason: "discovery_provider_not_implemented", Recoverable: true})
 
-	if runtime.GOOS != "windows" && !hasSkippedSource(result.Skipped, "windows_only_evidence") {
+	if runtimeGOOS != "windows" && !hasSkippedSource(result.Skipped, "windows_only_evidence") {
 		result.EvidenceSources = append(result.EvidenceSources, EvidenceSource{Source: "windows_only_evidence", Status: "skipped", Reason: "not running on Windows"})
 		result.Skipped = append(result.Skipped, SkippedReason{Source: "windows_only_evidence", Reason: "unsupported_platform", Recoverable: true})
 	}
 
-	return result
+	return WithReviewSections(result)
 }
 
 func hasSkippedSource(skipped []SkippedReason, source string) bool {
@@ -120,6 +128,7 @@ func ReviewEvidence(evidence Evidence) Result {
 		Status:              "preview",
 		Applications:        []Application{},
 		EvidenceSources:     evidenceSources(evidence),
+		ReviewSections:      []ReviewSection{},
 		PossibleLeftovers:   []LeftoverCandidate{},
 		SharedStateConcerns: []SharedStateConcern{},
 		UnknownState:        []UnknownStateCandidate{},
@@ -162,6 +171,18 @@ func ReviewEvidence(evidence Evidence) Result {
 		}
 	}
 
+	return WithReviewSections(result)
+}
+
+func WithReviewSections(result Result) Result {
+	result.ReviewSections = []ReviewSection{
+		{ID: "applications", Label: "Applications", Count: len(result.Applications)},
+		{ID: "evidence_sources", Label: "Evidence sources", Count: len(result.EvidenceSources)},
+		{ID: "possible_leftovers", Label: "Possible leftovers", Count: len(result.PossibleLeftovers)},
+		{ID: "shared_state_concerns", Label: "Shared state concerns", Count: len(result.SharedStateConcerns)},
+		{ID: "unknown_state", Label: "Unknown state", Count: len(result.UnknownState)},
+		{ID: "skipped_discovery_sources", Label: "Skipped discovery sources", Count: len(result.Skipped)},
+	}
 	return result
 }
 
