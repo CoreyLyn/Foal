@@ -73,6 +73,18 @@ type PreviewNotice struct {
 	Message string
 }
 
+type previewReportPresentation struct {
+	defaultCandidateLabel string
+	skippedLabel          string
+	inspectionErrorLabel  string
+}
+
+var plainPreviewReportPresentation = previewReportPresentation{
+	defaultCandidateLabel: "default candidate",
+	skippedLabel:          "skipped",
+	inspectionErrorLabel:  "inspection error",
+}
+
 func NewPreviewReadModel(result Result) PreviewReadModel {
 	candidates := make([]PreviewCandidate, 0, len(result.Candidates))
 	var potentialSpace int64
@@ -145,6 +157,10 @@ func isPermissionBoundaryCode(code string) bool {
 }
 
 func RenderPreviewReport(model PreviewReadModel) string {
+	return renderPreviewReport(model, plainPreviewReportPresentation)
+}
+
+func renderPreviewReport(model PreviewReadModel, presentation previewReportPresentation) string {
 	var builder strings.Builder
 	builder.WriteString(model.Title)
 	builder.WriteString("\n")
@@ -174,8 +190,8 @@ func RenderPreviewReport(model PreviewReadModel) string {
 		builder.WriteString("  No default candidates found.\n")
 	} else {
 		for _, candidate := range model.Candidates {
-			builder.WriteString(fmt.Sprintf("  %s (%s, rule: %s, planned action: Recycle Bin)\n",
-				candidate.Path, formatBytes(candidate.Bytes), candidate.Rule))
+			builder.WriteString(fmt.Sprintf("  %s (%s, %srule: %s, planned action: Recycle Bin)\n",
+				candidate.Path, formatBytes(candidate.Bytes), statusLabel(presentation.defaultCandidateLabel), candidate.Rule))
 		}
 	}
 
@@ -184,8 +200,8 @@ func RenderPreviewReport(model PreviewReadModel) string {
 		builder.WriteString("  No skipped cleanup paths reported.\n")
 	} else {
 		for _, skipped := range model.Skipped {
-			builder.WriteString(fmt.Sprintf("  %s (rule: %s, reason: %s, recoverable: %t)\n",
-				skipped.Path, skipped.Rule, skipped.Reason.Code, skipped.Reason.Recoverable))
+			builder.WriteString(fmt.Sprintf("  %s (%srule: %s, reason: %s, recoverable: %t)\n",
+				skipped.Path, statusLabel(presentation.skippedLabel), skipped.Rule, skipped.Reason.Code, skipped.Reason.Recoverable))
 			if skipped.Reason.Message != "" {
 				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason.Message))
 			}
@@ -255,8 +271,8 @@ func RenderPreviewReport(model PreviewReadModel) string {
 		builder.WriteString("  No recoverable inspection errors reported.\n")
 	} else {
 		for _, err := range model.Errors {
-			builder.WriteString(fmt.Sprintf("  %s (rule: %s, error: %s, recoverable: %t)\n",
-				err.Path, err.Rule, err.Code, err.Recoverable))
+			builder.WriteString(fmt.Sprintf("  %s (%srule: %s, error: %s, recoverable: %t)\n",
+				err.Path, statusLabel(presentation.inspectionErrorLabel), err.Rule, err.Code, err.Recoverable))
 			if err.Message != "" {
 				builder.WriteString(fmt.Sprintf("    %s\n", err.Message))
 			}
@@ -268,6 +284,13 @@ func RenderPreviewReport(model PreviewReadModel) string {
 	builder.WriteString(model.Summary)
 	builder.WriteString("\n")
 	return builder.String()
+}
+
+func statusLabel(label string) string {
+	if label == "" {
+		return ""
+	}
+	return fmt.Sprintf("status: %s, ", label)
 }
 
 func formatBytes(bytes int64) string {
