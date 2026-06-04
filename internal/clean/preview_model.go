@@ -6,17 +6,21 @@ import (
 )
 
 type PreviewReadModel struct {
-	Title               string
-	Status              string
-	ProtectionRules     []PreviewProtectionRule
-	Candidates          []PreviewCandidate
-	Skipped             []PreviewSkippedItem
-	Errors              []StructuredIssue
-	Notices             []PreviewNotice
-	PotentialSpaceBytes int64
-	CandidateCount      int
-	SkippedCount        int
-	Summary             string
+	Title                   string
+	Status                  string
+	ProtectionRules         []PreviewProtectionRule
+	Candidates              []PreviewCandidate
+	Skipped                 []PreviewSkippedItem
+	SkippedByDefault        []PreviewSkippedByDefaultItem
+	ReviewClues             []PreviewReviewClue
+	ReviewSuggestions       []PreviewReviewSuggestion
+	RunningApplicationSkips []PreviewRunningApplicationSkip
+	Errors                  []StructuredIssue
+	Notices                 []PreviewNotice
+	PotentialSpaceBytes     int64
+	CandidateCount          int
+	SkippedCount            int
+	Summary                 string
 }
 
 type PreviewProtectionRule struct {
@@ -36,6 +40,31 @@ type PreviewSkippedItem struct {
 	Bytes  int64
 	Rule   string
 	Reason StructuredIssue
+}
+
+type PreviewSkippedByDefaultItem struct {
+	Name   string
+	Path   string
+	Bytes  int64
+	Reason string
+}
+
+type PreviewReviewClue struct {
+	Name    string
+	Path    string
+	Details string
+}
+
+type PreviewReviewSuggestion struct {
+	Label    string
+	NextStep string
+}
+
+type PreviewRunningApplicationSkip struct {
+	Name        string
+	Path        string
+	Application string
+	Reason      string
 }
 
 type PreviewNotice struct {
@@ -154,6 +183,64 @@ func RenderPreviewReport(model PreviewReadModel) string {
 				skipped.Path, skipped.Rule, skipped.Reason.Code, skipped.Reason.Recoverable))
 			if skipped.Reason.Message != "" {
 				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason.Message))
+			}
+		}
+	}
+
+	if len(model.SkippedByDefault) > 0 {
+		builder.WriteString("\nSkipped by default\n")
+		for _, skipped := range model.SkippedByDefault {
+			builder.WriteString(fmt.Sprintf("  %s", skipped.Name))
+			if skipped.Path != "" {
+				builder.WriteString(fmt.Sprintf(" - %s", skipped.Path))
+			}
+			if skipped.Bytes > 0 {
+				builder.WriteString(fmt.Sprintf(" (%s, not counted as Potential space)", formatBytes(skipped.Bytes)))
+			}
+			builder.WriteString("\n")
+			if skipped.Reason != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason))
+			}
+		}
+	}
+
+	if len(model.ReviewClues) > 0 {
+		builder.WriteString("\nReview clues\n")
+		for _, clue := range model.ReviewClues {
+			builder.WriteString(fmt.Sprintf("  %s", clue.Name))
+			if clue.Path != "" {
+				builder.WriteString(fmt.Sprintf(" - %s", clue.Path))
+			}
+			builder.WriteString("\n")
+			if clue.Details != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", clue.Details))
+			}
+		}
+	}
+
+	if len(model.ReviewSuggestions) > 0 {
+		builder.WriteString("\nReview suggestions\n")
+		for _, suggestion := range model.ReviewSuggestions {
+			builder.WriteString(fmt.Sprintf("  %s\n", suggestion.Label))
+			if suggestion.NextStep != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", suggestion.NextStep))
+			}
+		}
+	}
+
+	if len(model.RunningApplicationSkips) > 0 {
+		builder.WriteString("\nRunning application skips\n")
+		for _, skipped := range model.RunningApplicationSkips {
+			builder.WriteString(fmt.Sprintf("  %s", skipped.Name))
+			if skipped.Application != "" {
+				builder.WriteString(fmt.Sprintf(" (%s)", skipped.Application))
+			}
+			if skipped.Path != "" {
+				builder.WriteString(fmt.Sprintf(" - %s", skipped.Path))
+			}
+			builder.WriteString("\n")
+			if skipped.Reason != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason))
 			}
 		}
 	}
