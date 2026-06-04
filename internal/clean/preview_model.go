@@ -85,6 +85,8 @@ var plainPreviewReportPresentation = previewReportPresentation{
 	inspectionErrorLabel:  "inspection error",
 }
 
+const previewReportSectionEntryLimit = 10
+
 func NewPreviewReadModel(result Result) PreviewReadModel {
 	candidates := make([]PreviewCandidate, 0, len(result.Candidates))
 	var potentialSpace int64
@@ -189,23 +191,25 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 	if len(model.Candidates) == 0 {
 		builder.WriteString("  No default candidates found.\n")
 	} else {
-		for _, candidate := range model.Candidates {
+		for _, candidate := range model.Candidates[:cappedEntryCount(len(model.Candidates))] {
 			builder.WriteString(fmt.Sprintf("  %s (%s, %srule: %s, planned action: Recycle Bin)\n",
 				candidate.Path, formatBytes(candidate.Bytes), statusLabel(presentation.defaultCandidateLabel), candidate.Rule))
 		}
+		writeOmittedLine(&builder, len(model.Candidates), model.DetailedListPath)
 	}
 
 	builder.WriteString("\nSkipped items\n")
 	if len(model.Skipped) == 0 {
 		builder.WriteString("  No skipped cleanup paths reported.\n")
 	} else {
-		for _, skipped := range model.Skipped {
+		for _, skipped := range model.Skipped[:cappedEntryCount(len(model.Skipped))] {
 			builder.WriteString(fmt.Sprintf("  %s (%srule: %s, reason: %s, recoverable: %t)\n",
 				skipped.Path, statusLabel(presentation.skippedLabel), skipped.Rule, skipped.Reason.Code, skipped.Reason.Recoverable))
 			if skipped.Reason.Message != "" {
 				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason.Message))
 			}
 		}
+		writeOmittedLine(&builder, len(model.Skipped), model.DetailedListPath)
 	}
 
 	if len(model.SkippedByDefault) > 0 {
@@ -270,13 +274,14 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 	if len(model.Errors) == 0 {
 		builder.WriteString("  No recoverable inspection errors reported.\n")
 	} else {
-		for _, err := range model.Errors {
+		for _, err := range model.Errors[:cappedEntryCount(len(model.Errors))] {
 			builder.WriteString(fmt.Sprintf("  %s (%srule: %s, error: %s, recoverable: %t)\n",
 				err.Path, statusLabel(presentation.inspectionErrorLabel), err.Rule, err.Code, err.Recoverable))
 			if err.Message != "" {
 				builder.WriteString(fmt.Sprintf("    %s\n", err.Message))
 			}
 		}
+		writeOmittedLine(&builder, len(model.Errors), model.DetailedListPath)
 	}
 
 	builder.WriteString("\n")
@@ -284,6 +289,25 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 	builder.WriteString(model.Summary)
 	builder.WriteString("\n")
 	return builder.String()
+}
+
+func cappedEntryCount(count int) int {
+	if count > previewReportSectionEntryLimit {
+		return previewReportSectionEntryLimit
+	}
+	return count
+}
+
+func writeOmittedLine(builder *strings.Builder, count int, detailedListPath string) {
+	omitted := count - previewReportSectionEntryLimit
+	if omitted <= 0 {
+		return
+	}
+	builder.WriteString(fmt.Sprintf("  %d omitted.", omitted))
+	if detailedListPath != "" {
+		builder.WriteString(fmt.Sprintf(" See detailed candidate list for full path detail: %s", detailedListPath))
+	}
+	builder.WriteString("\n")
 }
 
 func statusLabel(label string) string {
