@@ -10,6 +10,9 @@ type PreviewReadModel struct {
 	Status              string
 	ProtectionRules     []PreviewProtectionRule
 	Candidates          []PreviewCandidate
+	Skipped             []PreviewSkippedItem
+	Errors              []StructuredIssue
+	Notices             []PreviewNotice
 	PotentialSpaceBytes int64
 	CandidateCount      int
 	SkippedCount        int
@@ -26,6 +29,18 @@ type PreviewCandidate struct {
 	Bytes         int64
 	Rule          string
 	PlannedAction string
+}
+
+type PreviewSkippedItem struct {
+	Path   string
+	Bytes  int64
+	Rule   string
+	Reason StructuredIssue
+}
+
+type PreviewNotice struct {
+	Kind    string
+	Message string
 }
 
 func NewPreviewReadModel(result Result) PreviewReadModel {
@@ -52,16 +67,50 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		})
 	}
 
+	skippedItems := make([]PreviewSkippedItem, 0, len(result.Skipped))
+	hasPermissionBoundary := false
+	for _, skipped := range result.Skipped {
+		if isPermissionBoundaryCode(skipped.Reason.Code) {
+			hasPermissionBoundary = true
+		}
+		skippedItems = append(skippedItems, PreviewSkippedItem{
+			Path:   skipped.Path,
+			Bytes:  skipped.Bytes,
+			Rule:   skipped.Rule,
+			Reason: skipped.Reason,
+		})
+	}
+	for _, err := range result.Errors {
+		if isPermissionBoundaryCode(err.Code) {
+			hasPermissionBoundary = true
+		}
+	}
+
+	notices := []PreviewNotice{}
+	if hasPermissionBoundary {
+		notices = append(notices, PreviewNotice{
+			Kind:    "permission_boundary",
+			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
+		})
+	}
+
 	return PreviewReadModel{
 		Title:               "Foal clean",
 		Status:              "preview_only",
 		ProtectionRules:     protectionRules,
 		Candidates:          candidates,
+		Skipped:             skippedItems,
+		Errors:              append([]StructuredIssue(nil), result.Errors...),
+		Notices:             notices,
 		PotentialSpaceBytes: potentialSpace,
 		CandidateCount:      len(candidates),
 		SkippedCount:        len(result.Skipped),
 		Summary:             "Dry-run summary: No changes were made. Re-run with foal clean --execute to move these default candidates to the Recycle Bin.",
 	}
+}
+
+func isPermissionBoundaryCode(code string) bool {
+	return code == "protected_path" || code == "permission_denied"
 }
 
 func RenderPreviewReport(model PreviewReadModel) string {
@@ -79,6 +128,13 @@ func RenderPreviewReport(model PreviewReadModel) string {
 		}
 	}
 
+	if len(model.Notices) > 0 {
+		builder.WriteString("\nNotices\n")
+		for _, notice := range model.Notices {
+			builder.WriteString(fmt.Sprintf("  %s\n", notice.Message))
+		}
+	}
+
 	builder.WriteString("\nDefault candidates\n")
 	if len(model.Candidates) == 0 {
 		builder.WriteString("  No default candidates found.\n")
@@ -89,8 +145,34 @@ func RenderPreviewReport(model PreviewReadModel) string {
 		}
 	}
 
+	builder.WriteString("\nSkipped items\n")
+	if len(model.Skipped) == 0 {
+		builder.WriteString("  No skipped cleanup paths reported.\n")
+	} else {
+		for _, skipped := range model.Skipped {
+			builder.WriteString(fmt.Sprintf("  %s (rule: %s, reason: %s, recoverable: %t)\n",
+				skipped.Path, skipped.Rule, skipped.Reason.Code, skipped.Reason.Recoverable))
+			if skipped.Reason.Message != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason.Message))
+			}
+		}
+	}
+
+	builder.WriteString("\nInspection errors\n")
+	if len(model.Errors) == 0 {
+		builder.WriteString("  No recoverable inspection errors reported.\n")
+	} else {
+		for _, err := range model.Errors {
+			builder.WriteString(fmt.Sprintf("  %s (rule: %s, error: %s, recoverable: %t)\n",
+				err.Path, err.Rule, err.Code, err.Recoverable))
+			if err.Message != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", err.Message))
+			}
+		}
+	}
+
 	builder.WriteString("\n")
-	builder.WriteString(fmt.Sprintf("Candidates: %d, skipped: %d.\n", model.CandidateCount, model.SkippedCount))
+	builder.WriteString(fmt.Sprintf("Candidates: %d, skipped: %d, errors: %d.\n", model.CandidateCount, model.SkippedCount, len(model.Errors)))
 	builder.WriteString(model.Summary)
 	builder.WriteString("\n")
 	return builder.String()
