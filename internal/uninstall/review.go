@@ -77,30 +77,42 @@ type ExecutionPolicy struct {
 	Reason  string   `json:"reason"`
 }
 
+type DiscoveryResult struct {
+	Evidence Evidence
+	Sources  []EvidenceSource
+	Skipped  []SkippedReason
+}
+
+var discoverUninstallEvidence = discoverPlatformUninstallEvidence
+
 func Review() Result {
-	sources := []EvidenceSource{
-		{Source: "windows_registry_uninstall_keys", Status: "skipped", Reason: "discovery provider not implemented"},
-		{Source: "known_leftover_locations", Status: "skipped", Reason: "discovery provider not implemented"},
-	}
-	skipped := []SkippedReason{
-		{Source: "windows_registry_uninstall_keys", Reason: "discovery_provider_not_implemented", Recoverable: true},
-		{Source: "known_leftover_locations", Reason: "discovery_provider_not_implemented", Recoverable: true},
-	}
-	if runtime.GOOS != "windows" {
-		sources = append(sources, EvidenceSource{Source: "windows_only_evidence", Status: "skipped", Reason: "not running on Windows"})
-		skipped = append(skipped, SkippedReason{Source: "windows_only_evidence", Reason: "unsupported_platform", Recoverable: true})
+	discovery := discoverUninstallEvidence()
+	result := ReviewEvidence(discovery.Evidence)
+
+	result.EvidenceSources = append([]EvidenceSource{}, discovery.Sources...)
+	result.Skipped = append([]SkippedReason{}, discovery.Skipped...)
+	if len(result.EvidenceSources) == 0 && len(discovery.Evidence.Applications) > 0 {
+		result.EvidenceSources = evidenceSources(discovery.Evidence)
 	}
 
-	return Result{
-		Status:              "preview",
-		Applications:        []Application{},
-		EvidenceSources:     sources,
-		PossibleLeftovers:   []LeftoverCandidate{},
-		SharedStateConcerns: []SharedStateConcern{},
-		UnknownState:        []UnknownStateCandidate{},
-		Skipped:             skipped,
-		Execution:           previewOnlyExecution(),
+	result.EvidenceSources = append(result.EvidenceSources, EvidenceSource{Source: "known_leftover_locations", Status: "skipped", Reason: "discovery provider not implemented"})
+	result.Skipped = append(result.Skipped, SkippedReason{Source: "known_leftover_locations", Reason: "discovery_provider_not_implemented", Recoverable: true})
+
+	if runtime.GOOS != "windows" && !hasSkippedSource(result.Skipped, "windows_only_evidence") {
+		result.EvidenceSources = append(result.EvidenceSources, EvidenceSource{Source: "windows_only_evidence", Status: "skipped", Reason: "not running on Windows"})
+		result.Skipped = append(result.Skipped, SkippedReason{Source: "windows_only_evidence", Reason: "unsupported_platform", Recoverable: true})
 	}
+
+	return result
+}
+
+func hasSkippedSource(skipped []SkippedReason, source string) bool {
+	for _, item := range skipped {
+		if item.Source == source {
+			return true
+		}
+	}
+	return false
 }
 
 func ReviewEvidence(evidence Evidence) Result {
