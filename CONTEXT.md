@@ -20,9 +20,9 @@ _Avoid_: default-enabled cache rules
 Read-only cleanup hints that Foal surfaces for manual investigation without treating them as cleanup candidates.
 _Avoid_: cleanup candidates, executable actions
 
-**Human report symbols**:
-Presentation-only markers used in non-JSON output to make preview state, skipped state, clean state, clues, and review suggestions easier to scan.
-_Avoid_: JSON status codes, execution semantics
+**Human report labels**:
+Plain ASCII presentation-only labels used in non-JSON output to make preview state, skipped state, clean state, clues, and review suggestions easier to scan.
+_Avoid_: Unicode symbols, JSON status codes, execution semantics
 
 **Permission boundary notice**:
 A human-readable notice that explains protected or administrator-only locations were skipped without recommending elevation as the normal path.

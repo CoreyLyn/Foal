@@ -68,7 +68,9 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 ## Phase 3A: Clean Dry-Run Human Report
 
 - Start with the clean preview read model and human report renderer over existing conservative clean data; do not introduce new scanner rules in the first implementation slice.
-- Add a Mole-inspired but Windows-native non-JSON `foal clean --dry-run` report with grouped sections, scan-friendly symbols, clear preview-only wording, and a final summary.
+- Add a Mole-inspired but Windows-native non-JSON `foal clean --dry-run` report with grouped sections, plain ASCII scan-friendly labels, clear preview-only wording, and a final summary.
+- Keep terminal output focused on summary, grouped overview, counts, and short candidate samples; put full path detail in the detailed candidate list.
+- Show at most 10 default candidates, skipped items, or inspection errors per terminal report section; when a section is truncated, point to the detailed candidate list for the full path detail.
 - Display `Protection rules` instead of `Whitelist`, using Foal's Windows path-safety boundaries as the primary language.
 - Include a permission boundary notice when administrator-only or protected locations are skipped, without recommending elevation as the normal path.
 - Write a detailed candidate list under Foal's config/history area as a human-readable companion artifact, not as an execution manifest.
