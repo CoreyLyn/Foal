@@ -2,6 +2,7 @@ package clean_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,6 +168,69 @@ func TestDryRunRecordsSkippedAndErrorHistoryItems(t *testing.T) {
 		t.Fatalf("error item = %#v, want missing root error", errorItem)
 	}
 	mustHaveIssue(t, errorItem.Error, "not_found")
+}
+
+func TestDryRunWritesDetailedCandidateListUnderConfiguredHistoryArea(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "foal-cache.tmp")
+	if err := os.WriteFile(candidate, []byte("SECRET-CACHE-CONTENT"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	missingRoot := filepath.Join(root, "missing")
+	detailedListDir := filepath.Join(t.TempDir(), "Foal", "history")
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		DetailedListDir: detailedListDir,
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate, `\\?\C:\Windows\System32`},
+			Roots:          []string{missingRoot},
+		}},
+	})
+
+	if result.DetailedListPath == "" {
+		t.Fatal("detailed list path is empty")
+	}
+	if gotDir := filepath.Dir(result.DetailedListPath); gotDir != detailedListDir {
+		t.Fatalf("detailed list dir = %q, want %q", gotDir, detailedListDir)
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.Base(result.DetailedListPath))); !os.IsNotExist(err) {
+		t.Fatalf("detailed list was written near working candidate root; stat err = %v", err)
+	}
+
+	data, err := os.ReadFile(result.DetailedListPath)
+	if err != nil {
+		t.Fatalf("read detailed list: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"Foal clean detailed candidate list",
+		"Companion file only",
+		candidate,
+		"bytes: 20",
+		"planned action: Recycle Bin",
+		`\\?\C:\Windows\System32`,
+		"reason: protected_path",
+		missingRoot,
+		"error: not_found",
+		"recoverable: true",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("detailed list missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "SECRET-CACHE-CONTENT") {
+		t.Fatalf("detailed list leaked file contents:\n%s", text)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal dry-run result: %v", err)
+	}
+	if strings.Contains(string(encoded), "detailed_list_path") || strings.Contains(string(encoded), result.DetailedListPath) {
+		t.Fatalf("dry-run JSON leaked detailed list path:\n%s", encoded)
+	}
 }
 
 func TestDryRunUsesOnlyDefaultEnabledRules(t *testing.T) {

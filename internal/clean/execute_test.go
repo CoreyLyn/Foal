@@ -201,6 +201,53 @@ func TestExecuteRecordsSkippedHistoryItemForRecycleBinFailure(t *testing.T) {
 	}
 }
 
+func TestExecuteIgnoresDryRunDetailedListAndUsesFreshCandidates(t *testing.T) {
+	root := t.TempDir()
+	staleCandidate := filepath.Join(root, "foal-stale.tmp")
+	freshCandidate := filepath.Join(root, "foal-fresh.tmp")
+	if err := os.WriteFile(staleCandidate, []byte("stale"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(freshCandidate, []byte("fresh"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	detailedListDir := filepath.Join(t.TempDir(), "Foal", "history")
+	dryRunResult := clean.DryRun(context.Background(), clean.Options{
+		DetailedListDir: detailedListDir,
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{staleCandidate},
+		}},
+	})
+	if dryRunResult.DetailedListPath == "" {
+		t.Fatal("dry-run detailed list path is empty")
+	}
+	if err := os.WriteFile(dryRunResult.DetailedListPath, []byte("execution manifest attempt\n"+staleCandidate+"\n"), 0600); err != nil {
+		t.Fatalf("poison detailed list: %v", err)
+	}
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		RecycleBinAdapter: adapter,
+		DetailedListDir:   detailedListDir,
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{freshCandidate},
+		}},
+	})
+
+	if result.Mode != "execute" || result.DetailedListPath != "" {
+		t.Fatalf("result mode/path = %q/%q, want execute with no detailed list path", result.Mode, result.DetailedListPath)
+	}
+	if len(adapter.paths) != 1 || adapter.paths[0] != freshCandidate {
+		t.Fatalf("adapter paths = %v, want only fresh candidate %q", adapter.paths, freshCandidate)
+	}
+}
+
 type failingRecycleBinAdapter struct {
 	err error
 }
