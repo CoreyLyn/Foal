@@ -363,3 +363,79 @@ func TestPreviewReadModelRepresentsSkippedUnsafePathsAndRecoverableErrors(t *tes
 		t.Fatalf("notices = %#v, want one permission boundary notice", model.Notices)
 	}
 }
+
+func TestPreviewReportRendersReviewOnlySectionsWithoutExecutionSemantics(t *testing.T) {
+	model := clean.PreviewReadModel{
+		Title:  "Foal clean",
+		Status: "preview_only",
+		ProtectionRules: []clean.PreviewProtectionRule{{
+			ID:          "foal_owned_temp_sandboxes",
+			Description: "Foal-owned temporary sandbox entries",
+		}},
+		Candidates: []clean.PreviewCandidate{{
+			Path:          `C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+			Bytes:         12,
+			Rule:          "foal_owned_temp_sandboxes",
+			PlannedAction: "move_to_recycle_bin",
+		}},
+		SkippedByDefault: []clean.PreviewSkippedByDefaultItem{{
+			Name:   "Browser cache family",
+			Path:   `C:\Users\corey\AppData\Local\Browser\Cache`,
+			Bytes:  4096,
+			Reason: "requires explicit future opt-in",
+		}},
+		ReviewClues: []clean.PreviewReviewClue{{
+			Name:    "Project artifact clue",
+			Path:    `D:\Code\Personal\Foal\node_modules`,
+			Details: "Rebuildable project output; review manually before deleting.",
+		}},
+		ReviewSuggestions: []clean.PreviewReviewSuggestion{{
+			Label:    "Open Windows Storage settings",
+			NextStep: "Use Windows Settings to review large app storage.",
+		}},
+		RunningApplicationSkips: []clean.PreviewRunningApplicationSkip{{
+			Name:        "Sync client cache",
+			Path:        `C:\Users\corey\Sync\Cache`,
+			Application: "SyncClient.exe",
+			Reason:      "application is running",
+		}},
+		PotentialSpaceBytes: 12,
+		CandidateCount:      1,
+		SkippedCount:        0,
+		Summary:             "Dry-run summary: No changes were made.",
+	}
+
+	output := clean.RenderPreviewReport(model)
+
+	for _, want := range []string{
+		"Potential space: 12 bytes",
+		"Default candidates",
+		`C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+		"Skipped by default",
+		"Browser cache family",
+		"Review clues",
+		"Project artifact clue",
+		"Review suggestions",
+		"Use Windows Settings to review large app storage.",
+		"Running application skips",
+		"SyncClient.exe",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{
+		"Potential space: 4108 bytes",
+		"Potential space: 8204 bytes",
+		"planned action: Recycle Bin)\n  Browser cache family",
+		"close",
+		"Close",
+		"execute",
+		"Execute",
+		"move_to_recycle_bin",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains forbidden execution semantics %q:\n%s", forbidden, output)
+		}
+	}
+}
