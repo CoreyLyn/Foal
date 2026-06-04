@@ -20,6 +20,7 @@ type PreviewReadModel struct {
 	PotentialSpaceBytes     int64
 	CandidateCount          int
 	SkippedCount            int
+	DetailedListPath        string
 	Summary                 string
 }
 
@@ -134,6 +135,7 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		PotentialSpaceBytes: potentialSpace,
 		CandidateCount:      len(candidates),
 		SkippedCount:        len(result.Skipped),
+		DetailedListPath:    result.DetailedListPath,
 		Summary:             "Dry-run summary: No changes were made. Re-run with foal clean --execute to move these default candidates to the Recycle Bin.",
 	}
 }
@@ -148,6 +150,9 @@ func RenderPreviewReport(model PreviewReadModel) string {
 	builder.WriteString("\n")
 	builder.WriteString("Preview only: Foal inspected default cleanup candidates and did not change files.\n")
 	builder.WriteString(fmt.Sprintf("Potential space: %s\n", formatBytes(model.PotentialSpaceBytes)))
+	if model.DetailedListPath != "" {
+		builder.WriteString(fmt.Sprintf("Detailed candidate list: %s\n", model.DetailedListPath))
+	}
 	builder.WriteString("\nProtection rules\n")
 	if len(model.ProtectionRules) == 0 {
 		builder.WriteString("  No default-enabled protection rules were reported.\n")

@@ -312,7 +312,8 @@ func TestCleanDryRunNonJSONRendersPreviewReadModelReport(t *testing.T) {
 				Rule:          "foal_owned_temp_sandboxes",
 				PlannedAction: "move_to_recycle_bin",
 			}},
-			Skipped: []clean.SkippedItem{},
+			Skipped:          []clean.SkippedItem{},
+			DetailedListPath: `C:\Users\corey\AppData\Roaming\Foal\history\clean-dry-run-detail.txt`,
 		}
 	}
 
@@ -330,6 +331,7 @@ func TestCleanDryRunNonJSONRendersPreviewReadModelReport(t *testing.T) {
 		"Protection rules",
 		"Potential space: 12 bytes",
 		`C:\Users\corey\AppData\Local\Temp\foal-preview.tmp`,
+		`Detailed candidate list: C:\Users\corey\AppData\Roaming\Foal\history\clean-dry-run-detail.txt`,
 		"No changes were made",
 	} {
 		if !strings.Contains(output, want) {

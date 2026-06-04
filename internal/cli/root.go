@@ -45,6 +45,7 @@ var (
 	newHistoryQuery = func() (history.FileQuery, error) {
 		return history.NewDefaultFileQuery()
 	}
+	newHistoryDir = history.DefaultDir
 )
 
 // Run executes the Foal command line with output streams supplied by the caller.
@@ -163,8 +164,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		recorder, _ := newHistoryRecorder()
+		detailedListDir := ""
+		if invocation.dryRun {
+			detailedListDir, _ = newHistoryDir()
+		}
 		cleanOptions := clean.Options{
 			HistoryRecorder: recorder,
+			DetailedListDir: detailedListDir,
 			CommandParameters: history.CommandParameters{
 				Command: "clean",
 				Args:    append([]string(nil), args...),

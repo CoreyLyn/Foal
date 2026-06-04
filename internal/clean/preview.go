@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/CoreyLyn/Foal/internal/core/delete"
@@ -20,6 +21,7 @@ type Options struct {
 	Rules             []Rule
 	RecycleBinAdapter delete.Adapter
 	HistoryRecorder   history.Recorder
+	DetailedListDir   string
 	CommandParameters history.CommandParameters
 }
 
@@ -41,6 +43,7 @@ type Result struct {
 	Skipped            []SkippedItem      `json:"skipped"`
 	Errors             []StructuredIssue  `json:"errors"`
 	Totals             Totals             `json:"totals"`
+	DetailedListPath   string             `json:"detailed_list_path,omitempty"`
 	ElapsedMS          int64              `json:"elapsed_ms"`
 }
 
@@ -144,6 +147,15 @@ func dryRun(ctx context.Context, opts Options, recordHistory bool) Result {
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
+	if recordHistory && opts.DetailedListDir != "" {
+		path, err := writeDetailedCandidateList(opts.DetailedListDir, result, time.Now())
+		if err != nil {
+			result.Errors = append(result.Errors, issue("detailed_list_write_failed", err.Error(), true, opts.DetailedListDir, ""))
+			result.Totals = totals(result)
+		} else {
+			result.DetailedListPath = path
+		}
+	}
 	if recordHistory {
 		recordHistorySession(ctx, opts, result, start, time.Now())
 	}
@@ -284,6 +296,70 @@ func historyIssue(issue StructuredIssue) *history.Issue {
 		Message:     issue.Message,
 		Recoverable: issue.Recoverable,
 	}
+}
+
+func writeDetailedCandidateList(dir string, result Result, at time.Time) (string, error) {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, fmt.Sprintf("clean-dry-run-%s-detailed-candidates.txt", at.UTC().Format("20060102T150405.000000000Z")))
+	var builder strings.Builder
+	builder.WriteString("Foal clean detailed candidate list\n")
+	builder.WriteString("Companion file only. This is not an execution manifest; foal clean --execute performs a fresh scan and path-safety validation before using the Recycle Bin.\n\n")
+
+	builder.WriteString("Default candidates\n")
+	if len(result.Candidates) == 0 {
+		builder.WriteString("  No default candidates found.\n")
+	} else {
+		for _, candidate := range result.Candidates {
+			builder.WriteString(fmt.Sprintf("  path: %s\n", candidate.Path))
+			builder.WriteString(fmt.Sprintf("    rule: %s\n", candidate.Rule))
+			builder.WriteString(fmt.Sprintf("    bytes: %d\n", candidate.Bytes))
+			builder.WriteString(fmt.Sprintf("    planned action: %s (%s)\n", plannedActionLabel(candidate.PlannedAction), candidate.PlannedAction))
+		}
+	}
+
+	builder.WriteString("\nSkipped items\n")
+	if len(result.Skipped) == 0 {
+		builder.WriteString("  No skipped cleanup paths reported.\n")
+	} else {
+		for _, skipped := range result.Skipped {
+			builder.WriteString(fmt.Sprintf("  path: %s\n", skipped.Path))
+			builder.WriteString(fmt.Sprintf("    rule: %s\n", skipped.Rule))
+			if skipped.Bytes > 0 {
+				builder.WriteString(fmt.Sprintf("    bytes: %d\n", skipped.Bytes))
+			}
+			builder.WriteString(fmt.Sprintf("    reason: %s\n", skipped.Reason.Code))
+			if skipped.Reason.Message != "" {
+				builder.WriteString(fmt.Sprintf("    message: %s\n", skipped.Reason.Message))
+			}
+			builder.WriteString(fmt.Sprintf("    recoverable: %t\n", skipped.Reason.Recoverable))
+		}
+	}
+
+	builder.WriteString("\nRecoverable errors\n")
+	if len(result.Errors) == 0 {
+		builder.WriteString("  No recoverable inspection errors reported.\n")
+	} else {
+		for _, err := range result.Errors {
+			builder.WriteString(fmt.Sprintf("  path: %s\n", err.Path))
+			builder.WriteString(fmt.Sprintf("    rule: %s\n", err.Rule))
+			builder.WriteString(fmt.Sprintf("    error: %s\n", err.Code))
+			if err.Message != "" {
+				builder.WriteString(fmt.Sprintf("    message: %s\n", err.Message))
+			}
+			builder.WriteString(fmt.Sprintf("    recoverable: %t\n", err.Recoverable))
+		}
+	}
+
+	return path, os.WriteFile(path, []byte(builder.String()), 0600)
+}
+
+func plannedActionLabel(action string) string {
+	if action == plannedRecycleBinAction {
+		return "Recycle Bin"
+	}
+	return action
 }
 
 func DefaultRuleCatalog() []Rule {

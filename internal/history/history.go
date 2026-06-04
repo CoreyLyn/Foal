@@ -95,15 +95,23 @@ type FileQuery struct {
 }
 
 func NewDefaultFileRecorder() (FileRecorder, error) {
-	dir := os.Getenv("FOAL_HISTORY_DIR")
-	if dir == "" {
-		configDir, err := os.UserConfigDir()
-		if err != nil {
-			return FileRecorder{}, err
-		}
-		dir = filepath.Join(configDir, "Foal", "history")
+	dir, err := DefaultDir()
+	if err != nil {
+		return FileRecorder{}, err
 	}
 	return NewFileRecorder(dir), nil
+}
+
+func DefaultDir() (string, error) {
+	dir := os.Getenv("FOAL_HISTORY_DIR")
+	if dir != "" {
+		return dir, nil
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "Foal", "history"), nil
 }
 
 func NewFileRecorder(dir string) FileRecorder {
@@ -111,13 +119,9 @@ func NewFileRecorder(dir string) FileRecorder {
 }
 
 func NewDefaultFileQuery() (FileQuery, error) {
-	dir := os.Getenv("FOAL_HISTORY_DIR")
-	if dir == "" {
-		configDir, err := os.UserConfigDir()
-		if err != nil {
-			return FileQuery{}, err
-		}
-		dir = filepath.Join(configDir, "Foal", "history")
+	dir, err := DefaultDir()
+	if err != nil {
+		return FileQuery{}, err
 	}
 	return NewFileQuery(dir), nil
 }
