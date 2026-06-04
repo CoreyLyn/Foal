@@ -175,3 +175,44 @@ func TestReviewReportsRegistryDiscoveryFailuresAsRecoverableSkips(t *testing.T) 
 		t.Fatalf("execution actions = %#v, want empty", result.Execution.Actions)
 	}
 }
+
+func TestReviewReportsUnsupportedPlatformAsPreviewOnlyRecoverableSkip(t *testing.T) {
+	originalDiscover := discoverUninstallEvidence
+	discoverUninstallEvidence = func() DiscoveryResult {
+		return DiscoveryResult{
+			Sources: []EvidenceSource{{
+				Source: "windows_registry_uninstall_keys",
+				Status: "skipped",
+				Reason: "not running on Windows",
+			}},
+			Skipped: []SkippedReason{{
+				Source:      "windows_registry_uninstall_keys",
+				Reason:      "unsupported_platform",
+				Recoverable: true,
+			}},
+		}
+	}
+	t.Cleanup(func() { discoverUninstallEvidence = originalDiscover })
+
+	originalGOOS := runtimeGOOS
+	runtimeGOOS = "linux"
+	t.Cleanup(func() { runtimeGOOS = originalGOOS })
+
+	result := Review()
+
+	if len(result.Applications) != 0 {
+		t.Fatalf("applications = %#v, want none on unsupported platform", result.Applications)
+	}
+	if !hasSkippedSource(result.Skipped, "windows_registry_uninstall_keys") {
+		t.Fatalf("skipped = %#v, want registry unsupported_platform skip", result.Skipped)
+	}
+	if !hasSkippedSource(result.Skipped, "windows_only_evidence") {
+		t.Fatalf("skipped = %#v, want windows_only_evidence unsupported_platform skip", result.Skipped)
+	}
+	if result.Execution.Allowed {
+		t.Fatal("execution allowed = true, want false")
+	}
+	if len(result.Execution.Actions) != 0 {
+		t.Fatalf("execution actions = %#v, want empty", result.Execution.Actions)
+	}
+}

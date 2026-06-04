@@ -343,6 +343,96 @@ func TestUninstallJSONReportsRegistryDiscoveredApplications(t *testing.T) {
 	}
 }
 
+func TestUninstallJSONReviewSectionsUsePreviewTerminology(t *testing.T) {
+	original := reviewUninstall
+	reviewUninstall = func() uninstall.Result {
+		return uninstall.Result{
+			Status: "preview",
+			Applications: []uninstall.Application{{
+				Name:       "Registry App",
+				Version:    "2.4.6",
+				Publisher:  "Registry Publisher",
+				Evidence:   []string{"windows_registry_uninstall_keys:HKLM64"},
+				Confidence: "medium",
+				Ownership:  "unknown",
+			}},
+			EvidenceSources: []uninstall.EvidenceSource{{
+				Source: "windows_registry_uninstall_keys:HKLM64",
+				Status: "reported",
+			}, {
+				Source: "known_leftover_locations",
+				Status: "skipped",
+				Reason: "discovery provider not implemented",
+			}},
+			PossibleLeftovers:   []uninstall.LeftoverCandidate{},
+			SharedStateConcerns: []uninstall.SharedStateConcern{},
+			UnknownState:        []uninstall.UnknownStateCandidate{},
+			Skipped: []uninstall.SkippedReason{{
+				Source:      "known_leftover_locations",
+				Reason:      "discovery_provider_not_implemented",
+				Recoverable: true,
+			}},
+			Execution: uninstall.ExecutionPolicy{
+				Allowed: false,
+				Actions: []string{},
+				Reason:  "uninstall is preview-only",
+			},
+		}
+	}
+	t.Cleanup(func() { reviewUninstall = original })
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"uninstall", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	sections, ok := result["review_sections"].([]interface{})
+	if !ok {
+		t.Fatalf("review_sections has type %T, want array", result["review_sections"])
+	}
+	wantSections := map[string]float64{
+		"applications":              1,
+		"evidence_sources":          2,
+		"possible_leftovers":        0,
+		"shared_state_concerns":     0,
+		"unknown_state":             0,
+		"skipped_discovery_sources": 1,
+	}
+	if len(sections) != len(wantSections) {
+		t.Fatalf("review_sections = %#v, want %d sections", sections, len(wantSections))
+	}
+	for _, sectionValue := range sections {
+		section := sectionValue.(map[string]interface{})
+		id, _ := section["id"].(string)
+		wantCount, ok := wantSections[id]
+		if !ok {
+			t.Fatalf("section id = %q, want one of %#v", id, wantSections)
+		}
+		if section["label"] == "" {
+			t.Fatalf("section = %#v, want display label", section)
+		}
+		if section["count"] != wantCount {
+			t.Fatalf("section %q count = %v, want %v", id, section["count"], wantCount)
+		}
+		termText := strings.ToLower(id + " " + section["label"].(string))
+		for _, forbidden := range []string{"execute", "execution", "action", "delete", "deletion", "stop process", "uninstall command"} {
+			if strings.Contains(termText, forbidden) {
+				t.Fatalf("review section uses execution terminology %q in %#v", forbidden, section)
+			}
+		}
+	}
+	execution := result["execution"].(map[string]interface{})
+	if execution["allowed"] != false {
+		t.Fatalf("execution.allowed = %v, want false", execution["allowed"])
+	}
+	if actions := execution["actions"].([]interface{}); len(actions) != 0 {
+		t.Fatalf("execution.actions = %#v, want empty", actions)
+	}
+}
+
 func TestCommandSpecificArgumentsAreRouted(t *testing.T) {
 	disableHistoryRecording(t)
 	var stdout, stderr bytes.Buffer

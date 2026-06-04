@@ -123,7 +123,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if command == "uninstall" {
-		result := reviewUninstall()
+		result := uninstall.WithReviewSections(reviewUninstall())
 		if opts.json {
 			return writeJSON(stdout, envelope{Command: command, Result: result})
 		}
