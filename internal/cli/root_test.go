@@ -279,6 +279,103 @@ func TestUninstallJSONReportsPreviewOnlyReviewContract(t *testing.T) {
 	}
 }
 
+func TestUninstallNonJSONRendersPreviewReportCoreSections(t *testing.T) {
+	original := reviewUninstall
+	reviewUninstall = func() uninstall.Result {
+		return uninstall.WithReviewSections(uninstall.Result{
+			Status: "preview",
+			Applications: []uninstall.Application{{
+				Name:       "Registry App",
+				Version:    "2.4.6",
+				Publisher:  "Registry Publisher",
+				Evidence:   []string{"windows_registry_uninstall_keys:HKLM64"},
+				Confidence: "medium",
+				Ownership:  "unknown",
+			}},
+			EvidenceSources: []uninstall.EvidenceSource{{
+				Source: "windows_registry_uninstall_keys:HKLM64",
+				Status: "reported",
+			}},
+			PossibleLeftovers: []uninstall.LeftoverCandidate{{
+				Path:       `C:\Users\corey\AppData\Local\Registry App`,
+				App:        "Registry App",
+				Ownership:  "app_owned",
+				Confidence: "high",
+				Reason:     "leftover signals tie this path to one application",
+			}},
+			SharedStateConcerns: []uninstall.SharedStateConcern{{
+				Path:   `C:\ProgramData\Registry Publisher`,
+				Reason: "candidate appears to contain shared application or publisher state",
+			}},
+			UnknownState: []uninstall.UnknownStateCandidate{{
+				Path:   `C:\Users\corey\AppData\Roaming\mystery`,
+				Reason: "evidence is too weak for an ownership decision",
+			}},
+			Skipped: []uninstall.SkippedReason{{
+				Source:      "known_leftover_locations",
+				Reason:      "discovery_provider_not_implemented",
+				Recoverable: true,
+			}},
+			Execution: uninstall.ExecutionPolicy{
+				Allowed: false,
+				Actions: []string{},
+				Reason:  "uninstall is preview-only; Foal does not execute uninstallers, stop processes, or delete leftovers",
+			},
+		})
+	}
+	t.Cleanup(func() { reviewUninstall = original })
+
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"uninstall"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Foal uninstall",
+		"Preview only",
+		"uninstall is preview-only; Foal does not execute uninstallers, stop processes, or delete leftovers",
+		"Applications",
+		"Evidence sources",
+		"Possible leftovers",
+		"Shared state concerns",
+		"Unknown state",
+		"Skipped discovery sources",
+		"Summary:",
+		"Registry App",
+		`C:\Users\corey\AppData\Local\Registry App`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	assertContainsInOrder(t, output, []string{
+		"Applications",
+		"Evidence sources",
+		"Possible leftovers",
+		"Shared state concerns",
+		"Unknown state",
+		"Skipped discovery sources",
+		"Summary:",
+	})
+	for _, forbidden := range []string{
+		"foal uninstall --execute",
+		"Run uninstaller",
+		"Stop process",
+		"Delete leftover",
+		"Actions:",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains unsupported execution wording %q:\n%s", forbidden, output)
+		}
+	}
+}
+
 func TestUninstallJSONReportsRegistryDiscoveredApplications(t *testing.T) {
 	original := reviewUninstall
 	reviewUninstall = func() uninstall.Result {
@@ -1147,4 +1244,20 @@ func readDirNames(t *testing.T, dir string) []string {
 		names = append(names, entry.Name())
 	}
 	return names
+}
+
+func assertContainsInOrder(t *testing.T, text string, values []string) {
+	t.Helper()
+
+	previous := -1
+	for _, value := range values {
+		index := strings.Index(text, value)
+		if index == -1 {
+			t.Fatalf("missing ordered value %q in:\n%s", value, text)
+		}
+		if index < previous {
+			t.Fatalf("%q appeared before the prior value in:\n%s", value, text)
+		}
+		previous = index
+	}
 }
