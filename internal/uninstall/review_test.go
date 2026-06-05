@@ -1,6 +1,7 @@
 package uninstall
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -88,6 +89,118 @@ func TestRenderPreviewReportShowsCoreSectionsInReviewOrder(t *testing.T) {
 	} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("output contains unsupported execution wording %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestRenderPreviewReportUsesCapabilityAwareEmptyStatesAndConfidenceNote(t *testing.T) {
+	result := WithReviewSections(Result{
+		Status: "preview",
+		Applications: []Application{{
+			Name:       "Example App",
+			Evidence:   []string{"windows_registry_uninstall_keys:HKLM64"},
+			Confidence: "medium",
+			Ownership:  "unknown",
+		}},
+		EvidenceSources: []EvidenceSource{{
+			Source: "windows_registry_uninstall_keys:HKLM64",
+			Status: "reported",
+		}, {
+			Source: "known_leftover_locations",
+			Status: "skipped",
+			Reason: "discovery provider not implemented",
+		}},
+		PossibleLeftovers:   []LeftoverCandidate{},
+		SharedStateConcerns: []SharedStateConcern{},
+		UnknownState:        []UnknownStateCandidate{},
+		Skipped: []SkippedReason{{
+			Source:      "known_leftover_locations",
+			Reason:      "discovery_provider_not_implemented",
+			Recoverable: true,
+		}},
+		Execution: previewOnlyExecution(),
+	})
+
+	output := RenderPreviewReport(result)
+
+	for _, want := range []string{
+		"Applications are reported at medium confidence; high-confidence ownership requires multi-source evidence, not implemented yet",
+		"Not inspected: leftover discovery is not implemented yet (see Skipped discovery sources)",
+		"Skipped discovery sources",
+		"known_leftover_locations",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if got := strings.Count(output, "Not inspected: leftover discovery is not implemented yet (see Skipped discovery sources)"); got != 3 {
+		t.Fatalf("not-inspected lines = %d, want 3:\n%s", got, output)
+	}
+	for _, forbidden := range []string{
+		"    confidence:",
+		"    ownership:",
+		"  - known_leftover_locations\n    status: skipped",
+		"None reported",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains forbidden %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestRenderPreviewReportSaysNoneFoundWhenLeftoversWereInspectedAndEmpty(t *testing.T) {
+	result := WithReviewSections(Result{
+		Status:              "preview",
+		Applications:        []Application{},
+		EvidenceSources:     []EvidenceSource{},
+		PossibleLeftovers:   []LeftoverCandidate{},
+		SharedStateConcerns: []SharedStateConcern{},
+		UnknownState:        []UnknownStateCandidate{},
+		Skipped:             []SkippedReason{},
+		Execution:           previewOnlyExecution(),
+	})
+
+	output := RenderPreviewReport(result)
+
+	if strings.Contains(output, "Not inspected:") {
+		t.Fatalf("output contains not-inspected state for inspected empty leftovers:\n%s", output)
+	}
+	for _, section := range []string{"Possible leftovers", "Shared state concerns", "Unknown state"} {
+		sectionText := sectionText(t, output, section)
+		if !strings.Contains(sectionText, "  none found") {
+			t.Fatalf("%s missing none found empty state:\n%s", section, sectionText)
+		}
+	}
+}
+
+func TestRenderPreviewReportCapsEverySectionAtTenEntries(t *testing.T) {
+	result := WithReviewSections(Result{
+		Status:              "preview",
+		Applications:        manyApplications(11),
+		EvidenceSources:     manyEvidenceSources(11),
+		PossibleLeftovers:   manyLeftovers(11),
+		SharedStateConcerns: manySharedStateConcerns(11),
+		UnknownState:        manyUnknownState(11),
+		Skipped:             manySkippedReasons(11),
+		Execution:           previewOnlyExecution(),
+	})
+
+	output := RenderPreviewReport(result)
+
+	for _, section := range []string{
+		"Applications",
+		"Evidence sources (reported)",
+		"Possible leftovers",
+		"Shared state concerns",
+		"Unknown state",
+		"Skipped discovery sources",
+	} {
+		sectionText := sectionText(t, output, section)
+		if got := strings.Count(sectionText, "  - "); got != 10 {
+			t.Fatalf("%s entries = %d, want 10:\n%s", section, got, sectionText)
+		}
+		if !strings.Contains(sectionText, "  1 omitted. See foal uninstall --json.") {
+			t.Fatalf("%s missing JSON overflow line:\n%s", section, sectionText)
 		}
 	}
 }
@@ -331,4 +444,91 @@ func assertASCII(t *testing.T, text string) {
 			t.Fatalf("output contains non-ASCII rune %q:\n%s", r, text)
 		}
 	}
+}
+
+func sectionText(t *testing.T, output, section string) string {
+	t.Helper()
+
+	start := strings.Index(output, section+"\n")
+	if start == -1 {
+		t.Fatalf("missing section %q in:\n%s", section, output)
+	}
+	rest := output[start:]
+	end := strings.Index(rest, "\n\n")
+	if end == -1 {
+		return rest
+	}
+	return rest[:end]
+}
+
+func manyApplications(count int) []Application {
+	applications := make([]Application, 0, count)
+	for i := 1; i <= count; i++ {
+		applications = append(applications, Application{
+			Name:       fmt.Sprintf("App %02d", i),
+			Evidence:   []string{"windows_registry_uninstall_keys:HKLM64"},
+			Confidence: "medium",
+			Ownership:  "unknown",
+		})
+	}
+	return applications
+}
+
+func manyEvidenceSources(count int) []EvidenceSource {
+	sources := make([]EvidenceSource, 0, count)
+	for i := 1; i <= count; i++ {
+		sources = append(sources, EvidenceSource{
+			Source: fmt.Sprintf("source_%02d", i),
+			Status: "reported",
+		})
+	}
+	return sources
+}
+
+func manyLeftovers(count int) []LeftoverCandidate {
+	leftovers := make([]LeftoverCandidate, 0, count)
+	for i := 1; i <= count; i++ {
+		leftovers = append(leftovers, LeftoverCandidate{
+			Path:       fmt.Sprintf(`C:\Users\corey\AppData\Local\App%02d`, i),
+			App:        fmt.Sprintf("App %02d", i),
+			Ownership:  "app_owned",
+			Confidence: "high",
+			Reason:     "leftover signals tie this path to one application",
+		})
+	}
+	return leftovers
+}
+
+func manySharedStateConcerns(count int) []SharedStateConcern {
+	concerns := make([]SharedStateConcern, 0, count)
+	for i := 1; i <= count; i++ {
+		concerns = append(concerns, SharedStateConcern{
+			Path:   fmt.Sprintf(`C:\ProgramData\Shared%02d`, i),
+			Reason: "candidate appears to contain shared application or publisher state",
+		})
+	}
+	return concerns
+}
+
+func manyUnknownState(count int) []UnknownStateCandidate {
+	unknown := make([]UnknownStateCandidate, 0, count)
+	for i := 1; i <= count; i++ {
+		unknown = append(unknown, UnknownStateCandidate{
+			Path:   fmt.Sprintf(`C:\Users\corey\AppData\Roaming\Mystery%02d`, i),
+			Reason: "evidence is too weak for an ownership decision",
+		})
+	}
+	return unknown
+}
+
+func manySkippedReasons(count int) []SkippedReason {
+	skipped := make([]SkippedReason, 0, count)
+	for i := 1; i <= count; i++ {
+		skipped = append(skipped, SkippedReason{
+			Source:      fmt.Sprintf("provider_%02d", i),
+			Reason:      "discovery_provider_not_implemented",
+			Recoverable: true,
+		})
+	}
+	return skipped
 }
