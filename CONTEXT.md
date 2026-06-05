@@ -55,3 +55,11 @@ _Avoid_: close-and-clean prompt, default candidate
 **Clean preview read model**:
 A shared representation of clean preview sections, candidates, skipped-by-default items, review clues, suggestions, protection rules, notices, totals, and detailed-list metadata for JSON, human output, and future TUI consumers.
 _Avoid_: CLI string builder as model, TUI-owned cleanup model
+
+**Uninstall preview report**:
+A human-readable presentation surface rendered directly over the uninstall preview read model, mirroring the Mole-inspired report style while keeping uninstall preview-only and read-only.
+_Avoid_: uninstall execution plan, uninstall manifest, leftover deletion list
+
+**Not-inspected state**:
+A report state asserting that Foal did not examine a discovery category at all, kept distinct from an inspected-but-empty result so the report never implies an examination that did not happen.
+_Avoid_: none found, no leftovers, empty result
