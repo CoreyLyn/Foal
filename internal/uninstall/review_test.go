@@ -1,6 +1,96 @@
 package uninstall
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestRenderPreviewReportShowsCoreSectionsInReviewOrder(t *testing.T) {
+	result := WithReviewSections(Result{
+		Status: "preview",
+		Applications: []Application{{
+			Name:       "Example App",
+			Version:    "1.2.3",
+			Publisher:  "Example Co",
+			Evidence:   []string{"windows_registry_uninstall_keys:HKLM64"},
+			Confidence: "medium",
+			Ownership:  "unknown",
+		}},
+		EvidenceSources: []EvidenceSource{{
+			Source: "windows_registry_uninstall_keys:HKLM64",
+			Status: "reported",
+		}},
+		PossibleLeftovers: []LeftoverCandidate{{
+			Path:       `C:\Users\corey\AppData\Local\Example App`,
+			App:        "Example App",
+			Ownership:  "app_owned",
+			Confidence: "high",
+			Reason:     "leftover signals tie this path to one application",
+		}},
+		SharedStateConcerns: []SharedStateConcern{{
+			Path:   `C:\ProgramData\Example Co`,
+			Reason: "candidate appears to contain shared application or publisher state",
+		}},
+		UnknownState: []UnknownStateCandidate{{
+			Path:   `C:\Users\corey\AppData\Roaming\mystery`,
+			Reason: "evidence is too weak for an ownership decision",
+		}},
+		Skipped: []SkippedReason{{
+			Source:      "known_leftover_locations",
+			Reason:      "discovery_provider_not_implemented",
+			Recoverable: true,
+		}},
+		Execution: ExecutionPolicy{
+			Allowed: false,
+			Actions: []string{},
+			Reason:  "uninstall is preview-only; Foal does not execute uninstallers, stop processes, or delete leftovers",
+		},
+	})
+
+	output := RenderPreviewReport(result)
+
+	for _, want := range []string{
+		"Foal uninstall",
+		"Preview only",
+		"uninstall is preview-only; Foal does not execute uninstallers, stop processes, or delete leftovers",
+		"Applications",
+		"Evidence sources",
+		"Possible leftovers",
+		"Shared state concerns",
+		"Unknown state",
+		"Skipped discovery sources",
+		"Summary:",
+		"Example App",
+		`C:\Users\corey\AppData\Local\Example App`,
+		"windows_registry_uninstall_keys:HKLM64",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+
+	assertOrdered(t, output, []string{
+		"Applications",
+		"Evidence sources",
+		"Possible leftovers",
+		"Shared state concerns",
+		"Unknown state",
+		"Skipped discovery sources",
+		"Summary:",
+	})
+	assertASCII(t, output)
+	for _, forbidden := range []string{
+		"foal uninstall --execute",
+		"Run uninstaller",
+		"Stop process",
+		"Delete leftover",
+		"Actions:",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains unsupported execution wording %q:\n%s", forbidden, output)
+		}
+	}
+}
 
 func TestReviewEvidenceClassifiesApplicationsAndLeftovers(t *testing.T) {
 	result := ReviewEvidence(Evidence{
@@ -214,5 +304,31 @@ func TestReviewReportsUnsupportedPlatformAsPreviewOnlyRecoverableSkip(t *testing
 	}
 	if len(result.Execution.Actions) != 0 {
 		t.Fatalf("execution actions = %#v, want empty", result.Execution.Actions)
+	}
+}
+
+func assertOrdered(t *testing.T, text string, values []string) {
+	t.Helper()
+
+	previous := -1
+	for _, value := range values {
+		index := strings.Index(text, value)
+		if index == -1 {
+			t.Fatalf("missing ordered value %q in:\n%s", value, text)
+		}
+		if index < previous {
+			t.Fatalf("%q appeared before prior section in:\n%s", value, text)
+		}
+		previous = index
+	}
+}
+
+func assertASCII(t *testing.T, text string) {
+	t.Helper()
+
+	for _, r := range text {
+		if r > 127 {
+			t.Fatalf("output contains non-ASCII rune %q:\n%s", r, text)
+		}
 	}
 }

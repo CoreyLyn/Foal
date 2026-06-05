@@ -128,7 +128,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			return writeJSON(stdout, envelope{Command: command, Result: result})
 		}
 
-		_, _ = fmt.Fprint(stdout, "Foal uninstall\nPreview only. No uninstallers, process stops, or leftover deletion actions were executed.\n")
+		_, _ = fmt.Fprint(stdout, uninstall.RenderPreviewReport(result))
 		return exitOK
 	}
 
