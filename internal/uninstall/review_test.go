@@ -252,18 +252,28 @@ func TestReviewEvidenceClassifiesApplicationsAndLeftovers(t *testing.T) {
 	}
 }
 
-func TestReviewReportsKnownLeftoverProviderAsSkipped(t *testing.T) {
+func TestReviewSurfacesLeftoverProviderSkip(t *testing.T) {
+	original := discoverUninstallEvidence
+	discoverUninstallEvidence = func() DiscoveryResult { return DiscoveryResult{} }
+	t.Cleanup(func() { discoverUninstallEvidence = original })
+
+	originalLeftover := discoverLeftoverEvidence
+	discoverLeftoverEvidence = func([]ApplicationEvidence) LeftoverDiscoveryResult {
+		return LeftoverDiscoveryResult{
+			Source:  EvidenceSource{Source: "known_leftover_locations", Status: "skipped", Reason: "not running on Windows"},
+			Skipped: []SkippedReason{{Source: "known_leftover_locations", Reason: "unsupported_platform", Recoverable: true}},
+		}
+	}
+	t.Cleanup(func() { discoverLeftoverEvidence = originalLeftover })
+
 	result := Review()
 
 	found := false
 	for _, skipped := range result.Skipped {
 		if skipped.Source == "known_leftover_locations" {
 			found = true
-			if skipped.Reason != "discovery_provider_not_implemented" {
-				t.Fatalf("known leftover skipped reason = %q, want discovery_provider_not_implemented", skipped.Reason)
-			}
 			if !skipped.Recoverable {
-				t.Fatalf("known leftover skipped recoverable = false for %#v, want true", skipped)
+				t.Fatalf("known leftover skip recoverable = false for %#v, want true", skipped)
 			}
 		}
 	}
@@ -275,7 +285,7 @@ func TestReviewReportsKnownLeftoverProviderAsSkipped(t *testing.T) {
 	}
 }
 
-func TestReviewKeepsKnownLeftoverProviderSkippedAfterRegistryDiscovery(t *testing.T) {
+func TestReviewWiresReportedLeftoverProviderWithRegistryDiscovery(t *testing.T) {
 	original := discoverUninstallEvidence
 	discoverUninstallEvidence = func() DiscoveryResult {
 		return DiscoveryResult{
@@ -295,44 +305,52 @@ func TestReviewKeepsKnownLeftoverProviderSkippedAfterRegistryDiscovery(t *testin
 	}
 	t.Cleanup(func() { discoverUninstallEvidence = original })
 
+	originalLeftover := discoverLeftoverEvidence
+	discoverLeftoverEvidence = func(apps []ApplicationEvidence) LeftoverDiscoveryResult {
+		if len(apps) != 1 || apps[0].Name != "Registry App" {
+			t.Fatalf("leftover provider received apps = %#v, want the registry-discovered app", apps)
+		}
+		return LeftoverDiscoveryResult{
+			Leftovers: []LeftoverEvidence{
+				{Path: `C:\Users\corey\AppData\Roaming\Registry App`, App: "Registry App", Signals: []string{"app_name_match", "under_user_profile"}},
+				{Path: `C:\ProgramData\Registry Publisher`, App: "Registry App", Signals: []string{"shared_program_data"}},
+			},
+			Source: EvidenceSource{Source: "known_leftover_locations", Status: "reported"},
+		}
+	}
+	t.Cleanup(func() { discoverLeftoverEvidence = originalLeftover })
+
 	result := Review()
 
-	if len(result.Applications) != 1 {
+	if len(result.Applications) != 1 || result.Applications[0].Name != "Registry App" {
 		t.Fatalf("applications = %#v, want one registry-discovered app", result.Applications)
 	}
-	app := result.Applications[0]
-	if app.Name != "Registry App" || app.Version != "2.4.6" || app.Publisher != "Registry Publisher" {
-		t.Fatalf("app = %#v, want name/version/publisher from registry metadata", app)
+	if len(result.PossibleLeftovers) != 1 {
+		t.Fatalf("possible leftovers = %#v, want one app-owned footprint", result.PossibleLeftovers)
 	}
-	if len(app.Evidence) != 1 || app.Evidence[0] != "windows_registry_uninstall_keys:HKLM64" {
-		t.Fatalf("app evidence = %#v, want registry source metadata", app.Evidence)
+	if result.PossibleLeftovers[0].Ownership != "app_owned" || result.PossibleLeftovers[0].Confidence != "high" {
+		t.Fatalf("possible leftover = %#v, want app_owned/high", result.PossibleLeftovers[0])
 	}
-	if len(result.EvidenceSources) != 2 {
-		t.Fatalf("evidence sources = %#v, want registry reported plus leftover skipped", result.EvidenceSources)
-	}
-	if result.EvidenceSources[0].Source != "windows_registry_uninstall_keys:HKLM64" || result.EvidenceSources[0].Status != "reported" {
-		t.Fatalf("registry evidence source = %#v, want reported HKLM64 source", result.EvidenceSources[0])
-	}
-	if result.EvidenceSources[1].Source != "known_leftover_locations" || result.EvidenceSources[1].Status != "skipped" {
-		t.Fatalf("leftover evidence source = %#v, want skipped known_leftover_locations", result.EvidenceSources[1])
-	}
-	if result.EvidenceSources[1].Reason != "discovery provider not implemented" {
-		t.Fatalf("leftover evidence source reason = %q, want discovery provider not implemented", result.EvidenceSources[1].Reason)
-	}
-	if len(result.Skipped) != 1 {
-		t.Fatalf("skipped = %#v, want known leftover discovery skip only", result.Skipped)
-	}
-	if result.Skipped[0].Source != "known_leftover_locations" || result.Skipped[0].Reason != "discovery_provider_not_implemented" || !result.Skipped[0].Recoverable {
-		t.Fatalf("skipped[0] = %#v, want recoverable known leftover discovery skip", result.Skipped[0])
-	}
-	if len(result.PossibleLeftovers) != 0 {
-		t.Fatalf("possible leftovers = %#v, want empty after registry metadata discovery", result.PossibleLeftovers)
-	}
-	if len(result.SharedStateConcerns) != 0 {
-		t.Fatalf("shared state concerns = %#v, want empty after registry metadata discovery", result.SharedStateConcerns)
+	if len(result.SharedStateConcerns) != 1 {
+		t.Fatalf("shared state concerns = %#v, want one shared publisher path", result.SharedStateConcerns)
 	}
 	if len(result.UnknownState) != 0 {
-		t.Fatalf("unknown state = %#v, want empty after registry metadata discovery", result.UnknownState)
+		t.Fatalf("unknown state = %#v, want empty in footprint slice", result.UnknownState)
+	}
+	if hasSkippedSource(result.Skipped, "known_leftover_locations") {
+		t.Fatalf("skipped = %#v, want known_leftover_locations reported, not skipped", result.Skipped)
+	}
+	reported := false
+	for _, source := range result.EvidenceSources {
+		if source.Source == "known_leftover_locations" {
+			if source.Status != "reported" {
+				t.Fatalf("known_leftover_locations source = %#v, want reported", source)
+			}
+			reported = true
+		}
+	}
+	if !reported {
+		t.Fatalf("evidence sources = %#v, want known_leftover_locations reported", result.EvidenceSources)
 	}
 	if result.Execution.Allowed {
 		t.Fatal("execution allowed = true, want false")
@@ -397,6 +415,15 @@ func TestReviewReportsUnsupportedPlatformAsPreviewOnlyRecoverableSkip(t *testing
 	}
 	t.Cleanup(func() { discoverUninstallEvidence = originalDiscover })
 
+	originalLeftover := discoverLeftoverEvidence
+	discoverLeftoverEvidence = func([]ApplicationEvidence) LeftoverDiscoveryResult {
+		return LeftoverDiscoveryResult{
+			Source:  EvidenceSource{Source: "known_leftover_locations", Status: "skipped", Reason: "not running on Windows"},
+			Skipped: []SkippedReason{{Source: "known_leftover_locations", Reason: "unsupported_platform", Recoverable: true}},
+		}
+	}
+	t.Cleanup(func() { discoverLeftoverEvidence = originalLeftover })
+
 	originalGOOS := runtimeGOOS
 	runtimeGOOS = "linux"
 	t.Cleanup(func() { runtimeGOOS = originalGOOS })
@@ -411,6 +438,9 @@ func TestReviewReportsUnsupportedPlatformAsPreviewOnlyRecoverableSkip(t *testing
 	}
 	if !hasSkippedSource(result.Skipped, "windows_only_evidence") {
 		t.Fatalf("skipped = %#v, want windows_only_evidence unsupported_platform skip", result.Skipped)
+	}
+	if !hasSkippedSource(result.Skipped, "known_leftover_locations") {
+		t.Fatalf("skipped = %#v, want known_leftover_locations unsupported_platform skip", result.Skipped)
 	}
 	if result.Execution.Allowed {
 		t.Fatal("execution allowed = true, want false")
