@@ -60,6 +60,10 @@ _Avoid_: CLI string builder as model, TUI-owned cleanup model
 A human-readable presentation surface rendered directly over the uninstall preview read model, mirroring the Mole-inspired report style while keeping uninstall preview-only and read-only.
 _Avoid_: uninstall execution plan, uninstall manifest, leftover deletion list
 
+**Possible leftovers**:
+Filesystem paths Foal confidently associates with one discovered, still-installed application (app-owned, high confidence) that would likely remain after an uninstall, surfaced for read-only review only. Lower-confidence findings are split off into shared-state concerns or unknown state rather than reported here.
+_Avoid_: deletion candidate, orphan residue of an already-removed application, implying the application is already gone
+
 **Not-inspected state**:
 A report state asserting that Foal did not examine a discovery category at all, kept distinct from an inspected-but-empty result so the report never implies an examination that did not happen.
 _Avoid_: none found, no leftovers, empty result
