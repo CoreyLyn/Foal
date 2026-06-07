@@ -95,6 +95,9 @@ var runtimeGOOS = runtime.GOOS
 
 func Review() Result {
 	discovery := discoverUninstallEvidence()
+	leftover := discoverLeftoverEvidence(discovery.Evidence.Applications)
+	discovery.Evidence.Leftovers = append(discovery.Evidence.Leftovers, leftover.Leftovers...)
+
 	result := ReviewEvidence(discovery.Evidence)
 
 	result.EvidenceSources = append([]EvidenceSource{}, discovery.Sources...)
@@ -103,8 +106,8 @@ func Review() Result {
 		result.EvidenceSources = evidenceSources(discovery.Evidence)
 	}
 
-	result.EvidenceSources = append(result.EvidenceSources, EvidenceSource{Source: "known_leftover_locations", Status: "skipped", Reason: "discovery provider not implemented"})
-	result.Skipped = append(result.Skipped, SkippedReason{Source: "known_leftover_locations", Reason: "discovery_provider_not_implemented", Recoverable: true})
+	result.EvidenceSources = append(result.EvidenceSources, leftover.Source)
+	result.Skipped = append(result.Skipped, leftover.Skipped...)
 
 	if runtimeGOOS != "windows" && !hasSkippedSource(result.Skipped, "windows_only_evidence") {
 		result.EvidenceSources = append(result.EvidenceSources, EvidenceSource{Source: "windows_only_evidence", Status: "skipped", Reason: "not running on Windows"})
