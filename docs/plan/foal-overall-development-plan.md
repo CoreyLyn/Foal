@@ -22,7 +22,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 | Mole category | Foal direction |
 | --- | --- |
 | `clean` | Conservative preview-first cleanup; Recycle Bin-only execution by default. |
-| `uninstall` | Current preview-only application and leftover review; future execution model is separate. |
+| `uninstall` | Current preview-only registry application discovery, installed-application footprint review, orphaned residue review clues, human report, and JSON review sections; future execution model is separate. |
 | `analyze` | Read-only, JSON-first directory insight engine. |
 | `optimize` | Future read-only health checks and recommendations; not current implementation scope. |
 | `status` | Read-only system snapshot; realtime monitoring is future TUI work. |
@@ -37,7 +37,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 | `foal clean --dry-run --json` | Preview-only cleanup candidate review for conservative default rules. |
 | `foal clean --execute` | Explicit cleanup confirmation path; default execution is Recycle Bin-only and still subject to path-safety validation. |
 | `foal history --json` | Reads Foal operation history and reports sessions or structured history errors. |
-| `foal uninstall --json` | Preview-only uninstall review; execution is not allowed and actions remain empty. |
+| `foal uninstall --json` | Preview-only uninstall review with registry-discovered applications, installed-application footprint evidence, orphaned residue review clues, shared-state and unknown-state sections, JSON review sections, and empty execution actions. |
 
 ## Phase 1: Rename and Safety Baseline
 
@@ -80,9 +80,11 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 
 ## Phase 4: Uninstall Preview Quality
 
-- Improve application discovery and evidence reporting.
-- Classify leftovers by confidence and ownership.
-- Explain skipped, unknown, and shared-state candidates.
+- Implemented registry application discovery and evidence reporting for installed applications.
+- Implemented installed-application footprint review as high-confidence possible leftovers tied to a currently discovered application.
+- Implemented orphaned residue as low-confidence read-only review evidence, distinct from installed-application footprint and never treated as cleanup candidates.
+- Implemented human uninstall reporting and JSON review sections over the shared uninstall result.
+- Continue to explain skipped discovery, unknown state, and shared-state concerns as preview-only review information.
 - Do not execute uninstallers, delete leftovers, stop processes, or add a Phase 5 execution plan in this phase.
 
 ## Phase 5: Future TUI
