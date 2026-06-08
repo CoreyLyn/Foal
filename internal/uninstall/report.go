@@ -30,6 +30,8 @@ func RenderPreviewReport(result Result) string {
 			renderPossibleLeftovers(&builder, section.Label, result.PossibleLeftovers, result.Skipped)
 		case "shared_state_concerns":
 			renderSharedStateConcerns(&builder, section.Label, result.SharedStateConcerns, result.Skipped)
+		case "orphaned_residue":
+			renderOrphanedResidue(&builder, section.Label, result.OrphanedResidue, result.EvidenceSources)
 		case "unknown_state":
 			renderUnknownState(&builder, section.Label, result.UnknownState, result.Skipped)
 		case "skipped_discovery_sources":
@@ -40,11 +42,12 @@ func RenderPreviewReport(result Result) string {
 		}
 	}
 
-	builder.WriteString(fmt.Sprintf("Summary: applications=%d, evidence sources=%d, possible leftovers=%d, shared state concerns=%d, unknown state=%d, skipped discovery sources=%d\n",
+	builder.WriteString(fmt.Sprintf("Summary: applications=%d, evidence sources=%d, possible leftovers=%d, shared state concerns=%d, orphaned residue=%d, unknown state=%d, skipped discovery sources=%d\n",
 		len(result.Applications),
 		len(result.EvidenceSources),
 		len(result.PossibleLeftovers),
 		len(result.SharedStateConcerns),
+		len(result.OrphanedResidue),
 		len(result.UnknownState),
 		len(result.Skipped),
 	))
@@ -148,6 +151,25 @@ func renderUnknownState(builder *strings.Builder, label string, unknownState []U
 	builder.WriteString("\n")
 }
 
+func renderOrphanedResidue(builder *strings.Builder, label string, candidates []OrphanedResidueCandidate, sources []EvidenceSource) {
+	renderSectionHeader(builder, label)
+	builder.WriteString("  Review only: low-confidence residue clues; not cleanup candidates.\n")
+	if len(candidates) == 0 {
+		writeOrphanedResidueEmptyState(builder, sources)
+		return
+	}
+	for _, candidate := range candidates[:cappedEntryCount(len(candidates))] {
+		builder.WriteString("  - ")
+		builder.WriteString(valueOrUnknown(candidate.Path))
+		builder.WriteString("\n")
+		writeField(builder, "source root", candidate.SourceRoot)
+		writeField(builder, "confidence", candidate.Confidence)
+		writeField(builder, "reason", candidate.Reason)
+	}
+	writeOmittedLine(builder, len(candidates))
+	builder.WriteString("\n")
+}
+
 func renderSkippedDiscoverySources(builder *strings.Builder, label string, skipped []SkippedReason) {
 	renderSectionHeader(builder, label)
 	if len(skipped) == 0 {
@@ -205,6 +227,23 @@ func writeLeftoverEmptyState(builder *strings.Builder, skipped []SkippedReason) 
 		return
 	}
 	builder.WriteString("  none found\n\n")
+}
+
+func writeOrphanedResidueEmptyState(builder *strings.Builder, sources []EvidenceSource) {
+	if evidenceSourceStatus(sources, orphanedResidueSource) == "skipped" {
+		builder.WriteString("  Not inspected: orphaned residue discovery was skipped (see Skipped discovery sources)\n\n")
+		return
+	}
+	builder.WriteString("  none found\n\n")
+}
+
+func evidenceSourceStatus(sources []EvidenceSource, sourceName string) string {
+	for _, source := range sources {
+		if source.Source == sourceName {
+			return source.Status
+		}
+	}
+	return ""
 }
 
 func cappedEntryCount(count int) int {

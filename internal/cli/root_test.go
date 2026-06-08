@@ -255,6 +255,7 @@ func TestUninstallJSONReportsPreviewOnlyReviewContract(t *testing.T) {
 		"evidence_sources",
 		"possible_leftovers",
 		"shared_state_concerns",
+		"orphaned_residue",
 		"unknown_state",
 		"skipped",
 		"execution",
@@ -307,6 +308,12 @@ func TestUninstallNonJSONRendersPreviewReportCoreSections(t *testing.T) {
 				Path:   `C:\ProgramData\Registry Publisher`,
 				Reason: "candidate appears to contain shared application or publisher state",
 			}},
+			OrphanedResidue: []uninstall.OrphanedResidueCandidate{{
+				Path:       `C:\Users\corey\AppData\Roaming\Gone App`,
+				SourceRoot: `C:\Users\corey\AppData\Roaming`,
+				Confidence: "low",
+				Reason:     "directory is under an application data root but does not match a discovered installed application or publisher",
+			}},
 			UnknownState: []uninstall.UnknownStateCandidate{{
 				Path:   `C:\Users\corey\AppData\Roaming\mystery`,
 				Reason: "evidence is too weak for an ownership decision",
@@ -344,6 +351,7 @@ func TestUninstallNonJSONRendersPreviewReportCoreSections(t *testing.T) {
 		"Evidence sources",
 		"Possible leftovers",
 		"Shared state concerns",
+		"Orphaned residue",
 		"Unknown state",
 		"Skipped discovery sources",
 		"Summary:",
@@ -359,6 +367,7 @@ func TestUninstallNonJSONRendersPreviewReportCoreSections(t *testing.T) {
 		"Evidence sources",
 		"Possible leftovers",
 		"Shared state concerns",
+		"Orphaned residue",
 		"Unknown state",
 		"Skipped discovery sources",
 		"Summary:",
@@ -395,6 +404,7 @@ func TestUninstallJSONReportsRegistryDiscoveredApplications(t *testing.T) {
 			}},
 			PossibleLeftovers:   []uninstall.LeftoverCandidate{},
 			SharedStateConcerns: []uninstall.SharedStateConcern{},
+			OrphanedResidue:     []uninstall.OrphanedResidueCandidate{},
 			UnknownState:        []uninstall.UnknownStateCandidate{},
 			Skipped:             []uninstall.SkippedReason{},
 			Execution: uninstall.ExecutionPolicy{
@@ -463,6 +473,7 @@ func TestUninstallJSONReviewSectionsUsePreviewTerminology(t *testing.T) {
 			}},
 			PossibleLeftovers:   []uninstall.LeftoverCandidate{},
 			SharedStateConcerns: []uninstall.SharedStateConcern{},
+			OrphanedResidue:     []uninstall.OrphanedResidueCandidate{},
 			UnknownState:        []uninstall.UnknownStateCandidate{},
 			Skipped: []uninstall.SkippedReason{{
 				Source:      "known_leftover_locations",
@@ -495,6 +506,7 @@ func TestUninstallJSONReviewSectionsUsePreviewTerminology(t *testing.T) {
 		"evidence_sources":          2,
 		"possible_leftovers":        0,
 		"shared_state_concerns":     0,
+		"orphaned_residue":          0,
 		"unknown_state":             0,
 		"skipped_discovery_sources": 1,
 	}

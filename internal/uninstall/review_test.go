@@ -32,6 +32,12 @@ func TestRenderPreviewReportShowsCoreSectionsInReviewOrder(t *testing.T) {
 			Path:   `C:\ProgramData\Example Co`,
 			Reason: "candidate appears to contain shared application or publisher state",
 		}},
+		OrphanedResidue: []OrphanedResidueCandidate{{
+			Path:       `C:\Users\corey\AppData\Roaming\Gone App`,
+			SourceRoot: `C:\Users\corey\AppData\Roaming`,
+			Confidence: "low",
+			Reason:     "directory is under an application data root but does not match a discovered installed application or publisher",
+		}},
 		UnknownState: []UnknownStateCandidate{{
 			Path:   `C:\Users\corey\AppData\Roaming\mystery`,
 			Reason: "evidence is too weak for an ownership decision",
@@ -58,6 +64,8 @@ func TestRenderPreviewReportShowsCoreSectionsInReviewOrder(t *testing.T) {
 		"Evidence sources",
 		"Possible leftovers",
 		"Shared state concerns",
+		"Orphaned residue",
+		"Review only: low-confidence residue clues; not cleanup candidates.",
 		"Unknown state",
 		"Skipped discovery sources",
 		"Summary:",
@@ -75,6 +83,7 @@ func TestRenderPreviewReportShowsCoreSectionsInReviewOrder(t *testing.T) {
 		"Evidence sources",
 		"Possible leftovers",
 		"Shared state concerns",
+		"Orphaned residue",
 		"Unknown state",
 		"Skipped discovery sources",
 		"Summary:",
@@ -152,7 +161,7 @@ func TestRenderPreviewReportSaysNoneFoundWhenLeftoversWereInspectedAndEmpty(t *t
 	result := WithReviewSections(Result{
 		Status:              "preview",
 		Applications:        []Application{},
-		EvidenceSources:     []EvidenceSource{},
+		EvidenceSources:     []EvidenceSource{{Source: orphanedResidueSource, Status: "reported"}},
 		PossibleLeftovers:   []LeftoverCandidate{},
 		SharedStateConcerns: []SharedStateConcern{},
 		UnknownState:        []UnknownStateCandidate{},
@@ -165,11 +174,65 @@ func TestRenderPreviewReportSaysNoneFoundWhenLeftoversWereInspectedAndEmpty(t *t
 	if strings.Contains(output, "Not inspected:") {
 		t.Fatalf("output contains not-inspected state for inspected empty leftovers:\n%s", output)
 	}
-	for _, section := range []string{"Possible leftovers", "Shared state concerns", "Unknown state"} {
+	for _, section := range []string{"Possible leftovers", "Shared state concerns", "Orphaned residue", "Unknown state"} {
 		sectionText := sectionText(t, output, section)
 		if !strings.Contains(sectionText, "  none found") {
 			t.Fatalf("%s missing none found empty state:\n%s", section, sectionText)
 		}
+	}
+}
+
+func TestRenderPreviewReportDistinguishesSkippedOrphanedResidueDiscovery(t *testing.T) {
+	result := WithReviewSections(Result{
+		Status:              "preview",
+		Applications:        []Application{},
+		EvidenceSources:     []EvidenceSource{{Source: orphanedResidueSource, Status: "skipped", Reason: "not running on Windows"}},
+		PossibleLeftovers:   []LeftoverCandidate{},
+		SharedStateConcerns: []SharedStateConcern{},
+		OrphanedResidue:     []OrphanedResidueCandidate{},
+		UnknownState:        []UnknownStateCandidate{},
+		Skipped: []SkippedReason{{
+			Source:      orphanedResidueSource,
+			Reason:      "roots_not_configured",
+			Recoverable: true,
+		}},
+		Execution: previewOnlyExecution(),
+	})
+
+	output := RenderPreviewReport(result)
+	sectionText := sectionText(t, output, "Orphaned residue")
+	if !strings.Contains(sectionText, "Not inspected: orphaned residue discovery was skipped") {
+		t.Fatalf("orphaned residue section missing not-inspected state:\n%s", sectionText)
+	}
+	if strings.Contains(sectionText, "  none found") {
+		t.Fatalf("orphaned residue section reported none found despite skipped discovery:\n%s", sectionText)
+	}
+}
+
+func TestRenderPreviewReportTreatsEntrySkipsAsInspectedEmptyOrphanedResidue(t *testing.T) {
+	result := WithReviewSections(Result{
+		Status:              "preview",
+		Applications:        []Application{},
+		EvidenceSources:     []EvidenceSource{{Source: orphanedResidueSource, Status: "reported"}},
+		PossibleLeftovers:   []LeftoverCandidate{},
+		SharedStateConcerns: []SharedStateConcern{},
+		OrphanedResidue:     []OrphanedResidueCandidate{},
+		UnknownState:        []UnknownStateCandidate{},
+		Skipped: []SkippedReason{{
+			Source:      orphanedResidueSource,
+			Reason:      "hidden_or_system",
+			Recoverable: true,
+		}},
+		Execution: previewOnlyExecution(),
+	})
+
+	output := RenderPreviewReport(result)
+	sectionText := sectionText(t, output, "Orphaned residue")
+	if strings.Contains(sectionText, "Not inspected:") {
+		t.Fatalf("orphaned residue section treated entry skip as provider skip:\n%s", sectionText)
+	}
+	if !strings.Contains(sectionText, "  none found") {
+		t.Fatalf("orphaned residue section missing inspected-empty state:\n%s", sectionText)
 	}
 }
 
@@ -180,6 +243,7 @@ func TestRenderPreviewReportCapsEverySectionAtTenEntries(t *testing.T) {
 		EvidenceSources:     manyEvidenceSources(11),
 		PossibleLeftovers:   manyLeftovers(11),
 		SharedStateConcerns: manySharedStateConcerns(11),
+		OrphanedResidue:     manyOrphanedResidue(11),
 		UnknownState:        manyUnknownState(11),
 		Skipped:             manySkippedReasons(11),
 		Execution:           previewOnlyExecution(),
@@ -192,6 +256,7 @@ func TestRenderPreviewReportCapsEverySectionAtTenEntries(t *testing.T) {
 		"Evidence sources (reported)",
 		"Possible leftovers",
 		"Shared state concerns",
+		"Orphaned residue",
 		"Unknown state",
 		"Skipped discovery sources",
 	} {
@@ -220,6 +285,10 @@ func TestReviewEvidenceClassifiesApplicationsAndLeftovers(t *testing.T) {
 			{Path: `C:\ProgramData\Example Co\Shared`, App: "Example App", Signals: []string{"shared_program_data"}},
 			{Path: `C:\Users\corey\AppData\Roaming\mystery`, Signals: []string{"weak_name_match"}},
 		},
+		OrphanedResidue: []OrphanedResidueEvidence{{
+			Path:       `C:\Users\corey\AppData\Local\Gone App`,
+			SourceRoot: `C:\Users\corey\AppData\Local`,
+		}},
 	})
 
 	if len(result.Applications) != 1 {
@@ -240,6 +309,12 @@ func TestReviewEvidenceClassifiesApplicationsAndLeftovers(t *testing.T) {
 	}
 	if len(result.SharedStateConcerns) != 1 {
 		t.Fatalf("shared state concerns = %#v, want one", result.SharedStateConcerns)
+	}
+	if len(result.OrphanedResidue) != 1 {
+		t.Fatalf("orphaned residue = %#v, want one", result.OrphanedResidue)
+	}
+	if result.OrphanedResidue[0].Confidence != "low" || result.OrphanedResidue[0].SourceRoot == "" || result.OrphanedResidue[0].Reason == "" {
+		t.Fatalf("orphaned residue = %#v, want low-confidence evidence", result.OrphanedResidue[0])
 	}
 	if len(result.UnknownState) != 1 {
 		t.Fatalf("unknown state = %#v, want one", result.UnknownState)
@@ -265,6 +340,9 @@ func TestReviewSurfacesLeftoverProviderSkip(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { discoverLeftoverEvidence = originalLeftover })
+	stubOrphanedResidue(t, OrphanedResidueDiscoveryResult{
+		Source: EvidenceSource{Source: orphanedResidueSource, Status: "reported"},
+	})
 
 	result := Review()
 
@@ -319,6 +397,13 @@ func TestReviewWiresReportedLeftoverProviderWithRegistryDiscovery(t *testing.T) 
 		}
 	}
 	t.Cleanup(func() { discoverLeftoverEvidence = originalLeftover })
+	stubOrphanedResidue(t, OrphanedResidueDiscoveryResult{
+		Candidates: []OrphanedResidueEvidence{{
+			Path:       `C:\Users\corey\AppData\Local\Abandoned`,
+			SourceRoot: `C:\Users\corey\AppData\Local`,
+		}},
+		Source: EvidenceSource{Source: orphanedResidueSource, Status: "reported"},
+	})
 
 	result := Review()
 
@@ -336,6 +421,9 @@ func TestReviewWiresReportedLeftoverProviderWithRegistryDiscovery(t *testing.T) 
 	}
 	if len(result.UnknownState) != 0 {
 		t.Fatalf("unknown state = %#v, want empty in footprint slice", result.UnknownState)
+	}
+	if len(result.OrphanedResidue) != 1 || result.OrphanedResidue[0].Confidence != "low" {
+		t.Fatalf("orphaned residue = %#v, want one low-confidence candidate", result.OrphanedResidue)
 	}
 	if hasSkippedSource(result.Skipped, "known_leftover_locations") {
 		t.Fatalf("skipped = %#v, want known_leftover_locations reported, not skipped", result.Skipped)
@@ -377,6 +465,9 @@ func TestReviewReportsRegistryDiscoveryFailuresAsRecoverableSkips(t *testing.T) 
 		}
 	}
 	t.Cleanup(func() { discoverUninstallEvidence = original })
+	stubOrphanedResidue(t, OrphanedResidueDiscoveryResult{
+		Source: EvidenceSource{Source: orphanedResidueSource, Status: "reported"},
+	})
 
 	result := Review()
 
@@ -423,6 +514,10 @@ func TestReviewReportsUnsupportedPlatformAsPreviewOnlyRecoverableSkip(t *testing
 		}
 	}
 	t.Cleanup(func() { discoverLeftoverEvidence = originalLeftover })
+	stubOrphanedResidue(t, OrphanedResidueDiscoveryResult{
+		Source:  EvidenceSource{Source: orphanedResidueSource, Status: "skipped", Reason: "not running on Windows"},
+		Skipped: []SkippedReason{{Source: orphanedResidueSource, Reason: "unsupported_platform", Recoverable: true}},
+	})
 
 	originalGOOS := runtimeGOOS
 	runtimeGOOS = "linux"
@@ -441,6 +536,9 @@ func TestReviewReportsUnsupportedPlatformAsPreviewOnlyRecoverableSkip(t *testing
 	}
 	if !hasSkippedSource(result.Skipped, "known_leftover_locations") {
 		t.Fatalf("skipped = %#v, want known_leftover_locations unsupported_platform skip", result.Skipped)
+	}
+	if !hasSkippedSource(result.Skipped, orphanedResidueSource) {
+		t.Fatalf("skipped = %#v, want orphaned_residue unsupported_platform skip", result.Skipped)
 	}
 	if result.Execution.Allowed {
 		t.Fatal("execution allowed = true, want false")
@@ -474,6 +572,16 @@ func assertASCII(t *testing.T, text string) {
 			t.Fatalf("output contains non-ASCII rune %q:\n%s", r, text)
 		}
 	}
+}
+
+func stubOrphanedResidue(t *testing.T, result OrphanedResidueDiscoveryResult) {
+	t.Helper()
+
+	original := discoverOrphanedResidueEvidence
+	discoverOrphanedResidueEvidence = func([]ApplicationEvidence) OrphanedResidueDiscoveryResult {
+		return result
+	}
+	t.Cleanup(func() { discoverOrphanedResidueEvidence = original })
 }
 
 func sectionText(t *testing.T, output, section string) string {
@@ -538,6 +646,72 @@ func manySharedStateConcerns(count int) []SharedStateConcern {
 		})
 	}
 	return concerns
+}
+
+func TestReviewWiresOrphanedResidueProviderWithRegistryDiscovery(t *testing.T) {
+	original := discoverUninstallEvidence
+	discoverUninstallEvidence = func() DiscoveryResult {
+		return DiscoveryResult{
+			Evidence: Evidence{
+				Applications: []ApplicationEvidence{{
+					Name:      "Registry App",
+					Publisher: "Registry Publisher",
+					Sources:   []string{"windows_registry_uninstall_keys:HKLM64"},
+				}},
+			},
+			Sources: []EvidenceSource{{Source: "windows_registry_uninstall_keys:HKLM64", Status: "reported"}},
+		}
+	}
+	t.Cleanup(func() { discoverUninstallEvidence = original })
+	originalLeftover := discoverLeftoverEvidence
+	discoverLeftoverEvidence = func([]ApplicationEvidence) LeftoverDiscoveryResult {
+		return LeftoverDiscoveryResult{Source: EvidenceSource{Source: "known_leftover_locations", Status: "reported"}}
+	}
+	t.Cleanup(func() { discoverLeftoverEvidence = originalLeftover })
+
+	originalOrphaned := discoverOrphanedResidueEvidence
+	discoverOrphanedResidueEvidence = func(apps []ApplicationEvidence) OrphanedResidueDiscoveryResult {
+		if len(apps) != 1 || apps[0].Name != "Registry App" || apps[0].Publisher != "Registry Publisher" {
+			t.Fatalf("orphaned provider received apps = %#v, want registry-discovered app", apps)
+		}
+		return OrphanedResidueDiscoveryResult{
+			Candidates: []OrphanedResidueEvidence{{
+				Path:       `C:\Users\corey\AppData\Roaming\Gone App`,
+				SourceRoot: `C:\Users\corey\AppData\Roaming`,
+			}},
+			Source: EvidenceSource{Source: orphanedResidueSource, Status: "reported"},
+		}
+	}
+	t.Cleanup(func() { discoverOrphanedResidueEvidence = originalOrphaned })
+
+	result := Review()
+
+	if len(result.OrphanedResidue) != 1 {
+		t.Fatalf("orphaned residue = %#v, want one candidate", result.OrphanedResidue)
+	}
+	got := result.OrphanedResidue[0]
+	if got.Confidence != "low" || got.SourceRoot == "" || got.Reason == "" {
+		t.Fatalf("orphaned residue = %#v, want low-confidence automation evidence", got)
+	}
+	if result.Execution.Allowed {
+		t.Fatal("execution allowed = true, want false")
+	}
+	if len(result.Execution.Actions) != 0 {
+		t.Fatalf("execution actions = %#v, want empty", result.Execution.Actions)
+	}
+}
+
+func manyOrphanedResidue(count int) []OrphanedResidueCandidate {
+	candidates := make([]OrphanedResidueCandidate, 0, count)
+	for i := 1; i <= count; i++ {
+		candidates = append(candidates, OrphanedResidueCandidate{
+			Path:       fmt.Sprintf(`C:\Users\corey\AppData\Roaming\Gone%02d`, i),
+			SourceRoot: `C:\Users\corey\AppData\Roaming`,
+			Confidence: "low",
+			Reason:     "directory is under an application data root but does not match a discovered installed application or publisher",
+		})
+	}
+	return candidates
 }
 
 func manyUnknownState(count int) []UnknownStateCandidate {
