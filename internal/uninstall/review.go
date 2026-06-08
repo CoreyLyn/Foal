@@ -3,8 +3,9 @@ package uninstall
 import "runtime"
 
 type Evidence struct {
-	Applications []ApplicationEvidence
-	Leftovers    []LeftoverEvidence
+	Applications    []ApplicationEvidence
+	Leftovers       []LeftoverEvidence
+	OrphanedResidue []OrphanedResidueEvidence
 }
 
 type ApplicationEvidence struct {
@@ -20,16 +21,22 @@ type LeftoverEvidence struct {
 	Signals []string
 }
 
+type OrphanedResidueEvidence struct {
+	Path       string
+	SourceRoot string
+}
+
 type Result struct {
-	Status              string                  `json:"status"`
-	Applications        []Application           `json:"applications"`
-	EvidenceSources     []EvidenceSource        `json:"evidence_sources"`
-	ReviewSections      []ReviewSection         `json:"review_sections"`
-	PossibleLeftovers   []LeftoverCandidate     `json:"possible_leftovers"`
-	SharedStateConcerns []SharedStateConcern    `json:"shared_state_concerns"`
-	UnknownState        []UnknownStateCandidate `json:"unknown_state"`
-	Skipped             []SkippedReason         `json:"skipped"`
-	Execution           ExecutionPolicy         `json:"execution"`
+	Status              string                     `json:"status"`
+	Applications        []Application              `json:"applications"`
+	EvidenceSources     []EvidenceSource           `json:"evidence_sources"`
+	ReviewSections      []ReviewSection            `json:"review_sections"`
+	PossibleLeftovers   []LeftoverCandidate        `json:"possible_leftovers"`
+	SharedStateConcerns []SharedStateConcern       `json:"shared_state_concerns"`
+	OrphanedResidue     []OrphanedResidueCandidate `json:"orphaned_residue"`
+	UnknownState        []UnknownStateCandidate    `json:"unknown_state"`
+	Skipped             []SkippedReason            `json:"skipped"`
+	Execution           ExecutionPolicy            `json:"execution"`
 }
 
 type Application struct {
@@ -72,6 +79,13 @@ type UnknownStateCandidate struct {
 	Reason string `json:"reason"`
 }
 
+type OrphanedResidueCandidate struct {
+	Path       string `json:"path"`
+	SourceRoot string `json:"source_root"`
+	Confidence string `json:"confidence"`
+	Reason     string `json:"reason"`
+}
+
 type SkippedReason struct {
 	Source      string `json:"source"`
 	Reason      string `json:"reason"`
@@ -96,7 +110,9 @@ var runtimeGOOS = runtime.GOOS
 func Review() Result {
 	discovery := discoverUninstallEvidence()
 	leftover := discoverLeftoverEvidence(discovery.Evidence.Applications)
+	orphaned := discoverOrphanedResidueEvidence(discovery.Evidence.Applications)
 	discovery.Evidence.Leftovers = append(discovery.Evidence.Leftovers, leftover.Leftovers...)
+	discovery.Evidence.OrphanedResidue = append(discovery.Evidence.OrphanedResidue, orphaned.Candidates...)
 
 	result := ReviewEvidence(discovery.Evidence)
 
@@ -107,7 +123,9 @@ func Review() Result {
 	}
 
 	result.EvidenceSources = append(result.EvidenceSources, leftover.Source)
+	result.EvidenceSources = append(result.EvidenceSources, orphaned.Source)
 	result.Skipped = append(result.Skipped, leftover.Skipped...)
+	result.Skipped = append(result.Skipped, orphaned.Skipped...)
 
 	if runtimeGOOS != "windows" && !hasSkippedSource(result.Skipped, "windows_only_evidence") {
 		result.EvidenceSources = append(result.EvidenceSources, EvidenceSource{Source: "windows_only_evidence", Status: "skipped", Reason: "not running on Windows"})
@@ -134,6 +152,7 @@ func ReviewEvidence(evidence Evidence) Result {
 		ReviewSections:      []ReviewSection{},
 		PossibleLeftovers:   []LeftoverCandidate{},
 		SharedStateConcerns: []SharedStateConcern{},
+		OrphanedResidue:     []OrphanedResidueCandidate{},
 		UnknownState:        []UnknownStateCandidate{},
 		Skipped:             []SkippedReason{},
 		Execution:           previewOnlyExecution(),
@@ -174,6 +193,15 @@ func ReviewEvidence(evidence Evidence) Result {
 		}
 	}
 
+	for _, orphaned := range evidence.OrphanedResidue {
+		result.OrphanedResidue = append(result.OrphanedResidue, OrphanedResidueCandidate{
+			Path:       orphaned.Path,
+			SourceRoot: orphaned.SourceRoot,
+			Confidence: "low",
+			Reason:     "directory is under an application data root but does not match a discovered installed application or publisher",
+		})
+	}
+
 	return WithReviewSections(result)
 }
 
@@ -183,6 +211,7 @@ func WithReviewSections(result Result) Result {
 		{ID: "evidence_sources", Label: "Evidence sources", Count: len(result.EvidenceSources)},
 		{ID: "possible_leftovers", Label: "Possible leftovers", Count: len(result.PossibleLeftovers)},
 		{ID: "shared_state_concerns", Label: "Shared state concerns", Count: len(result.SharedStateConcerns)},
+		{ID: "orphaned_residue", Label: "Orphaned residue", Count: len(result.OrphanedResidue)},
 		{ID: "unknown_state", Label: "Unknown state", Count: len(result.UnknownState)},
 		{ID: "skipped_discovery_sources", Label: "Skipped discovery sources", Count: len(result.Skipped)},
 	}
