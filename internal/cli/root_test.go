@@ -542,6 +542,141 @@ func TestUninstallJSONReviewSectionsUsePreviewTerminology(t *testing.T) {
 	}
 }
 
+func TestUninstallReleaseReadinessSmokeCoversHumanAndJSONPreviewContracts(t *testing.T) {
+	original := reviewUninstall
+	reviewUninstall = func() uninstall.Result {
+		return uninstall.Result{
+			Status: "preview",
+			Applications: []uninstall.Application{{
+				Name:       "Registry App",
+				Version:    "2.4.6",
+				Publisher:  "Registry Publisher",
+				Evidence:   []string{"windows_registry_uninstall_keys:HKLM64"},
+				Confidence: "medium",
+				Ownership:  "unknown",
+			}},
+			EvidenceSources: []uninstall.EvidenceSource{{
+				Source: "windows_registry_uninstall_keys:HKLM64",
+				Status: "reported",
+			}, {
+				Source: "known_leftover_locations",
+				Status: "reported",
+			}, {
+				Source: "orphaned_residue",
+				Status: "reported",
+			}},
+			PossibleLeftovers: []uninstall.LeftoverCandidate{{
+				Path:       `C:\Users\corey\AppData\Local\Registry App`,
+				App:        "Registry App",
+				Ownership:  "app_owned",
+				Confidence: "high",
+				Reason:     "leftover signals tie this path to one application",
+			}},
+			SharedStateConcerns: []uninstall.SharedStateConcern{{
+				Path:   `C:\ProgramData\Registry Publisher`,
+				Reason: "candidate appears to contain shared application or publisher state",
+			}},
+			OrphanedResidue: []uninstall.OrphanedResidueCandidate{{
+				Path:       `C:\Users\corey\AppData\Roaming\Gone App`,
+				SourceRoot: `C:\Users\corey\AppData\Roaming`,
+				Confidence: "low",
+				Reason:     "directory is under an application data root but does not match a discovered installed application or publisher",
+			}},
+			UnknownState: []uninstall.UnknownStateCandidate{{
+				Path:   `C:\Users\corey\AppData\Roaming\mystery`,
+				Reason: "evidence is too weak for an ownership decision",
+			}},
+			Skipped: []uninstall.SkippedReason{{
+				Source:      "windows_registry_uninstall_keys:HKCU",
+				Reason:      "registry_discovery_failed",
+				Recoverable: true,
+			}},
+			Execution: uninstall.ExecutionPolicy{
+				Allowed: false,
+				Actions: []string{},
+				Reason:  "uninstall is preview-only; Foal does not execute uninstallers, stop processes, or delete leftovers",
+			},
+		}
+	}
+	t.Cleanup(func() { reviewUninstall = original })
+
+	var humanStdout, humanStderr bytes.Buffer
+	humanCode := Run([]string{"uninstall"}, &humanStdout, &humanStderr)
+	if humanCode != exitOK {
+		t.Fatalf("foal uninstall returned %d, want %d; stderr=%q", humanCode, exitOK, humanStderr.String())
+	}
+	if humanStderr.Len() != 0 {
+		t.Fatalf("foal uninstall stderr = %q, want empty", humanStderr.String())
+	}
+	humanOutput := humanStdout.String()
+	assertContainsInOrder(t, humanOutput, []string{
+		"Foal uninstall",
+		"Preview only",
+		"Applications",
+		"Evidence sources",
+		"Possible leftovers",
+		"Shared state concerns",
+		"Orphaned residue",
+		"Unknown state",
+		"Skipped discovery sources",
+		"Summary:",
+	})
+	for _, want := range []string{
+		`C:\Users\corey\AppData\Roaming\Gone App`,
+		"confidence: low",
+		"Review only:",
+	} {
+		if !strings.Contains(humanOutput, want) {
+			t.Fatalf("foal uninstall smoke output missing %q:\n%s", want, humanOutput)
+		}
+	}
+	for _, forbidden := range []string{"foal uninstall --execute", "Run uninstaller", "Stop process", "Actions:"} {
+		if strings.Contains(humanOutput, forbidden) {
+			t.Fatalf("foal uninstall smoke output contains execution wording %q:\n%s", forbidden, humanOutput)
+		}
+	}
+
+	var jsonStdout, jsonStderr bytes.Buffer
+	jsonCode := Run([]string{"uninstall", "--json"}, &jsonStdout, &jsonStderr)
+	if jsonCode != exitOK {
+		t.Fatalf("foal uninstall --json returned %d, want %d; stderr=%q", jsonCode, exitOK, jsonStderr.String())
+	}
+	if jsonStderr.Len() != 0 {
+		t.Fatalf("foal uninstall --json stderr = %q, want empty", jsonStderr.String())
+	}
+	result := readResultObject(t, jsonStdout.Bytes())
+	if result["status"] != "preview" {
+		t.Fatalf("result.status = %v, want preview", result["status"])
+	}
+	assertReviewSectionCounts(t, result["review_sections"], map[string]float64{
+		"applications":              1,
+		"evidence_sources":          3,
+		"possible_leftovers":        1,
+		"shared_state_concerns":     1,
+		"orphaned_residue":          1,
+		"unknown_state":             1,
+		"skipped_discovery_sources": 1,
+	})
+	execution := result["execution"].(map[string]interface{})
+	if execution["allowed"] != false {
+		t.Fatalf("execution.allowed = %v, want false", execution["allowed"])
+	}
+	if actions := execution["actions"].([]interface{}); len(actions) != 0 {
+		t.Fatalf("execution.actions = %#v, want empty", actions)
+	}
+	orphanedResidue := result["orphaned_residue"].([]interface{})
+	if len(orphanedResidue) != 1 {
+		t.Fatalf("orphaned_residue = %#v, want one low-confidence review clue", orphanedResidue)
+	}
+	orphaned := orphanedResidue[0].(map[string]interface{})
+	if orphaned["confidence"] != "low" || orphaned["source_root"] == "" || orphaned["reason"] == "" {
+		t.Fatalf("orphaned residue = %#v, want low-confidence read-only evidence", orphaned)
+	}
+	if _, ok := orphaned["action"]; ok {
+		t.Fatalf("orphaned residue = %#v, want no execution action", orphaned)
+	}
+}
+
 func TestCommandSpecificArgumentsAreRouted(t *testing.T) {
 	disableHistoryRecording(t)
 	var stdout, stderr bytes.Buffer
@@ -1220,6 +1355,38 @@ func readResultObject(t *testing.T, data []byte) map[string]interface{} {
 		t.Fatalf("result has type %T, want object", got.Result)
 	}
 	return result
+}
+
+func assertReviewSectionCounts(t *testing.T, value interface{}, want map[string]float64) {
+	t.Helper()
+
+	sections, ok := value.([]interface{})
+	if !ok {
+		t.Fatalf("review_sections has type %T, want array", value)
+	}
+	if len(sections) != len(want) {
+		t.Fatalf("review_sections = %#v, want %d sections", sections, len(want))
+	}
+	for _, sectionValue := range sections {
+		section, ok := sectionValue.(map[string]interface{})
+		if !ok {
+			t.Fatalf("review section has type %T, want object", sectionValue)
+		}
+		id, ok := section["id"].(string)
+		if !ok || id == "" {
+			t.Fatalf("review section = %#v, want string id", section)
+		}
+		wantCount, ok := want[id]
+		if !ok {
+			t.Fatalf("review section id = %q, want one of %#v", id, want)
+		}
+		if label, ok := section["label"].(string); !ok || label == "" {
+			t.Fatalf("review section = %#v, want display label", section)
+		}
+		if section["count"] != wantCount {
+			t.Fatalf("review section %q count = %v, want %v", id, section["count"], wantCount)
+		}
+	}
 }
 
 func mustTime(t *testing.T, value string) time.Time {
