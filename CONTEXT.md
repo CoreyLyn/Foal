@@ -64,6 +64,10 @@ _Avoid_: uninstall execution plan, uninstall manifest, leftover deletion list
 Filesystem paths Foal confidently associates with one discovered, still-installed application (app-owned, high confidence) that would likely remain after an uninstall, surfaced for read-only review only. Lower-confidence findings are split off into shared-state concerns or unknown state rather than reported here.
 _Avoid_: deletion candidate, orphan residue of an already-removed application, implying the application is already gone
 
+**Orphaned residue**:
+Filesystem paths that look like application data but are not tied to any currently discovered installed application, surfaced as low-confidence read-only review clues unless a future explicit rule proves stronger ownership.
+_Avoid_: possible leftovers, deletion candidate, app-owned footprint, safe-to-clean residue
+
 **Not-inspected state**:
 A report state asserting that Foal did not examine a discovery category at all, kept distinct from an inspected-but-empty result so the report never implies an examination that did not happen.
 _Avoid_: none found, no leftovers, empty result
