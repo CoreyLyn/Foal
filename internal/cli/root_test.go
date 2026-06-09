@@ -181,6 +181,184 @@ func TestMainMenuKeyboardNavigationSelectsNonDestructivePlaceholders(t *testing.
 	}
 }
 
+func TestMainMenuCleanSelectionRendersReadOnlyPreviewTUI(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	originalExecute := executeClean
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		return clean.Result{
+			Status: "preview",
+			Mode:   "dry_run",
+			DefaultRuleCatalog: []clean.RuleSummary{{
+				ID:             "foal_owned_temp_sandboxes",
+				Description:    "Foal-owned temporary sandbox entries",
+				DefaultEnabled: true,
+			}},
+			Candidates: []clean.CandidatePreview{{
+				Path:          `C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+				Bytes:         12,
+				Rule:          "foal_owned_temp_sandboxes",
+				PlannedAction: "move_to_recycle_bin",
+			}},
+			Skipped: []clean.SkippedItem{{
+				Path:  `\\?\C:\Windows\System32`,
+				Bytes: 4096,
+				Rule:  "foal_owned_temp_sandboxes",
+				Reason: clean.StructuredIssue{
+					Code:        "protected_path",
+					Message:     "protected Windows location",
+					Recoverable: true,
+					Path:        `\\?\C:\Windows\System32`,
+					Rule:        "foal_owned_temp_sandboxes",
+				},
+			}},
+			Errors: []clean.StructuredIssue{{
+				Code:        "inspection_failed",
+				Message:     "could not inspect root",
+				Recoverable: true,
+				Path:        `C:\Users\corey\AppData\Local\Temp\missing`,
+				Rule:        "foal_owned_temp_sandboxes",
+			}},
+			Totals:           clean.Totals{CandidateCount: 1, CandidateBytes: 12, SkippedCount: 1},
+			DetailedListPath: `C:\Users\corey\AppData\Roaming\Foal\history\clean-dry-run-detail.txt`,
+		}
+	}
+	executeClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		t.Fatal("clean TUI preview must not execute cleanup")
+		return clean.Result{}
+	}
+	t.Cleanup(func() {
+		dryRunClean = originalDryRun
+		executeClean = originalExecute
+	})
+
+	var stdout, stderr bytes.Buffer
+
+	code := RunInvocation(Invocation{
+		ExecutableName:            "foal",
+		InteractiveTerminal:       true,
+		OutputInteractiveTerminal: true,
+		Input:                     strings.NewReader("enter\nq\n"),
+	}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("RunInvocation returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Clean preview TUI",
+		"Read-only review over foal clean --dry-run",
+		"Potential space: 12 bytes",
+		"Default candidates (1)",
+		`C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+		"Skipped items (1)",
+		`\\?\C:\Windows\System32`,
+		"protected_path",
+		"Inspection errors (1)",
+		"inspection_failed",
+		"Protection rules",
+		"Detailed candidate list:",
+		"Copy paths from the detailed list or visible rows for manual review.",
+		"Foal main menu closed.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{
+		"Execution complete",
+		"Deleted:",
+		"Execute",
+		"execute cleanup",
+		"confirm",
+		"Confirmation",
+		"Potential space: 4108 bytes",
+		"Run as Administrator",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains forbidden execution or potential-space wording %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestCleanPreviewTUIFilterShowsReviewSectionsWithoutChangingPotentialSpace(t *testing.T) {
+	state := cleanPreviewTUIState{
+		open:     true,
+		filter:   cleanPreviewFilterReview,
+		expanded: true,
+		model: clean.PreviewReadModel{
+			Title: "Foal clean",
+			Candidates: []clean.PreviewCandidate{{
+				Path:          `C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+				Bytes:         12,
+				Rule:          "foal_owned_temp_sandboxes",
+				PlannedAction: "move_to_recycle_bin",
+			}},
+			SkippedByDefault: []clean.PreviewSkippedByDefaultItem{{
+				Name:   "Browser cache family",
+				Path:   `C:\Users\corey\AppData\Local\Browser\Cache`,
+				Bytes:  4096,
+				Reason: "requires explicit future opt-in",
+			}},
+			ReviewClues: []clean.PreviewReviewClue{{
+				Name:    "Project artifact clue",
+				Path:    `D:\Code\Personal\Foal\node_modules`,
+				Details: "review manually before deleting",
+			}},
+			ReviewSuggestions: []clean.PreviewReviewSuggestion{{
+				Label:    "Open Windows Storage settings",
+				NextStep: "Use Windows Settings to review large app storage.",
+			}},
+			RunningApplicationSkips: []clean.PreviewRunningApplicationSkip{{
+				Name:        "Sync client cache",
+				Application: "SyncClient.exe",
+				Path:        `C:\Users\corey\Sync\Cache`,
+				Reason:      "application is running",
+			}},
+			PotentialSpaceBytes: 12,
+			CandidateCount:      1,
+		},
+	}
+
+	output := renderCleanPreviewTUI(state)
+
+	for _, want := range []string{
+		"Filter: review",
+		"Potential space: 12 bytes",
+		"Skipped by default (1)",
+		"Browser cache family",
+		"requires explicit future opt-in",
+		"Review clues (1)",
+		"Project artifact clue",
+		"Review suggestions (1)",
+		"Use Windows Settings to review large app storage.",
+		"Running application skips (1)",
+		"SyncClient.exe",
+		"not counted as Potential space",
+		"review only",
+		"skipped, not executable here",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{
+		"Potential space: 4108 bytes",
+		"Default candidates (1)",
+		"preview action metadata: Recycle Bin)\n  Browser cache family",
+		"cleanup candidate",
+		"Execution complete",
+		"Deleted:",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains forbidden review/execution wording %q:\n%s", forbidden, output)
+		}
+	}
+}
+
 func TestNoArgumentNonTTYKeepsCanonicalHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
