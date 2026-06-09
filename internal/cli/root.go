@@ -49,8 +49,19 @@ var (
 	reviewUninstall = uninstall.Review
 )
 
+type Invocation struct {
+	ExecutableName      string
+	Args                []string
+	InteractiveTerminal bool
+}
+
 // Run executes the Foal command line with output streams supplied by the caller.
 func Run(args []string, stdout, stderr io.Writer) int {
+	return RunInvocation(Invocation{ExecutableName: "foal", Args: args}, stdout, stderr)
+}
+
+func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
+	args := append([]string(nil), invocation.Args...)
 	opts, positional, err := parseOptions(args)
 	if err != nil {
 		return writeError(stderr, opts.json, "root", args, jsonError{
@@ -62,7 +73,25 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		})
 	}
 
-	if len(positional) == 0 || positional[0] == "help" {
+	if len(positional) == 0 {
+		if invocation.InteractiveTerminal && !opts.json {
+			_, _ = fmt.Fprint(stdout, mainMenuEntryText())
+			return exitOK
+		}
+		if opts.json {
+			return writeJSON(stdout, envelope{
+				Command: "root",
+				Result: commandResult{
+					Status:  "ok",
+					Message: helpText(),
+				},
+			})
+		}
+		_, _ = fmt.Fprint(stdout, helpText())
+		return exitOK
+	}
+
+	if positional[0] == "help" {
 		if opts.json {
 			return writeJSON(stdout, envelope{
 				Command: "root",
@@ -299,6 +328,18 @@ func helpText() string {
 	builder.WriteString("  foal clean --dry-run\n")
 	builder.WriteString("  foal clean --execute\n")
 	builder.WriteString("  foal.exe analyze\n")
+	return builder.String()
+}
+
+func mainMenuEntryText() string {
+	var builder strings.Builder
+	builder.WriteString("Foal main menu\n")
+	builder.WriteString("Preview-first Windows cleanup\n\n")
+	builder.WriteString("Commands:\n")
+	for _, command := range commands {
+		builder.WriteString(fmt.Sprintf("  %-10s %s\n", command.name, command.description))
+	}
+	builder.WriteString("\nThis interactive entry is a navigation surface over the existing Foal command paths.\n")
 	return builder.String()
 }
 
