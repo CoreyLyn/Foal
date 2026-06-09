@@ -76,9 +76,10 @@ func TestNoArgumentTTYRoutesToFoalMainMenuEntry(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 
 			code := RunInvocation(Invocation{
-				ExecutableName:      executable,
-				InteractiveTerminal: true,
-				Args:                nil,
+				ExecutableName:            executable,
+				InteractiveTerminal:       true,
+				OutputInteractiveTerminal: true,
+				Args:                      nil,
 			}, &stdout, &stderr)
 
 			if code != exitOK {
@@ -153,9 +154,10 @@ func TestMainMenuKeyboardNavigationSelectsNonDestructivePlaceholders(t *testing.
 			var stdout, stderr bytes.Buffer
 
 			code := RunInvocation(Invocation{
-				ExecutableName:      "foal",
-				InteractiveTerminal: true,
-				Input:               strings.NewReader(tc.input),
+				ExecutableName:            "foal",
+				InteractiveTerminal:       true,
+				OutputInteractiveTerminal: true,
+				Input:                     strings.NewReader(tc.input),
 			}, &stdout, &stderr)
 
 			if code != exitOK {
@@ -200,6 +202,31 @@ func TestNoArgumentNonTTYKeepsCanonicalHelp(t *testing.T) {
 	}
 	if strings.Contains(output, "Foal main menu") {
 		t.Fatalf("stdout = %q, want help instead of interactive menu", output)
+	}
+}
+
+func TestNoArgumentPipedOutputKeepsCanonicalHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := RunInvocation(Invocation{
+		ExecutableName:            "foal",
+		InteractiveTerminal:       true,
+		OutputInteractiveTerminal: false,
+		Args:                      nil,
+	}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("RunInvocation returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Usage:\n  foal [--json] <command>") {
+		t.Fatalf("stdout = %q, want canonical foal help", output)
+	}
+	if strings.Contains(output, "Foal main menu") {
+		t.Fatalf("stdout = %q, want help instead of interactive menu for piped output", output)
 	}
 }
 

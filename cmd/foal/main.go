@@ -9,10 +9,11 @@ import (
 
 func main() {
 	os.Exit(cli.RunInvocation(cli.Invocation{
-		ExecutableName:      filepath.Base(os.Args[0]),
-		Args:                os.Args[1:],
-		InteractiveTerminal: isInteractiveTerminal(os.Stdin),
-		Input:               os.Stdin,
+		ExecutableName:            filepath.Base(os.Args[0]),
+		Args:                      os.Args[1:],
+		InteractiveTerminal:       isInteractiveTerminal(os.Stdin),
+		OutputInteractiveTerminal: isInteractiveTerminal(os.Stdout),
+		Input:                     os.Stdin,
 	}, os.Stdout, os.Stderr))
 }
 

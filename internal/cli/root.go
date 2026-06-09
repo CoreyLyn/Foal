@@ -51,10 +51,11 @@ var (
 )
 
 type Invocation struct {
-	ExecutableName      string
-	Args                []string
-	InteractiveTerminal bool
-	Input               io.Reader
+	ExecutableName            string
+	Args                      []string
+	InteractiveTerminal       bool
+	OutputInteractiveTerminal bool
+	Input                     io.Reader
 }
 
 // Run executes the Foal command line with output streams supplied by the caller.
@@ -76,7 +77,7 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 	}
 
 	if len(positional) == 0 {
-		if invocation.InteractiveTerminal && !opts.json {
+		if canLaunchInteractiveEntry(invocation, opts) {
 			_, _ = fmt.Fprint(stdout, runMainMenu(invocation.Input))
 			return exitOK
 		}
@@ -275,6 +276,14 @@ func parseOptions(args []string) (options, []string, error) {
 	}
 
 	return opts, positional, nil
+}
+
+func canLaunchInteractiveEntry(invocation Invocation, opts options) bool {
+	// Future TUI entry points should use this same guard: no-argument
+	// interactivity is safe only when both sides are terminals and the caller
+	// did not request JSON. This keeps scripts, pipes, and automation on the
+	// deterministic command/help path instead of waiting for keyboard input.
+	return invocation.InteractiveTerminal && invocation.OutputInteractiveTerminal && !opts.json
 }
 
 func isKnownCommand(name string) bool {
