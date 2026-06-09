@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/CoreyLyn/Foal/internal/analyze"
@@ -78,7 +79,11 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 
 	if len(positional) == 0 {
 		if canLaunchInteractiveEntry(invocation, opts) {
-			_, _ = fmt.Fprint(stdout, runMainMenu(invocation.Input))
+			restoreInput := enableRawInput(invocation.Input)
+			defer restoreInput()
+			restoreOutput := enableVirtualTerminalOutput(stdout)
+			defer restoreOutput()
+			runMainMenuScreenTo(invocation.Input, stdout)
 			return exitOK
 		}
 		if opts.json {
@@ -393,89 +398,256 @@ var mainMenuItems = []mainMenuItem{
 }
 
 func runMainMenu(input io.Reader) string {
+	var builder strings.Builder
+	runMainMenuTo(input, &builder)
+	return builder.String()
+}
+
+func runMainMenuTo(input io.Reader, output io.Writer) {
+	runMainMenuWithRenderer(input, output, appendMenuRenderer{})
+}
+
+func runMainMenuScreenTo(input io.Reader, output io.Writer) {
+	renderer := &screenMenuRenderer{}
+	renderer.begin(output)
+	defer renderer.end(output)
+	runMainMenuWithRenderer(input, output, renderer)
+}
+
+func runMainMenuWithRenderer(input io.Reader, output io.Writer, renderer menuRenderer) {
 	if input == nil {
-		return mainMenuEntryText()
+		renderer.frame(output, mainMenuEntryText())
+		return
 	}
 
 	selected := 0
 	cleanView := cleanPreviewTUIState{}
-	var builder strings.Builder
-	builder.WriteString(renderMainMenu(selected, ""))
-	scanner := bufio.NewScanner(input)
-	for scanner.Scan() {
-		key := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	renderer.frame(output, renderMainMenu(selected, ""))
+	reader := bufio.NewReader(input)
+	for {
+		key, ok := readMenuKey(reader)
+		if !ok {
+			return
+		}
 		if cleanView.open {
 			switch key {
 			case "q", "quit", "esc":
-				builder.WriteString("\nFoal main menu closed.\n")
-				return builder.String()
+				renderer.message(output, "\nFoal main menu closed.\n")
+				return
 			case "b", "back":
 				cleanView.open = false
-				builder.WriteString("\n")
-				builder.WriteString(renderMainMenu(selected, ""))
+				renderer.frame(output, renderMainMenu(selected, ""))
 			case "j", "down":
 				cleanView.scroll++
-				builder.WriteString("\n")
-				builder.WriteString(renderCleanPreviewTUI(cleanView))
+				renderer.frame(output, renderCleanPreviewTUI(cleanView))
 			case "k", "up":
 				if cleanView.scroll > 0 {
 					cleanView.scroll--
 				}
-				builder.WriteString("\n")
-				builder.WriteString(renderCleanPreviewTUI(cleanView))
+				renderer.frame(output, renderCleanPreviewTUI(cleanView))
 			case "f", "filter":
 				cleanView.filter = nextCleanPreviewFilter(cleanView.filter)
 				cleanView.scroll = 0
-				builder.WriteString("\n")
-				builder.WriteString(renderCleanPreviewTUI(cleanView))
+				renderer.frame(output, renderCleanPreviewTUI(cleanView))
 			case "e", "expand":
 				cleanView.expanded = !cleanView.expanded
-				builder.WriteString("\n")
-				builder.WriteString(renderCleanPreviewTUI(cleanView))
+				renderer.frame(output, renderCleanPreviewTUI(cleanView))
 			case "c", "copy":
 				cleanView.notice = "Copy paths from the detailed list or visible rows for manual review."
-				builder.WriteString("\n")
-				builder.WriteString(renderCleanPreviewTUI(cleanView))
+				renderer.frame(output, renderCleanPreviewTUI(cleanView))
 			default:
-				builder.WriteString("\n")
 				cleanView.notice = "Unknown key. Use j/k, f, e, c, b, or q."
-				builder.WriteString(renderCleanPreviewTUI(cleanView))
+				renderer.frame(output, renderCleanPreviewTUI(cleanView))
 			}
 			continue
 		}
 
 		switch key {
 		case "q", "quit", "esc":
-			builder.WriteString("\nFoal main menu closed.\n")
-			return builder.String()
+			renderer.message(output, "\nFoal main menu closed.\n")
+			return
 		case "j", "down":
 			selected = (selected + 1) % len(mainMenuItems)
-			builder.WriteString("\n")
-			builder.WriteString(renderMainMenu(selected, ""))
+			renderer.frame(output, renderMainMenu(selected, ""))
 		case "k", "up":
 			selected = (selected + len(mainMenuItems) - 1) % len(mainMenuItems)
-			builder.WriteString("\n")
-			builder.WriteString(renderMainMenu(selected, ""))
+			renderer.frame(output, renderMainMenu(selected, ""))
 		case "", "enter":
-			builder.WriteString("\n")
 			if mainMenuItems[selected].command == "clean" {
 				cleanView = newCleanPreviewTUIState()
-				builder.WriteString(renderCleanPreviewTUI(cleanView))
+				renderer.frame(output, renderCleanPreviewTUI(cleanView))
 			} else {
-				builder.WriteString(mainMenuItems[selected].selection)
-				builder.WriteString("\n")
-				builder.WriteString(renderMainMenu(selected, ""))
+				renderer.frame(output, mainMenuItems[selected].selection+"\n"+renderMainMenu(selected, ""))
 			}
 		default:
-			builder.WriteString("\n")
-			builder.WriteString(renderMainMenu(selected, "Unknown key. Use j/k, up/down, enter, or q."))
+			renderer.frame(output, renderMainMenu(selected, "Unknown key. Use j/k, up/down, enter, or q."))
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		builder.WriteString("\n")
-		builder.WriteString(renderMainMenu(selected, "Input ended with an error; no files were changed."))
+}
+
+type menuRenderer interface {
+	frame(output io.Writer, text string)
+	message(output io.Writer, text string)
+}
+
+type appendMenuRenderer struct{}
+
+func (appendMenuRenderer) frame(output io.Writer, text string) {
+	_, _ = io.WriteString(output, text)
+}
+
+func (appendMenuRenderer) message(output io.Writer, text string) {
+	_, _ = io.WriteString(output, text)
+}
+
+type screenMenuRenderer struct {
+	ended bool
+}
+
+func (renderer *screenMenuRenderer) begin(output io.Writer) {
+	_, _ = io.WriteString(output, "\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H")
+}
+
+func (renderer *screenMenuRenderer) end(output io.Writer) {
+	if renderer.ended {
+		return
 	}
-	return builder.String()
+	renderer.ended = true
+	_, _ = io.WriteString(output, "\x1b[?25h\x1b[?1049l")
+}
+
+func (renderer *screenMenuRenderer) frame(output io.Writer, text string) {
+	_, _ = io.WriteString(output, "\x1b[2J\x1b[H")
+	_, _ = io.WriteString(output, text)
+}
+
+func (renderer *screenMenuRenderer) message(output io.Writer, text string) {
+	renderer.end(output)
+	_, _ = io.WriteString(output, text)
+}
+
+func readMenuKey(reader *bufio.Reader) (string, bool) {
+	b, err := reader.ReadByte()
+	if err != nil {
+		return "", false
+	}
+
+	switch b {
+	case '\r', '\n':
+		return "enter", true
+	case 0x1b:
+		return readEscapeMenuKey(reader), true
+	case 0x00, 0xe0:
+		return readWindowsExtendedMenuKey(reader), true
+	}
+
+	if isMenuCommandByte(b) && reader.Buffered() == 0 {
+		return strings.ToLower(string(b)), true
+	}
+	if isMenuCommandByte(b) && nextBufferedByteIsMenuCommand(reader) {
+		return strings.ToLower(string(b)), true
+	}
+
+	if isMenuCommandByte(b) || isMenuWordByte(b) {
+		var builder strings.Builder
+		builder.WriteByte(b)
+		for reader.Buffered() > 0 {
+			next, err := reader.ReadByte()
+			if err != nil {
+				break
+			}
+			if next == '\r' || next == '\n' {
+				break
+			}
+			builder.WriteByte(next)
+		}
+		return normalizeMenuKey(builder.String()), true
+	}
+
+	return strings.ToLower(strings.TrimSpace(string(b))), true
+}
+
+func readEscapeMenuKey(reader *bufio.Reader) string {
+	if reader.Buffered() == 0 {
+		return "esc"
+	}
+	next, err := reader.ReadByte()
+	if err != nil {
+		return "esc"
+	}
+	if next == '[' || next == 'O' {
+		if reader.Buffered() == 0 {
+			return "esc"
+		}
+		key, err := reader.ReadByte()
+		if err != nil {
+			return "esc"
+		}
+		switch key {
+		case 'A':
+			return "up"
+		case 'B':
+			return "down"
+		}
+	}
+	return "esc"
+}
+
+func readWindowsExtendedMenuKey(reader *bufio.Reader) string {
+	if reader.Buffered() == 0 {
+		return ""
+	}
+	key, err := reader.ReadByte()
+	if err != nil {
+		return ""
+	}
+	switch key {
+	case 'H':
+		return "up"
+	case 'P':
+		return "down"
+	}
+	return ""
+}
+
+func normalizeMenuKey(text string) string {
+	return strings.ToLower(strings.TrimSpace(text))
+}
+
+func isMenuCommandByte(b byte) bool {
+	switch b {
+	case 'b', 'B', 'c', 'C', 'e', 'E', 'f', 'F', 'j', 'J', 'k', 'K', 'q', 'Q':
+		return true
+	}
+	return false
+}
+
+func nextBufferedByteIsMenuCommand(reader *bufio.Reader) bool {
+	next, err := reader.Peek(1)
+	if err != nil || len(next) == 0 {
+		return false
+	}
+	return isMenuCommandByte(next[0]) || next[0] == 0x1b || next[0] == 0x00 || next[0] == 0xe0
+}
+
+func isMenuWordByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func enableRawInput(input io.Reader) func() {
+	file, ok := input.(*os.File)
+	if !ok {
+		return func() {}
+	}
+	return enableRawInputFile(file)
+}
+
+func enableVirtualTerminalOutput(output io.Writer) func() {
+	file, ok := output.(*os.File)
+	if !ok {
+		return func() {}
+	}
+	return enableVirtualTerminalOutputFile(file)
 }
 
 type cleanPreviewFilter string

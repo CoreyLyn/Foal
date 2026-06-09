@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -113,6 +115,155 @@ func TestNoArgumentTTYRoutesToFoalMainMenuEntry(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMainMenuWritesInitialFrameBeforeReadingInput(t *testing.T) {
+	reader, writer := io.Pipe()
+	output := newSignalingWriter()
+	done := make(chan struct{})
+
+	go func() {
+		runMainMenuTo(reader, output)
+		close(done)
+	}()
+
+	select {
+	case text := <-output.writes:
+		if !strings.Contains(text, "Foal main menu") {
+			t.Fatalf("initial output = %q, want main menu", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("main menu did not write initial frame before waiting for input")
+	}
+
+	if _, err := writer.Write([]byte("q\n")); err != nil {
+		t.Fatalf("write quit input: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close input writer: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("main menu did not exit after quit input")
+	}
+}
+
+func TestMainMenuRespondsToSingleKeyBeforeNewline(t *testing.T) {
+	reader, writer := io.Pipe()
+	output := newSignalingWriter()
+	done := make(chan struct{})
+
+	go func() {
+		runMainMenuTo(reader, output)
+		close(done)
+	}()
+
+	waitForMenuOutput(t, output, "Foal main menu")
+
+	if _, err := writer.Write([]byte("j")); err != nil {
+		t.Fatalf("write navigation key: %v", err)
+	}
+
+	waitForMenuOutput(t, output, "> Uninstall")
+
+	if _, err := writer.Write([]byte("q")); err != nil {
+		t.Fatalf("write quit key: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close input writer: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("main menu did not exit after single-key quit input")
+	}
+}
+
+func TestMainMenuParsesArrowKeySequences(t *testing.T) {
+	output := runMainMenu(strings.NewReader("\x1b[B\x1b[Aq"))
+
+	if !strings.Contains(output, "> Clean") {
+		t.Fatalf("up arrow should return selection to Clean:\n%s", output)
+	}
+	if !strings.Contains(output, "> Uninstall") {
+		t.Fatalf("down arrow should move selection to Uninstall:\n%s", output)
+	}
+	if !strings.Contains(output, "Foal main menu closed.") {
+		t.Fatalf("output missing close message:\n%s", output)
+	}
+}
+
+func TestMainMenuScreenRendererRedrawsInPlace(t *testing.T) {
+	var output strings.Builder
+
+	runMainMenuScreenTo(strings.NewReader("jq"), &output)
+
+	text := output.String()
+	if !strings.Contains(text, "\x1b[?1049h") {
+		t.Fatalf("screen renderer did not enter the alternate screen:\n%q", text)
+	}
+	if !strings.Contains(text, "\x1b[?1049l") {
+		t.Fatalf("screen renderer did not leave the alternate screen:\n%q", text)
+	}
+	if got := strings.Count(text, "\x1b[2J\x1b[H"); got < 2 {
+		t.Fatalf("screen renderer sent %d clear/home sequences, want at least 2:\n%q", got, text)
+	}
+	if !strings.Contains(text, "\x1b[?25l") {
+		t.Fatalf("screen renderer did not hide cursor while drawing:\n%q", text)
+	}
+	if !strings.Contains(text, "\x1b[?25h") {
+		t.Fatalf("screen renderer did not restore cursor on close:\n%q", text)
+	}
+	if !strings.Contains(text, "> Uninstall") {
+		t.Fatalf("screen renderer did not redraw selected item:\n%s", text)
+	}
+}
+
+func TestMainMenuTextRendererDoesNotEmitScreenControls(t *testing.T) {
+	output := runMainMenu(strings.NewReader("jq"))
+
+	if strings.Contains(output, "\x1b[2J") || strings.Contains(output, "\x1b[H") || strings.Contains(output, "\x1b[?1049") {
+		t.Fatalf("text renderer emitted screen control sequences:\n%q", output)
+	}
+}
+
+type signalingWriter struct {
+	mu     sync.Mutex
+	buffer strings.Builder
+	writes chan string
+}
+
+func newSignalingWriter() *signalingWriter {
+	return &signalingWriter{writes: make(chan string, 16)}
+}
+
+func (w *signalingWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, _ = w.buffer.Write(p)
+	select {
+	case w.writes <- w.buffer.String():
+	default:
+	}
+	return len(p), nil
+}
+
+func waitForMenuOutput(t *testing.T, output *signalingWriter, want string) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case text := <-output.writes:
+			if strings.Contains(text, want) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("menu output did not contain %q before timeout", want)
+		}
 	}
 }
 

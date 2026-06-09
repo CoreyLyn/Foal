@@ -11,16 +11,8 @@ func main() {
 	os.Exit(cli.RunInvocation(cli.Invocation{
 		ExecutableName:            filepath.Base(os.Args[0]),
 		Args:                      os.Args[1:],
-		InteractiveTerminal:       isInteractiveTerminal(os.Stdin),
-		OutputInteractiveTerminal: isInteractiveTerminal(os.Stdout),
+		InteractiveTerminal:       cli.IsInteractiveTerminal(os.Stdin),
+		OutputInteractiveTerminal: cli.IsInteractiveTerminal(os.Stdout),
 		Input:                     os.Stdin,
 	}, os.Stdout, os.Stderr))
-}
-
-func isInteractiveTerminal(file *os.File) bool {
-	info, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
 }
