@@ -36,6 +36,96 @@ func TestHelpUsesFoalNamingOnly(t *testing.T) {
 	}
 }
 
+func TestFoAliasRunsSameExplicitCommandSurface(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := RunInvocation(Invocation{
+		ExecutableName: "fo",
+		Args:           []string{"status", "--json"},
+	}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("RunInvocation returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	var got envelope
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
+	}
+	if got.Command != "status" {
+		t.Fatalf("command = %q, want status", got.Command)
+	}
+	result, ok := got.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result has type %T, want object", got.Result)
+	}
+	foal, ok := result["foal"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.foal has type %T, want object", result["foal"])
+	}
+	if foal["command"] != "foal" || foal["executable"] != "foal.exe" {
+		t.Fatalf("foal state = %#v, want canonical foal naming through alias", foal)
+	}
+}
+
+func TestNoArgumentTTYRoutesToFoalMainMenuEntry(t *testing.T) {
+	for _, executable := range []string{"foal", "fo"} {
+		t.Run(executable, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			code := RunInvocation(Invocation{
+				ExecutableName:      executable,
+				InteractiveTerminal: true,
+				Args:                nil,
+			}, &stdout, &stderr)
+
+			if code != exitOK {
+				t.Fatalf("RunInvocation returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+			output := stdout.String()
+			for _, want := range []string{"Foal main menu", "Preview-first Windows cleanup", "clean", "uninstall", "status"} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("main menu entry missing %q:\n%s", want, output)
+				}
+			}
+			for _, forbidden := range []string{"fo command", "fo --help", "execute cleanup"} {
+				if strings.Contains(output, forbidden) {
+					t.Fatalf("main menu entry contains forbidden alias/destructive wording %q:\n%s", forbidden, output)
+				}
+			}
+		})
+	}
+}
+
+func TestNoArgumentNonTTYKeepsCanonicalHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := RunInvocation(Invocation{
+		ExecutableName:      "fo",
+		InteractiveTerminal: false,
+		Args:                nil,
+	}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("RunInvocation returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Usage:\n  foal [--json] <command>") {
+		t.Fatalf("stdout = %q, want canonical foal help", output)
+	}
+	if strings.Contains(output, "Foal main menu") {
+		t.Fatalf("stdout = %q, want help instead of interactive menu", output)
+	}
+}
+
 func TestKnownCommandRoutesAsJSON(t *testing.T) {
 	disableHistoryRecording(t)
 	var stdout, stderr bytes.Buffer
