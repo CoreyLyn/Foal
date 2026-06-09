@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -53,6 +54,7 @@ type Invocation struct {
 	ExecutableName      string
 	Args                []string
 	InteractiveTerminal bool
+	Input               io.Reader
 }
 
 // Run executes the Foal command line with output streams supplied by the caller.
@@ -75,7 +77,7 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 
 	if len(positional) == 0 {
 		if invocation.InteractiveTerminal && !opts.json {
-			_, _ = fmt.Fprint(stdout, mainMenuEntryText())
+			_, _ = fmt.Fprint(stdout, runMainMenu(invocation.Input))
 			return exitOK
 		}
 		if opts.json {
@@ -332,14 +334,118 @@ func helpText() string {
 }
 
 func mainMenuEntryText() string {
-	var builder strings.Builder
-	builder.WriteString("Foal main menu\n")
-	builder.WriteString("Preview-first Windows cleanup\n\n")
-	builder.WriteString("Commands:\n")
-	for _, command := range commands {
-		builder.WriteString(fmt.Sprintf("  %-10s %s\n", command.name, command.description))
+	return renderMainMenu(0, "")
+}
+
+type mainMenuItem struct {
+	title       string
+	command     string
+	description string
+	selection   string
+}
+
+var mainMenuItems = []mainMenuItem{
+	{
+		title:       "Clean",
+		command:     "clean",
+		description: "Preview conservative cleanup candidates; TUI browsing arrives in a later slice.",
+		selection:   "Clean TUI path\nClean preview browsing is not built in this slice. Run `foal clean --dry-run` for the existing non-destructive preview.\nNo files were changed.",
+	},
+	{
+		title:       "Uninstall",
+		command:     "uninstall",
+		description: "Review installed application evidence; preview-only, no uninstallers are executed.",
+		selection:   "Uninstall TUI path\nUninstall remains preview-only; no uninstallers are executed, no processes are stopped, and no leftovers are deleted.\nNo files were changed.",
+	},
+	{
+		title:       "Analyze",
+		command:     "analyze",
+		description: "Inspect disk usage through the existing read-only command path.",
+		selection:   "Analyze TUI path\nAnalyze is available through `foal analyze --json <path>`; the read-only view is not built in this slice.\nNo files were changed.",
+	},
+	{
+		title:       "Status",
+		command:     "status",
+		description: "Inspect a read-only system and Foal state snapshot.",
+		selection:   "Status TUI path\nStatus is available through `foal status --json`; the read-only view is not built in this slice.\nNo files were changed.",
+	},
+	{
+		title:       "History",
+		command:     "history",
+		description: "Browse prior Foal operation records through the existing JSON contract.",
+		selection:   "History TUI path\nHistory is available through `foal history --json`; the read-only view is not built in this slice.\nNo files were changed.",
+	},
+	{
+		title:       "Extensions",
+		command:     "future",
+		description: "Reserved for future read-only command views.",
+		selection:   "Extensions\nFuture read-only views are not built in this slice.\nNo files were changed.",
+	},
+}
+
+func runMainMenu(input io.Reader) string {
+	if input == nil {
+		return mainMenuEntryText()
 	}
-	builder.WriteString("\nThis interactive entry is a navigation surface over the existing Foal command paths.\n")
+
+	selected := 0
+	var builder strings.Builder
+	builder.WriteString(renderMainMenu(selected, ""))
+	scanner := bufio.NewScanner(input)
+	for scanner.Scan() {
+		key := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		switch key {
+		case "q", "quit", "esc":
+			builder.WriteString("\nFoal main menu closed.\n")
+			return builder.String()
+		case "j", "down":
+			selected = (selected + 1) % len(mainMenuItems)
+			builder.WriteString("\n")
+			builder.WriteString(renderMainMenu(selected, ""))
+		case "k", "up":
+			selected = (selected + len(mainMenuItems) - 1) % len(mainMenuItems)
+			builder.WriteString("\n")
+			builder.WriteString(renderMainMenu(selected, ""))
+		case "", "enter":
+			builder.WriteString("\n")
+			builder.WriteString(mainMenuItems[selected].selection)
+			builder.WriteString("\n")
+			builder.WriteString(renderMainMenu(selected, ""))
+		default:
+			builder.WriteString("\n")
+			builder.WriteString(renderMainMenu(selected, "Unknown key. Use j/k, up/down, enter, or q."))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		builder.WriteString("\n")
+		builder.WriteString(renderMainMenu(selected, "Input ended with an error; no files were changed."))
+	}
+	return builder.String()
+}
+
+func renderMainMenu(selected int, notice string) string {
+	var builder strings.Builder
+	builder.WriteString("+--------------------------------------------------+\n")
+	builder.WriteString("| FOAL                                             |\n")
+	builder.WriteString("| Safe, preview-first cleanup for Windows          |\n")
+	builder.WriteString("+--------------------------------------------------+\n\n")
+	builder.WriteString("Foal main menu\n")
+	builder.WriteString("Safe, preview-first cleanup for Windows\n")
+	builder.WriteString("This is a read-only navigation shell over existing Foal command paths.\n\n")
+	builder.WriteString("Commands:\n")
+	for index, item := range mainMenuItems {
+		prefix := " "
+		if index == selected {
+			prefix = ">"
+		}
+		builder.WriteString(fmt.Sprintf("%s %-10s %-10s %s\n", prefix, item.title, "("+item.command+")", item.description))
+	}
+	if notice != "" {
+		builder.WriteString("\n")
+		builder.WriteString(notice)
+		builder.WriteString("\n")
+	}
+	builder.WriteString("\nHints: j/k or up/down: move | enter: open | q: quit\n")
 	return builder.String()
 }
 

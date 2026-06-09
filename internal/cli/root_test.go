@@ -88,14 +88,91 @@ func TestNoArgumentTTYRoutesToFoalMainMenuEntry(t *testing.T) {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 			output := stdout.String()
-			for _, want := range []string{"Foal main menu", "Preview-first Windows cleanup", "clean", "uninstall", "status"} {
+			for _, want := range []string{
+				"FOAL",
+				"Foal main menu",
+				"Safe, preview-first cleanup for Windows",
+				"> Clean",
+				"  Uninstall",
+				"  Analyze",
+				"  Status",
+				"  Extensions",
+				"j/k or up/down: move",
+				"enter: open",
+				"q: quit",
+				"read-only navigation shell",
+			} {
 				if !strings.Contains(output, want) {
 					t.Fatalf("main menu entry missing %q:\n%s", want, output)
 				}
 			}
-			for _, forbidden := range []string{"fo command", "fo --help", "execute cleanup"} {
+			for _, forbidden := range []string{"Mole", "Mac", "optimize", "fo command", "fo --help", "execute cleanup", "Run uninstaller", "Delete leftover"} {
 				if strings.Contains(output, forbidden) {
 					t.Fatalf("main menu entry contains forbidden alias/destructive wording %q:\n%s", forbidden, output)
+				}
+			}
+		})
+	}
+}
+
+func TestMainMenuKeyboardNavigationSelectsNonDestructivePlaceholders(t *testing.T) {
+	disableHistoryRecording(t)
+	originalExecute := executeClean
+	executeClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		t.Fatal("main menu selection must not execute cleanup")
+		return clean.Result{}
+	}
+	t.Cleanup(func() { executeClean = originalExecute })
+
+	for _, tc := range []struct {
+		name      string
+		input     string
+		wantTitle string
+		wantBody  string
+	}{
+		{
+			name:      "uninstall",
+			input:     "down\nenter\nq\n",
+			wantTitle: "Uninstall TUI path",
+			wantBody:  "preview-only; no uninstallers are executed",
+		},
+		{
+			name:      "analyze",
+			input:     "down\ndown\nenter\nq\n",
+			wantTitle: "Analyze TUI path",
+			wantBody:  "read-only view is not built in this slice",
+		},
+		{
+			name:      "status",
+			input:     "down\ndown\ndown\nenter\nq\n",
+			wantTitle: "Status TUI path",
+			wantBody:  "read-only view is not built in this slice",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			code := RunInvocation(Invocation{
+				ExecutableName:      "foal",
+				InteractiveTerminal: true,
+				Input:               strings.NewReader(tc.input),
+			}, &stdout, &stderr)
+
+			if code != exitOK {
+				t.Fatalf("RunInvocation returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+			output := stdout.String()
+			for _, want := range []string{tc.wantTitle, tc.wantBody, "No files were changed.", "Foal main menu closed."} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("output missing %q:\n%s", want, output)
+				}
+			}
+			for _, forbidden := range []string{"Execution complete", "Deleted:", "Run uninstaller", "Stop process", "Delete leftover"} {
+				if strings.Contains(output, forbidden) {
+					t.Fatalf("output contains destructive wording %q:\n%s", forbidden, output)
 				}
 			}
 		})

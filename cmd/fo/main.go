@@ -12,6 +12,7 @@ func main() {
 		ExecutableName:      filepath.Base(os.Args[0]),
 		Args:                os.Args[1:],
 		InteractiveTerminal: isInteractiveTerminal(os.Stdin),
+		Input:               os.Stdin,
 	}, os.Stdout, os.Stderr))
 }
 
