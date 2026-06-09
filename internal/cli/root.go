@@ -357,8 +357,8 @@ var mainMenuItems = []mainMenuItem{
 	{
 		title:       "Clean",
 		command:     "clean",
-		description: "Preview conservative cleanup candidates; TUI browsing arrives in a later slice.",
-		selection:   "Clean TUI path\nClean preview browsing is not built in this slice. Run `foal clean --dry-run` for the existing non-destructive preview.\nNo files were changed.",
+		description: "Browse conservative clean preview data from the existing dry-run read model.",
+		selection:   "",
 	},
 	{
 		title:       "Uninstall",
@@ -398,11 +398,52 @@ func runMainMenu(input io.Reader) string {
 	}
 
 	selected := 0
+	cleanView := cleanPreviewTUIState{}
 	var builder strings.Builder
 	builder.WriteString(renderMainMenu(selected, ""))
 	scanner := bufio.NewScanner(input)
 	for scanner.Scan() {
 		key := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		if cleanView.open {
+			switch key {
+			case "q", "quit", "esc":
+				builder.WriteString("\nFoal main menu closed.\n")
+				return builder.String()
+			case "b", "back":
+				cleanView.open = false
+				builder.WriteString("\n")
+				builder.WriteString(renderMainMenu(selected, ""))
+			case "j", "down":
+				cleanView.scroll++
+				builder.WriteString("\n")
+				builder.WriteString(renderCleanPreviewTUI(cleanView))
+			case "k", "up":
+				if cleanView.scroll > 0 {
+					cleanView.scroll--
+				}
+				builder.WriteString("\n")
+				builder.WriteString(renderCleanPreviewTUI(cleanView))
+			case "f", "filter":
+				cleanView.filter = nextCleanPreviewFilter(cleanView.filter)
+				cleanView.scroll = 0
+				builder.WriteString("\n")
+				builder.WriteString(renderCleanPreviewTUI(cleanView))
+			case "e", "expand":
+				cleanView.expanded = !cleanView.expanded
+				builder.WriteString("\n")
+				builder.WriteString(renderCleanPreviewTUI(cleanView))
+			case "c", "copy":
+				cleanView.notice = "Copy paths from the detailed list or visible rows for manual review."
+				builder.WriteString("\n")
+				builder.WriteString(renderCleanPreviewTUI(cleanView))
+			default:
+				builder.WriteString("\n")
+				cleanView.notice = "Unknown key. Use j/k, f, e, c, b, or q."
+				builder.WriteString(renderCleanPreviewTUI(cleanView))
+			}
+			continue
+		}
+
 		switch key {
 		case "q", "quit", "esc":
 			builder.WriteString("\nFoal main menu closed.\n")
@@ -417,9 +458,14 @@ func runMainMenu(input io.Reader) string {
 			builder.WriteString(renderMainMenu(selected, ""))
 		case "", "enter":
 			builder.WriteString("\n")
-			builder.WriteString(mainMenuItems[selected].selection)
-			builder.WriteString("\n")
-			builder.WriteString(renderMainMenu(selected, ""))
+			if mainMenuItems[selected].command == "clean" {
+				cleanView = newCleanPreviewTUIState()
+				builder.WriteString(renderCleanPreviewTUI(cleanView))
+			} else {
+				builder.WriteString(mainMenuItems[selected].selection)
+				builder.WriteString("\n")
+				builder.WriteString(renderMainMenu(selected, ""))
+			}
 		default:
 			builder.WriteString("\n")
 			builder.WriteString(renderMainMenu(selected, "Unknown key. Use j/k, up/down, enter, or q."))
@@ -430,6 +476,237 @@ func runMainMenu(input io.Reader) string {
 		builder.WriteString(renderMainMenu(selected, "Input ended with an error; no files were changed."))
 	}
 	return builder.String()
+}
+
+type cleanPreviewFilter string
+
+const (
+	cleanPreviewFilterAll        cleanPreviewFilter = "all"
+	cleanPreviewFilterCandidates cleanPreviewFilter = "default candidates"
+	cleanPreviewFilterSkipped    cleanPreviewFilter = "skipped"
+	cleanPreviewFilterReview     cleanPreviewFilter = "review"
+	cleanPreviewFilterErrors     cleanPreviewFilter = "errors"
+)
+
+type cleanPreviewTUIState struct {
+	open     bool
+	model    clean.PreviewReadModel
+	filter   cleanPreviewFilter
+	scroll   int
+	expanded bool
+	notice   string
+}
+
+func newCleanPreviewTUIState() cleanPreviewTUIState {
+	recorder, _ := newHistoryRecorder()
+	detailedListDir, _ := newHistoryDir()
+	result := dryRunClean(context.Background(), clean.Options{
+		HistoryRecorder: recorder,
+		DetailedListDir: detailedListDir,
+		CommandParameters: history.CommandParameters{
+			Command: "clean",
+			Args:    []string{"clean", "--dry-run"},
+		},
+	})
+	return cleanPreviewTUIState{
+		open:   true,
+		model:  clean.NewPreviewReadModel(result),
+		filter: cleanPreviewFilterAll,
+		notice: "Copy paths from the detailed list or visible rows for manual review.",
+	}
+}
+
+func nextCleanPreviewFilter(filter cleanPreviewFilter) cleanPreviewFilter {
+	switch filter {
+	case cleanPreviewFilterAll:
+		return cleanPreviewFilterCandidates
+	case cleanPreviewFilterCandidates:
+		return cleanPreviewFilterSkipped
+	case cleanPreviewFilterSkipped:
+		return cleanPreviewFilterReview
+	case cleanPreviewFilterReview:
+		return cleanPreviewFilterErrors
+	default:
+		return cleanPreviewFilterAll
+	}
+}
+
+func renderCleanPreviewTUI(state cleanPreviewTUIState) string {
+	model := state.model
+	var builder strings.Builder
+	builder.WriteString("+--------------------------------------------------+\n")
+	builder.WriteString("| Clean preview TUI                                |\n")
+	builder.WriteString("| Read-only review over foal clean --dry-run       |\n")
+	builder.WriteString("+--------------------------------------------------+\n\n")
+	builder.WriteString(fmt.Sprintf("Potential space: %s\n", cleanFormatBytes(model.PotentialSpaceBytes)))
+	builder.WriteString(fmt.Sprintf("Candidates: %d, skipped: %d, errors: %d\n", model.CandidateCount, model.SkippedCount, len(model.Errors)))
+	builder.WriteString(fmt.Sprintf("Filter: %s | Scroll: %d | Expanded: %t\n", state.filter, state.scroll, state.expanded))
+	if model.DetailedListPath != "" {
+		builder.WriteString(fmt.Sprintf("Detailed candidate list: %s\n", model.DetailedListPath))
+	}
+	if state.notice != "" {
+		builder.WriteString(state.notice)
+		builder.WriteString("\n")
+	}
+
+	if len(model.Notices) > 0 && cleanPreviewFilterAllows(state.filter, cleanPreviewFilterAll) {
+		builder.WriteString("\nNotices\n")
+		for _, notice := range model.Notices {
+			builder.WriteString(fmt.Sprintf("  %s\n", notice.Message))
+		}
+	}
+
+	if cleanPreviewFilterAllows(state.filter, cleanPreviewFilterAll) {
+		builder.WriteString("\nProtection rules\n")
+		if len(model.ProtectionRules) == 0 {
+			builder.WriteString("  No default-enabled protection rules were reported.\n")
+		} else {
+			for _, rule := range visibleCleanPreviewRows(state.scroll, model.ProtectionRules) {
+				builder.WriteString(fmt.Sprintf("  %s: %s\n", rule.ID, rule.Description))
+			}
+		}
+	}
+
+	if cleanPreviewFilterAllows(state.filter, cleanPreviewFilterCandidates) {
+		builder.WriteString(fmt.Sprintf("\nDefault candidates (%d)\n", len(model.Candidates)))
+		if len(model.Candidates) == 0 {
+			builder.WriteString("  No default candidates found.\n")
+		} else {
+			for _, candidate := range visibleCleanPreviewRows(state.scroll, model.Candidates) {
+				builder.WriteString(fmt.Sprintf("  %s (%s, rule: %s, preview action metadata: Recycle Bin)\n",
+					candidate.Path, cleanFormatBytes(candidate.Bytes), candidate.Rule))
+				if state.expanded && candidate.PlannedAction != "" {
+					builder.WriteString(fmt.Sprintf("    planned action metadata: %s\n", candidate.PlannedAction))
+				}
+			}
+		}
+	}
+
+	if cleanPreviewFilterAllows(state.filter, cleanPreviewFilterSkipped) {
+		builder.WriteString(fmt.Sprintf("\nSkipped items (%d)\n", len(model.Skipped)))
+		if len(model.Skipped) == 0 {
+			builder.WriteString("  No skipped cleanup paths reported.\n")
+		} else {
+			for _, skipped := range visibleCleanPreviewRows(state.scroll, model.Skipped) {
+				builder.WriteString(fmt.Sprintf("  %s (rule: %s, reason: %s, not counted as Potential space)\n",
+					skipped.Path, skipped.Rule, skipped.Reason.Code))
+				if state.expanded && skipped.Reason.Message != "" {
+					builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason.Message))
+				}
+			}
+		}
+	}
+
+	if cleanPreviewFilterAllows(state.filter, cleanPreviewFilterReview) {
+		writeCleanPreviewReviewSections(&builder, model, state)
+	}
+
+	if cleanPreviewFilterAllows(state.filter, cleanPreviewFilterErrors) {
+		builder.WriteString(fmt.Sprintf("\nInspection errors (%d)\n", len(model.Errors)))
+		if len(model.Errors) == 0 {
+			builder.WriteString("  No recoverable inspection errors reported.\n")
+		} else {
+			for _, err := range visibleCleanPreviewRows(state.scroll, model.Errors) {
+				builder.WriteString(fmt.Sprintf("  %s (rule: %s, error: %s, recoverable: %t)\n",
+					err.Path, err.Rule, err.Code, err.Recoverable))
+				if state.expanded && err.Message != "" {
+					builder.WriteString(fmt.Sprintf("    %s\n", err.Message))
+				}
+			}
+		}
+	}
+
+	builder.WriteString("\nHints: j/k scroll | f filter | e expand | c copy note | b back | q quit\n")
+	builder.WriteString("No cleanup actions are available in this TUI view.\n")
+	return builder.String()
+}
+
+func cleanPreviewFilterAllows(active, section cleanPreviewFilter) bool {
+	return active == cleanPreviewFilterAll || active == section
+}
+
+func visibleCleanPreviewRows[T any](scroll int, rows []T) []T {
+	const limit = 10
+	if scroll < 0 {
+		scroll = 0
+	}
+	if scroll >= len(rows) {
+		return []T{}
+	}
+	end := scroll + limit
+	if end > len(rows) {
+		end = len(rows)
+	}
+	return rows[scroll:end]
+}
+
+func writeCleanPreviewReviewSections(builder *strings.Builder, model clean.PreviewReadModel, state cleanPreviewTUIState) {
+	builder.WriteString(fmt.Sprintf("\nSkipped by default (%d)\n", len(model.SkippedByDefault)))
+	if len(model.SkippedByDefault) == 0 {
+		builder.WriteString("  No skipped-by-default review items reported.\n")
+	} else {
+		for _, skipped := range visibleCleanPreviewRows(state.scroll, model.SkippedByDefault) {
+			builder.WriteString(fmt.Sprintf("  %s", skipped.Name))
+			if skipped.Path != "" {
+				builder.WriteString(fmt.Sprintf(" - %s", skipped.Path))
+			}
+			builder.WriteString(" (not counted as Potential space)\n")
+			if state.expanded && skipped.Reason != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason))
+			}
+		}
+	}
+
+	builder.WriteString(fmt.Sprintf("\nReview clues (%d)\n", len(model.ReviewClues)))
+	if len(model.ReviewClues) == 0 {
+		builder.WriteString("  No review clues reported.\n")
+	} else {
+		for _, clue := range visibleCleanPreviewRows(state.scroll, model.ReviewClues) {
+			builder.WriteString(fmt.Sprintf("  %s", clue.Name))
+			if clue.Path != "" {
+				builder.WriteString(fmt.Sprintf(" - %s", clue.Path))
+			}
+			builder.WriteString(" (review only)\n")
+			if state.expanded && clue.Details != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", clue.Details))
+			}
+		}
+	}
+
+	builder.WriteString(fmt.Sprintf("\nRunning application skips (%d)\n", len(model.RunningApplicationSkips)))
+	if len(model.RunningApplicationSkips) == 0 {
+		builder.WriteString("  No running application skips reported.\n")
+	} else {
+		for _, skipped := range visibleCleanPreviewRows(state.scroll, model.RunningApplicationSkips) {
+			builder.WriteString(fmt.Sprintf("  %s", skipped.Name))
+			if skipped.Application != "" {
+				builder.WriteString(fmt.Sprintf(" (%s)", skipped.Application))
+			}
+			if skipped.Path != "" {
+				builder.WriteString(fmt.Sprintf(" - %s", skipped.Path))
+			}
+			builder.WriteString(" (skipped, not executable here)\n")
+			if state.expanded && skipped.Reason != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason))
+			}
+		}
+	}
+
+	builder.WriteString(fmt.Sprintf("\nReview suggestions (%d)\n", len(model.ReviewSuggestions)))
+	if len(model.ReviewSuggestions) == 0 {
+		builder.WriteString("  No review suggestions reported.\n")
+	} else {
+		for _, suggestion := range visibleCleanPreviewRows(state.scroll, model.ReviewSuggestions) {
+			builder.WriteString(fmt.Sprintf("  %s\n", suggestion.Label))
+			if state.expanded && suggestion.NextStep != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", suggestion.NextStep))
+			}
+		}
+	}
+}
+
+func cleanFormatBytes(bytes int64) string {
+	return fmt.Sprintf("%d bytes", bytes)
 }
 
 func renderMainMenu(selected int, notice string) string {
