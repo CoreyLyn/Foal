@@ -27,7 +27,7 @@ foal history --json
 foal uninstall --json
 ```
 
-`foal clean` requires either `--dry-run` or `--execute`; `--dry-run` previews candidates and `--execute` confirms Recycle Bin cleanup for conservative Foal-owned temp sandbox entries. Docs and verification should prefer non-destructive examples such as `foal clean --dry-run --json`.
+`foal clean` requires either `--dry-run` or `--execute`; `--dry-run` previews default candidates and reports idle user-temp opportunities as skipped-by-default review data with observed bytes kept separate from `Potential space`. `--execute` does not run opportunity discovery and confirms Recycle Bin cleanup only for freshly scanned, validated Foal-owned temp sandbox candidates. Docs and verification should prefer non-destructive examples such as `foal clean --dry-run --json`.
 
 `foal analyze --json <path>` returns read-only directory insight with totals, top children, skipped entries, and elapsed time. `foal status --json` returns a read-only snapshot with disk capacity, OS runtime, Foal command state, elapsed time, and structured `skipped` / `errors` arrays for automation consumers.
 
@@ -35,7 +35,7 @@ foal uninstall --json
 
 ### Interactive TUI
 
-Running `foal` (or the `fo` alias) with no arguments in an interactive terminal opens a read-only TUI: a main menu over the implemented commands, a clean preview browser, and read-only viewers for uninstall, status, and history. Browsing records no history sessions and writes no files. Scripts, pipes, and `--json` callers are unaffected and keep the deterministic help/command output.
+Running `foal` (or the `fo` alias) with no arguments in an interactive terminal opens a read-only TUI: a main menu over the implemented commands, a clean preview browser, and read-only viewers for uninstall, status, and history. The Clean TUI shows default candidates and skipped-by-default user-temp opportunities under its existing filters, keeps observed opportunity bytes distinct from `Potential space`, and supports cancellable reloads. Browsing records no history sessions, writes no detailed candidate list, and offers no cleanup selection or execution action. Scripts, pipes, and `--json` callers are unaffected and keep the deterministic help/command output.
 
 ## Scope
 

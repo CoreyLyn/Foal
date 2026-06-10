@@ -90,7 +90,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewer.setSize(msg.Width, msg.Height)
 		return m, nil
 	case cleanPreviewLoadedMsg:
-		m.clean.applyLoaded(msg)
+		if m.screen == screenCleanPreview {
+			m.clean.applyLoaded(msg)
+		}
 		return m, nil
 	case viewerLoadedMsg:
 		m.viewer.applyLoaded(msg)
@@ -124,7 +126,7 @@ func (m rootModel) updateMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "clean":
 			m.screen = screenCleanPreview
 			m.clean = newCleanModel(m.width, m.height)
-			return m, loadCleanPreviewCmd
+			return m, m.clean.startLoad(false)
 		case "uninstall", "status", "history":
 			command := mainMenuItems[m.selected].command
 			m.screen = screenViewer
@@ -141,16 +143,18 @@ func (m rootModel) updateMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m rootModel) updateCleanPreviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
+		m.clean.cancelPendingLoad()
 		return m, tea.Interrupt
 	case "q", "esc":
+		m.clean.cancelPendingLoad()
 		return m, tea.Quit
 	case "b":
+		m.clean.cancelPendingLoad()
 		m.screen = screenMenu
 		m.notice = ""
 		return m, nil
 	case "r":
-		m.clean.beginReload()
-		return m, loadCleanPreviewCmd
+		return m, m.clean.startLoad(true)
 	}
 	m.clean.handleKey(msg.String())
 	return m, nil

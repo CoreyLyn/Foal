@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -19,6 +20,9 @@ func stubCleanPreviewDryRun(t *testing.T) {
 	originalDryRun := dryRunClean
 	originalExecute := executeClean
 	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		if opts.HistoryRecorder != nil || opts.DetailedListDir != "" {
+			t.Fatalf("clean TUI load options enable side effects: %#v", opts)
+		}
 		return clean.Result{
 			Status: "preview",
 			Mode:   "dry_run",
@@ -52,8 +56,21 @@ func stubCleanPreviewDryRun(t *testing.T) {
 				Path:        `C:\Users\corey\AppData\Local\Temp\missing`,
 				Rule:        "foal_owned_temp_sandboxes",
 			}},
-			Totals:           clean.Totals{CandidateCount: 1, CandidateBytes: 12, SkippedCount: 1},
-			DetailedListPath: `C:\Users\corey\AppData\Roaming\Foal\history\clean-dry-run-detail.txt`,
+			Opportunities: []clean.UserTempOpportunity{{
+				Path:             `C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+				Bytes:            4096,
+				LatestModifiedAt: time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC),
+				IdleDays:         9,
+				Status:           clean.UserTempOpportunityStatus,
+				Reason:           clean.UserTempOpportunityReason,
+			}},
+			Totals: clean.Totals{
+				CandidateCount:           1,
+				CandidateBytes:           12,
+				SkippedCount:             1,
+				OpportunityCount:         1,
+				OpportunityObservedBytes: 4096,
+			},
 		}
 	}
 	executeClean = func(ctx context.Context, opts clean.Options) clean.Result {
@@ -70,7 +87,7 @@ func openCleanPreview(t *testing.T) rootModel {
 	t.Helper()
 	model := newRootModel()
 	// Wide window so long candidate paths are not clipped by the viewport.
-	next, _ := model.Update(tea.WindowSizeMsg{Width: 200, Height: 40})
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 240, Height: 60})
 	model = next.(rootModel)
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(rootModel)
@@ -106,7 +123,12 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"Inspection errors (1)",
 		"inspection_failed",
 		"Protection rules",
-		"Detailed candidate list:",
+		"Opportunities: 1, observed bytes: 4096 bytes",
+		`C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+		"latest modified: 2026-06-01T12:00:00Z",
+		"idle days: 9",
+		"status: skipped_by_default",
+		"reason: requires_explicit_opt_in",
 		"Press c to copy candidate paths to the clipboard.",
 	} {
 		if !strings.Contains(content, want) {
@@ -121,6 +143,7 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"confirm",
 		"Confirmation",
 		"Potential space: 4108 bytes",
+		"Detailed candidate list:",
 		"Run as Administrator",
 	} {
 		if strings.Contains(content, forbidden) {
@@ -138,6 +161,90 @@ func TestCleanPreviewBackReturnsToMenu(t *testing.T) {
 	if !strings.Contains(model.content(), "Foal main menu") {
 		t.Fatalf("b should return to the main menu:\n%s", model.content())
 	}
+}
+
+func TestCleanPreviewBackCancelsInFlightLoad(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		return clean.Result{}
+	}
+	t.Cleanup(func() { dryRunClean = originalDryRun })
+
+	model := newRootModel()
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
+	if cmd == nil {
+		t.Fatal("opening the clean view must start a load")
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = cmd()
+		close(done)
+	}()
+	<-started
+
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'b', Text: "b"})
+
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("leaving the clean preview did not cancel the in-flight load")
+	}
+	<-done
+	if !strings.Contains(model.content(), "Foal main menu") {
+		t.Fatalf("b should return to the main menu:\n%s", model.content())
+	}
+}
+
+func TestCleanPreviewReloadCancelsPreviousAndRemainsCancellable(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	contexts := make(chan context.Context, 2)
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		contexts <- ctx
+		<-ctx.Done()
+		return clean.Result{}
+	}
+	t.Cleanup(func() { dryRunClean = originalDryRun })
+
+	model := newRootModel()
+	next, firstCmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
+	firstDone := make(chan struct{})
+	go func() {
+		_ = firstCmd()
+		close(firstDone)
+	}()
+	firstCtx := <-contexts
+
+	next, secondCmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	model = next.(rootModel)
+	select {
+	case <-firstCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("reload did not cancel the previous clean preview load")
+	}
+	<-firstDone
+
+	secondDone := make(chan struct{})
+	go func() {
+		_ = secondCmd()
+		close(secondDone)
+	}()
+	secondCtx := <-contexts
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'b', Text: "b"})
+	select {
+	case <-secondCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("reloaded clean preview was not cancellable")
+	}
+	<-secondDone
 }
 
 func TestCleanPreviewBrowsingRecordsNoHistoryAndWritesNoFiles(t *testing.T) {
@@ -175,6 +282,9 @@ func TestCleanPreviewCopyKeySendsCandidatePathsToClipboard(t *testing.T) {
 
 	if want := `C:\Users\corey\AppData\Local\Temp\foal-default.tmp` + "\n"; copied != want {
 		t.Fatalf("clipboard payload = %q, want %q", copied, want)
+	}
+	if strings.Contains(copied, "old-tool-cache") {
+		t.Fatalf("clipboard payload includes review-only opportunity path: %q", copied)
 	}
 	if !strings.Contains(model.content(), "Copied 1 candidate path(s) to the clipboard.") {
 		t.Fatalf("content missing copy confirmation:\n%s", model.content())
@@ -337,5 +447,37 @@ func TestCleanPreviewFilterShowsReviewSectionsWithoutChangingPotentialSpace(t *t
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("output contains forbidden review/execution wording %q:\n%s", forbidden, output)
 		}
+	}
+}
+
+func TestCleanPreviewCapsHighVolumeOpportunityRendering(t *testing.T) {
+	opportunities := make([]clean.UserTempOpportunity, 0, 11)
+	for index := 0; index < 11; index++ {
+		opportunities = append(opportunities, clean.UserTempOpportunity{
+			Path:             `C:\Users\corey\AppData\Local\Temp\opportunity-` + string(rune('A'+index)),
+			Bytes:            int64(index + 1),
+			LatestModifiedAt: time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC),
+			IdleDays:         9,
+			Status:           clean.UserTempOpportunityStatus,
+			Reason:           clean.UserTempOpportunityReason,
+		})
+	}
+	model := clean.PreviewReadModel{
+		Opportunities:            opportunities,
+		OpportunityCount:         len(opportunities),
+		OpportunityObservedBytes: 66,
+	}
+
+	output := renderCleanPreviewSections(model, cleanPreviewFilterReview, false)
+
+	if !strings.Contains(output, "Skipped-by-default opportunities (11)") ||
+		!strings.Contains(output, "1 omitted from this review view.") {
+		t.Fatalf("output missing high-volume summary:\n%s", output)
+	}
+	if !strings.Contains(output, `opportunity-J`) {
+		t.Fatalf("output missing tenth opportunity:\n%s", output)
+	}
+	if strings.Contains(output, `opportunity-K`) {
+		t.Fatalf("output rendered opportunity beyond the cap:\n%s", output)
 	}
 }

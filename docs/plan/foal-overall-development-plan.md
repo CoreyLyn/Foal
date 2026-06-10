@@ -102,7 +102,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 
 ## Phase 5: TUI (Partial)
 
-Implemented a read-only interactive TUI: running `foal` or `fo` with no arguments in an interactive terminal opens a main menu, a clean preview browser (filter/expand/scroll/reload), and read-only viewers for uninstall, status, and history. The TUI consumes shared read models, records no history sessions during browsing, writes no companion files, and contains no deletion, uninstall, or path-safety logic. Analyze and future extensions remain command navigation placeholders.
+Implemented a read-only interactive TUI: running `foal` or `fo` with no arguments in an interactive terminal opens a main menu, a clean preview browser (filter/expand/scroll/cancellable reload), and read-only viewers for uninstall, status, and history. The Clean TUI includes capped, scrollable user-temp opportunity review data with count and observed bytes kept separate from `Potential space`; opportunity paths remain outside candidate-copy and execution surfaces. The TUI consumes shared read models, records no history sessions during browsing, writes no companion files, and contains no deletion, uninstall, or path-safety logic. Analyze and future extensions remain command navigation placeholders.
 
 The following design principles continue to govern TUI work:
 

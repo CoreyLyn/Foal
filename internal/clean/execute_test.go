@@ -112,6 +112,53 @@ func TestExecuteDoesNotDiscoverOrReturnUserTempOpportunities(t *testing.T) {
 	}
 }
 
+func TestDryRunOpportunityNeverReachesExecuteAdapterOrHistory(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "foal-owned.tmp")
+	opportunity := filepath.Join(root, "unrelated-old-cache")
+	if err := os.WriteFile(candidate, []byte("candidate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &recordingRecycleBinAdapter{}
+	executeRecorder := &recordingHistoryRecorder{}
+	options := clean.Options{
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   executeRecorder,
+		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{{
+				Path:   opportunity,
+				Bytes:  4096,
+				Status: clean.UserTempOpportunityStatus,
+				Reason: clean.UserTempOpportunityReason,
+			}}}
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	}
+
+	preview := clean.DryRun(context.Background(), options)
+	result := clean.Execute(context.Background(), options)
+
+	if len(preview.Opportunities) != 1 || preview.Opportunities[0].Path != opportunity {
+		t.Fatalf("dry-run opportunities = %#v, want review-only path %q", preview.Opportunities, opportunity)
+	}
+	if len(adapter.paths) != 1 || adapter.paths[0] != candidate {
+		t.Fatalf("execute adapter paths = %v, want only default candidate %q", adapter.paths, candidate)
+	}
+	if len(result.Opportunities) != 0 || result.Totals.OpportunityCount != 0 {
+		t.Fatalf("execute opportunity data = %#v/%#v, want none", result.Opportunities, result.Totals)
+	}
+	for _, item := range executeRecorder.items {
+		if item.Path == opportunity {
+			t.Fatalf("execute history persisted opportunity path: %#v", item)
+		}
+	}
+}
+
 func TestExecuteRecordsHistorySessionAndDeletedItem(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "cache.tmp")

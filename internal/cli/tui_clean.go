@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -14,11 +15,12 @@ import (
 type cleanPreviewFilter string
 
 const (
-	cleanPreviewFilterAll        cleanPreviewFilter = "all"
-	cleanPreviewFilterCandidates cleanPreviewFilter = "default candidates"
-	cleanPreviewFilterSkipped    cleanPreviewFilter = "skipped"
-	cleanPreviewFilterReview     cleanPreviewFilter = "review"
-	cleanPreviewFilterErrors     cleanPreviewFilter = "errors"
+	cleanPreviewFilterAll         cleanPreviewFilter = "all"
+	cleanPreviewFilterCandidates  cleanPreviewFilter = "default candidates"
+	cleanPreviewFilterSkipped     cleanPreviewFilter = "skipped"
+	cleanPreviewFilterReview      cleanPreviewFilter = "review"
+	cleanPreviewFilterErrors      cleanPreviewFilter = "errors"
+	cleanPreviewSectionEntryLimit                    = 10
 )
 
 func nextCleanPreviewFilter(filter cleanPreviewFilter) cleanPreviewFilter {
@@ -45,27 +47,35 @@ func cleanFormatBytes(bytes int64) string {
 }
 
 type cleanPreviewLoadedMsg struct {
-	model clean.PreviewReadModel
+	generation uint64
+	model      clean.PreviewReadModel
 }
 
 // loadCleanPreviewCmd runs the existing dry-run command path off the UI loop
 // and delivers the shared read model; the TUI never owns cleanup logic.
 // Browsing stays free of side effects: no history session is recorded and no
 // detailed-list file is written, unlike the `foal clean --dry-run` command.
-func loadCleanPreviewCmd() tea.Msg {
-	result := dryRunClean(context.Background(), clean.Options{})
-	return cleanPreviewLoadedMsg{model: clean.NewPreviewReadModel(result)}
+func loadCleanPreviewCmd(ctx context.Context, generation uint64) tea.Cmd {
+	return func() tea.Msg {
+		result := dryRunClean(ctx, clean.Options{})
+		return cleanPreviewLoadedMsg{
+			generation: generation,
+			model:      clean.NewPreviewReadModel(result),
+		}
+	}
 }
 
 type cleanModel struct {
-	loading  bool
-	model    clean.PreviewReadModel
-	filter   cleanPreviewFilter
-	expanded bool
-	notice   string
-	vp       viewport.Model
-	width    int
-	height   int
+	loading        bool
+	loadGeneration uint64
+	cancelLoad     context.CancelFunc
+	model          clean.PreviewReadModel
+	filter         cleanPreviewFilter
+	expanded       bool
+	notice         string
+	vp             viewport.Model
+	width          int
+	height         int
 }
 
 func newCleanModel(width, height int) cleanModel {
@@ -98,19 +108,36 @@ func (m *cleanModel) chromeLineCount() int {
 }
 
 func (m *cleanModel) applyLoaded(msg cleanPreviewLoadedMsg) {
+	if msg.generation != m.loadGeneration {
+		return
+	}
 	m.loading = false
+	m.cancelLoad = nil
 	m.model = msg.model
 	m.refreshViewportContent()
 	m.setSize(m.width, m.height)
 }
 
-// beginReload puts the view back into the loading state; the caller is
-// responsible for issuing loadCleanPreviewCmd.
-func (m *cleanModel) beginReload() {
+func (m *cleanModel) startLoad(reload bool) tea.Cmd {
+	m.cancelPendingLoad()
+	m.loadGeneration++
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelLoad = cancel
 	m.loading = true
-	m.notice = "Reloading clean preview (dry-run)..."
+	if reload {
+		m.notice = "Reloading clean preview (dry-run)..."
+	}
 	m.vp.GotoTop()
 	m.setSize(m.width, m.height)
+	return loadCleanPreviewCmd(ctx, m.loadGeneration)
+}
+
+func (m *cleanModel) cancelPendingLoad() {
+	if m.cancelLoad == nil {
+		return
+	}
+	m.cancelLoad()
+	m.cancelLoad = nil
 }
 
 func (m *cleanModel) refreshViewportContent() {
@@ -174,6 +201,8 @@ func (m cleanModel) headerContent() string {
 	builder.WriteString("| Read-only review over foal clean --dry-run       |\n")
 	builder.WriteString("+--------------------------------------------------+\n\n")
 	builder.WriteString(fmt.Sprintf("Potential space: %s\n", cleanFormatBytes(m.model.PotentialSpaceBytes)))
+	builder.WriteString(fmt.Sprintf("Review-only opportunities: %d, observed bytes: %s (not counted as Potential space)\n",
+		m.model.OpportunityCount, cleanFormatBytes(m.model.OpportunityObservedBytes)))
 	builder.WriteString(fmt.Sprintf("Candidates: %d, skipped: %d, errors: %d\n", m.model.CandidateCount, m.model.SkippedCount, len(m.model.Errors)))
 	builder.WriteString(fmt.Sprintf("Filter: %s | Scroll: %d%% | Expanded: %t\n", m.filter, int(m.vp.ScrollPercent()*100), m.expanded))
 	if m.model.DetailedListPath != "" {
@@ -260,6 +289,30 @@ func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPrevie
 }
 
 func writeCleanPreviewReviewSections(builder *strings.Builder, model clean.PreviewReadModel, expanded bool) {
+	builder.WriteString(fmt.Sprintf("\nSkipped-by-default opportunities (%d)\n", len(model.Opportunities)))
+	if len(model.Opportunities) == 0 {
+		builder.WriteString("  No user-temp opportunities reported.\n")
+	} else {
+		builder.WriteString(fmt.Sprintf("  Opportunities: %d, observed bytes: %s (not counted as Potential space)\n",
+			model.OpportunityCount, cleanFormatBytes(model.OpportunityObservedBytes)))
+		entryCount := len(model.Opportunities)
+		if entryCount > cleanPreviewSectionEntryLimit {
+			entryCount = cleanPreviewSectionEntryLimit
+		}
+		for _, opportunity := range model.Opportunities[:entryCount] {
+			builder.WriteString(fmt.Sprintf("  %s (%s, latest modified: %s, idle days: %d, status: %s, reason: %s, not counted as Potential space)\n",
+				opportunity.Path,
+				cleanFormatBytes(opportunity.Bytes),
+				opportunity.LatestModifiedAt.UTC().Format(time.RFC3339),
+				opportunity.IdleDays,
+				opportunity.Status,
+				opportunity.Reason))
+		}
+		if omitted := len(model.Opportunities) - entryCount; omitted > 0 {
+			builder.WriteString(fmt.Sprintf("  %d omitted from this review view.\n", omitted))
+		}
+	}
+
 	builder.WriteString(fmt.Sprintf("\nSkipped by default (%d)\n", len(model.SkippedByDefault)))
 	if len(model.SkippedByDefault) == 0 {
 		builder.WriteString("  No skipped-by-default review items reported.\n")
