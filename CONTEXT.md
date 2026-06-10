@@ -16,6 +16,42 @@ _Avoid_: aggressive defaults, hidden cleanup
 Recognized cleanup opportunities that Foal may report with size, count, status, or review commands, but does not include in default execution.
 _Avoid_: default-enabled cache rules
 
+**Clean skipped-by-default discovery**:
+A read-only Clean discovery capability that identifies explainable Windows cleanup opportunities outside Foal's frozen default candidate set and reports them as skipped by default, without making them executable or counting them as Potential space.
+_Avoid_: default rule expansion, opt-in execution rule, cleanup authorization
+
+**User temp opportunity**:
+A non-Foal-owned top-level entry in the current user's Windows temporary directory that Clean may inspect and report through skipped-by-default discovery, but never treats as a default candidate or includes in Potential space.
+_Avoid_: default temp candidate, recursively discovered arbitrary temp path, safe-to-delete claim
+
+**Idle temp opportunity**:
+A user temp opportunity whose latest observed modification is at least seven days old, making it eligible for skipped-by-default reporting while still conveying no cleanup authorization.
+_Avoid_: safe to delete, expired file, default candidate
+
+**Latest observed modification**:
+The newest modification time found across a user temp opportunity and all of its safely inspectable descendants. If that inspection is incomplete, Foal does not classify the entry as an idle temp opportunity.
+_Avoid_: top-level directory timestamp, assumed inactivity, partial-scan age
+
+**Observed opportunity bytes**:
+The measured bytes represented by skipped-by-default discovery results. This value is reported separately for review and is never included in Potential space.
+_Avoid_: reclaimable bytes, cleanable space, Potential space
+
+**Opportunity history summary**:
+The aggregate count and observed bytes of skipped-by-default discovery results persisted for a Clean dry-run session without retaining the discovered non-Foal paths. Clean execution history excludes these non-executable opportunities.
+_Avoid_: opportunity path history, execution item, deletion record
+
+**Opportunity detail section**:
+The detailed candidate list section that records full skipped-by-default opportunity review data while remaining a non-authoritative companion artifact that Clean execution never consumes.
+_Avoid_: execution manifest, opt-in selection file, deletion input
+
+**Review-only opportunity scan**:
+The skipped-by-default discovery scan used by Clean dry-run and the Clean TUI, but omitted from Clean execution so non-executable observations cannot affect or delay the confirmed cleanup path.
+_Avoid_: execute-time opportunity scan, shared deletion input, implicit cleanup
+
+**Opportunity inspection limit**:
+The deterministic per-entry ceiling of 100,000 safely inspected descendants used by review-only opportunity scanning. Entries that exceed the ceiling, cannot be fully inspected, or are interrupted are reported as inspection incomplete and excluded from opportunity totals.
+_Avoid_: wall-clock timeout, partial opportunity, estimated complete scan
+
 **Review clues**:
 Read-only cleanup hints that Foal surfaces for manual investigation without treating them as cleanup candidates.
 _Avoid_: cleanup candidates, executable actions

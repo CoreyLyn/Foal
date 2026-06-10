@@ -78,6 +78,19 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Treat browser, IDE, package-manager, AI-tool, Docker, WSL, virtualization, sync-client, project-artifact, and application-leftover findings as skipped-by-default or review clues unless an explicit future opt-in rule group is approved.
 - Treat running application state as a skip reason, not as a close-and-clean prompt or default cleanup condition.
 
+## Phase 3B: Clean Skipped-by-Default Discovery
+
+- Keep the default candidate set frozen; this phase expands read-only discovery, not default or opt-in execution.
+- Discover non-Foal-owned top-level entries under the current user's Windows temporary directory for `clean --dry-run` and the read-only Clean TUI only.
+- Report an entry as a user temp opportunity only when the latest modification observed across the entry and all safely inspectable descendants is at least seven days old.
+- Exclude entries from opportunity results when inspection is incomplete because of path-safety rejection, permission failure, cancellation, or the deterministic per-entry ceiling of 100,000 descendants.
+- Report each opportunity with path, measured bytes, latest observed modification, idle days, `skipped_by_default` status, and the fixed `requires_explicit_opt_in` reason.
+- Report opportunity count and observed bytes separately; never include observed opportunity bytes in `Potential space`.
+- Persist only opportunity count and observed bytes in dry-run history. Do not persist non-Foal opportunity paths in history, and do not add opportunity data to execution history.
+- Include full opportunity review data in a separate detailed candidate list section while keeping that file non-authoritative and unused by execution.
+- Do not run skipped-by-default discovery during `clean --execute`; execution continues to fresh-scan and validate only executable default candidates.
+- Do not impose a wall-clock timeout. Honor cancellation, report elapsed time, and continue scanning other top-level entries after an entry-specific incomplete inspection.
+
 ## Phase 4: Uninstall Preview Quality
 
 - Implemented registry application discovery and evidence reporting for installed applications.
