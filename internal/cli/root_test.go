@@ -231,6 +231,108 @@ func TestMainMenuTextRendererDoesNotEmitScreenControls(t *testing.T) {
 	}
 }
 
+func interceptInterruptHooks(t *testing.T) (chan<- os.Signal, <-chan int) {
+	t.Helper()
+	captured := make(chan os.Signal, 1)
+	exitCodes := make(chan int, 1)
+
+	originalNotify := notifyInterrupt
+	originalStop := stopInterrupt
+	originalExit := exitProcess
+	notifyInterrupt = func(signals chan<- os.Signal) {
+		go func() {
+			for s := range captured {
+				signals <- s
+			}
+		}()
+	}
+	stopInterrupt = func(chan<- os.Signal) {}
+	exitProcess = func(code int) {
+		exitCodes <- code
+	}
+	t.Cleanup(func() {
+		notifyInterrupt = originalNotify
+		stopInterrupt = originalStop
+		exitProcess = originalExit
+		close(captured)
+	})
+	return captured, exitCodes
+}
+
+func TestExitOnInterruptRestoresBeforeExit(t *testing.T) {
+	interrupts, exitCodes := interceptInterruptHooks(t)
+
+	restored := make(chan struct{})
+	stop := exitOnInterrupt(func() { close(restored) })
+	defer stop()
+
+	interrupts <- os.Interrupt
+
+	select {
+	case <-restored:
+	case <-time.After(time.Second):
+		t.Fatal("interrupt did not run the restore callback")
+	}
+	select {
+	case code := <-exitCodes:
+		if code != exitInterrupted {
+			t.Fatalf("interrupt exit code = %d, want %d", code, exitInterrupted)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("interrupt did not request process exit")
+	}
+}
+
+func TestInterruptDuringMenuSessionRestoresTerminal(t *testing.T) {
+	interrupts, exitCodes := interceptInterruptHooks(t)
+
+	pipeReader, pipeWriter := io.Pipe()
+	t.Cleanup(func() {
+		_ = pipeWriter.Close()
+	})
+	output := newSignalingWriter()
+	var restoreCalls sync.WaitGroup
+	restoreCalls.Add(1)
+	sessionDone := make(chan struct{})
+	go func() {
+		defer close(sessionDone)
+		runMainMenuScreenSessionTo(pipeReader, output, restoreCalls.Done)
+	}()
+	waitForMenuOutput(t, output, "Foal main menu")
+
+	interrupts <- os.Interrupt
+
+	select {
+	case code := <-exitCodes:
+		if code != exitInterrupted {
+			t.Fatalf("interrupt exit code = %d, want %d", code, exitInterrupted)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("interrupt during menu session did not request process exit")
+	}
+	waitForMenuOutput(t, output, "\x1b[?25h\x1b[?1049l")
+	restoredModes := make(chan struct{})
+	go func() {
+		restoreCalls.Wait()
+		close(restoredModes)
+	}()
+	select {
+	case <-restoredModes:
+	case <-time.After(time.Second):
+		t.Fatal("interrupt during menu session did not restore terminal modes")
+	}
+
+	// Unblock the session goroutine; the deferred restore must stay
+	// idempotent (a second restoreTerminalModes call would panic the
+	// exhausted WaitGroup counter).
+	_ = pipeWriter.Close()
+	select {
+	case <-sessionDone:
+	case <-time.After(time.Second):
+		t.Fatal("menu session did not end after input closed")
+	}
+}
+
 type signalingWriter struct {
 	mu     sync.Mutex
 	buffer strings.Builder

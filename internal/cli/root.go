@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
 
 	"github.com/CoreyLyn/Foal/internal/analyze"
 	"github.com/CoreyLyn/Foal/internal/clean"
@@ -19,6 +21,8 @@ import (
 const (
 	exitOK    = 0
 	exitUsage = 2
+	// Conventional exit status for a process ended by an interrupt signal.
+	exitInterrupted = 130
 )
 
 type commandSpec struct {
@@ -80,10 +84,11 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 	if len(positional) == 0 {
 		if canLaunchInteractiveEntry(invocation, opts) {
 			restoreInput := enableRawInput(invocation.Input)
-			defer restoreInput()
 			restoreOutput := enableVirtualTerminalOutput(stdout)
-			defer restoreOutput()
-			runMainMenuScreenTo(invocation.Input, stdout)
+			runMainMenuScreenSessionTo(invocation.Input, stdout, func() {
+				restoreOutput()
+				restoreInput()
+			})
 			return exitOK
 		}
 		if opts.json {
@@ -414,6 +419,59 @@ func runMainMenuScreenTo(input io.Reader, output io.Writer) {
 	runMainMenuWithRenderer(input, output, renderer)
 }
 
+// runMainMenuScreenSessionTo runs the alternate-screen menu with terminal
+// restoration that also fires on an interrupt signal. Raw input keeps
+// ENABLE_PROCESSED_INPUT, so Ctrl+C arrives as a signal while the menu blocks
+// on keyboard reads; without this hook the deferred restores never run and the
+// user's shell is left on the alternate screen with a hidden cursor and raw
+// input mode.
+func runMainMenuScreenSessionTo(input io.Reader, output io.Writer, restoreTerminalModes func()) {
+	renderer := &screenMenuRenderer{}
+	var restoreOnce sync.Once
+	restore := func() {
+		restoreOnce.Do(func() {
+			renderer.end(output)
+			restoreTerminalModes()
+		})
+	}
+	defer restore()
+	stop := exitOnInterrupt(restore)
+	defer stop()
+	renderer.begin(output)
+	runMainMenuWithRenderer(input, output, renderer)
+}
+
+var (
+	notifyInterrupt = func(signals chan<- os.Signal) {
+		signal.Notify(signals, os.Interrupt)
+	}
+	stopInterrupt = func(signals chan<- os.Signal) {
+		signal.Stop(signals)
+	}
+	exitProcess = os.Exit
+)
+
+// exitOnInterrupt restores the terminal before the process exits on an
+// interrupt signal. The returned stop function releases the signal handler
+// when the menu ends through the normal path.
+func exitOnInterrupt(restore func()) (stop func()) {
+	signals := make(chan os.Signal, 1)
+	notifyInterrupt(signals)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-signals:
+			restore()
+			exitProcess(exitInterrupted)
+		case <-done:
+		}
+	}()
+	return func() {
+		stopInterrupt(signals)
+		close(done)
+	}
+}
+
 func runMainMenuWithRenderer(input io.Reader, output io.Writer, renderer menuRenderer) {
 	if input == nil {
 		renderer.frame(output, mainMenuEntryText())
@@ -501,7 +559,9 @@ func (appendMenuRenderer) message(output io.Writer, text string) {
 }
 
 type screenMenuRenderer struct {
-	ended bool
+	// endOnce makes end idempotent and safe when the interrupt-signal
+	// goroutine races the normal shutdown path.
+	endOnce sync.Once
 }
 
 func (renderer *screenMenuRenderer) begin(output io.Writer) {
@@ -509,11 +569,9 @@ func (renderer *screenMenuRenderer) begin(output io.Writer) {
 }
 
 func (renderer *screenMenuRenderer) end(output io.Writer) {
-	if renderer.ended {
-		return
-	}
-	renderer.ended = true
-	_, _ = io.WriteString(output, "\x1b[?25h\x1b[?1049l")
+	renderer.endOnce.Do(func() {
+		_, _ = io.WriteString(output, "\x1b[?25h\x1b[?1049l")
+	})
 }
 
 func (renderer *screenMenuRenderer) frame(output io.Writer, text string) {
