@@ -249,12 +249,14 @@ func recordHistorySession(ctx context.Context, opts Options, result Result, star
 		EndedAt:   endedAt.UTC(),
 		Mode:      result.Mode,
 		Aggregate: history.AggregateOutcomes{
-			CandidateCount: result.Totals.CandidateCount,
-			DeletedCount:   result.Totals.DeletedCount,
-			SkippedCount:   result.Totals.SkippedCount,
-			ErrorCount:     len(result.Errors),
-			CandidateBytes: result.Totals.CandidateBytes,
-			AffectedBytes:  result.Totals.AffectedBytes,
+			CandidateCount:           result.Totals.CandidateCount,
+			DeletedCount:             result.Totals.DeletedCount,
+			SkippedCount:             result.Totals.SkippedCount,
+			ErrorCount:               len(result.Errors),
+			OpportunityCount:         result.Totals.OpportunityCount,
+			CandidateBytes:           result.Totals.CandidateBytes,
+			OpportunityObservedBytes: result.Totals.OpportunityObservedBytes,
+			AffectedBytes:            result.Totals.AffectedBytes,
 		},
 	}
 	_ = opts.HistoryRecorder.Record(ctx, session, historyItems(session.ID, result))
@@ -279,8 +281,6 @@ func withoutOpportunityReviewData(result Result) Result {
 	result.Opportunities = nil
 	result.IncompleteOpportunityInspections = nil
 	result.Errors = errorsForHistory
-	result.Totals.OpportunityCount = 0
-	result.Totals.OpportunityObservedBytes = 0
 	return result
 }
 

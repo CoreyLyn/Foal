@@ -210,6 +210,16 @@ func TestDryRunDoesNotPersistOpportunityPathsInExistingHistoryItems(t *testing.T
 	if len(result.Opportunities) != 1 || len(result.Errors) != 1 {
 		t.Fatalf("dry-run review result = %#v, want opportunity and incomplete error", result)
 	}
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("sessions = %#v, want one history session", recorder.sessions)
+	}
+	aggregate := recorder.sessions[0].Aggregate
+	if aggregate.OpportunityCount != 1 || aggregate.OpportunityObservedBytes != 4096 {
+		t.Fatalf("aggregate = %#v, want privacy-preserving opportunity totals", aggregate)
+	}
+	if aggregate.ErrorCount != 0 {
+		t.Fatalf("aggregate error count = %d, want incomplete review error excluded", aggregate.ErrorCount)
+	}
 	for _, item := range recorder.items {
 		if item.Path == opportunityPath || item.Path == incompletePath {
 			t.Fatalf("history item persisted review-only opportunity path: %#v", item)

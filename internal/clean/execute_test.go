@@ -65,9 +65,11 @@ func TestExecuteDoesNotDiscoverOrReturnUserTempOpportunities(t *testing.T) {
 		t.Fatal(err)
 	}
 	discoveryCalled := false
+	recorder := &recordingHistoryRecorder{}
 
 	result := clean.Execute(context.Background(), clean.Options{
 		RecycleBinAdapter: &recordingRecycleBinAdapter{},
+		HistoryRecorder:   recorder,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			discoveryCalled = true
 			return clean.UserTempDiscoveryResult{
@@ -95,6 +97,18 @@ func TestExecuteDoesNotDiscoverOrReturnUserTempOpportunities(t *testing.T) {
 	}
 	if result.Totals.OpportunityCount != 0 || result.Totals.OpportunityObservedBytes != 0 {
 		t.Fatalf("opportunity totals = %d/%d, want zero for execute", result.Totals.OpportunityCount, result.Totals.OpportunityObservedBytes)
+	}
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("sessions = %#v, want one execute history session", recorder.sessions)
+	}
+	aggregate := recorder.sessions[0].Aggregate
+	if aggregate.OpportunityCount != 0 || aggregate.OpportunityObservedBytes != 0 {
+		t.Fatalf("history opportunity totals = %d/%d, want zero for execute", aggregate.OpportunityCount, aggregate.OpportunityObservedBytes)
+	}
+	for _, item := range recorder.items {
+		if item.Path == filepath.Join(root, "unrelated.tmp") {
+			t.Fatalf("execute history persisted review-only opportunity item: %#v", item)
+		}
 	}
 }
 

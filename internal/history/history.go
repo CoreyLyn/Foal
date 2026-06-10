@@ -31,12 +31,14 @@ type SessionRecord struct {
 }
 
 type AggregateOutcomes struct {
-	CandidateCount int   `json:"candidate_count"`
-	DeletedCount   int   `json:"deleted_count"`
-	SkippedCount   int   `json:"skipped_count"`
-	ErrorCount     int   `json:"error_count"`
-	CandidateBytes int64 `json:"candidate_bytes"`
-	AffectedBytes  int64 `json:"affected_bytes"`
+	CandidateCount           int   `json:"candidate_count"`
+	DeletedCount             int   `json:"deleted_count"`
+	SkippedCount             int   `json:"skipped_count"`
+	ErrorCount               int   `json:"error_count"`
+	OpportunityCount         int   `json:"opportunity_count"`
+	CandidateBytes           int64 `json:"candidate_bytes"`
+	OpportunityObservedBytes int64 `json:"opportunity_observed_bytes"`
+	AffectedBytes            int64 `json:"affected_bytes"`
 }
 
 type ItemRecord struct {

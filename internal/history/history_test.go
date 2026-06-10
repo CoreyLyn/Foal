@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +24,12 @@ func TestFileRecorderWritesSessionAndItemRecords(t *testing.T) {
 		Mode:      "dry_run",
 		StartedAt: time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC),
 		EndedAt:   time.Date(2026, 6, 3, 10, 0, 1, 0, time.UTC),
-		Aggregate: history.AggregateOutcomes{CandidateCount: 1, CandidateBytes: 5},
+		Aggregate: history.AggregateOutcomes{
+			CandidateCount:           1,
+			OpportunityCount:         2,
+			CandidateBytes:           5,
+			OpportunityObservedBytes: 4096,
+		},
 	}
 	items := []history.ItemRecord{{
 		SessionID:     "session-1",
@@ -47,6 +53,17 @@ func TestFileRecorderWritesSessionAndItemRecords(t *testing.T) {
 	}
 	if records[0].Session.Command.Command != "clean" || records[0].Session.Mode != "dry_run" {
 		t.Fatalf("session = %#v, want clean dry_run", records[0].Session)
+	}
+	if records[0].Session.Aggregate.OpportunityCount != 2 || records[0].Session.Aggregate.OpportunityObservedBytes != 4096 {
+		t.Fatalf("aggregate = %#v, want opportunity totals", records[0].Session.Aggregate)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "session-1.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"opportunity_count":2`) ||
+		!strings.Contains(string(raw), `"opportunity_observed_bytes":4096`) {
+		t.Fatalf("encoded history = %s, want additive opportunity fields", raw)
 	}
 	if records[1].Type != "item" || records[1].Item == nil {
 		t.Fatalf("second record = %#v, want item record", records[1])
@@ -130,6 +147,34 @@ func TestQueryReturnsRecentSessionsWithItemOutcomes(t *testing.T) {
 	}
 	if result.Sessions[1].Mode != "dry_run" || result.Sessions[1].Items[0].PlannedAction != "move_to_recycle_bin" {
 		t.Fatalf("older session = %#v, want dry-run candidate", result.Sessions[1])
+	}
+}
+
+func TestQueryReadsAggregateRecordsWithAndWithoutOpportunityFields(t *testing.T) {
+	dir := t.TempDir()
+	older := `{"type":"session","session":{"id":"older","command_parameters":{"command":"clean","args":["clean","--dry-run"]},"started_at":"2026-06-03T09:00:00Z","ended_at":"2026-06-03T09:00:01Z","mode":"dry_run","aggregate_outcomes":{"candidate_count":1,"deleted_count":0,"skipped_count":0,"error_count":0,"candidate_bytes":5,"affected_bytes":0}}}` + "\n"
+	newer := `{"type":"session","session":{"id":"newer","command_parameters":{"command":"clean","args":["clean","--dry-run"]},"started_at":"2026-06-03T10:00:00Z","ended_at":"2026-06-03T10:00:01Z","mode":"dry_run","aggregate_outcomes":{"candidate_count":1,"deleted_count":0,"skipped_count":0,"error_count":0,"opportunity_count":2,"candidate_bytes":5,"opportunity_observed_bytes":4096,"affected_bytes":0}}}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "older.jsonl"), []byte(older), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "newer.jsonl"), []byte(newer), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := history.NewFileQuery(dir).Recent(context.Background())
+
+	if result.Status != "ok" || len(result.Sessions) != 2 {
+		t.Fatalf("result = %#v, want two readable sessions", result)
+	}
+	if result.Sessions[0].ID != "newer" ||
+		result.Sessions[0].Aggregate.OpportunityCount != 2 ||
+		result.Sessions[0].Aggregate.OpportunityObservedBytes != 4096 {
+		t.Fatalf("newer aggregate = %#v, want opportunity totals", result.Sessions[0].Aggregate)
+	}
+	if result.Sessions[1].ID != "older" ||
+		result.Sessions[1].Aggregate.OpportunityCount != 0 ||
+		result.Sessions[1].Aggregate.OpportunityObservedBytes != 0 {
+		t.Fatalf("older aggregate = %#v, want additive fields to decode as zero", result.Sessions[1].Aggregate)
 	}
 }
 
