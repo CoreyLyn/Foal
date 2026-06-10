@@ -18,11 +18,13 @@ import (
 const plannedRecycleBinAction = "move_to_recycle_bin"
 
 type Options struct {
-	Rules             []Rule
-	RecycleBinAdapter delete.Adapter
-	HistoryRecorder   history.Recorder
-	DetailedListDir   string
-	CommandParameters history.CommandParameters
+	Rules                         []Rule
+	RecycleBinAdapter             delete.Adapter
+	HistoryRecorder               history.Recorder
+	DetailedListDir               string
+	CommandParameters             history.CommandParameters
+	UserTempDiscoveryOptions      UserTempDiscoveryOptions
+	DiscoverUserTempOpportunities func(context.Context) UserTempDiscoveryResult
 }
 
 type Rule struct {
@@ -35,16 +37,18 @@ type Rule struct {
 }
 
 type Result struct {
-	Status             string             `json:"status"`
-	Mode               string             `json:"mode"`
-	DefaultRuleCatalog []RuleSummary      `json:"default_rule_catalog"`
-	Candidates         []CandidatePreview `json:"candidates"`
-	Deleted            []DeletedItem      `json:"deleted"`
-	Skipped            []SkippedItem      `json:"skipped"`
-	Errors             []StructuredIssue  `json:"errors"`
-	Totals             Totals             `json:"totals"`
-	DetailedListPath   string             `json:"-"`
-	ElapsedMS          int64              `json:"elapsed_ms"`
+	Status                           string                            `json:"status"`
+	Mode                             string                            `json:"mode"`
+	DefaultRuleCatalog               []RuleSummary                     `json:"default_rule_catalog"`
+	Candidates                       []CandidatePreview                `json:"candidates"`
+	Deleted                          []DeletedItem                     `json:"deleted"`
+	Skipped                          []SkippedItem                     `json:"skipped"`
+	Errors                           []StructuredIssue                 `json:"errors"`
+	Opportunities                    []UserTempOpportunity             `json:"opportunities"`
+	IncompleteOpportunityInspections []IncompleteOpportunityInspection `json:"incomplete_opportunity_inspections"`
+	Totals                           Totals                            `json:"totals"`
+	DetailedListPath                 string                            `json:"-"`
+	ElapsedMS                        int64                             `json:"elapsed_ms"`
 }
 
 type RuleSummary struct {
@@ -82,35 +86,69 @@ type StructuredIssue struct {
 }
 
 type Totals struct {
-	CandidateCount int   `json:"candidate_count"`
-	DeletedCount   int   `json:"deleted_count"`
-	SkippedCount   int   `json:"skipped_count"`
-	CandidateBytes int64 `json:"candidate_bytes"`
-	AffectedBytes  int64 `json:"affected_bytes"`
+	CandidateCount           int   `json:"candidate_count"`
+	DeletedCount             int   `json:"deleted_count"`
+	SkippedCount             int   `json:"skipped_count"`
+	OpportunityCount         int   `json:"opportunity_count"`
+	CandidateBytes           int64 `json:"candidate_bytes"`
+	OpportunityObservedBytes int64 `json:"opportunity_observed_bytes"`
+	AffectedBytes            int64 `json:"affected_bytes"`
 }
 
 func DryRun(ctx context.Context, opts Options) Result {
-	return dryRun(ctx, opts, true)
+	return dryRun(ctx, opts)
 }
 
-func dryRun(ctx context.Context, opts Options, recordHistory bool) Result {
+func dryRun(ctx context.Context, opts Options) Result {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	start := time.Now()
+	result := scanDefaultCandidates(ctx, opts, start)
+	discover := opts.DiscoverUserTempOpportunities
+	if discover == nil {
+		discover = func(ctx context.Context) UserTempDiscoveryResult {
+			return DiscoverUserTempOpportunities(ctx, opts.UserTempDiscoveryOptions)
+		}
+	}
+	discovery := discover(ctx)
+	result.Opportunities = append(result.Opportunities, discovery.Opportunities...)
+	result.IncompleteOpportunityInspections = append(result.IncompleteOpportunityInspections, discovery.Incomplete...)
+	for _, incomplete := range discovery.Incomplete {
+		result.Errors = append(result.Errors, incomplete.Reason)
+	}
+
+	result.ElapsedMS = time.Since(start).Milliseconds()
+	result.Totals = totals(result)
+	if opts.DetailedListDir != "" {
+		path, err := writeDetailedCandidateList(opts.DetailedListDir, result, time.Now())
+		if err != nil {
+			result.Errors = append(result.Errors, issue("detailed_list_write_failed", err.Error(), true, opts.DetailedListDir, ""))
+			result.Totals = totals(result)
+		} else {
+			result.DetailedListPath = path
+		}
+	}
+	recordHistorySession(ctx, opts, result, start, time.Now())
+	return result
+}
+
+func scanDefaultCandidates(ctx context.Context, opts Options, start time.Time) Result {
 	rules := opts.Rules
 	if len(rules) == 0 {
 		rules = DefaultRuleCatalog()
 	}
 
 	result := Result{
-		Status:             "preview",
-		Mode:               "dry_run",
-		DefaultRuleCatalog: defaultRuleSummaries(rules),
-		Candidates:         []CandidatePreview{},
-		Deleted:            []DeletedItem{},
-		Skipped:            []SkippedItem{},
-		Errors:             []StructuredIssue{},
+		Status:                           "preview",
+		Mode:                             "dry_run",
+		DefaultRuleCatalog:               defaultRuleSummaries(rules),
+		Candidates:                       []CandidatePreview{},
+		Deleted:                          []DeletedItem{},
+		Skipped:                          []SkippedItem{},
+		Errors:                           []StructuredIssue{},
+		Opportunities:                    []UserTempOpportunity{},
+		IncompleteOpportunityInspections: []IncompleteOpportunityInspection{},
 	}
 
 	for _, rule := range rules {
@@ -147,18 +185,6 @@ func dryRun(ctx context.Context, opts Options, recordHistory bool) Result {
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
-	if recordHistory && opts.DetailedListDir != "" {
-		path, err := writeDetailedCandidateList(opts.DetailedListDir, result, time.Now())
-		if err != nil {
-			result.Errors = append(result.Errors, issue("detailed_list_write_failed", err.Error(), true, opts.DetailedListDir, ""))
-			result.Totals = totals(result)
-		} else {
-			result.DetailedListPath = path
-		}
-	}
-	if recordHistory {
-		recordHistorySession(ctx, opts, result, start, time.Now())
-	}
 	return result
 }
 
@@ -167,7 +193,7 @@ func Execute(ctx context.Context, opts Options) Result {
 		ctx = context.Background()
 	}
 	start := time.Now()
-	result := dryRun(ctx, opts, false)
+	result := scanDefaultCandidates(ctx, opts, start)
 	result.Status = "ok"
 	result.Mode = "execute"
 	result.Deleted = []DeletedItem{}
@@ -215,6 +241,7 @@ func recordHistorySession(ctx context.Context, opts Options, result Result, star
 	if opts.HistoryRecorder == nil {
 		return
 	}
+	result = withoutOpportunityReviewData(result)
 	session := history.SessionRecord{
 		ID:        newHistorySessionID(result.Mode, endedAt),
 		Command:   opts.CommandParameters,
@@ -231,6 +258,34 @@ func recordHistorySession(ctx context.Context, opts Options, result Result, star
 		},
 	}
 	_ = opts.HistoryRecorder.Record(ctx, session, historyItems(session.ID, result))
+}
+
+func withoutOpportunityReviewData(result Result) Result {
+	if len(result.IncompleteOpportunityInspections) == 0 {
+		result.Opportunities = nil
+		return result
+	}
+	incompleteIssues := make(map[string]struct{}, len(result.IncompleteOpportunityInspections))
+	for _, incomplete := range result.IncompleteOpportunityInspections {
+		incompleteIssues[structuredIssueKey(incomplete.Reason)] = struct{}{}
+	}
+	errorsForHistory := make([]StructuredIssue, 0, len(result.Errors))
+	for _, issue := range result.Errors {
+		if _, reviewOnly := incompleteIssues[structuredIssueKey(issue)]; reviewOnly {
+			continue
+		}
+		errorsForHistory = append(errorsForHistory, issue)
+	}
+	result.Opportunities = nil
+	result.IncompleteOpportunityInspections = nil
+	result.Errors = errorsForHistory
+	result.Totals.OpportunityCount = 0
+	result.Totals.OpportunityObservedBytes = 0
+	return result
+}
+
+func structuredIssueKey(issue StructuredIssue) string {
+	return issue.Path + "\x00" + issue.Code + "\x00" + issue.Message
 }
 
 func newHistorySessionID(mode string, at time.Time) string {
@@ -316,6 +371,22 @@ func writeDetailedCandidateList(dir string, result Result, at time.Time) (string
 			builder.WriteString(fmt.Sprintf("    rule: %s\n", candidate.Rule))
 			builder.WriteString(fmt.Sprintf("    bytes: %d\n", candidate.Bytes))
 			builder.WriteString(fmt.Sprintf("    planned action: %s (%s)\n", plannedActionLabel(candidate.PlannedAction), candidate.PlannedAction))
+		}
+	}
+
+	builder.WriteString("\nSkipped-by-default opportunities\n")
+	builder.WriteString("  This section is review-only and is not an execution manifest. Opportunity bytes are not counted as Potential space.\n")
+	if len(result.Opportunities) == 0 {
+		builder.WriteString("  No skipped-by-default opportunities found.\n")
+	} else {
+		for _, opportunity := range result.Opportunities {
+			builder.WriteString(fmt.Sprintf("  path: %s\n", opportunity.Path))
+			builder.WriteString(fmt.Sprintf("    bytes: %d\n", opportunity.Bytes))
+			builder.WriteString(fmt.Sprintf("    latest modified: %s\n", opportunity.LatestModifiedAt.UTC().Format(time.RFC3339)))
+			builder.WriteString(fmt.Sprintf("    idle days: %d\n", opportunity.IdleDays))
+			builder.WriteString(fmt.Sprintf("    status: %s\n", opportunity.Status))
+			builder.WriteString(fmt.Sprintf("    reason: %s\n", opportunity.Reason))
+			builder.WriteString("    not counted as Potential space: true\n")
 		}
 	}
 
@@ -495,11 +566,17 @@ func totals(result Result) Totals {
 	for _, deleted := range result.Deleted {
 		affectedBytes += deleted.Bytes
 	}
+	var opportunityBytes int64
+	for _, opportunity := range result.Opportunities {
+		opportunityBytes += opportunity.Bytes
+	}
 	return Totals{
-		CandidateCount: len(result.Candidates),
-		DeletedCount:   len(result.Deleted),
-		SkippedCount:   len(result.Skipped),
-		CandidateBytes: bytes,
-		AffectedBytes:  affectedBytes,
+		CandidateCount:           len(result.Candidates),
+		DeletedCount:             len(result.Deleted),
+		SkippedCount:             len(result.Skipped),
+		OpportunityCount:         len(result.Opportunities),
+		CandidateBytes:           bytes,
+		OpportunityObservedBytes: opportunityBytes,
+		AffectedBytes:            affectedBytes,
 	}
 }

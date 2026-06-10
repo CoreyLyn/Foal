@@ -58,6 +58,46 @@ func TestExecuteMovesEligibleCandidatesThroughRecycleBin(t *testing.T) {
 	}
 }
 
+func TestExecuteDoesNotDiscoverOrReturnUserTempOpportunities(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "cache.tmp")
+	if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	discoveryCalled := false
+
+	result := clean.Execute(context.Background(), clean.Options{
+		RecycleBinAdapter: &recordingRecycleBinAdapter{},
+		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
+			discoveryCalled = true
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{{
+					Path:   filepath.Join(root, "unrelated.tmp"),
+					Bytes:  4096,
+					Status: clean.UserTempOpportunityStatus,
+					Reason: clean.UserTempOpportunityReason,
+				}},
+			}
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+
+	if discoveryCalled {
+		t.Fatal("execute invoked review-only user temp opportunity discovery")
+	}
+	if len(result.Opportunities) != 0 {
+		t.Fatalf("opportunities = %#v, want none for execute", result.Opportunities)
+	}
+	if result.Totals.OpportunityCount != 0 || result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("opportunity totals = %d/%d, want zero for execute", result.Totals.OpportunityCount, result.Totals.OpportunityObservedBytes)
+	}
+}
+
 func TestExecuteRecordsHistorySessionAndDeletedItem(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "cache.tmp")
@@ -213,7 +253,8 @@ func TestExecuteIgnoresDryRunDetailedListAndUsesFreshCandidates(t *testing.T) {
 	}
 	detailedListDir := filepath.Join(t.TempDir(), "Foal", "history")
 	dryRunResult := clean.DryRun(context.Background(), clean.Options{
-		DetailedListDir: detailedListDir,
+		DetailedListDir:               detailedListDir,
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
 			Description:    "test default rule",
