@@ -14,6 +14,10 @@ var (
 	tuiHeadingStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
 	tuiSummaryStyle  = lipgloss.NewStyle().Bold(true)
 	tuiFaintStyle    = lipgloss.NewStyle().Faint(true)
+	tuiBannerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	// No underline here: lipgloss renders underlined text rune by rune,
+	// which would break contiguous-substring assertions and copy affordances.
+	tuiLinkStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
 )
 
 var tuiSectionHeadingPrefixes = []string{
@@ -26,6 +30,10 @@ var tuiSectionHeadingPrefixes = []string{
 	"Running application skips (",
 	"Review suggestions (",
 	"Inspection errors (",
+	"Sessions (",
+	"Skipped (",
+	"Errors (",
+	"Disk",
 }
 
 // stylizeFrame decorates a rendered plain-text frame line by line. The plain
@@ -45,10 +53,25 @@ func stylizeLine(line string) string {
 		return line
 	case strings.HasPrefix(trimmed, "> "):
 		return tuiSelectedStyle.Render(trimmed)
+	}
+	// Banner rows mix wordmark art with side text; style the parts
+	// separately, splitting only at known boundaries so asserted fragments
+	// stay contiguous.
+	if index := strings.Index(trimmed, bannerURL); index >= 0 {
+		return tuiBannerStyle.Render(trimmed[:index]) + tuiLinkStyle.Render(bannerURL)
+	}
+	if index := strings.Index(trimmed, bannerTagline); index >= 0 {
+		return tuiBannerStyle.Render(trimmed[:index]) + trimmed[index:]
+	}
+	if isBannerArtLine(trimmed) {
+		return tuiBannerStyle.Render(trimmed)
+	}
+	switch {
 	case strings.HasPrefix(trimmed, "+--") || strings.HasPrefix(trimmed, "| "):
 		return tuiBorderStyle.Render(trimmed)
 	case strings.HasPrefix(trimmed, "Hints:"),
 		trimmed == "No cleanup actions are available in this TUI view.",
+		trimmed == "This view is read-only; no actions are executed.",
 		trimmed == "This is a read-only navigation shell over existing Foal command paths.":
 		return tuiFaintStyle.Render(trimmed)
 	case strings.HasPrefix(trimmed, "Potential space:"):
@@ -60,4 +83,17 @@ func stylizeLine(line string) string {
 		}
 	}
 	return line
+}
+
+// isBannerArtLine reports whether a line consists only of the FOAL wordmark
+// charset, so plain box borders and report rows never match.
+func isBannerArtLine(line string) bool {
+	for _, r := range line {
+		switch r {
+		case '_', '|', '/', '\\', ' ':
+		default:
+			return false
+		}
+	}
+	return true
 }

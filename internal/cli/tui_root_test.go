@@ -29,9 +29,9 @@ func TestRootModelInitialContentShowsMainMenu(t *testing.T) {
 	content := newRootModel().content()
 
 	for _, want := range []string{
-		"FOAL",
+		"https://github.com/CoreyLyn/Foal",
+		"Safe, preview-first cleanup for Windows.",
 		"Foal main menu",
-		"Safe, preview-first cleanup for Windows",
 		"> Clean",
 		"  Uninstall",
 		"  Analyze",
@@ -124,9 +124,8 @@ func TestRootModelPlaceholderSelectionsAreNonDestructive(t *testing.T) {
 		wantTitle string
 		wantBody  string
 	}{
-		{name: "uninstall", downs: 1, wantTitle: "Uninstall TUI path", wantBody: "preview-only; no uninstallers are executed"},
 		{name: "analyze", downs: 2, wantTitle: "Analyze TUI path", wantBody: "read-only view is not built in this slice"},
-		{name: "status", downs: 3, wantTitle: "Status TUI path", wantBody: "read-only view is not built in this slice"},
+		{name: "extensions", downs: 5, wantTitle: "Extensions", wantBody: "Future read-only views are not built in this slice"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			model := newRootModel()
@@ -206,6 +205,7 @@ func TestStylizedFramePreservesPlainFragments(t *testing.T) {
 	for _, want := range []string{
 		"> Clean",
 		"Foal main menu",
+		"https://github.com/CoreyLyn/Foal",
 		"Hints: j/k or up/down: move | enter: open | q: quit",
 	} {
 		if !strings.Contains(styled, want) {

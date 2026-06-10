@@ -90,7 +90,7 @@ func TestNoArgumentTTYRoutesToFoalMainMenuEntry(t *testing.T) {
 			}
 			output := stdout.String()
 			for _, want := range []string{
-				"FOAL",
+				"https://github.com/CoreyLyn/Foal",
 				"Foal main menu",
 				"Safe, preview-first cleanup for Windows",
 				"> Clean",

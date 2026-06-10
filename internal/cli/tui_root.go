@@ -13,6 +13,7 @@ type tuiScreen int
 const (
 	screenMenu tuiScreen = iota
 	screenCleanPreview
+	screenViewer
 )
 
 type mainMenuItem struct {
@@ -33,7 +34,7 @@ var mainMenuItems = []mainMenuItem{
 		title:       "Uninstall",
 		command:     "uninstall",
 		description: "Review installed application evidence; preview-only, no uninstallers are executed.",
-		selection:   "Uninstall TUI path\nUninstall remains preview-only; no uninstallers are executed, no processes are stopped, and no leftovers are deleted.\nNo files were changed.",
+		selection:   "",
 	},
 	{
 		title:       "Analyze",
@@ -45,13 +46,13 @@ var mainMenuItems = []mainMenuItem{
 		title:       "Status",
 		command:     "status",
 		description: "Inspect a read-only system and Foal state snapshot.",
-		selection:   "Status TUI path\nStatus is available through `foal status --json`; the read-only view is not built in this slice.\nNo files were changed.",
+		selection:   "",
 	},
 	{
 		title:       "History",
 		command:     "history",
 		description: "Browse prior Foal operation records through the existing JSON contract.",
-		selection:   "History TUI path\nHistory is available through `foal history --json`; the read-only view is not built in this slice.\nNo files were changed.",
+		selection:   "",
 	},
 	{
 		title:       "Extensions",
@@ -66,6 +67,7 @@ type rootModel struct {
 	selected int
 	notice   string
 	clean    cleanModel
+	viewer   viewerModel
 	width    int
 	height   int
 }
@@ -85,13 +87,20 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.clean.setSize(msg.Width, msg.Height)
+		m.viewer.setSize(msg.Width, msg.Height)
 		return m, nil
 	case cleanPreviewLoadedMsg:
 		m.clean.applyLoaded(msg)
 		return m, nil
+	case viewerLoadedMsg:
+		m.viewer.applyLoaded(msg)
+		return m, nil
 	case tea.KeyPressMsg:
-		if m.screen == screenCleanPreview {
+		switch m.screen {
+		case screenCleanPreview:
 			return m.updateCleanPreviewKey(msg)
+		case screenViewer:
+			return m.updateViewerKey(msg)
 		}
 		return m.updateMenuKey(msg)
 	}
@@ -111,10 +120,16 @@ func (m rootModel) updateMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.selected = (m.selected + len(mainMenuItems) - 1) % len(mainMenuItems)
 		m.notice = ""
 	case "enter":
-		if mainMenuItems[m.selected].command == "clean" {
+		switch mainMenuItems[m.selected].command {
+		case "clean":
 			m.screen = screenCleanPreview
 			m.clean = newCleanModel(m.width, m.height)
 			return m, loadCleanPreviewCmd
+		case "uninstall", "status", "history":
+			command := mainMenuItems[m.selected].command
+			m.screen = screenViewer
+			m.viewer = newViewerModel(command, m.width, m.height)
+			return m, loadViewerCmd(command)
 		}
 		m.notice = mainMenuItems[m.selected].selection
 	default:
@@ -141,16 +156,32 @@ func (m rootModel) updateCleanPreviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 	return m, nil
 }
 
+func (m rootModel) updateViewerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Interrupt
+	case "q", "esc":
+		return m, tea.Quit
+	case "b":
+		m.screen = screenMenu
+		m.notice = ""
+		return m, nil
+	case "r":
+		m.viewer.beginReload()
+		return m, loadViewerCmd(m.viewer.command)
+	}
+	m.viewer.handleKey(msg.String())
+	return m, nil
+}
+
 // content is the plain text frame. It is separate from View so the nil-input
 // entry path and unit tests can assert on the rendered text directly.
 func (m rootModel) content() string {
-	if m.screen == screenCleanPreview {
+	switch m.screen {
+	case screenCleanPreview:
 		return m.clean.content()
-	}
-	if m.notice != "" && strings.Contains(m.notice, "\n") {
-		// Placeholder selections render above the menu, matching the
-		// pre-framework frame layout.
-		return m.notice + "\n" + renderMainMenu(m.selected, "")
+	case screenViewer:
+		return m.viewer.content()
 	}
 	return renderMainMenu(m.selected, m.notice)
 }
@@ -161,14 +192,43 @@ func (m rootModel) View() tea.View {
 	return view
 }
 
+const (
+	bannerURL     = "https://github.com/CoreyLyn/Foal"
+	bannerTagline = "Safe, preview-first cleanup for Windows."
+)
+
+// foalBannerArt is a hand-set figlet-style "FOAL" wordmark; every row is 34
+// columns and uses only the _|/\ charset so stylizeLine can recognize it.
+var foalBannerArt = []string{
+	` ______   ____             _      `,
+	`|  ____| / __ \     /\    | |     `,
+	`| |__   | |  | |   /  \   | |     `,
+	`|  __|  | |  | |  / /\ \  | |     `,
+	`| |     | |__| | / ____ \ | |____ `,
+	`|_|      \____/ /_/    \_\|______|`,
+}
+
+func renderFoalBanner() string {
+	sideText := map[int]string{
+		2: bannerURL,
+		3: bannerTagline,
+	}
+	var builder strings.Builder
+	for index, row := range foalBannerArt {
+		builder.WriteString(row)
+		if text, ok := sideText[index]; ok {
+			builder.WriteString("   ")
+			builder.WriteString(text)
+		}
+		builder.WriteString("\n")
+	}
+	return builder.String()
+}
+
 func renderMainMenu(selected int, notice string) string {
 	var builder strings.Builder
-	builder.WriteString("+--------------------------------------------------+\n")
-	builder.WriteString("| FOAL                                             |\n")
-	builder.WriteString("| Safe, preview-first cleanup for Windows          |\n")
-	builder.WriteString("+--------------------------------------------------+\n\n")
-	builder.WriteString("Foal main menu\n")
-	builder.WriteString("Safe, preview-first cleanup for Windows\n")
+	builder.WriteString(renderFoalBanner())
+	builder.WriteString("\nFoal main menu\n")
 	builder.WriteString("This is a read-only navigation shell over existing Foal command paths.\n\n")
 	builder.WriteString("Commands:\n")
 	for index, item := range mainMenuItems {
