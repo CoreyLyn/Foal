@@ -11,11 +11,3 @@ func IsInteractiveTerminal(file *os.File) bool {
 	}
 	return info.Mode()&os.ModeCharDevice != 0
 }
-
-func enableRawInputFile(file *os.File) func() {
-	return func() {}
-}
-
-func enableVirtualTerminalOutputFile(file *os.File) func() {
-	return func() {}
-}
