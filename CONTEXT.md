@@ -57,8 +57,8 @@ A shared representation of clean preview sections, candidates, skipped-by-defaul
 _Avoid_: CLI string builder as model, TUI-owned cleanup model
 
 **TUI review surface**:
-A future interactive Foal interface for browsing existing command read models, comparing preview sections, and navigating review evidence without owning cleanup, uninstall, path-safety, or execution decisions.
-_Avoid_: TUI-owned cleanup engine, TUI execution model, replacement command path
+The interactive Foal interface for browsing existing command read models, comparing preview sections, and navigating review evidence without owning cleanup, uninstall, path-safety, or execution decisions.
+_Avoid_: TUI-owned cleanup engine, TUI execution model, replacement command path, future-tense framing
 
 **Foal main menu**:
 The top-level interactive TUI entry that appears when a user explicitly starts Foal's interactive mode, offering command navigation for clean, uninstall, analyze, status, and future read-only views while preserving each command's existing CLI and JSON contract.
@@ -73,20 +73,24 @@ The no-argument `foal` and `fo` behavior in an interactive terminal, launching t
 _Avoid_: blocking non-TTY scripts, replacing help semantics everywhere, implicit command execution
 
 **Main menu command entries**:
-Top-level Foal main menu items that expose the implemented command map, with `Clean` entering the first real TUI preview view and other commands remaining command navigation or later TUI extension points until their read-only views are designed.
+Top-level Foal main menu items that expose the implemented command map, where Clean, Uninstall, Status, and History open read-only TUI views over their existing read models, while Analyze and future extensions remain command navigation placeholders until their views are designed.
 _Avoid_: pretending every command has a completed TUI, launching destructive flows, hiding unavailable capability
+
+**Command viewer**:
+A shared read-only TUI shell that renders one command's existing report or read model as scrollable text with reload, without per-command interaction logic or any execution affordance.
+_Avoid_: per-command TUI platform, editable report, execution surface
 
 **Foal TUI brand frame**:
 The visual shell for Foal's interactive surfaces, using Foal-owned ASCII branding, a Windows preview-first tagline, scan-friendly command descriptions, and compact keyboard hints without copying Mole's product wording, Mac positioning, or optimize-first promise.
 _Avoid_: Mole brand clone, Mac maintenance wording, decorative UI that obscures safety state
 
 **Clean TUI preview view**:
-The first TUI review surface slice, focused on browsing the existing clean preview read model for `foal clean --dry-run` sections, totals, candidates, skipped items, review clues, notices, suggestions, and detailed-list metadata.
+The first TUI review surface slice, focused on browsing the existing clean preview read model for `foal clean --dry-run` sections, totals, candidates, skipped items, review clues, notices, and suggestions.
 _Avoid_: multi-command TUI platform, new scanner rules, TUI cleanup execution
 
 **Read-only TUI action model**:
-A TUI interaction boundary where navigation, filtering, expansion, scrolling, and copy-oriented review affordances are allowed, while cleanup execution, uninstaller execution, process stopping, elevation prompts, and leftover deletion are absent.
-_Avoid_: execute button, confirmation flow, destructive TUI action
+A TUI interaction boundary where navigation, filtering, expansion, scrolling, reload, and clipboard-copy review affordances are allowed, while cleanup execution, uninstaller execution, process stopping, elevation prompts, and leftover deletion are absent, and where browsing itself records no history sessions and writes no companion files.
+_Avoid_: execute button, confirmation flow, destructive TUI action, browsing-as-operation history noise
 
 **Uninstall preview report**:
 A human-readable presentation surface rendered directly over the uninstall preview read model, mirroring the Mole-inspired report style while keeping uninstall preview-only and read-only.

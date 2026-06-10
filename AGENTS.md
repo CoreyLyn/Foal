@@ -29,7 +29,7 @@ Foal is a safe, preview-first cleanup CLI for Windows. It is inspired by tools l
 - Do not add automatic elevation. Permission failures should be reported as skipped items with clear reasons.
 - `uninstall` is preview-only until a future execution model is explicitly designed.
 - `optimize` is not in the current implementation scope. Future optimize work starts as read-only health checks and recommendations.
-- Future TUI work must consume read models and call shared command/core execution paths; it must not own deletion, uninstall, or path-safety logic.
+- The TUI is a read-only review surface: it must consume read models and call shared command/core execution paths; it must not own deletion, uninstall, or path-safety logic.
 
 ## Implemented command boundaries
 

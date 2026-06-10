@@ -87,7 +87,11 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Continue to explain skipped discovery, unknown state, and shared-state concerns as preview-only review information.
 - Do not execute uninstallers, delete leftovers, stop processes, or add a Phase 5 execution plan in this phase.
 
-## Phase 5: Future TUI
+## Phase 5: TUI (Partial)
+
+Implemented a read-only interactive TUI: running `foal` or `fo` with no arguments in an interactive terminal opens a main menu, a clean preview browser (filter/expand/scroll/reload), and read-only viewers for uninstall, status, and history. The TUI consumes shared read models, records no history sessions during browsing, writes no companion files, and contains no deletion, uninstall, or path-safety logic. Analyze and future extensions remain command navigation placeholders.
+
+The following design principles continue to govern TUI work:
 
 - Build TUI as a review and navigation surface.
 - Consume shared read models.

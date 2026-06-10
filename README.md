@@ -10,7 +10,7 @@ It is designed for Windows developers and power users who want cleanup, uninstal
 - Recycle Bin by default: confirmed cleanup should use the Windows Recycle Bin, not permanent deletion.
 - Conservative defaults: default cleanup rules should be easy to explain and low-disagreement.
 - Windows-native safety: protected paths, reparse points, permissions, package managers, and installer ecosystems are first-class design concerns.
-- JSON contracts first: human output can be friendly, but stable JSON output is the automation and future TUI contract.
+- JSON contracts first: human output can be friendly, but stable JSON output is the automation and TUI contract.
 - No automatic elevation: permission failures should be visible skipped items, not a reason to silently escalate.
 
 ## Implemented Command Shape
@@ -33,6 +33,10 @@ foal uninstall --json
 
 `foal history --json` reads Foal operation history and reports recent sessions or structured history errors. `foal uninstall --json` is preview-only: it reports registry-discovered applications, installed-application footprint evidence as possible leftovers, orphaned residue as low-confidence review evidence, shared-state concerns, unknown state, skipped discovery providers, JSON `review_sections`, and an execution object whose actions are empty.
 
+### Interactive TUI
+
+Running `foal` (or the `fo` alias) with no arguments in an interactive terminal opens a read-only TUI: a main menu over the implemented commands, a clean preview browser, and read-only viewers for uninstall, status, and history. Browsing records no history sessions and writes no files. Scripts, pipes, and `--json` callers are unaffected and keep the deterministic help/command output.
+
 ## Scope
 
 Foal is inspired by tools like Mole, but it is not "Mole for Windows". The roadmap is ordered by Windows risk and Foal's safety model rather than feature parity.
@@ -44,4 +48,4 @@ Foal is inspired by tools like Mole, but it is not "Mole for Windows". The roadm
 - `history`: JSON-first record of prior Foal operations.
 - `optimize`: future read-only health checks and recommendations; not current implementation scope.
 
-Future TUI work should be a review and navigation surface over shared read models. It should not duplicate deletion, uninstall, or path-safety logic.
+The TUI is a review and navigation surface over shared read models. It does not duplicate deletion, uninstall, or path-safety logic.
