@@ -36,7 +36,7 @@ Foal is a safe, preview-first cleanup CLI for Windows. It is inspired by tools l
 - `foal --help` is the current help surface and should use Foal/foal/foal.exe naming only.
 - `foal status --json` is read-only and reports disk, OS, Foal command state, elapsed time, skipped items, and errors.
 - `foal analyze --json <path>` is read-only and reports directory totals, top children, skipped entries, and elapsed time.
-- `foal clean --dry-run --json` previews conservative cleanup candidates; `foal clean --execute` is the explicit confirmation path and uses the Recycle Bin. Do not document permanent deletion or automatic elevation paths.
+- `foal clean --dry-run --json` previews conservative cleanup candidates and reports skipped-by-default user-temp opportunities with observed bytes excluded from `Potential space`; the read-only Clean TUI presents the same review semantics without history or detailed-list writes. `foal clean --execute` does not run opportunity discovery, is the explicit confirmation path for fresh default candidates, and uses the Recycle Bin. Do not document permanent deletion or automatic elevation paths.
 - `foal history --json` reads operation history and reports sessions plus structured errors.
 - `foal uninstall --json` is preview-only. Do not document uninstall execution, process stopping, or leftover deletion as supported behavior.
 
