@@ -1095,6 +1095,72 @@ func TestCleanDryRunJSONDoesNotIncludeHumanReportText(t *testing.T) {
 	}
 }
 
+func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	defer func() { dryRunClean = originalDryRun }()
+
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		return clean.Result{
+			Status: "preview",
+			Mode:   "dry_run",
+			Candidates: []clean.CandidatePreview{{
+				Path:          `C:\Temp\foal-preview.tmp`,
+				Bytes:         12,
+				Rule:          "foal_owned_temp_sandboxes",
+				PlannedAction: "move_to_recycle_bin",
+			}},
+			Opportunities: []clean.UserTempOpportunity{{
+				Path:             `C:\Temp\old-tool-cache`,
+				Bytes:            4096,
+				LatestModifiedAt: time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC),
+				IdleDays:         9,
+				Status:           clean.UserTempOpportunityStatus,
+				Reason:           clean.UserTempOpportunityReason,
+			}},
+			IncompleteOpportunityInspections: []clean.IncompleteOpportunityInspection{{
+				Path: `C:\Temp\unreadable-cache`,
+				Reason: clean.StructuredIssue{
+					Code:        "permission_denied",
+					Message:     "access denied",
+					Recoverable: true,
+					Path:        `C:\Temp\unreadable-cache`,
+				},
+			}},
+			Totals: clean.Totals{
+				CandidateCount:           1,
+				CandidateBytes:           12,
+				OpportunityCount:         1,
+				OpportunityObservedBytes: 4096,
+			},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	opportunities := result["opportunities"].([]interface{})
+	if len(opportunities) != 1 {
+		t.Fatalf("opportunities = %#v, want one", opportunities)
+	}
+	opportunity := opportunities[0].(map[string]interface{})
+	if opportunity["status"] != clean.UserTempOpportunityStatus || opportunity["reason"] != clean.UserTempOpportunityReason {
+		t.Fatalf("opportunity = %#v, want fixed skipped-by-default status/reason", opportunity)
+	}
+	incomplete := result["incomplete_opportunity_inspections"].([]interface{})
+	if len(incomplete) != 1 {
+		t.Fatalf("incomplete inspections = %#v, want one", incomplete)
+	}
+	totals := result["totals"].(map[string]interface{})
+	if totals["candidate_bytes"] != float64(12) || totals["opportunity_count"] != float64(1) || totals["opportunity_observed_bytes"] != float64(4096) {
+		t.Fatalf("totals = %#v, want separate candidate and opportunity totals", totals)
+	}
+}
+
 func TestCleanDryRunJSONDoesNotWriteOrExposeDetailedCandidateList(t *testing.T) {
 	historyDir := t.TempDir()
 	t.Setenv("FOAL_HISTORY_DIR", historyDir)

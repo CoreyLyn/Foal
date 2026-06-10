@@ -8,10 +8,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/history"
 )
+
+func noUserTempOpportunities(context.Context) clean.UserTempDiscoveryResult {
+	return clean.UserTempDiscoveryResult{
+		Opportunities: []clean.UserTempOpportunity{},
+		Incomplete:    []clean.IncompleteOpportunityInspection{},
+	}
+}
 
 func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 	root := t.TempDir()
@@ -21,6 +29,7 @@ func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 	}
 
 	result := clean.DryRun(context.Background(), clean.Options{
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
 			Description:    "test default rule",
@@ -50,6 +59,66 @@ func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 	}
 }
 
+func TestDryRunProjectsUserTempOpportunitiesSeparatelyFromCandidates(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "foal-cache.tmp")
+	opportunityPath := filepath.Join(root, "old-tool-cache")
+	incompletePath := filepath.Join(root, "unreadable-cache")
+	if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	latestModifiedAt := time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC)
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{{
+					Path:             opportunityPath,
+					Bytes:            4096,
+					LatestModifiedAt: latestModifiedAt,
+					IdleDays:         9,
+					Status:           clean.UserTempOpportunityStatus,
+					Reason:           clean.UserTempOpportunityReason,
+				}},
+				Incomplete: []clean.IncompleteOpportunityInspection{{
+					Path: incompletePath,
+					Reason: clean.StructuredIssue{
+						Code:        "permission_denied",
+						Message:     "access denied",
+						Recoverable: true,
+						Path:        incompletePath,
+					},
+				}},
+			}
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+
+	if len(result.Opportunities) != 1 {
+		t.Fatalf("opportunities = %#v, want one", result.Opportunities)
+	}
+	if result.Opportunities[0].Path != opportunityPath || result.Opportunities[0].LatestModifiedAt != latestModifiedAt {
+		t.Fatalf("opportunity = %#v, want complete review data", result.Opportunities[0])
+	}
+	if len(result.IncompleteOpportunityInspections) != 1 || result.IncompleteOpportunityInspections[0].Reason.Code != "permission_denied" {
+		t.Fatalf("incomplete inspections = %#v, want structured permission reason", result.IncompleteOpportunityInspections)
+	}
+	if len(result.Errors) != 1 || result.Errors[0].Path != incompletePath {
+		t.Fatalf("errors = %#v, want incomplete inspection through existing review boundary", result.Errors)
+	}
+	if result.Totals.CandidateCount != 1 || result.Totals.CandidateBytes != 5 {
+		t.Fatalf("candidate totals = %#v, want candidate-only count and bytes", result.Totals)
+	}
+	if result.Totals.OpportunityCount != 1 || result.Totals.OpportunityObservedBytes != 4096 {
+		t.Fatalf("opportunity totals = %#v, want separate count and observed bytes", result.Totals)
+	}
+}
+
 func TestDryRunRecordsHistorySessionAndCandidateWithoutFileContents(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "cache.tmp")
@@ -59,7 +128,8 @@ func TestDryRunRecordsHistorySessionAndCandidateWithoutFileContents(t *testing.T
 	recorder := &recordingHistoryRecorder{}
 
 	result := clean.DryRun(context.Background(), clean.Options{
-		HistoryRecorder: recorder,
+		HistoryRecorder:               recorder,
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		CommandParameters: history.CommandParameters{
 			Command: "clean",
 			Args:    []string{"clean", "--dry-run"},
@@ -103,8 +173,56 @@ func TestDryRunRecordsHistorySessionAndCandidateWithoutFileContents(t *testing.T
 	}
 }
 
+func TestDryRunDoesNotPersistOpportunityPathsInExistingHistoryItems(t *testing.T) {
+	root := t.TempDir()
+	opportunityPath := filepath.Join(root, "old-tool-cache")
+	incompletePath := filepath.Join(root, "unreadable-cache")
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder: recorder,
+		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{{
+					Path:   opportunityPath,
+					Bytes:  4096,
+					Status: clean.UserTempOpportunityStatus,
+					Reason: clean.UserTempOpportunityReason,
+				}},
+				Incomplete: []clean.IncompleteOpportunityInspection{{
+					Path: incompletePath,
+					Reason: clean.StructuredIssue{
+						Code:        "permission_denied",
+						Message:     "access denied",
+						Recoverable: true,
+						Path:        incompletePath,
+					},
+				}},
+			}
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+		}},
+	})
+
+	if len(result.Opportunities) != 1 || len(result.Errors) != 1 {
+		t.Fatalf("dry-run review result = %#v, want opportunity and incomplete error", result)
+	}
+	for _, item := range recorder.items {
+		if item.Path == opportunityPath || item.Path == incompletePath {
+			t.Fatalf("history item persisted review-only opportunity path: %#v", item)
+		}
+	}
+	if strings.Contains(recorder.encoded, opportunityPath) || strings.Contains(recorder.encoded, incompletePath) {
+		t.Fatalf("history encoding persisted review-only opportunity path: %s", recorder.encoded)
+	}
+}
+
 func TestDryRunSkipsUnsafePathsThroughPathSafetyValidation(t *testing.T) {
 	result := clean.DryRun(context.Background(), clean.Options{
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
 			Description:    "test default rule",
@@ -133,7 +251,8 @@ func TestDryRunRecordsSkippedAndErrorHistoryItems(t *testing.T) {
 	recorder := &recordingHistoryRecorder{}
 
 	result := clean.DryRun(context.Background(), clean.Options{
-		HistoryRecorder: recorder,
+		HistoryRecorder:               recorder,
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		CommandParameters: history.CommandParameters{
 			Command: "clean",
 			Args:    []string{"clean", "--dry-run"},
@@ -181,7 +300,8 @@ func TestDryRunWritesDetailedCandidateListUnderConfiguredHistoryArea(t *testing.
 	detailedListDir := filepath.Join(t.TempDir(), "Foal", "history")
 
 	result := clean.DryRun(context.Background(), clean.Options{
-		DetailedListDir: detailedListDir,
+		DetailedListDir:               detailedListDir,
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
 			Description:    "test default rule",
@@ -246,6 +366,7 @@ func TestDryRunUsesOnlyDefaultEnabledRules(t *testing.T) {
 	}
 
 	result := clean.DryRun(context.Background(), clean.Options{
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		Rules: []clean.Rule{
 			{
 				ID:             "approved_default_rule",
@@ -285,6 +406,7 @@ func TestDryRunRootRuleHonorsCandidateNamePrefixes(t *testing.T) {
 	}
 
 	result := clean.DryRun(context.Background(), clean.Options{
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		Rules: []clean.Rule{{
 			ID:                    "foal_owned_temp_sandboxes",
 			Description:           "Foal-owned temporary sandbox entries",
@@ -366,6 +488,61 @@ func TestPreviewReadModelUsesExistingDefaultCandidatesForPotentialSpace(t *testi
 	}
 	if strings.Contains(model.Summary, "Whitelist") || !strings.Contains(model.Summary, "No changes were made") {
 		t.Fatalf("summary = %q, want dry-run no-changes language without Whitelist", model.Summary)
+	}
+}
+
+func TestPreviewReadModelProjectsOpportunitiesWithoutChangingPotentialSpace(t *testing.T) {
+	latestModifiedAt := time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC)
+	result := clean.Result{
+		Status: "preview",
+		Mode:   "dry_run",
+		Candidates: []clean.CandidatePreview{{
+			Path:          `C:\Temp\foal-owned.tmp`,
+			Bytes:         12,
+			Rule:          "foal_owned_temp_sandboxes",
+			PlannedAction: "move_to_recycle_bin",
+		}},
+		Opportunities: []clean.UserTempOpportunity{{
+			Path:             `C:\Temp\old-tool-cache`,
+			Bytes:            4096,
+			LatestModifiedAt: latestModifiedAt,
+			IdleDays:         9,
+			Status:           clean.UserTempOpportunityStatus,
+			Reason:           clean.UserTempOpportunityReason,
+		}},
+		IncompleteOpportunityInspections: []clean.IncompleteOpportunityInspection{{
+			Path: `C:\Temp\unreadable-cache`,
+			Reason: clean.StructuredIssue{
+				Code:        "permission_denied",
+				Message:     "access denied",
+				Recoverable: true,
+				Path:        `C:\Temp\unreadable-cache`,
+			},
+		}},
+		Totals: clean.Totals{
+			CandidateCount:           1,
+			CandidateBytes:           12,
+			OpportunityCount:         1,
+			OpportunityObservedBytes: 4096,
+		},
+	}
+
+	model := clean.NewPreviewReadModel(result)
+
+	if model.PotentialSpaceBytes != 12 {
+		t.Fatalf("potential space = %d, want candidate bytes only", model.PotentialSpaceBytes)
+	}
+	if model.OpportunityCount != 1 || model.OpportunityObservedBytes != 4096 {
+		t.Fatalf("opportunity totals = %d/%d, want 1/4096", model.OpportunityCount, model.OpportunityObservedBytes)
+	}
+	if len(model.Opportunities) != 1 || model.Opportunities[0].LatestModifiedAt != latestModifiedAt {
+		t.Fatalf("opportunities = %#v, want complete review projection", model.Opportunities)
+	}
+	if len(model.IncompleteOpportunityInspections) != 1 || model.IncompleteOpportunityInspections[0].Reason.Code != "permission_denied" {
+		t.Fatalf("incomplete inspections = %#v, want structured reason", model.IncompleteOpportunityInspections)
+	}
+	if len(model.SkippedByDefault) != 0 {
+		t.Fatalf("legacy skipped-by-default items = %#v, want opportunity projection kept separate for later TUI work", model.SkippedByDefault)
 	}
 }
 
@@ -569,6 +746,56 @@ func TestPreviewReportCapsHighVolumePathSectionsAtTenEntries(t *testing.T) {
 	}
 }
 
+func TestPreviewReportCapsSkippedByDefaultOpportunities(t *testing.T) {
+	model := clean.PreviewReadModel{
+		Title:                    "Foal clean",
+		Status:                   "preview_only",
+		PotentialSpaceBytes:      12,
+		CandidateCount:           1,
+		OpportunityCount:         11,
+		OpportunityObservedBytes: 66,
+		DetailedListPath:         `C:\Users\corey\AppData\Roaming\Foal\history\clean-dry-run-detail.txt`,
+		Summary:                  "Dry-run summary: No changes were made.",
+	}
+	for i := 0; i < 11; i++ {
+		model.Opportunities = append(model.Opportunities, clean.UserTempOpportunity{
+			Path:             fmt.Sprintf(`C:\Users\corey\AppData\Local\Temp\old-cache-%02d`, i),
+			Bytes:            int64(i + 1),
+			LatestModifiedAt: time.Date(2026, time.May, i+1, 12, 0, 0, 0, time.UTC),
+			IdleDays:         10 + i,
+			Status:           clean.UserTempOpportunityStatus,
+			Reason:           clean.UserTempOpportunityReason,
+		})
+	}
+
+	output := clean.RenderPreviewReport(model)
+
+	for _, want := range []string{
+		"Potential space: 12 bytes",
+		"Skipped by default",
+		"Opportunities: 11, observed bytes: 66 bytes (not counted as Potential space)",
+		`C:\Users\corey\AppData\Local\Temp\old-cache-09`,
+		"latest modified: 2026-05-10T12:00:00Z",
+		"idle days: 19",
+		"status: skipped_by_default",
+		"reason: requires_explicit_opt_in",
+		`1 omitted. See detailed candidate list for full path detail: C:\Users\corey\AppData\Roaming\Foal\history\clean-dry-run-detail.txt`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{
+		"Potential space: 78 bytes",
+		`C:\Users\corey\AppData\Local\Temp\old-cache-10`,
+		"planned action",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains forbidden opportunity semantics %q:\n%s", forbidden, output)
+		}
+	}
+}
+
 func TestDryRunDetailedCandidateListStaysCompleteWhenTerminalReportWouldBeCapped(t *testing.T) {
 	root := t.TempDir()
 	missingRoot := filepath.Join(root, "missing")
@@ -587,7 +814,8 @@ func TestDryRunDetailedCandidateListStaysCompleteWhenTerminalReportWouldBeCapped
 	}
 
 	result := clean.DryRun(context.Background(), clean.Options{
-		DetailedListDir: detailedListDir,
+		DetailedListDir:               detailedListDir,
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
 			Description:    "test default rule",
@@ -608,6 +836,56 @@ func TestDryRunDetailedCandidateListStaysCompleteWhenTerminalReportWouldBeCapped
 	for _, path := range append(append(candidatePaths, skippedPaths...), errorRoots...) {
 		if !strings.Contains(text, path) {
 			t.Fatalf("detailed list missing path %q:\n%s", path, text)
+		}
+	}
+}
+
+func TestDryRunDetailedListContainsCompleteSkippedByDefaultOpportunities(t *testing.T) {
+	root := t.TempDir()
+	detailedListDir := filepath.Join(t.TempDir(), "Foal", "history")
+	var opportunities []clean.UserTempOpportunity
+	for i := 0; i < 11; i++ {
+		opportunities = append(opportunities, clean.UserTempOpportunity{
+			Path:             filepath.Join(root, fmt.Sprintf("old-cache-%02d", i)),
+			Bytes:            int64(i + 1),
+			LatestModifiedAt: time.Date(2026, time.May, i+1, 12, 0, 0, 0, time.UTC),
+			IdleDays:         10 + i,
+			Status:           clean.UserTempOpportunityStatus,
+			Reason:           clean.UserTempOpportunityReason,
+		})
+	}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		DetailedListDir: detailedListDir,
+		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{Opportunities: opportunities}
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+		}},
+	})
+
+	data, err := os.ReadFile(result.DetailedListPath)
+	if err != nil {
+		t.Fatalf("read detailed list: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"Skipped-by-default opportunities",
+		"This section is review-only and is not an execution manifest.",
+		opportunities[0].Path,
+		opportunities[10].Path,
+		"bytes: 11",
+		"latest modified: 2026-05-11T12:00:00Z",
+		"idle days: 20",
+		"status: skipped_by_default",
+		"reason: requires_explicit_opt_in",
+		"not counted as Potential space",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("detailed list missing %q:\n%s", want, text)
 		}
 	}
 }

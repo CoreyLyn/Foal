@@ -3,25 +3,30 @@ package clean
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 type PreviewReadModel struct {
-	Title                   string
-	Status                  string
-	ProtectionRules         []PreviewProtectionRule
-	Candidates              []PreviewCandidate
-	Skipped                 []PreviewSkippedItem
-	SkippedByDefault        []PreviewSkippedByDefaultItem
-	ReviewClues             []PreviewReviewClue
-	ReviewSuggestions       []PreviewReviewSuggestion
-	RunningApplicationSkips []PreviewRunningApplicationSkip
-	Errors                  []StructuredIssue
-	Notices                 []PreviewNotice
-	PotentialSpaceBytes     int64
-	CandidateCount          int
-	SkippedCount            int
-	DetailedListPath        string
-	Summary                 string
+	Title                            string
+	Status                           string
+	ProtectionRules                  []PreviewProtectionRule
+	Candidates                       []PreviewCandidate
+	Skipped                          []PreviewSkippedItem
+	SkippedByDefault                 []PreviewSkippedByDefaultItem
+	Opportunities                    []UserTempOpportunity
+	IncompleteOpportunityInspections []IncompleteOpportunityInspection
+	ReviewClues                      []PreviewReviewClue
+	ReviewSuggestions                []PreviewReviewSuggestion
+	RunningApplicationSkips          []PreviewRunningApplicationSkip
+	Errors                           []StructuredIssue
+	Notices                          []PreviewNotice
+	PotentialSpaceBytes              int64
+	CandidateCount                   int
+	SkippedCount                     int
+	OpportunityCount                 int
+	OpportunityObservedBytes         int64
+	DetailedListPath                 string
+	Summary                          string
 }
 
 type PreviewProtectionRule struct {
@@ -139,18 +144,22 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 	}
 
 	return PreviewReadModel{
-		Title:               "Foal clean",
-		Status:              "preview_only",
-		ProtectionRules:     protectionRules,
-		Candidates:          candidates,
-		Skipped:             skippedItems,
-		Errors:              append([]StructuredIssue(nil), result.Errors...),
-		Notices:             notices,
-		PotentialSpaceBytes: potentialSpace,
-		CandidateCount:      len(candidates),
-		SkippedCount:        len(result.Skipped),
-		DetailedListPath:    result.DetailedListPath,
-		Summary:             "Dry-run summary: No changes were made. Re-run with foal clean --execute to move these default candidates to the Recycle Bin.",
+		Title:                            "Foal clean",
+		Status:                           "preview_only",
+		ProtectionRules:                  protectionRules,
+		Candidates:                       candidates,
+		Skipped:                          skippedItems,
+		Opportunities:                    append([]UserTempOpportunity(nil), result.Opportunities...),
+		IncompleteOpportunityInspections: append([]IncompleteOpportunityInspection(nil), result.IncompleteOpportunityInspections...),
+		Errors:                           append([]StructuredIssue(nil), result.Errors...),
+		Notices:                          notices,
+		PotentialSpaceBytes:              potentialSpace,
+		CandidateCount:                   len(candidates),
+		SkippedCount:                     len(result.Skipped),
+		OpportunityCount:                 result.Totals.OpportunityCount,
+		OpportunityObservedBytes:         result.Totals.OpportunityObservedBytes,
+		DetailedListPath:                 result.DetailedListPath,
+		Summary:                          "Dry-run summary: No changes were made. Re-run with foal clean --execute to move these default candidates to the Recycle Bin.",
 	}
 }
 
@@ -212,8 +221,22 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 		writeOmittedLine(&builder, len(model.Skipped), model.DetailedListPath)
 	}
 
-	if len(model.SkippedByDefault) > 0 {
+	if len(model.Opportunities) > 0 || len(model.SkippedByDefault) > 0 {
 		builder.WriteString("\nSkipped by default\n")
+		if len(model.Opportunities) > 0 {
+			builder.WriteString(fmt.Sprintf("  Opportunities: %d, observed bytes: %s (not counted as Potential space)\n",
+				model.OpportunityCount, formatBytes(model.OpportunityObservedBytes)))
+			for _, opportunity := range model.Opportunities[:cappedEntryCount(len(model.Opportunities))] {
+				builder.WriteString(fmt.Sprintf("  %s (%s, latest modified: %s, idle days: %d, status: %s, reason: %s, not counted as Potential space)\n",
+					opportunity.Path,
+					formatBytes(opportunity.Bytes),
+					opportunity.LatestModifiedAt.UTC().Format(time.RFC3339),
+					opportunity.IdleDays,
+					opportunity.Status,
+					opportunity.Reason))
+			}
+			writeOmittedLine(&builder, len(model.Opportunities), model.DetailedListPath)
+		}
 		for _, skipped := range model.SkippedByDefault {
 			builder.WriteString(fmt.Sprintf("  %s", skipped.Name))
 			if skipped.Path != "" {
