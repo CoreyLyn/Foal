@@ -133,6 +133,9 @@ func (m rootModel) updateCleanPreviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 		m.screen = screenMenu
 		m.notice = ""
 		return m, nil
+	case "r":
+		m.clean.beginReload()
+		return m, loadCleanPreviewCmd
 	}
 	m.clean.handleKey(msg.String())
 	return m, nil
@@ -153,7 +156,7 @@ func (m rootModel) content() string {
 }
 
 func (m rootModel) View() tea.View {
-	view := tea.NewView(m.content())
+	view := tea.NewView(stylizeFrame(m.content()))
 	view.AltScreen = true
 	return view
 }

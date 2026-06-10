@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/history"
 )
 
 func stubCleanPreviewDryRun(t *testing.T) {
@@ -105,7 +107,7 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"inspection_failed",
 		"Protection rules",
 		"Detailed candidate list:",
-		"Copy paths from the detailed list or visible rows for manual review.",
+		"Press c to copy candidate paths to the clipboard.",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("content missing %q:\n%s", want, content)
@@ -135,6 +137,81 @@ func TestCleanPreviewBackReturnsToMenu(t *testing.T) {
 
 	if !strings.Contains(model.content(), "Foal main menu") {
 		t.Fatalf("b should return to the main menu:\n%s", model.content())
+	}
+}
+
+func TestCleanPreviewBrowsingRecordsNoHistoryAndWritesNoFiles(t *testing.T) {
+	stubCleanPreviewDryRun(t)
+	originalRecorder := newHistoryRecorder
+	originalDir := newHistoryDir
+	newHistoryRecorder = func() (history.Recorder, error) {
+		t.Fatal("browsing the clean preview TUI must not open a history recorder")
+		return nil, nil
+	}
+	newHistoryDir = func() (string, error) {
+		t.Fatal("browsing the clean preview TUI must not resolve the history directory")
+		return "", nil
+	}
+	t.Cleanup(func() {
+		newHistoryRecorder = originalRecorder
+		newHistoryDir = originalDir
+	})
+
+	openCleanPreview(t)
+}
+
+func TestCleanPreviewCopyKeySendsCandidatePathsToClipboard(t *testing.T) {
+	stubCleanPreviewDryRun(t)
+	originalCopy := copyTextToClipboard
+	copied := ""
+	copyTextToClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	t.Cleanup(func() { copyTextToClipboard = originalCopy })
+
+	model := openCleanPreview(t)
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'c', Text: "c"})
+
+	if want := `C:\Users\corey\AppData\Local\Temp\foal-default.tmp` + "\n"; copied != want {
+		t.Fatalf("clipboard payload = %q, want %q", copied, want)
+	}
+	if !strings.Contains(model.content(), "Copied 1 candidate path(s) to the clipboard.") {
+		t.Fatalf("content missing copy confirmation:\n%s", model.content())
+	}
+}
+
+func TestCleanPreviewCopyKeyReportsClipboardFailure(t *testing.T) {
+	stubCleanPreviewDryRun(t)
+	originalCopy := copyTextToClipboard
+	copyTextToClipboard = func(text string) error {
+		return errors.New("clip unavailable")
+	}
+	t.Cleanup(func() { copyTextToClipboard = originalCopy })
+
+	model := openCleanPreview(t)
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'c', Text: "c"})
+
+	if !strings.Contains(model.content(), "Clipboard copy failed: clip unavailable") {
+		t.Fatalf("content missing clipboard failure notice:\n%s", model.content())
+	}
+}
+
+func TestCleanPreviewRefreshKeyReloadsThroughDryRun(t *testing.T) {
+	stubCleanPreviewDryRun(t)
+
+	model := openCleanPreview(t)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	model = next.(rootModel)
+
+	if cmd == nil {
+		t.Fatal("r must return a reload command")
+	}
+	if !strings.Contains(model.content(), "Loading clean preview (dry-run)...") {
+		t.Fatalf("refresh should re-enter the loading state:\n%s", model.content())
+	}
+	if _, ok := cmd().(cleanPreviewLoadedMsg); !ok {
+		t.Fatal("reload command must produce cleanPreviewLoadedMsg")
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
-	"github.com/CoreyLyn/Foal/internal/history"
 )
 
 type cleanPreviewFilter string
@@ -51,17 +50,10 @@ type cleanPreviewLoadedMsg struct {
 
 // loadCleanPreviewCmd runs the existing dry-run command path off the UI loop
 // and delivers the shared read model; the TUI never owns cleanup logic.
+// Browsing stays free of side effects: no history session is recorded and no
+// detailed-list file is written, unlike the `foal clean --dry-run` command.
 func loadCleanPreviewCmd() tea.Msg {
-	recorder, _ := newHistoryRecorder()
-	detailedListDir, _ := newHistoryDir()
-	result := dryRunClean(context.Background(), clean.Options{
-		HistoryRecorder: recorder,
-		DetailedListDir: detailedListDir,
-		CommandParameters: history.CommandParameters{
-			Command: "clean",
-			Args:    []string{"clean", "--dry-run"},
-		},
-	})
+	result := dryRunClean(context.Background(), clean.Options{})
 	return cleanPreviewLoadedMsg{model: clean.NewPreviewReadModel(result)}
 }
 
@@ -80,7 +72,7 @@ func newCleanModel(width, height int) cleanModel {
 	model := cleanModel{
 		loading: true,
 		filter:  cleanPreviewFilterAll,
-		notice:  "Copy paths from the detailed list or visible rows for manual review.",
+		notice:  "Press c to copy candidate paths to the clipboard.",
 		vp:      viewport.New(),
 	}
 	model.setSize(width, height)
@@ -112,6 +104,15 @@ func (m *cleanModel) applyLoaded(msg cleanPreviewLoadedMsg) {
 	m.setSize(m.width, m.height)
 }
 
+// beginReload puts the view back into the loading state; the caller is
+// responsible for issuing loadCleanPreviewCmd.
+func (m *cleanModel) beginReload() {
+	m.loading = true
+	m.notice = "Reloading clean preview (dry-run)..."
+	m.vp.GotoTop()
+	m.setSize(m.width, m.height)
+}
+
 func (m *cleanModel) refreshViewportContent() {
 	m.vp.SetContent(renderCleanPreviewSections(m.model, m.filter, m.expanded))
 }
@@ -130,14 +131,33 @@ func (m *cleanModel) handleKey(key string) {
 		m.expanded = !m.expanded
 		m.refreshViewportContent()
 	case "c":
-		m.notice = "Copy paths from the detailed list or visible rows for manual review."
+		m.notice = m.copyCandidatePathsNotice()
 	default:
-		m.notice = "Unknown key. Use j/k, f, e, c, b, or q."
+		m.notice = "Unknown key. Use j/k, f, e, c, r, b, or q."
 	}
 	m.setSize(m.width, m.height)
 }
 
-const cleanPreviewFooter = "\nHints: j/k scroll | f filter | e expand | c copy note | b back | q quit\n" +
+// copyCandidatePathsNotice copies the default candidate paths to the system
+// clipboard and reports the outcome as a notice line.
+func (m *cleanModel) copyCandidatePathsNotice() string {
+	if m.loading {
+		return "Clean preview is still loading; nothing to copy yet."
+	}
+	if len(m.model.Candidates) == 0 {
+		return "No candidate paths to copy."
+	}
+	paths := make([]string, 0, len(m.model.Candidates))
+	for _, candidate := range m.model.Candidates {
+		paths = append(paths, candidate.Path)
+	}
+	if err := copyTextToClipboard(strings.Join(paths, "\n") + "\n"); err != nil {
+		return fmt.Sprintf("Clipboard copy failed: %v", err)
+	}
+	return fmt.Sprintf("Copied %d candidate path(s) to the clipboard.", len(paths))
+}
+
+const cleanPreviewFooter = "\nHints: j/k scroll | f filter | e expand | c copy | r refresh | b back | q quit\n" +
 	"No cleanup actions are available in this TUI view.\n"
 
 func (m cleanModel) content() string {

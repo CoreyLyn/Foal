@@ -195,3 +195,24 @@ func TestInteractiveShellInterruptedReturnsInterruptExitCode(t *testing.T) {
 		t.Fatalf("interrupted shell must not print the closing line:\n%s", stdout.String())
 	}
 }
+
+func TestStylizedFramePreservesPlainFragments(t *testing.T) {
+	plain := newRootModel().content()
+	styled := stylizeFrame(plain)
+
+	if styled == plain {
+		t.Fatal("stylized frame should decorate the menu")
+	}
+	for _, want := range []string{
+		"> Clean",
+		"Foal main menu",
+		"Hints: j/k or up/down: move | enter: open | q: quit",
+	} {
+		if !strings.Contains(styled, want) {
+			t.Fatalf("stylized frame must keep plain fragment %q:\n%q", want, styled)
+		}
+	}
+	if strings.Contains(plain, "\x1b[") {
+		t.Fatalf("plain content must stay free of escape sequences:\n%q", plain)
+	}
+}
