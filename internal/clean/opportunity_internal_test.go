@@ -43,6 +43,58 @@ func TestIncompleteOpportunityInspectionIsExcludedAndDiscoveryContinues(t *testi
 	}
 }
 
+func TestUnsafeOpportunityPathsAreIncompleteWithoutInspectionAndDiscoveryContinues(t *testing.T) {
+	now := time.Date(2026, time.June, 10, 12, 0, 0, 0, time.UTC)
+	root := `C:\Temp`
+	validPath := filepath.Join(root, "valid.tmp")
+	resolvedPaths := map[string]string{
+		"escape":      `C:\Outside\escape`,
+		"root-self":   root,
+		"nested":      filepath.Join(root, "nested", "child"),
+		"unsafe":      `\\server\share\unsafe`,
+		"foal-escape": `C:\Outside\foal-escape`,
+		"valid.tmp":   validPath,
+	}
+	inspected := []string{}
+	result := discoverUserTempOpportunities(context.Background(), UserTempDiscoveryOptions{
+		TempDir: root,
+		Now:     now,
+	}, opportunityDiscoveryDependencies{
+		readDir: func(string) ([]os.DirEntry, error) {
+			return []os.DirEntry{
+				fakeDirEntry{name: "escape"},
+				fakeDirEntry{name: "root-self"},
+				fakeDirEntry{name: "nested"},
+				fakeDirEntry{name: "unsafe"},
+				fakeDirEntry{name: "foal-escape"},
+				fakeDirEntry{name: "valid.tmp", size: 5, modified: now.Add(-8 * 24 * time.Hour)},
+			}, nil
+		},
+		joinPath: func(_ string, name string) string {
+			return resolvedPaths[name]
+		},
+		walkDir: func(path string, visit fs.WalkDirFunc) error {
+			inspected = append(inspected, path)
+			return visit(path, fakeDirEntry{name: filepath.Base(path), size: 5, modified: now.Add(-8 * 24 * time.Hour)}, nil)
+		},
+	})
+
+	if len(result.Opportunities) != 1 || result.Opportunities[0].Path != validPath {
+		t.Fatalf("opportunities = %#v, want only valid direct child", result.Opportunities)
+	}
+	if len(inspected) != 1 || inspected[0] != validPath {
+		t.Fatalf("inspected paths = %#v, want only valid direct child", inspected)
+	}
+	if len(result.Incomplete) != 5 {
+		t.Fatalf("incomplete = %#v, want five unsafe paths", result.Incomplete)
+	}
+	for _, incomplete := range result.Incomplete {
+		if incomplete.Reason.Code != "unsafe_path" || !incomplete.Reason.Recoverable {
+			t.Fatalf("incomplete = %#v, want recoverable unsafe_path", incomplete)
+		}
+	}
+}
+
 func TestReparsePointInspectionIsIncomplete(t *testing.T) {
 	now := time.Date(2026, time.June, 10, 12, 0, 0, 0, time.UTC)
 	root := `C:\Temp`

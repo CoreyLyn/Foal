@@ -48,14 +48,16 @@ type IncompleteOpportunityInspection struct {
 
 func DiscoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOptions) UserTempDiscoveryResult {
 	return discoverUserTempOpportunities(ctx, opts, opportunityDiscoveryDependencies{
-		readDir: os.ReadDir,
-		walkDir: filepath.WalkDir,
+		readDir:  os.ReadDir,
+		joinPath: joinOpportunityPath,
+		walkDir:  filepath.WalkDir,
 	})
 }
 
 type opportunityDiscoveryDependencies struct {
-	readDir func(string) ([]os.DirEntry, error)
-	walkDir func(string, fs.WalkDirFunc) error
+	readDir  func(string) ([]os.DirEntry, error)
+	joinPath func(string, string) string
+	walkDir  func(string, fs.WalkDirFunc) error
 }
 
 func discoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOptions, deps opportunityDiscoveryDependencies) UserTempDiscoveryResult {
@@ -70,6 +72,9 @@ func discoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOp
 	now := opts.Now
 	if now.IsZero() {
 		now = time.Now()
+	}
+	if deps.joinPath == nil {
+		deps.joinPath = joinOpportunityPath
 	}
 	result := UserTempDiscoveryResult{
 		Opportunities: []UserTempOpportunity{},
@@ -91,10 +96,14 @@ func discoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOp
 		return result
 	}
 	for _, entry := range entries {
+		path := deps.joinPath(root, entry.Name())
+		if !isDirectChildPath(root, path) {
+			result.Incomplete = append(result.Incomplete, incompleteInspection(path, "unsafe_path", "resolved entry path is not a direct child of the user temp directory"))
+			continue
+		}
 		if isFoalOwnedTempEntry(entry.Name()) {
 			continue
 		}
-		path := filepath.Join(root, entry.Name())
 		inspection, err := inspectOpportunity(ctx, path, userTempDescendantLimit, deps.walkDir)
 		if err != nil {
 			result.Incomplete = append(result.Incomplete, incompleteInspection(path, classifyOpportunityInspectionError(err), err.Error()))
@@ -118,6 +127,26 @@ func discoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOp
 	}
 	result.ElapsedMS = time.Since(startedAt).Milliseconds()
 	return result
+}
+
+func joinOpportunityPath(root, name string) string {
+	return filepath.Join(root, name)
+}
+
+func isDirectChildPath(root, path string) bool {
+	cleanRoot := filepath.Clean(root)
+	cleanPath := filepath.Clean(path)
+	if !filepath.IsAbs(cleanRoot) || !filepath.IsAbs(cleanPath) {
+		return false
+	}
+	if strings.HasPrefix(cleanRoot, `\\`) || strings.HasPrefix(cleanPath, `\\`) {
+		return false
+	}
+	relative, err := filepath.Rel(cleanRoot, cleanPath)
+	if err != nil || relative == "." || relative == "" || filepath.IsAbs(relative) {
+		return false
+	}
+	return filepath.Dir(relative) == "."
 }
 
 type opportunityInspection struct {
