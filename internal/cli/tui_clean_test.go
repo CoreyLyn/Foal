@@ -468,6 +468,36 @@ func TestCleanPreviewFilterShowsReviewSectionsWithoutChangingPotentialSpace(t *t
 	}
 }
 
+func TestCleanPreviewRendersReviewSuggestionSafetyNoteOnceAboveSuggestions(t *testing.T) {
+	readModel := clean.PreviewReadModel{
+		ReviewSuggestions: []clean.PreviewReviewSuggestion{
+			{Label: "Review npm cache"},
+			{Label: "Review Go build cache"},
+		},
+	}
+
+	output := renderCleanPreviewSections(readModel, cleanPreviewFilterReview, true)
+	note := "Clearing a tool cache while the tool is installing or building can disrupt that operation. Confirm the tool is idle first."
+
+	if strings.Count(output, note) != 1 {
+		t.Fatalf("safety note count = %d, want 1:\n%s", strings.Count(output, note), output)
+	}
+	headingIndex := strings.Index(output, "Review suggestions (2)\n")
+	noteIndex := strings.Index(output, note)
+	firstSuggestionIndex := strings.Index(output, "Review npm cache")
+	if headingIndex == -1 || noteIndex <= headingIndex || firstSuggestionIndex <= noteIndex {
+		t.Fatalf("safety note must render above the suggestions list:\n%s", output)
+	}
+}
+
+func TestCleanPreviewOmitsReviewSuggestionSafetyNoteWithoutSuggestions(t *testing.T) {
+	output := renderCleanPreviewSections(clean.PreviewReadModel{}, cleanPreviewFilterReview, true)
+
+	if strings.Contains(output, clean.ReviewSuggestionSafetyNote) {
+		t.Fatalf("safety note must not render without suggestions:\n%s", output)
+	}
+}
+
 func TestCleanPreviewCapsHighVolumeOpportunityRendering(t *testing.T) {
 	opportunities := make([]clean.UserTempOpportunity, 0, 11)
 	for index := 0; index < 11; index++ {
