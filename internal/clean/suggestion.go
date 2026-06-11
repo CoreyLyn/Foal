@@ -22,6 +22,21 @@ var reviewSuggestionAllowlist = map[string]reviewSuggestionTool{
 		queryArgs:    []string{"config", "get", "cache"},
 		cleanCommand: "npm cache clean --force",
 	},
+	"pnpm": {
+		label:        "pnpm cache",
+		queryArgs:    []string{"store", "path"},
+		cleanCommand: "pnpm store prune",
+	},
+	"yarn": {
+		label:        "yarn cache",
+		queryArgs:    []string{"cache", "dir"},
+		cleanCommand: "yarn cache clean",
+	},
+	"bun": {
+		label:        "bun cache",
+		queryArgs:    []string{"pm", "cache"},
+		cleanCommand: "bun pm cache rm",
+	},
 }
 
 type reviewSuggestionDependencies struct {
@@ -31,7 +46,7 @@ type reviewSuggestionDependencies struct {
 }
 
 func DiscoverReviewSuggestions(ctx context.Context) []ReviewSuggestion {
-	return discoverReviewSuggestions(ctx, []string{"npm"}, reviewSuggestionDependencies{
+	return discoverReviewSuggestions(ctx, []string{"npm", "pnpm", "yarn", "bun"}, reviewSuggestionDependencies{
 		lookPath: exec.LookPath,
 		runQuery: runToolQuery,
 		pathExists: func(path string) bool {

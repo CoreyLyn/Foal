@@ -26,15 +26,30 @@ func noReviewSuggestions(context.Context) []clean.ReviewSuggestion {
 }
 
 func TestDryRunProjectsReviewSuggestionsThroughJSONAndHumanReportWithoutBytes(t *testing.T) {
+	suggestions := []clean.ReviewSuggestion{
+		{
+			Tool:      "pnpm",
+			Label:     "pnpm cache",
+			Command:   "pnpm store prune",
+			CachePath: `C:\Users\corey\AppData\Local\pnpm\store\v10`,
+		},
+		{
+			Tool:      "yarn",
+			Label:     "yarn cache",
+			Command:   "yarn cache clean",
+			CachePath: `C:\Users\corey\AppData\Local\Yarn\Cache\v6`,
+		},
+		{
+			Tool:      "bun",
+			Label:     "bun cache",
+			Command:   "bun pm cache rm",
+			CachePath: `C:\Users\corey\.bun\install\cache`,
+		},
+	}
 	result := clean.DryRun(context.Background(), clean.Options{
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
-			return []clean.ReviewSuggestion{{
-				Tool:      "npm",
-				Label:     "npm cache",
-				Command:   "npm cache clean --force",
-				CachePath: `C:\Users\corey\AppData\Local\npm-cache`,
-			}}
+			return suggestions
 		},
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
@@ -43,8 +58,8 @@ func TestDryRunProjectsReviewSuggestionsThroughJSONAndHumanReportWithoutBytes(t 
 		}},
 	})
 
-	if len(result.ReviewSuggestions) != 1 {
-		t.Fatalf("review suggestions = %#v, want one npm suggestion", result.ReviewSuggestions)
+	if len(result.ReviewSuggestions) != len(suggestions) {
+		t.Fatalf("review suggestions = %#v, want JavaScript suggestions", result.ReviewSuggestions)
 	}
 	if result.Totals.CandidateBytes != 0 || result.Totals.OpportunityObservedBytes != 0 {
 		t.Fatalf("totals = %#v, want suggestions excluded from byte totals", result.Totals)
@@ -55,9 +70,12 @@ func TestDryRunProjectsReviewSuggestionsThroughJSONAndHumanReportWithoutBytes(t 
 	}
 	for _, want := range []string{
 		`"review_suggestions":[`,
-		`"tool":"npm"`,
-		`"command":"npm cache clean --force"`,
-		`"cache_path":"C:\\Users\\corey\\AppData\\Local\\npm-cache"`,
+		`"tool":"pnpm"`,
+		`"command":"pnpm store prune"`,
+		`"tool":"yarn"`,
+		`"command":"yarn cache clean"`,
+		`"tool":"bun"`,
+		`"command":"bun pm cache rm"`,
 	} {
 		if !strings.Contains(string(encoded), want) {
 			t.Fatalf("JSON missing %q: %s", want, encoded)
@@ -71,9 +89,12 @@ func TestDryRunProjectsReviewSuggestionsThroughJSONAndHumanReportWithoutBytes(t 
 	report := clean.RenderPreviewReport(model)
 	for _, want := range []string{
 		"Review suggestions",
-		"npm cache",
-		"npm cache clean --force",
-		`C:\Users\corey\AppData\Local\npm-cache`,
+		"pnpm cache",
+		"pnpm store prune",
+		"yarn cache",
+		"yarn cache clean",
+		"bun cache",
+		"bun pm cache rm",
 		"Potential space: 0 bytes",
 	} {
 		if !strings.Contains(report, want) {
