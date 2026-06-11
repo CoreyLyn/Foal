@@ -95,6 +95,8 @@ var plainPreviewReportPresentation = previewReportPresentation{
 
 const previewReportSectionEntryLimit = 10
 
+const ReviewSuggestionSafetyNote = "Clearing a tool cache while the tool is installing or building can disrupt that operation. Confirm the tool is idle first."
+
 func NewPreviewReadModel(result Result) PreviewReadModel {
 	candidates := make([]PreviewCandidate, 0, len(result.Candidates))
 	var potentialSpace int64
@@ -282,6 +284,7 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 
 	if len(model.ReviewSuggestions) > 0 {
 		builder.WriteString("\nReview suggestions\n")
+		builder.WriteString(fmt.Sprintf("  %s\n", ReviewSuggestionSafetyNote))
 		for _, suggestion := range model.ReviewSuggestions {
 			builder.WriteString(fmt.Sprintf("  %s\n", suggestion.Label))
 			if suggestion.Command != "" {

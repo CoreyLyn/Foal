@@ -368,6 +368,7 @@ func writeCleanPreviewReviewSections(builder *strings.Builder, model clean.Previ
 	if len(model.ReviewSuggestions) == 0 {
 		builder.WriteString("  No review suggestions reported.\n")
 	} else {
+		builder.WriteString(fmt.Sprintf("  %s\n", clean.ReviewSuggestionSafetyNote))
 		for _, suggestion := range model.ReviewSuggestions {
 			builder.WriteString(fmt.Sprintf("  %s\n", suggestion.Label))
 			if expanded && suggestion.Command != "" {

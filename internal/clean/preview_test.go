@@ -796,6 +796,37 @@ func TestPreviewReportRendersReviewOnlySectionsWithoutExecutionSemantics(t *test
 	}
 }
 
+func TestPreviewReportRendersReviewSuggestionSafetyNoteOnceAboveSuggestions(t *testing.T) {
+	model := clean.PreviewReadModel{
+		Title: "Foal clean",
+		ReviewSuggestions: []clean.PreviewReviewSuggestion{
+			{Label: "Review npm cache"},
+			{Label: "Review Go build cache"},
+		},
+	}
+
+	output := clean.RenderPreviewReport(model)
+	note := "Clearing a tool cache while the tool is installing or building can disrupt that operation. Confirm the tool is idle first."
+
+	if strings.Count(output, note) != 1 {
+		t.Fatalf("safety note count = %d, want 1:\n%s", strings.Count(output, note), output)
+	}
+	headingIndex := strings.Index(output, "Review suggestions\n")
+	noteIndex := strings.Index(output, note)
+	firstSuggestionIndex := strings.Index(output, "Review npm cache")
+	if headingIndex == -1 || noteIndex <= headingIndex || firstSuggestionIndex <= noteIndex {
+		t.Fatalf("safety note must render above the suggestions list:\n%s", output)
+	}
+}
+
+func TestPreviewReportOmitsReviewSuggestionSafetyNoteWithoutSuggestions(t *testing.T) {
+	output := clean.RenderPreviewReport(clean.PreviewReadModel{Title: "Foal clean"})
+
+	if strings.Contains(output, "Clearing a tool cache while the tool is installing or building") {
+		t.Fatalf("safety note must not render without suggestions:\n%s", output)
+	}
+}
+
 func TestPreviewReportCapsHighVolumePathSectionsAtTenEntries(t *testing.T) {
 	model := clean.PreviewReadModel{
 		Title:               "Foal clean",
