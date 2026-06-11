@@ -20,6 +20,10 @@ _Avoid_: default-enabled cache rules
 A read-only Clean discovery capability that identifies explainable Windows cleanup opportunities outside Foal's frozen default candidate set and reports them as skipped by default, without making them executable or counting them as Potential space.
 _Avoid_: default rule expansion, opt-in execution rule, cleanup authorization
 
+**Opportunity category**:
+A recognized class of skipped-by-default Windows cleanup opportunity that review-only discovery observes and measures but never executes or counts as Potential space. Each category carries its own observation rule: an idle-age threshold for unbounded user-owned temp entries (see Idle temp opportunity), or plain existence for regenerating system caches whose age conveys no safety signal. A cache that an external developer tool's own command would clean is surfaced as a Review suggestion, not an opportunity category, so the two never double-report the same bytes.
+_Avoid_: default candidate, executable category, recycle bin treated as an opportunity, tool-owned cache duplicated as both suggestion and opportunity
+
 **User temp opportunity**:
 A non-Foal-owned top-level entry in the current user's Windows temporary directory that Clean may inspect and report through skipped-by-default discovery, but never treats as a default candidate or includes in Potential space.
 _Avoid_: default temp candidate, recursively discovered arbitrary temp path, safe-to-delete claim
@@ -73,8 +77,12 @@ A human-readable companion file for clean preview reports that records candidate
 _Avoid_: execution manifest, deletion input
 
 **Review suggestions**:
-Human-readable commands or next steps for external tools or manual investigation that Foal displays without executing or counting as Foal cleanup actions.
-_Avoid_: cleanup actions, delegated execution
+Structured, non-authoritative next steps that point at an external tool's own command (or manual investigation) which Foal surfaces but never executes or counts as a Foal cleanup action. They are part of the JSON clean contract so automation, human output, and the TUI all see the same suggestions; being structured does not make them executable.
+_Avoid_: cleanup actions, delegated execution, Foal-owned deletion of the referenced cache
+
+**Tool cache query probe**:
+A bounded, read-only execution of an allowlisted developer tool's own query subcommand (for example `npm config get cache` or `go env GOCACHE`) that Clean uses only to resolve the displayed cache path for a Review suggestion. Each probe is restricted to a built-in tool allowlist, runs only non-mutating query subcommands, and is bounded by a per-call context timeout. A probe that is not allowlisted, fails, or times out yields no path and never blocks the preview. This is the one deliberate exception to Clean's otherwise execution-free preview, and it never runs a tool's cleanup command.
+_Avoid_: running tool cleanup commands, executing arbitrary PATH binaries, unbounded execution, treating probe output as cleanup authorization, probing during Clean execution
 
 **Potential space**:
 The bytes represented by Foal default candidates in a clean preview, excluding skipped-by-default items, review clues, external tool suggestions, and permission-boundary skips.
