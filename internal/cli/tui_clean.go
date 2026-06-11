@@ -370,7 +370,13 @@ func writeCleanPreviewReviewSections(builder *strings.Builder, model clean.Previ
 	} else {
 		for _, suggestion := range model.ReviewSuggestions {
 			builder.WriteString(fmt.Sprintf("  %s\n", suggestion.Label))
-			if expanded && suggestion.NextStep != "" {
+			if expanded && suggestion.Command != "" {
+				builder.WriteString(fmt.Sprintf("    Command: %s\n", suggestion.Command))
+			}
+			if expanded && suggestion.CachePath != "" {
+				builder.WriteString(fmt.Sprintf("    Cache: %s\n", suggestion.CachePath))
+			}
+			if expanded && suggestion.Command == "" && suggestion.NextStep != "" {
 				builder.WriteString(fmt.Sprintf("    %s\n", suggestion.NextStep))
 			}
 		}

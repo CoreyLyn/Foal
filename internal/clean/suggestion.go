@@ -1,0 +1,84 @@
+package clean
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+const toolQueryTimeout = 2 * time.Second
+
+type reviewSuggestionTool struct {
+	label        string
+	queryArgs    []string
+	cleanCommand string
+}
+
+var reviewSuggestionAllowlist = map[string]reviewSuggestionTool{
+	"npm": {
+		label:        "npm cache",
+		queryArgs:    []string{"config", "get", "cache"},
+		cleanCommand: "npm cache clean --force",
+	},
+}
+
+type reviewSuggestionDependencies struct {
+	lookPath   func(string) (string, error)
+	runQuery   func(context.Context, string, ...string) ([]byte, error)
+	pathExists func(string) bool
+}
+
+func DiscoverReviewSuggestions(ctx context.Context) []ReviewSuggestion {
+	return discoverReviewSuggestions(ctx, []string{"npm"}, reviewSuggestionDependencies{
+		lookPath: exec.LookPath,
+		runQuery: runToolQuery,
+		pathExists: func(path string) bool {
+			info, err := os.Stat(path)
+			return err == nil && info.IsDir()
+		},
+	})
+}
+
+func discoverReviewSuggestions(ctx context.Context, tools []string, deps reviewSuggestionDependencies) []ReviewSuggestion {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	suggestions := []ReviewSuggestion{}
+	for _, toolName := range tools {
+		if ctx.Err() != nil {
+			break
+		}
+		tool, allowed := reviewSuggestionAllowlist[toolName]
+		if !allowed {
+			continue
+		}
+		executable, err := deps.lookPath(toolName)
+		if err != nil {
+			continue
+		}
+		queryCtx, cancel := context.WithTimeout(ctx, toolQueryTimeout)
+		output, err := deps.runQuery(queryCtx, executable, tool.queryArgs...)
+		queryErr := queryCtx.Err()
+		cancel()
+		if err != nil || queryErr != nil {
+			continue
+		}
+		cachePath := strings.TrimSpace(string(output))
+		if cachePath == "" || !deps.pathExists(cachePath) {
+			continue
+		}
+		suggestions = append(suggestions, ReviewSuggestion{
+			Tool:      toolName,
+			Label:     tool.label,
+			Command:   tool.cleanCommand,
+			CachePath: cachePath,
+		})
+	}
+	return suggestions
+}
+
+func runToolQuery(ctx context.Context, executable string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, executable, args...).Output()
+}

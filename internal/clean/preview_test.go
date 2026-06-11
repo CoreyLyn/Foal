@@ -21,6 +21,67 @@ func noUserTempOpportunities(context.Context) clean.UserTempDiscoveryResult {
 	}
 }
 
+func noReviewSuggestions(context.Context) []clean.ReviewSuggestion {
+	return []clean.ReviewSuggestion{}
+}
+
+func TestDryRunProjectsReviewSuggestionsThroughJSONAndHumanReportWithoutBytes(t *testing.T) {
+	result := clean.DryRun(context.Background(), clean.Options{
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+			return []clean.ReviewSuggestion{{
+				Tool:      "npm",
+				Label:     "npm cache",
+				Command:   "npm cache clean --force",
+				CachePath: `C:\Users\corey\AppData\Local\npm-cache`,
+			}}
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+		}},
+	})
+
+	if len(result.ReviewSuggestions) != 1 {
+		t.Fatalf("review suggestions = %#v, want one npm suggestion", result.ReviewSuggestions)
+	}
+	if result.Totals.CandidateBytes != 0 || result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("totals = %#v, want suggestions excluded from byte totals", result.Totals)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	for _, want := range []string{
+		`"review_suggestions":[`,
+		`"tool":"npm"`,
+		`"command":"npm cache clean --force"`,
+		`"cache_path":"C:\\Users\\corey\\AppData\\Local\\npm-cache"`,
+	} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("JSON missing %q: %s", want, encoded)
+		}
+	}
+	if strings.Contains(string(encoded), `"bytes"`) {
+		t.Fatalf("review suggestion JSON must not carry bytes: %s", encoded)
+	}
+
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	for _, want := range []string{
+		"Review suggestions",
+		"npm cache",
+		"npm cache clean --force",
+		`C:\Users\corey\AppData\Local\npm-cache`,
+		"Potential space: 0 bytes",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
 func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "cache.tmp")
@@ -30,6 +91,7 @@ func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 
 	result := clean.DryRun(context.Background(), clean.Options{
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
 			Description:    "test default rule",
@@ -70,6 +132,7 @@ func TestDryRunProjectsUserTempOpportunitiesSeparatelyFromCandidates(t *testing.
 	latestModifiedAt := time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC)
 
 	result := clean.DryRun(context.Background(), clean.Options{
+		DiscoverReviewSuggestions: noReviewSuggestions,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{
 				Opportunities: []clean.UserTempOpportunity{{
@@ -130,6 +193,7 @@ func TestDryRunRecordsHistorySessionAndCandidateWithoutFileContents(t *testing.T
 	result := clean.DryRun(context.Background(), clean.Options{
 		HistoryRecorder:               recorder,
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
 		CommandParameters: history.CommandParameters{
 			Command: "clean",
 			Args:    []string{"clean", "--dry-run"},
@@ -180,7 +244,8 @@ func TestDryRunDoesNotPersistOpportunityPathsInExistingHistoryItems(t *testing.T
 	recorder := &recordingHistoryRecorder{}
 
 	result := clean.DryRun(context.Background(), clean.Options{
-		HistoryRecorder: recorder,
+		HistoryRecorder:           recorder,
+		DiscoverReviewSuggestions: noReviewSuggestions,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{
 				Opportunities: []clean.UserTempOpportunity{{
@@ -230,9 +295,44 @@ func TestDryRunDoesNotPersistOpportunityPathsInExistingHistoryItems(t *testing.T
 	}
 }
 
+func TestDryRunDoesNotPersistReviewSuggestionsInHistory(t *testing.T) {
+	recorder := &recordingHistoryRecorder{}
+	cachePath := `C:\Users\corey\AppData\Local\npm-cache`
+	command := "npm cache clean --force"
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder:               recorder,
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+			return []clean.ReviewSuggestion{{
+				Tool:      "npm",
+				Label:     "npm cache",
+				Command:   command,
+				CachePath: cachePath,
+			}}
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+		}},
+	})
+
+	if len(result.ReviewSuggestions) != 1 {
+		t.Fatalf("review suggestions = %#v, want one in preview result", result.ReviewSuggestions)
+	}
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("sessions = %#v, want one dry-run history session", recorder.sessions)
+	}
+	if strings.Contains(recorder.encoded, cachePath) || strings.Contains(recorder.encoded, command) || strings.Contains(recorder.encoded, "npm cache") {
+		t.Fatalf("history persisted review suggestion: %s", recorder.encoded)
+	}
+}
+
 func TestDryRunSkipsUnsafePathsThroughPathSafetyValidation(t *testing.T) {
 	result := clean.DryRun(context.Background(), clean.Options{
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
 			Description:    "test default rule",
@@ -263,6 +363,7 @@ func TestDryRunRecordsSkippedAndErrorHistoryItems(t *testing.T) {
 	result := clean.DryRun(context.Background(), clean.Options{
 		HistoryRecorder:               recorder,
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
 		CommandParameters: history.CommandParameters{
 			Command: "clean",
 			Args:    []string{"clean", "--dry-run"},
@@ -312,6 +413,7 @@ func TestDryRunWritesDetailedCandidateListUnderConfiguredHistoryArea(t *testing.
 	result := clean.DryRun(context.Background(), clean.Options{
 		DetailedListDir:               detailedListDir,
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
 			Description:    "test default rule",
@@ -377,6 +479,7 @@ func TestDryRunUsesOnlyDefaultEnabledRules(t *testing.T) {
 
 	result := clean.DryRun(context.Background(), clean.Options{
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
 		Rules: []clean.Rule{
 			{
 				ID:             "approved_default_rule",
@@ -417,6 +520,7 @@ func TestDryRunRootRuleHonorsCandidateNamePrefixes(t *testing.T) {
 
 	result := clean.DryRun(context.Background(), clean.Options{
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
 		Rules: []clean.Rule{{
 			ID:                    "foal_owned_temp_sandboxes",
 			Description:           "Foal-owned temporary sandbox entries",
@@ -826,6 +930,7 @@ func TestDryRunDetailedCandidateListStaysCompleteWhenTerminalReportWouldBeCapped
 	result := clean.DryRun(context.Background(), clean.Options{
 		DetailedListDir:               detailedListDir,
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
 			Description:    "test default rule",
@@ -866,7 +971,8 @@ func TestDryRunDetailedListContainsCompleteSkippedByDefaultOpportunities(t *test
 	}
 
 	result := clean.DryRun(context.Background(), clean.Options{
-		DetailedListDir: detailedListDir,
+		DetailedListDir:           detailedListDir,
+		DiscoverReviewSuggestions: noReviewSuggestions,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{Opportunities: opportunities}
 		},
