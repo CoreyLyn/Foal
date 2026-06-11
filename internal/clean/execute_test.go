@@ -70,6 +70,10 @@ func TestExecuteDoesNotDiscoverOrReturnUserTempOpportunities(t *testing.T) {
 	result := clean.Execute(context.Background(), clean.Options{
 		RecycleBinAdapter: &recordingRecycleBinAdapter{},
 		HistoryRecorder:   recorder,
+		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+			t.Fatal("execute invoked review suggestion discovery")
+			return nil
+		},
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			discoveryCalled = true
 			return clean.UserTempDiscoveryResult{
@@ -94,6 +98,9 @@ func TestExecuteDoesNotDiscoverOrReturnUserTempOpportunities(t *testing.T) {
 	}
 	if len(result.Opportunities) != 0 {
 		t.Fatalf("opportunities = %#v, want none for execute", result.Opportunities)
+	}
+	if len(result.ReviewSuggestions) != 0 {
+		t.Fatalf("review suggestions = %#v, want none for execute", result.ReviewSuggestions)
 	}
 	if result.Totals.OpportunityCount != 0 || result.Totals.OpportunityObservedBytes != 0 {
 		t.Fatalf("opportunity totals = %d/%d, want zero for execute", result.Totals.OpportunityCount, result.Totals.OpportunityObservedBytes)
@@ -316,6 +323,7 @@ func TestExecuteIgnoresDryRunDetailedListAndUsesFreshCandidates(t *testing.T) {
 	dryRunResult := clean.DryRun(context.Background(), clean.Options{
 		DetailedListDir:               detailedListDir,
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
 			Description:    "test default rule",

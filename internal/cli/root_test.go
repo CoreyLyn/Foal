@@ -873,6 +873,48 @@ func TestCleanDryRunNonJSONRendersPreviewReadModelReport(t *testing.T) {
 	}
 }
 
+func TestCleanDryRunJSONIncludesReviewSuggestionsWithoutBytes(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	defer func() { dryRunClean = originalDryRun }()
+
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		return clean.Result{
+			Status: "preview",
+			Mode:   "dry_run",
+			ReviewSuggestions: []clean.ReviewSuggestion{{
+				Tool:      "npm",
+				Label:     "npm cache",
+				Command:   "npm cache clean --force",
+				CachePath: `C:\Users\corey\AppData\Local\npm-cache`,
+			}},
+			Totals: clean.Totals{},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	suggestions, ok := result["review_suggestions"].([]interface{})
+	if !ok || len(suggestions) != 1 {
+		t.Fatalf("review_suggestions = %#v, want one item", result["review_suggestions"])
+	}
+	suggestion := suggestions[0].(map[string]interface{})
+	if suggestion["tool"] != "npm" ||
+		suggestion["label"] != "npm cache" ||
+		suggestion["command"] != "npm cache clean --force" ||
+		suggestion["cache_path"] != `C:\Users\corey\AppData\Local\npm-cache` {
+		t.Fatalf("suggestion = %#v, want npm JSON contract", suggestion)
+	}
+	if _, hasBytes := suggestion["bytes"]; hasBytes {
+		t.Fatalf("suggestion carries bytes: %#v", suggestion)
+	}
+}
+
 func TestCleanDryRunNonJSONGroupsSkippedErrorsAndPermissionBoundary(t *testing.T) {
 	disableHistoryRecording(t)
 	originalDryRun := dryRunClean

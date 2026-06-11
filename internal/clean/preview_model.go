@@ -62,8 +62,11 @@ type PreviewReviewClue struct {
 }
 
 type PreviewReviewSuggestion struct {
-	Label    string
-	NextStep string
+	Tool      string
+	Label     string
+	Command   string
+	CachePath string
+	NextStep  string
 }
 
 type PreviewRunningApplicationSkip struct {
@@ -143,6 +146,16 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		})
 	}
 
+	reviewSuggestions := make([]PreviewReviewSuggestion, 0, len(result.ReviewSuggestions))
+	for _, suggestion := range result.ReviewSuggestions {
+		reviewSuggestions = append(reviewSuggestions, PreviewReviewSuggestion{
+			Tool:      suggestion.Tool,
+			Label:     suggestion.Label,
+			Command:   suggestion.Command,
+			CachePath: suggestion.CachePath,
+		})
+	}
+
 	return PreviewReadModel{
 		Title:                            "Foal clean",
 		Status:                           "preview_only",
@@ -151,6 +164,7 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		Skipped:                          skippedItems,
 		Opportunities:                    append([]UserTempOpportunity(nil), result.Opportunities...),
 		IncompleteOpportunityInspections: append([]IncompleteOpportunityInspection(nil), result.IncompleteOpportunityInspections...),
+		ReviewSuggestions:                reviewSuggestions,
 		Errors:                           append([]StructuredIssue(nil), result.Errors...),
 		Notices:                          notices,
 		PotentialSpaceBytes:              potentialSpace,
@@ -270,7 +284,13 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 		builder.WriteString("\nReview suggestions\n")
 		for _, suggestion := range model.ReviewSuggestions {
 			builder.WriteString(fmt.Sprintf("  %s\n", suggestion.Label))
-			if suggestion.NextStep != "" {
+			if suggestion.Command != "" {
+				builder.WriteString(fmt.Sprintf("    Command: %s\n", suggestion.Command))
+			}
+			if suggestion.CachePath != "" {
+				builder.WriteString(fmt.Sprintf("    Cache: %s\n", suggestion.CachePath))
+			}
+			if suggestion.Command == "" && suggestion.NextStep != "" {
 				builder.WriteString(fmt.Sprintf("    %s\n", suggestion.NextStep))
 			}
 		}

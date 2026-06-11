@@ -64,6 +64,12 @@ func stubCleanPreviewDryRun(t *testing.T) {
 				Status:           clean.UserTempOpportunityStatus,
 				Reason:           clean.UserTempOpportunityReason,
 			}},
+			ReviewSuggestions: []clean.ReviewSuggestion{{
+				Tool:      "npm",
+				Label:     "npm cache",
+				Command:   "npm cache clean --force",
+				CachePath: `C:\Users\corey\AppData\Local\npm-cache`,
+			}},
 			Totals: clean.Totals{
 				CandidateCount:           1,
 				CandidateBytes:           12,
@@ -129,6 +135,8 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"idle days: 9",
 		"status: skipped_by_default",
 		"reason: requires_explicit_opt_in",
+		"Review suggestions (1)",
+		"npm cache",
 		"Press c to copy candidate paths to the clipboard.",
 	} {
 		if !strings.Contains(content, want) {
@@ -148,6 +156,16 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 	} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("content contains forbidden execution or potential-space wording %q:\n%s", forbidden, content)
+		}
+	}
+
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'e', Text: "e"})
+	for _, want := range []string{
+		"Command: npm cache clean --force",
+		`Cache: C:\Users\corey\AppData\Local\npm-cache`,
+	} {
+		if !strings.Contains(model.content(), want) {
+			t.Fatalf("expanded content missing %q:\n%s", want, model.content())
 		}
 	}
 }

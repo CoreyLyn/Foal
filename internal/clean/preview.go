@@ -25,6 +25,7 @@ type Options struct {
 	CommandParameters             history.CommandParameters
 	UserTempDiscoveryOptions      UserTempDiscoveryOptions
 	DiscoverUserTempOpportunities func(context.Context) UserTempDiscoveryResult
+	DiscoverReviewSuggestions     func(context.Context) []ReviewSuggestion
 }
 
 type Rule struct {
@@ -46,6 +47,7 @@ type Result struct {
 	Errors                           []StructuredIssue                 `json:"errors"`
 	Opportunities                    []UserTempOpportunity             `json:"opportunities"`
 	IncompleteOpportunityInspections []IncompleteOpportunityInspection `json:"incomplete_opportunity_inspections"`
+	ReviewSuggestions                []ReviewSuggestion                `json:"review_suggestions"`
 	Totals                           Totals                            `json:"totals"`
 	DetailedListPath                 string                            `json:"-"`
 	ElapsedMS                        int64                             `json:"elapsed_ms"`
@@ -75,6 +77,13 @@ type DeletedItem struct {
 	Path  string `json:"path"`
 	Bytes int64  `json:"bytes"`
 	Rule  string `json:"rule"`
+}
+
+type ReviewSuggestion struct {
+	Tool      string `json:"tool"`
+	Label     string `json:"label"`
+	Command   string `json:"command"`
+	CachePath string `json:"cache_path"`
 }
 
 type StructuredIssue struct {
@@ -117,6 +126,11 @@ func dryRun(ctx context.Context, opts Options) Result {
 	for _, incomplete := range discovery.Incomplete {
 		result.Errors = append(result.Errors, incomplete.Reason)
 	}
+	discoverSuggestions := opts.DiscoverReviewSuggestions
+	if discoverSuggestions == nil {
+		discoverSuggestions = DiscoverReviewSuggestions
+	}
+	result.ReviewSuggestions = append(result.ReviewSuggestions, discoverSuggestions(ctx)...)
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
@@ -149,6 +163,7 @@ func scanDefaultCandidates(ctx context.Context, opts Options, start time.Time) R
 		Errors:                           []StructuredIssue{},
 		Opportunities:                    []UserTempOpportunity{},
 		IncompleteOpportunityInspections: []IncompleteOpportunityInspection{},
+		ReviewSuggestions:                []ReviewSuggestion{},
 	}
 
 	for _, rule := range rules {
