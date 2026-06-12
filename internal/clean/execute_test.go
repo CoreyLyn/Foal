@@ -279,6 +279,40 @@ func TestExecuteRecordsUserProtectedCandidateAsSkippedWithoutCallingRecycleBin(t
 	mustHaveIssue(t, item.SkippedReason, "protected_path")
 }
 
+func TestExecuteFailsClosedBeforeRecycleBinWhenProtectionFileCannotLoad(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "cache.tmp")
+	if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		RecycleBinAdapter: adapter,
+		ProtectionLoadError: &clean.StructuredIssue{
+			Code:        "protection_file_load_failed",
+			Message:     "selected protection file could not be read",
+			Recoverable: false,
+			Path:        `C:\missing\protection.txt`,
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+
+	if result.Status != "error" || result.Mode != "execute" {
+		t.Fatalf("status/mode = %q/%q, want error/execute", result.Status, result.Mode)
+	}
+	if len(result.Candidates) != 0 || len(result.Deleted) != 0 || len(adapter.paths) != 0 {
+		t.Fatalf("result/adapter = %#v/%#v, want fail-closed before executable candidates", result, adapter.paths)
+	}
+	if len(result.Errors) != 1 || result.Errors[0].Code != "protection_file_load_failed" || result.Errors[0].Recoverable {
+		t.Fatalf("errors = %#v, want non-recoverable protection load error", result.Errors)
+	}
+}
+
 func TestExecuteReportsRecycleBinPermissionFailureAsSkipped(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "locked.tmp")

@@ -10,6 +10,7 @@ type PreviewReadModel struct {
 	Title                            string
 	Status                           string
 	ProtectionRules                  []PreviewProtectionRule
+	ProtectionDiagnostics            []ProtectionDiagnostic
 	Candidates                       []PreviewCandidate
 	Skipped                          []PreviewSkippedItem
 	SkippedByDefault                 []PreviewSkippedByDefaultItem
@@ -170,6 +171,7 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		Title:                            "Foal clean",
 		Status:                           "preview_only",
 		ProtectionRules:                  protectionRules,
+		ProtectionDiagnostics:            append([]ProtectionDiagnostic(nil), result.ProtectionDiagnostics...),
 		Candidates:                       candidates,
 		Skipped:                          skippedItems,
 		Opportunities:                    append([]UserTempOpportunity(nil), result.Opportunities...),
@@ -195,6 +197,30 @@ func RenderPreviewReport(model PreviewReadModel) string {
 	return renderPreviewReport(model, plainPreviewReportPresentation)
 }
 
+func RenderFailureReport(result Result) string {
+	var builder strings.Builder
+	builder.WriteString("Foal clean\n")
+	builder.WriteString("Clean stopped before candidate scanning because required configuration could not be loaded.\n")
+	if len(result.ProtectionDiagnostics) > 0 {
+		builder.WriteString("\nProtection diagnostics\n")
+		for _, diagnostic := range result.ProtectionDiagnostics {
+			builder.WriteString(fmt.Sprintf("  %s (source: %s", diagnostic.Code, diagnostic.Source))
+			if diagnostic.Line > 0 {
+				builder.WriteString(fmt.Sprintf(", line %d", diagnostic.Line))
+			}
+			builder.WriteString(fmt.Sprintf(", recoverable: %t)\n", diagnostic.Recoverable))
+		}
+	}
+	builder.WriteString("\nConfiguration errors\n")
+	for _, issue := range result.Errors {
+		builder.WriteString(fmt.Sprintf("  %s (path: %s, recoverable: %t)\n", issue.Code, issue.Path, issue.Recoverable))
+		if issue.Message != "" {
+			builder.WriteString(fmt.Sprintf("    %s\n", issue.Message))
+		}
+	}
+	return builder.String()
+}
+
 func renderPreviewReport(model PreviewReadModel, presentation previewReportPresentation) string {
 	var builder strings.Builder
 	builder.WriteString(model.Title)
@@ -214,6 +240,20 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 				continue
 			}
 			builder.WriteString(fmt.Sprintf("  %s: %s\n", rule.ID, rule.Description))
+		}
+	}
+
+	if len(model.ProtectionDiagnostics) > 0 {
+		builder.WriteString("\nProtection diagnostics\n")
+		for _, diagnostic := range model.ProtectionDiagnostics {
+			builder.WriteString(fmt.Sprintf("  %s (source: %s", diagnostic.Code, diagnostic.Source))
+			if diagnostic.Line > 0 {
+				builder.WriteString(fmt.Sprintf(", line %d", diagnostic.Line))
+			}
+			builder.WriteString(fmt.Sprintf(", recoverable: %t)\n", diagnostic.Recoverable))
+			if diagnostic.Message != "" {
+				builder.WriteString(fmt.Sprintf("    %s\n", diagnostic.Message))
+			}
 		}
 	}
 

@@ -20,6 +20,8 @@ const plannedRecycleBinAction = "move_to_recycle_bin"
 type Options struct {
 	Rules                         []Rule
 	Validator                     pathsafe.Validator
+	ProtectionDiagnostics         []ProtectionDiagnostic
+	ProtectionLoadError           *StructuredIssue
 	RecycleBinAdapter             delete.Adapter
 	HistoryRecorder               history.Recorder
 	DetailedListDir               string
@@ -43,6 +45,7 @@ type Result struct {
 	Mode                             string                            `json:"mode"`
 	DefaultRuleCatalog               []RuleSummary                     `json:"default_rule_catalog"`
 	ProtectionRules                  []ProtectionRule                  `json:"protection_rules"`
+	ProtectionDiagnostics            []ProtectionDiagnostic            `json:"protection_diagnostics"`
 	Candidates                       []CandidatePreview                `json:"candidates"`
 	Deleted                          []DeletedItem                     `json:"deleted"`
 	Skipped                          []SkippedItem                     `json:"skipped"`
@@ -119,6 +122,9 @@ func dryRun(ctx context.Context, opts Options) Result {
 		ctx = context.Background()
 	}
 	start := time.Now()
+	if opts.ProtectionLoadError != nil {
+		return protectionLoadFailure("dry_run", opts, start)
+	}
 	result := scanDefaultCandidates(ctx, opts, start)
 	discover := opts.DiscoverUserTempOpportunities
 	if discover == nil {
@@ -164,6 +170,7 @@ func scanDefaultCandidates(ctx context.Context, opts Options, start time.Time) R
 		Mode:                             "dry_run",
 		DefaultRuleCatalog:               defaultRuleSummaries(rules),
 		ProtectionRules:                  protectionRules(opts.Validator),
+		ProtectionDiagnostics:            append([]ProtectionDiagnostic(nil), opts.ProtectionDiagnostics...),
 		Candidates:                       []CandidatePreview{},
 		Deleted:                          []DeletedItem{},
 		Skipped:                          []SkippedItem{},
@@ -215,6 +222,9 @@ func Execute(ctx context.Context, opts Options) Result {
 		ctx = context.Background()
 	}
 	start := time.Now()
+	if opts.ProtectionLoadError != nil {
+		return protectionLoadFailure("execute", opts, start)
+	}
 	result := scanDefaultCandidates(ctx, opts, start)
 	result.Status = "ok"
 	result.Mode = "execute"
@@ -257,6 +267,30 @@ func Execute(ctx context.Context, opts Options) Result {
 	result.Totals = totals(result)
 	recordHistorySession(ctx, opts, result, start, time.Now())
 	return result
+}
+
+func protectionLoadFailure(mode string, opts Options, start time.Time) Result {
+	loadError := *opts.ProtectionLoadError
+	rules := opts.Rules
+	if len(rules) == 0 {
+		rules = DefaultRuleCatalog()
+	}
+	return Result{
+		Status:                           "error",
+		Mode:                             mode,
+		DefaultRuleCatalog:               defaultRuleSummaries(rules),
+		ProtectionRules:                  []ProtectionRule{},
+		ProtectionDiagnostics:            append([]ProtectionDiagnostic(nil), opts.ProtectionDiagnostics...),
+		Candidates:                       []CandidatePreview{},
+		Deleted:                          []DeletedItem{},
+		Skipped:                          []SkippedItem{},
+		Errors:                           []StructuredIssue{loadError},
+		Opportunities:                    []UserTempOpportunity{},
+		IncompleteOpportunityInspections: []IncompleteOpportunityInspection{},
+		ReviewSuggestions:                []ReviewSuggestion{},
+		Totals:                           Totals{},
+		ElapsedMS:                        time.Since(start).Milliseconds(),
+	}
 }
 
 func recordHistorySession(ctx context.Context, opts Options, result Result, startedAt, endedAt time.Time) {
