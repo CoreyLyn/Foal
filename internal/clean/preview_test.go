@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
@@ -159,6 +160,74 @@ func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 	}
 	if result.Totals.CandidateCount != 1 || result.Totals.CandidateBytes != 5 || result.Totals.SkippedCount != 0 {
 		t.Fatalf("totals = %#v, want one candidate and no skipped", result.Totals)
+	}
+}
+
+func TestDryRunProjectsUserProtectionRuleAndExcludesProtectedCandidate(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "foal-protected.tmp")
+	if err := os.WriteFile(candidate, []byte("protected cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	detailedListDir := t.TempDir()
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator:                     pathsafe.NewValidator([]string{candidate}),
+		DetailedListDir:               detailedListDir,
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+
+	if len(result.Candidates) != 0 {
+		t.Fatalf("candidates = %#v, want protected path excluded", result.Candidates)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "protected_path" {
+		t.Fatalf("skipped = %#v, want protected_path", result.Skipped)
+	}
+	if !strings.Contains(result.Skipped[0].Reason.Message, "user-defined Protection rule") {
+		t.Fatalf("message = %q, want user-defined rule identity", result.Skipped[0].Reason.Message)
+	}
+	if result.Totals.CandidateCount != 0 || result.Totals.CandidateBytes != 0 {
+		t.Fatalf("totals = %#v, want protected path excluded from candidates and Potential space", result.Totals)
+	}
+	if len(result.ProtectionRules) != 1 || result.ProtectionRules[0].Path != candidate {
+		t.Fatalf("protection rules = %#v, want active user rule", result.ProtectionRules)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"protection_rules":[{"path":`) {
+		t.Fatalf("JSON missing active protection rule: %s", encoded)
+	}
+
+	detailed, err := os.ReadFile(result.DetailedListPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(detailed)
+	defaultSection := text[strings.Index(text, "Default candidates"):strings.Index(text, "Skipped-by-default opportunities")]
+	if strings.Contains(defaultSection, candidate) {
+		t.Fatalf("protected path leaked into executable candidate section:\n%s", text)
+	}
+	if !strings.Contains(text, "Skipped items") || !strings.Contains(text, candidate) {
+		t.Fatalf("detailed list missing protected skipped item:\n%s", text)
+	}
+
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	if !strings.Contains(report, candidate) || !strings.Contains(report, "user-defined Protection rule") {
+		t.Fatalf("human report missing active user protection rule:\n%s", report)
+	}
+	if model.PotentialSpaceBytes != 0 || model.CandidateCount != 0 {
+		t.Fatalf("read model totals = %#v, want no protected candidate bytes", model)
 	}
 }
 
@@ -545,6 +614,43 @@ func TestDryRunUsesOnlyDefaultEnabledRules(t *testing.T) {
 	}
 	if _, err := os.Stat(optInPath); err != nil {
 		t.Fatalf("dry-run touched opt-in path: %v", err)
+	}
+}
+
+func TestUserProtectionRulesCannotEnableOrExpandDefaultCandidates(t *testing.T) {
+	root := t.TempDir()
+	defaultPath := filepath.Join(root, "default.tmp")
+	disabledPath := filepath.Join(root, "disabled.tmp")
+	unruledPath := filepath.Join(root, "unruled.tmp")
+	for _, path := range []string{defaultPath, disabledPath, unruledPath} {
+		if err := os.WriteFile(path, []byte("cache"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator:                     pathsafe.NewValidator([]string{unruledPath}),
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
+		Rules: []clean.Rule{
+			{
+				ID:             "default_rule",
+				DefaultEnabled: true,
+				CandidatePaths: []string{defaultPath},
+			},
+			{
+				ID:             "disabled_rule",
+				DefaultEnabled: false,
+				CandidatePaths: []string{disabledPath},
+			},
+		},
+	})
+
+	if len(result.Candidates) != 1 || result.Candidates[0].Path != defaultPath {
+		t.Fatalf("candidates = %#v, want unchanged default candidate only", result.Candidates)
+	}
+	if len(result.Skipped) != 0 {
+		t.Fatalf("skipped = %#v, want unruled protection path absent rather than added", result.Skipped)
 	}
 }
 

@@ -14,7 +14,48 @@ type Reason struct {
 	Message string
 }
 
+type Validator struct {
+	userProtectionRules []protectionRule
+}
+
+type protectionRule struct {
+	path       string
+	normalized string
+}
+
+func NewValidator(userProtectionPaths []string) Validator {
+	rules := make([]protectionRule, 0, len(userProtectionPaths))
+	seen := make(map[string]struct{}, len(userProtectionPaths))
+	for _, path := range userProtectionPaths {
+		displayPath, normalized := normalizeLocalPath(path)
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		rules = append(rules, protectionRule{
+			path:       displayPath,
+			normalized: normalized,
+		})
+	}
+	return Validator{userProtectionRules: rules}
+}
+
+func (v Validator) UserProtectionPaths() []string {
+	paths := make([]string, 0, len(v.userProtectionRules))
+	for _, rule := range v.userProtectionRules {
+		paths = append(paths, rule.path)
+	}
+	return paths
+}
+
 func ValidateDeletePath(path string) (Reason, bool) {
+	return Validator{}.ValidateDeletePath(path)
+}
+
+func (v Validator) ValidateDeletePath(path string) (Reason, bool) {
 	if strings.TrimSpace(path) == "" {
 		return reject("empty_path", "delete path cannot be empty")
 	}
@@ -30,6 +71,12 @@ func ValidateDeletePath(path string) (Reason, bool) {
 	}
 	if containsShortNameSegment(cleaned) {
 		return reject("short_name_path", "8.3 short-name paths cannot be used for cleanup safety decisions")
+	}
+
+	for _, protected := range v.userProtectionRules {
+		if isSameOrDescendant(cleaned, protected.normalized) {
+			return reject("protected_path", "path is protected by user-defined Protection rule: "+protected.path)
+		}
 	}
 
 	for _, protected := range []string{
@@ -76,6 +123,25 @@ func ValidateDeletePath(path string) (Reason, bool) {
 	}
 
 	return Reason{}, true
+}
+
+func normalizeLocalPath(path string) (string, string) {
+	path = strings.TrimSpace(stripLongPathPrefix(path))
+	if path == "" {
+		return "", ""
+	}
+	cleaned := filepath.Clean(path)
+	return cleaned, strings.ToLower(cleaned)
+}
+
+func isSameOrDescendant(path, root string) bool {
+	if path == root {
+		return true
+	}
+	if strings.HasSuffix(root, string(filepath.Separator)) {
+		return strings.HasPrefix(path, root)
+	}
+	return strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
 func reject(code, message string) (Reason, bool) {

@@ -231,6 +231,10 @@ func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPrevie
 			builder.WriteString("  No default-enabled protection rules were reported.\n")
 		} else {
 			for _, rule := range model.ProtectionRules {
+				if rule.UserDefined {
+					builder.WriteString(fmt.Sprintf("  %s (user-defined Protection rule)\n", rule.Path))
+					continue
+				}
 				builder.WriteString(fmt.Sprintf("  %s: %s\n", rule.ID, rule.Description))
 			}
 		}

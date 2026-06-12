@@ -208,6 +208,20 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 	}
 }
 
+func TestCleanPreviewRendersUserDefinedProtectionRuleFromReadModel(t *testing.T) {
+	path := `C:\Users\corey\Work\Valuable`
+	output := renderCleanPreviewSections(clean.PreviewReadModel{
+		ProtectionRules: []clean.PreviewProtectionRule{{
+			Path:        path,
+			UserDefined: true,
+		}},
+	}, cleanPreviewFilterAll, false)
+
+	if !strings.Contains(output, path) || !strings.Contains(output, "user-defined Protection rule") {
+		t.Fatalf("output missing active user protection rule:\n%s", output)
+	}
+}
+
 func TestCleanPreviewBackReturnsToMenu(t *testing.T) {
 	stubCleanPreviewDryRun(t)
 

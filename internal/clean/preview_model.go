@@ -32,6 +32,8 @@ type PreviewReadModel struct {
 type PreviewProtectionRule struct {
 	ID          string
 	Description string
+	Path        string
+	UserDefined bool
 }
 
 type PreviewCandidate struct {
@@ -110,7 +112,7 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		})
 	}
 
-	protectionRules := make([]PreviewProtectionRule, 0, len(result.DefaultRuleCatalog))
+	protectionRules := make([]PreviewProtectionRule, 0, len(result.DefaultRuleCatalog)+len(result.ProtectionRules))
 	for _, rule := range result.DefaultRuleCatalog {
 		if !rule.DefaultEnabled {
 			continue
@@ -118,6 +120,12 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		protectionRules = append(protectionRules, PreviewProtectionRule{
 			ID:          rule.ID,
 			Description: rule.Description,
+		})
+	}
+	for _, rule := range result.ProtectionRules {
+		protectionRules = append(protectionRules, PreviewProtectionRule{
+			Path:        rule.Path,
+			UserDefined: true,
 		})
 	}
 
@@ -201,6 +209,10 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 		builder.WriteString("  No default-enabled protection rules were reported.\n")
 	} else {
 		for _, rule := range model.ProtectionRules {
+			if rule.UserDefined {
+				builder.WriteString(fmt.Sprintf("  %s (user-defined Protection rule)\n", rule.Path))
+				continue
+			}
 			builder.WriteString(fmt.Sprintf("  %s: %s\n", rule.ID, rule.Description))
 		}
 	}
