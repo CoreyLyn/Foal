@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -16,6 +18,7 @@ type reviewSuggestionProbe struct {
 	queryArgs    []string
 	cleanCommand string
 	parsePaths   func([]byte) []string
+	resolvePaths func(reviewSuggestionDependencies) []string
 }
 
 type reviewSuggestionTool struct {
@@ -95,22 +98,44 @@ var reviewSuggestionAllowlist = map[string]reviewSuggestionTool{
 			parsePaths:   parseDotnetNugetLocalPaths,
 		}},
 	},
+	"mise": {
+		probes: []reviewSuggestionProbe{{
+			label:        "mise cache",
+			queryArgs:    []string{"cache", "path"},
+			cleanCommand: "mise cache clear",
+		}},
+	},
+	"corepack": {
+		probes: []reviewSuggestionProbe{{
+			label:        "Corepack cache",
+			cleanCommand: "corepack cache clean",
+			resolvePaths: resolveCorepackCachePaths,
+		}},
+	},
 }
 
 type reviewSuggestionDependencies struct {
-	lookPath   func(string) (string, error)
-	runQuery   func(context.Context, string, ...string) ([]byte, error)
-	pathExists func(string) bool
+	lookPath    func(string) (string, error)
+	runQuery    func(context.Context, string, ...string) ([]byte, error)
+	pathExists  func(string) bool
+	lookupEnv   func(string) (string, bool)
+	userHomeDir func() (string, error)
+	joinPath    func(...string) string
+	goos        string
 }
 
 func DiscoverReviewSuggestions(ctx context.Context) []ReviewSuggestion {
-	return discoverReviewSuggestions(ctx, []string{"npm", "pnpm", "yarn", "bun", "pip", "uv", "conda", "go", "dotnet"}, reviewSuggestionDependencies{
+	return discoverReviewSuggestions(ctx, []string{"npm", "pnpm", "yarn", "bun", "pip", "uv", "conda", "go", "dotnet", "corepack", "mise"}, reviewSuggestionDependencies{
 		lookPath: exec.LookPath,
 		runQuery: runToolQuery,
 		pathExists: func(path string) bool {
 			info, err := os.Stat(path)
 			return err == nil && info.IsDir()
 		},
+		lookupEnv:   os.LookupEnv,
+		userHomeDir: os.UserHomeDir,
+		joinPath:    filepath.Join,
+		goos:        runtime.GOOS,
 	})
 }
 
@@ -118,6 +143,7 @@ func discoverReviewSuggestions(ctx context.Context, tools []string, deps reviewS
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	deps = withReviewSuggestionDependencyDefaults(deps)
 	suggestions := []ReviewSuggestion{}
 	for _, toolName := range tools {
 		if ctx.Err() != nil {
@@ -132,14 +158,20 @@ func discoverReviewSuggestions(ctx context.Context, tools []string, deps reviewS
 			continue
 		}
 		for _, probe := range tool.probes {
-			queryCtx, cancel := context.WithTimeout(ctx, toolQueryTimeout)
-			output, err := deps.runQuery(queryCtx, executable, probe.queryArgs...)
-			queryErr := queryCtx.Err()
-			cancel()
-			if err != nil || queryErr != nil {
-				continue
+			var paths []string
+			if probe.resolvePaths != nil {
+				paths = probe.resolvePaths(deps)
+			} else {
+				queryCtx, cancel := context.WithTimeout(ctx, toolQueryTimeout)
+				output, err := deps.runQuery(queryCtx, executable, probe.queryArgs...)
+				queryErr := queryCtx.Err()
+				cancel()
+				if err != nil || queryErr != nil {
+					continue
+				}
+				paths = parseReviewSuggestionPaths(probe, output)
 			}
-			cachePath := firstExistingCachePath(parseReviewSuggestionPaths(probe, output), deps.pathExists)
+			cachePath := firstExistingCachePath(paths, deps.pathExists)
 			if cachePath == "" {
 				continue
 			}
@@ -152,6 +184,45 @@ func discoverReviewSuggestions(ctx context.Context, tools []string, deps reviewS
 		}
 	}
 	return suggestions
+}
+
+func withReviewSuggestionDependencyDefaults(deps reviewSuggestionDependencies) reviewSuggestionDependencies {
+	if deps.lookupEnv == nil {
+		deps.lookupEnv = os.LookupEnv
+	}
+	if deps.userHomeDir == nil {
+		deps.userHomeDir = os.UserHomeDir
+	}
+	if deps.joinPath == nil {
+		deps.joinPath = filepath.Join
+	}
+	if deps.goos == "" {
+		deps.goos = runtime.GOOS
+	}
+	return deps
+}
+
+func resolveCorepackCachePaths(deps reviewSuggestionDependencies) []string {
+	corepackHome, found := deps.lookupEnv("COREPACK_HOME")
+	if !found {
+		base, found := deps.lookupEnv("XDG_CACHE_HOME")
+		if !found {
+			base, found = deps.lookupEnv("LOCALAPPDATA")
+		}
+		if !found {
+			home, err := deps.userHomeDir()
+			if err != nil || home == "" {
+				return nil
+			}
+			if deps.goos == "windows" {
+				base = deps.joinPath(home, "AppData", "Local")
+			} else {
+				base = deps.joinPath(home, ".cache")
+			}
+		}
+		corepackHome = deps.joinPath(base, "node", "corepack")
+	}
+	return []string{deps.joinPath(corepackHome, "v1")}
 }
 
 func parseReviewSuggestionPaths(probe reviewSuggestionProbe, output []byte) []string {

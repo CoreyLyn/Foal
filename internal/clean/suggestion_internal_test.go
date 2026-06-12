@@ -60,6 +60,13 @@ func TestDiscoverReviewSuggestionsQueriesInstalledToolCaches(t *testing.T) {
 			cachePath:    `C:\Users\corey\AppData\Local\uv\cache`,
 		},
 		{
+			tool:         "mise",
+			executable:   `C:\Users\corey\AppData\Local\mise\bin\mise.exe`,
+			queryArgs:    []string{"cache", "path"},
+			cleanCommand: "mise cache clear",
+			cachePath:    `C:\Users\corey\AppData\Local\mise`,
+		},
+		{
 			tool:         "conda",
 			executable:   `C:\Users\corey\miniconda3\Scripts\conda.exe`,
 			queryArgs:    []string{"info", "--json"},
@@ -163,6 +170,131 @@ func TestDiscoverReviewSuggestionsEmitsDistinctGoCacheSuggestions(t *testing.T) 
 	}
 }
 
+func TestDiscoverReviewSuggestionsResolvesCorepackHomeWithoutRunningQuery(t *testing.T) {
+	cachePath := `D:\Corepack\v1`
+	result := discoverReviewSuggestions(context.Background(), []string{"corepack"}, reviewSuggestionDependencies{
+		lookPath: func(tool string) (string, error) {
+			if tool != "corepack" {
+				t.Fatalf("PATH lookup tool = %q, want corepack", tool)
+			}
+			return `C:\Program Files\nodejs\corepack.cmd`, nil
+		},
+		runQuery: func(context.Context, string, ...string) ([]byte, error) {
+			t.Fatal("Corepack must not run a cache path query")
+			return nil, nil
+		},
+		lookupEnv: func(name string) (string, bool) {
+			switch name {
+			case "COREPACK_HOME":
+				return `D:\Corepack`, true
+			case "XDG_CACHE_HOME":
+				return `D:\ignored-xdg`, true
+			default:
+				return "", false
+			}
+		},
+		userHomeDir: func() (string, error) {
+			t.Fatal("Corepack home fallback must not run when COREPACK_HOME is set")
+			return "", nil
+		},
+		joinPath: func(parts ...string) string {
+			return strings.Join(parts, `\`)
+		},
+		goos: "windows",
+		pathExists: func(path string) bool {
+			return path == cachePath
+		},
+	})
+
+	want := ReviewSuggestion{
+		Tool:      "corepack",
+		Label:     "Corepack cache",
+		Command:   "corepack cache clean",
+		CachePath: cachePath,
+	}
+	if len(result) != 1 || result[0] != want {
+		t.Fatalf("suggestions = %#v, want %#v", result, []ReviewSuggestion{want})
+	}
+}
+
+func TestDiscoverReviewSuggestionsUsesOfficialCorepackFallbackChain(t *testing.T) {
+	tests := []struct {
+		name        string
+		environment map[string]string
+		goos        string
+		home        string
+		want        string
+	}{
+		{
+			name: "XDG cache precedes LOCALAPPDATA",
+			environment: map[string]string{
+				"XDG_CACHE_HOME": `D:\xdg-cache`,
+				"LOCALAPPDATA":   `D:\local-cache`,
+			},
+			goos: "windows",
+			home: `C:\Users\ignored`,
+			want: `D:\xdg-cache\node\corepack\v1`,
+		},
+		{
+			name: "LOCALAPPDATA fallback",
+			environment: map[string]string{
+				"LOCALAPPDATA": `D:\local-cache`,
+			},
+			goos: "windows",
+			home: `C:\Users\ignored`,
+			want: `D:\local-cache\node\corepack\v1`,
+		},
+		{
+			name: "Windows user home fallback",
+			goos: "windows",
+			home: `C:\Users\corey`,
+			want: `C:\Users\corey\AppData\Local\node\corepack\v1`,
+		},
+		{
+			name: "non-Windows user home fallback",
+			goos: "linux",
+			home: `/home/corey`,
+			want: `/home/corey/.cache/node/corepack/v1`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			separator := `\`
+			if test.goos != "windows" {
+				separator = "/"
+			}
+			result := discoverReviewSuggestions(context.Background(), []string{"corepack"}, reviewSuggestionDependencies{
+				lookPath: func(string) (string, error) {
+					return "corepack", nil
+				},
+				runQuery: func(context.Context, string, ...string) ([]byte, error) {
+					t.Fatal("Corepack must not run a cache path query")
+					return nil, nil
+				},
+				lookupEnv: func(name string) (string, bool) {
+					value, found := test.environment[name]
+					return value, found
+				},
+				userHomeDir: func() (string, error) {
+					return test.home, nil
+				},
+				joinPath: func(parts ...string) string {
+					return strings.Join(parts, separator)
+				},
+				goos: test.goos,
+				pathExists: func(path string) bool {
+					return path == test.want
+				},
+			})
+
+			if len(result) != 1 || result[0].CachePath != test.want {
+				t.Fatalf("suggestions = %#v, want Corepack cache at %q", result, test.want)
+			}
+		})
+	}
+}
+
 func TestDiscoverReviewSuggestionsParsesLocalizedDotnetNugetCacheOutput(t *testing.T) {
 	executable := `C:\Program Files\dotnet\dotnet.exe`
 	globalPackages := `D:\NuGet\packages`
@@ -243,7 +375,7 @@ func TestDiscoverReviewSuggestionsKeepsExistingGoCacheAfterOtherProbeFailsOrIsAb
 }
 
 func TestDiscoverReviewSuggestionsRequiresPATHAndExistingCache(t *testing.T) {
-	for _, tool := range []string{"npm", "pnpm", "yarn", "bun", "pip", "uv", "conda", "go", "dotnet"} {
+	for _, tool := range []string{"npm", "pnpm", "yarn", "bun", "pip", "uv", "conda", "go", "dotnet", "corepack", "mise"} {
 		t.Run(tool+" not on PATH", func(t *testing.T) {
 			result := discoverReviewSuggestions(context.Background(), []string{tool}, reviewSuggestionDependencies{
 				lookPath: func(string) (string, error) {
@@ -269,6 +401,9 @@ func TestDiscoverReviewSuggestionsRequiresPATHAndExistingCache(t *testing.T) {
 					return tool + ".cmd", nil
 				},
 				runQuery: func(context.Context, string, ...string) ([]byte, error) {
+					if tool == "corepack" {
+						t.Fatal("Corepack must not run a cache path query")
+					}
 					if tool == "conda" {
 						return []byte(`{"pkgs_dirs":["C:\\missing\\conda-cache"]}`), nil
 					}
@@ -328,7 +463,7 @@ func TestDiscoverReviewSuggestionsDropsFailedAndTimedOutQueries(t *testing.T) {
 		{
 			name: "query failure",
 			runQuery: func(context.Context, string, ...string) ([]byte, error) {
-				return nil, errors.New("npm failed")
+				return nil, errors.New("mise failed")
 			},
 		},
 		{
@@ -347,9 +482,9 @@ func TestDiscoverReviewSuggestionsDropsFailedAndTimedOutQueries(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			result := discoverReviewSuggestions(context.Background(), []string{"npm"}, reviewSuggestionDependencies{
+			result := discoverReviewSuggestions(context.Background(), []string{"mise"}, reviewSuggestionDependencies{
 				lookPath: func(string) (string, error) {
-					return `C:\Program Files\nodejs\npm.cmd`, nil
+					return `C:\Users\corey\AppData\Local\mise\bin\mise.exe`, nil
 				},
 				runQuery: test.runQuery,
 				pathExists: func(string) bool {
