@@ -2,6 +2,7 @@ package clean
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,6 +15,7 @@ type reviewSuggestionTool struct {
 	label        string
 	queryArgs    []string
 	cleanCommand string
+	parsePaths   func([]byte) []string
 }
 
 var reviewSuggestionAllowlist = map[string]reviewSuggestionTool{
@@ -37,6 +39,22 @@ var reviewSuggestionAllowlist = map[string]reviewSuggestionTool{
 		queryArgs:    []string{"pm", "cache"},
 		cleanCommand: "bun pm cache rm",
 	},
+	"pip": {
+		label:        "pip cache",
+		queryArgs:    []string{"cache", "dir"},
+		cleanCommand: "pip cache purge",
+	},
+	"uv": {
+		label:        "uv cache",
+		queryArgs:    []string{"cache", "dir"},
+		cleanCommand: "uv cache prune",
+	},
+	"conda": {
+		label:        "conda cache",
+		queryArgs:    []string{"info", "--json"},
+		cleanCommand: "conda clean --all",
+		parsePaths:   parseCondaPackageDirectories,
+	},
 }
 
 type reviewSuggestionDependencies struct {
@@ -46,7 +64,7 @@ type reviewSuggestionDependencies struct {
 }
 
 func DiscoverReviewSuggestions(ctx context.Context) []ReviewSuggestion {
-	return discoverReviewSuggestions(ctx, []string{"npm", "pnpm", "yarn", "bun"}, reviewSuggestionDependencies{
+	return discoverReviewSuggestions(ctx, []string{"npm", "pnpm", "yarn", "bun", "pip", "uv", "conda"}, reviewSuggestionDependencies{
 		lookPath: exec.LookPath,
 		runQuery: runToolQuery,
 		pathExists: func(path string) bool {
@@ -80,8 +98,8 @@ func discoverReviewSuggestions(ctx context.Context, tools []string, deps reviewS
 		if err != nil || queryErr != nil {
 			continue
 		}
-		cachePath := strings.TrimSpace(string(output))
-		if cachePath == "" || !deps.pathExists(cachePath) {
+		cachePath := firstExistingCachePath(parseReviewSuggestionPaths(tool, output), deps.pathExists)
+		if cachePath == "" {
 			continue
 		}
 		suggestions = append(suggestions, ReviewSuggestion{
@@ -92,6 +110,37 @@ func discoverReviewSuggestions(ctx context.Context, tools []string, deps reviewS
 		})
 	}
 	return suggestions
+}
+
+func parseReviewSuggestionPaths(tool reviewSuggestionTool, output []byte) []string {
+	if tool.parsePaths != nil {
+		return tool.parsePaths(output)
+	}
+	cachePath := strings.TrimSpace(string(output))
+	if cachePath == "" {
+		return nil
+	}
+	return []string{cachePath}
+}
+
+func parseCondaPackageDirectories(output []byte) []string {
+	var info struct {
+		PackageDirectories []string `json:"pkgs_dirs"`
+	}
+	if err := json.Unmarshal(output, &info); err != nil {
+		return nil
+	}
+	return info.PackageDirectories
+}
+
+func firstExistingCachePath(paths []string, pathExists func(string) bool) string {
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path != "" && pathExists(path) {
+			return path
+		}
+	}
+	return ""
 }
 
 func runToolQuery(ctx context.Context, executable string, args ...string) ([]byte, error) {
