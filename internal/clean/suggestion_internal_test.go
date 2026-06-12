@@ -3,17 +3,19 @@ package clean
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestDiscoverReviewSuggestionsQueriesInstalledJavaScriptToolCaches(t *testing.T) {
+func TestDiscoverReviewSuggestionsQueriesInstalledToolCaches(t *testing.T) {
 	tests := []struct {
 		tool         string
 		executable   string
 		queryArgs    []string
 		cleanCommand string
 		cachePath    string
+		queryOutput  string
 	}{
 		{
 			tool:         "npm",
@@ -43,6 +45,28 @@ func TestDiscoverReviewSuggestionsQueriesInstalledJavaScriptToolCaches(t *testin
 			cleanCommand: "bun pm cache rm",
 			cachePath:    `C:\Users\corey\.bun\install\cache`,
 		},
+		{
+			tool:         "pip",
+			executable:   `C:\Users\corey\AppData\Local\Programs\Python\Python313\Scripts\pip.exe`,
+			queryArgs:    []string{"cache", "dir"},
+			cleanCommand: "pip cache purge",
+			cachePath:    `C:\Users\corey\AppData\Local\pip\Cache`,
+		},
+		{
+			tool:         "uv",
+			executable:   `C:\Users\corey\.local\bin\uv.exe`,
+			queryArgs:    []string{"cache", "dir"},
+			cleanCommand: "uv cache prune",
+			cachePath:    `C:\Users\corey\AppData\Local\uv\cache`,
+		},
+		{
+			tool:         "conda",
+			executable:   `C:\Users\corey\miniconda3\Scripts\conda.exe`,
+			queryArgs:    []string{"info", "--json"},
+			cleanCommand: "conda clean",
+			cachePath:    `D:\conda-cache\pkgs`,
+			queryOutput:  `{"pkgs_dirs":["C:\\Users\\corey\\miniconda3\\pkgs","D:\\conda-cache\\pkgs"]}`,
+		},
 	}
 
 	for _, test := range tests {
@@ -59,6 +83,9 @@ func TestDiscoverReviewSuggestionsQueriesInstalledJavaScriptToolCaches(t *testin
 				runQuery: func(_ context.Context, executable string, args ...string) ([]byte, error) {
 					gotExecutable = executable
 					gotArgs = append([]string(nil), args...)
+					if test.queryOutput != "" {
+						return []byte(test.queryOutput), nil
+					}
 					return []byte(test.cachePath + "\r\n"), nil
 				},
 				pathExists: func(path string) bool {
@@ -87,7 +114,7 @@ func TestDiscoverReviewSuggestionsQueriesInstalledJavaScriptToolCaches(t *testin
 }
 
 func TestDiscoverReviewSuggestionsRequiresPATHAndExistingCache(t *testing.T) {
-	for _, tool := range []string{"npm", "pnpm", "yarn", "bun"} {
+	for _, tool := range []string{"npm", "pnpm", "yarn", "bun", "pip", "uv", "conda"} {
 		t.Run(tool+" not on PATH", func(t *testing.T) {
 			result := discoverReviewSuggestions(context.Background(), []string{tool}, reviewSuggestionDependencies{
 				lookPath: func(string) (string, error) {
@@ -113,6 +140,9 @@ func TestDiscoverReviewSuggestionsRequiresPATHAndExistingCache(t *testing.T) {
 					return tool + ".cmd", nil
 				},
 				runQuery: func(context.Context, string, ...string) ([]byte, error) {
+					if tool == "conda" {
+						return []byte(`{"pkgs_dirs":["C:\\missing\\conda-cache"]}`), nil
+					}
 					return []byte(`C:\missing\cache`), nil
 				},
 				pathExists: func(string) bool {
@@ -197,6 +227,43 @@ func TestDiscoverReviewSuggestionsDropsFailedAndTimedOutQueries(t *testing.T) {
 			})
 			if len(result) != 0 {
 				t.Fatalf("suggestions = %#v, want none", result)
+			}
+		})
+	}
+}
+
+func TestDiscoverReviewSuggestionsContinuesAfterOneToolFails(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "query failure", err: errors.New("pip failed")},
+		{name: "query deadline", err: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queries := []string{}
+			result := discoverReviewSuggestions(context.Background(), []string{"pip", "uv"}, reviewSuggestionDependencies{
+				lookPath: func(tool string) (string, error) {
+					return tool + ".exe", nil
+				},
+				runQuery: func(_ context.Context, executable string, args ...string) ([]byte, error) {
+					queries = append(queries, executable+" "+strings.Join(args, " "))
+					if executable == "pip.exe" {
+						return nil, test.err
+					}
+					return []byte("C:\\Users\\corey\\AppData\\Local\\uv\\cache\r\n"), nil
+				},
+				pathExists: func(path string) bool {
+					return path == `C:\Users\corey\AppData\Local\uv\cache`
+				},
+			})
+
+			wantQueries := []string{"pip.exe cache dir", "uv.exe cache dir"}
+			if !equalStrings(queries, wantQueries) {
+				t.Fatalf("queries = %#v, want %#v", queries, wantQueries)
+			}
+			if len(result) != 1 || result[0].Tool != "uv" {
+				t.Fatalf("suggestions = %#v, want only uv after pip failure", result)
 			}
 		})
 	}
