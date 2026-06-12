@@ -11,49 +11,89 @@ import (
 
 const toolQueryTimeout = 2 * time.Second
 
-type reviewSuggestionTool struct {
+type reviewSuggestionProbe struct {
 	label        string
 	queryArgs    []string
 	cleanCommand string
 	parsePaths   func([]byte) []string
 }
 
+type reviewSuggestionTool struct {
+	probes []reviewSuggestionProbe
+}
+
 var reviewSuggestionAllowlist = map[string]reviewSuggestionTool{
 	"npm": {
-		label:        "npm cache",
-		queryArgs:    []string{"config", "get", "cache"},
-		cleanCommand: "npm cache clean --force",
+		probes: []reviewSuggestionProbe{{
+			label:        "npm cache",
+			queryArgs:    []string{"config", "get", "cache"},
+			cleanCommand: "npm cache clean --force",
+		}},
 	},
 	"pnpm": {
-		label:        "pnpm cache",
-		queryArgs:    []string{"store", "path"},
-		cleanCommand: "pnpm store prune",
+		probes: []reviewSuggestionProbe{{
+			label:        "pnpm cache",
+			queryArgs:    []string{"store", "path"},
+			cleanCommand: "pnpm store prune",
+		}},
 	},
 	"yarn": {
-		label:        "yarn cache",
-		queryArgs:    []string{"cache", "dir"},
-		cleanCommand: "yarn cache clean",
+		probes: []reviewSuggestionProbe{{
+			label:        "yarn cache",
+			queryArgs:    []string{"cache", "dir"},
+			cleanCommand: "yarn cache clean",
+		}},
 	},
 	"bun": {
-		label:        "bun cache",
-		queryArgs:    []string{"pm", "cache"},
-		cleanCommand: "bun pm cache rm",
+		probes: []reviewSuggestionProbe{{
+			label:        "bun cache",
+			queryArgs:    []string{"pm", "cache"},
+			cleanCommand: "bun pm cache rm",
+		}},
 	},
 	"pip": {
-		label:        "pip cache",
-		queryArgs:    []string{"cache", "dir"},
-		cleanCommand: "pip cache purge",
+		probes: []reviewSuggestionProbe{{
+			label:        "pip cache",
+			queryArgs:    []string{"cache", "dir"},
+			cleanCommand: "pip cache purge",
+		}},
 	},
 	"uv": {
-		label:        "uv cache",
-		queryArgs:    []string{"cache", "dir"},
-		cleanCommand: "uv cache prune",
+		probes: []reviewSuggestionProbe{{
+			label:        "uv cache",
+			queryArgs:    []string{"cache", "dir"},
+			cleanCommand: "uv cache prune",
+		}},
 	},
 	"conda": {
-		label:        "conda cache",
-		queryArgs:    []string{"info", "--json"},
-		cleanCommand: "conda clean --all",
-		parsePaths:   parseCondaPackageDirectories,
+		probes: []reviewSuggestionProbe{{
+			label:        "conda cache",
+			queryArgs:    []string{"info", "--json"},
+			cleanCommand: "conda clean --all",
+			parsePaths:   parseCondaPackageDirectories,
+		}},
+	},
+	"go": {
+		probes: []reviewSuggestionProbe{
+			{
+				label:        "Go build cache",
+				queryArgs:    []string{"env", "GOCACHE"},
+				cleanCommand: "go clean -cache",
+			},
+			{
+				label:        "Go module cache",
+				queryArgs:    []string{"env", "GOMODCACHE"},
+				cleanCommand: "go clean -modcache",
+			},
+		},
+	},
+	"dotnet": {
+		probes: []reviewSuggestionProbe{{
+			label:        ".NET NuGet caches",
+			queryArgs:    []string{"nuget", "locals", "all", "--list"},
+			cleanCommand: "dotnet nuget locals all --clear",
+			parsePaths:   parseDotnetNugetLocalPaths,
+		}},
 	},
 }
 
@@ -64,7 +104,7 @@ type reviewSuggestionDependencies struct {
 }
 
 func DiscoverReviewSuggestions(ctx context.Context) []ReviewSuggestion {
-	return discoverReviewSuggestions(ctx, []string{"npm", "pnpm", "yarn", "bun", "pip", "uv", "conda"}, reviewSuggestionDependencies{
+	return discoverReviewSuggestions(ctx, []string{"npm", "pnpm", "yarn", "bun", "pip", "uv", "conda", "go", "dotnet"}, reviewSuggestionDependencies{
 		lookPath: exec.LookPath,
 		runQuery: runToolQuery,
 		pathExists: func(path string) bool {
@@ -91,30 +131,32 @@ func discoverReviewSuggestions(ctx context.Context, tools []string, deps reviewS
 		if err != nil {
 			continue
 		}
-		queryCtx, cancel := context.WithTimeout(ctx, toolQueryTimeout)
-		output, err := deps.runQuery(queryCtx, executable, tool.queryArgs...)
-		queryErr := queryCtx.Err()
-		cancel()
-		if err != nil || queryErr != nil {
-			continue
+		for _, probe := range tool.probes {
+			queryCtx, cancel := context.WithTimeout(ctx, toolQueryTimeout)
+			output, err := deps.runQuery(queryCtx, executable, probe.queryArgs...)
+			queryErr := queryCtx.Err()
+			cancel()
+			if err != nil || queryErr != nil {
+				continue
+			}
+			cachePath := firstExistingCachePath(parseReviewSuggestionPaths(probe, output), deps.pathExists)
+			if cachePath == "" {
+				continue
+			}
+			suggestions = append(suggestions, ReviewSuggestion{
+				Tool:      toolName,
+				Label:     probe.label,
+				Command:   probe.cleanCommand,
+				CachePath: cachePath,
+			})
 		}
-		cachePath := firstExistingCachePath(parseReviewSuggestionPaths(tool, output), deps.pathExists)
-		if cachePath == "" {
-			continue
-		}
-		suggestions = append(suggestions, ReviewSuggestion{
-			Tool:      toolName,
-			Label:     tool.label,
-			Command:   tool.cleanCommand,
-			CachePath: cachePath,
-		})
 	}
 	return suggestions
 }
 
-func parseReviewSuggestionPaths(tool reviewSuggestionTool, output []byte) []string {
-	if tool.parsePaths != nil {
-		return tool.parsePaths(output)
+func parseReviewSuggestionPaths(probe reviewSuggestionProbe, output []byte) []string {
+	if probe.parsePaths != nil {
+		return probe.parsePaths(output)
 	}
 	cachePath := strings.TrimSpace(string(output))
 	if cachePath == "" {
@@ -131,6 +173,17 @@ func parseCondaPackageDirectories(output []byte) []string {
 		return nil
 	}
 	return info.PackageDirectories
+}
+
+func parseDotnetNugetLocalPaths(output []byte) []string {
+	var paths []string
+	for _, line := range strings.Split(string(output), "\n") {
+		_, path, found := strings.Cut(strings.TrimSpace(line), ":")
+		if found && strings.TrimSpace(path) != "" {
+			paths = append(paths, strings.TrimSpace(path))
+		}
+	}
+	return paths
 }
 
 func firstExistingCachePath(paths []string, pathExists func(string) bool) string {

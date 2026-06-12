@@ -113,8 +113,137 @@ func TestDiscoverReviewSuggestionsQueriesInstalledToolCaches(t *testing.T) {
 	}
 }
 
+func TestDiscoverReviewSuggestionsEmitsDistinctGoCacheSuggestions(t *testing.T) {
+	executable := `C:\Program Files\Go\bin\go.exe`
+	buildCache := `C:\Users\corey\AppData\Local\go-build`
+	moduleCache := `C:\Users\corey\go\pkg\mod`
+	queries := []string{}
+
+	result := discoverReviewSuggestions(context.Background(), []string{"go"}, reviewSuggestionDependencies{
+		lookPath: func(tool string) (string, error) {
+			if tool != "go" {
+				t.Fatalf("PATH lookup tool = %q, want go", tool)
+			}
+			return executable, nil
+		},
+		runQuery: func(_ context.Context, gotExecutable string, args ...string) ([]byte, error) {
+			if gotExecutable != executable {
+				t.Fatalf("query executable = %q, want %q", gotExecutable, executable)
+			}
+			queries = append(queries, strings.Join(args, " "))
+			switch strings.Join(args, " ") {
+			case "env GOCACHE":
+				return []byte(buildCache + "\r\n"), nil
+			case "env GOMODCACHE":
+				return []byte(moduleCache + "\r\n"), nil
+			default:
+				t.Fatalf("unexpected query args: %#v", args)
+				return nil, nil
+			}
+		},
+		pathExists: func(path string) bool {
+			return path == buildCache || path == moduleCache
+		},
+	})
+
+	if !equalStrings(queries, []string{"env GOCACHE", "env GOMODCACHE"}) {
+		t.Fatalf("queries = %#v, want exact Go cache queries", queries)
+	}
+	want := []ReviewSuggestion{
+		{Tool: "go", Label: "Go build cache", Command: "go clean -cache", CachePath: buildCache},
+		{Tool: "go", Label: "Go module cache", Command: "go clean -modcache", CachePath: moduleCache},
+	}
+	if len(result) != len(want) {
+		t.Fatalf("suggestions = %#v, want %#v", result, want)
+	}
+	for index := range want {
+		if result[index] != want[index] {
+			t.Fatalf("suggestion %d = %#v, want %#v", index, result[index], want[index])
+		}
+	}
+}
+
+func TestDiscoverReviewSuggestionsParsesLocalizedDotnetNugetCacheOutput(t *testing.T) {
+	executable := `C:\Program Files\dotnet\dotnet.exe`
+	globalPackages := `D:\NuGet\packages`
+	checkedPaths := []string{}
+
+	result := discoverReviewSuggestions(context.Background(), []string{"dotnet"}, reviewSuggestionDependencies{
+		lookPath: func(tool string) (string, error) {
+			if tool != "dotnet" {
+				t.Fatalf("PATH lookup tool = %q, want dotnet", tool)
+			}
+			return executable, nil
+		},
+		runQuery: func(_ context.Context, gotExecutable string, args ...string) ([]byte, error) {
+			if gotExecutable != executable {
+				t.Fatalf("query executable = %q, want %q", gotExecutable, executable)
+			}
+			wantArgs := []string{"nuget", "locals", "all", "--list"}
+			if !equalStrings(args, wantArgs) {
+				t.Fatalf("query args = %#v, want only %#v", args, wantArgs)
+			}
+			return []byte("NuGet 本地资源:\r\n" +
+				"http-cache: C:\\missing\\v3-cache\r\n" +
+				"全局包: " + globalPackages + "\r\n" +
+				"\r\n" +
+				"diagnostic noise without a label\r\n"), nil
+		},
+		pathExists: func(path string) bool {
+			checkedPaths = append(checkedPaths, path)
+			return path == globalPackages
+		},
+	})
+
+	if !equalStrings(checkedPaths, []string{`C:\missing\v3-cache`, globalPackages}) {
+		t.Fatalf("checked paths = %#v, want labeled cache paths in output order", checkedPaths)
+	}
+	want := ReviewSuggestion{
+		Tool:      "dotnet",
+		Label:     ".NET NuGet caches",
+		Command:   "dotnet nuget locals all --clear",
+		CachePath: globalPackages,
+	}
+	if len(result) != 1 || result[0] != want {
+		t.Fatalf("suggestions = %#v, want %#v", result, []ReviewSuggestion{want})
+	}
+}
+
+func TestDiscoverReviewSuggestionsKeepsExistingGoCacheAfterOtherProbeFailsOrIsAbsent(t *testing.T) {
+	moduleCache := `C:\Users\corey\go\pkg\mod`
+	result := discoverReviewSuggestions(context.Background(), []string{"go"}, reviewSuggestionDependencies{
+		lookPath: func(string) (string, error) {
+			return `C:\Program Files\Go\bin\go.exe`, nil
+		},
+		runQuery: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			switch strings.Join(args, " ") {
+			case "env GOCACHE":
+				return nil, errors.New("GOCACHE query failed")
+			case "env GOMODCACHE":
+				return []byte(moduleCache), nil
+			default:
+				t.Fatalf("unexpected query args: %#v", args)
+				return nil, nil
+			}
+		},
+		pathExists: func(path string) bool {
+			return path == moduleCache
+		},
+	})
+
+	want := ReviewSuggestion{
+		Tool:      "go",
+		Label:     "Go module cache",
+		Command:   "go clean -modcache",
+		CachePath: moduleCache,
+	}
+	if len(result) != 1 || result[0] != want {
+		t.Fatalf("suggestions = %#v, want only %#v", result, want)
+	}
+}
+
 func TestDiscoverReviewSuggestionsRequiresPATHAndExistingCache(t *testing.T) {
-	for _, tool := range []string{"npm", "pnpm", "yarn", "bun", "pip", "uv", "conda"} {
+	for _, tool := range []string{"npm", "pnpm", "yarn", "bun", "pip", "uv", "conda", "go", "dotnet"} {
 		t.Run(tool+" not on PATH", func(t *testing.T) {
 			result := discoverReviewSuggestions(context.Background(), []string{tool}, reviewSuggestionDependencies{
 				lookPath: func(string) (string, error) {
@@ -142,6 +271,9 @@ func TestDiscoverReviewSuggestionsRequiresPATHAndExistingCache(t *testing.T) {
 				runQuery: func(context.Context, string, ...string) ([]byte, error) {
 					if tool == "conda" {
 						return []byte(`{"pkgs_dirs":["C:\\missing\\conda-cache"]}`), nil
+					}
+					if tool == "dotnet" {
+						return []byte("http-cache: C:\\missing\\nuget-http\r\nglobal-packages: C:\\missing\\nuget-packages"), nil
 					}
 					return []byte(`C:\missing\cache`), nil
 				},
