@@ -139,8 +139,11 @@ func dryRun(ctx context.Context, opts Options) Result {
 		}
 		result.Opportunities = append(result.Opportunities, opportunity)
 	}
-	result.IncompleteOpportunityInspections = append(result.IncompleteOpportunityInspections, discovery.Incomplete...)
 	for _, incomplete := range discovery.Incomplete {
+		if opts.Validator.IsUserProtected(incomplete.Path) {
+			continue
+		}
+		result.IncompleteOpportunityInspections = append(result.IncompleteOpportunityInspections, incomplete)
 		result.Errors = append(result.Errors, incomplete.Reason)
 	}
 	discoverSuggestions := opts.DiscoverReviewSuggestions

@@ -227,16 +227,40 @@ func TestCleanPreviewDoesNotRenderSuppressedReviewOnlyPaths(t *testing.T) {
 	protectedRoot := `C:\Users\corey\AppData\Local\Protected`
 	protectedOpportunity := protectedRoot + `\private-opportunity`
 	protectedSuggestion := protectedRoot + `\private-suggestion`
+	protectedIncomplete := protectedRoot + `\private-incomplete`
 	visibleOpportunity := `C:\Users\corey\AppData\Local\ProtectedSibling\visible-opportunity`
 	visibleSuggestion := `C:\Users\corey\AppData\Local\ProtectedSibling\visible-suggestion`
+	visibleIncomplete := `C:\Users\corey\AppData\Local\ProtectedSibling\visible-incomplete`
 
 	result := clean.DryRun(context.Background(), clean.Options{
 		Validator: pathsafe.NewValidator([]string{protectedRoot}),
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
-			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{
-				{Path: protectedOpportunity, Bytes: 10, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
-				{Path: visibleOpportunity, Bytes: 20, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
-			}}
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{Path: protectedOpportunity, Bytes: 10, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+					{Path: visibleOpportunity, Bytes: 20, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				},
+				Incomplete: []clean.IncompleteOpportunityInspection{
+					{
+						Path: protectedIncomplete,
+						Reason: clean.StructuredIssue{
+							Code:        "inspection_failed",
+							Message:     "protected inspection failed",
+							Recoverable: true,
+							Path:        protectedIncomplete,
+						},
+					},
+					{
+						Path: visibleIncomplete,
+						Reason: clean.StructuredIssue{
+							Code:        "inspection_failed",
+							Message:     "visible inspection failed",
+							Recoverable: true,
+							Path:        visibleIncomplete,
+						},
+					},
+				},
+			}
 		},
 		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
 			return []clean.ReviewSuggestion{
@@ -248,12 +272,12 @@ func TestCleanPreviewDoesNotRenderSuppressedReviewOnlyPaths(t *testing.T) {
 	})
 	output := renderCleanPreviewSections(clean.NewPreviewReadModel(result), cleanPreviewFilterAll, true)
 
-	for _, suppressed := range []string{protectedOpportunity, protectedSuggestion} {
+	for _, suppressed := range []string{protectedOpportunity, protectedSuggestion, protectedIncomplete} {
 		if strings.Contains(output, suppressed) {
 			t.Fatalf("TUI leaked suppressed review-only path %q:\n%s", suppressed, output)
 		}
 	}
-	for _, visible := range []string{visibleOpportunity, visibleSuggestion} {
+	for _, visible := range []string{visibleOpportunity, visibleSuggestion, visibleIncomplete} {
 		if !strings.Contains(output, visible) {
 			t.Fatalf("TUI missing unprotected review-only path %q:\n%s", visible, output)
 		}

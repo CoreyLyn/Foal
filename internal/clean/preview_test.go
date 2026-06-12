@@ -382,8 +382,10 @@ func TestDryRunSuppressedReviewPathsDoNotReachDownstreamSurfacesOrHistory(t *tes
 	protectedRoot := filepath.Join(root, "protected")
 	protectedOpportunity := filepath.Join(protectedRoot, "private-opportunity")
 	protectedSuggestion := filepath.Join(protectedRoot, "private-suggestion")
+	protectedIncomplete := filepath.Join(protectedRoot, "private-incomplete")
 	visibleOpportunity := filepath.Join(root, "visible-opportunity")
 	visibleSuggestion := filepath.Join(root, "visible-suggestion")
+	visibleIncomplete := filepath.Join(root, "protected-sibling-incomplete")
 	recorder := &recordingHistoryRecorder{}
 
 	result := clean.DryRun(context.Background(), clean.Options{
@@ -391,10 +393,32 @@ func TestDryRunSuppressedReviewPathsDoNotReachDownstreamSurfacesOrHistory(t *tes
 		HistoryRecorder: recorder,
 		DetailedListDir: t.TempDir(),
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
-			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{
-				{Path: protectedOpportunity, Bytes: 40, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
-				{Path: visibleOpportunity, Bytes: 50, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
-			}}
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{Path: protectedOpportunity, Bytes: 40, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+					{Path: visibleOpportunity, Bytes: 50, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				},
+				Incomplete: []clean.IncompleteOpportunityInspection{
+					{
+						Path: protectedIncomplete,
+						Reason: clean.StructuredIssue{
+							Code:        "inspection_failed",
+							Message:     "protected inspection failed",
+							Recoverable: true,
+							Path:        protectedIncomplete,
+						},
+					},
+					{
+						Path: visibleIncomplete,
+						Reason: clean.StructuredIssue{
+							Code:        "inspection_failed",
+							Message:     "visible inspection failed",
+							Recoverable: true,
+							Path:        visibleIncomplete,
+						},
+					},
+				},
+			}
 		},
 		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
 			return []clean.ReviewSuggestion{
@@ -405,6 +429,14 @@ func TestDryRunSuppressedReviewPathsDoNotReachDownstreamSurfacesOrHistory(t *tes
 		Rules: []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
 	})
 
+	if len(result.IncompleteOpportunityInspections) != 1 ||
+		result.IncompleteOpportunityInspections[0].Path != visibleIncomplete {
+		t.Fatalf("incomplete inspections = %#v, want only unprotected prefix sibling", result.IncompleteOpportunityInspections)
+	}
+	if len(result.Errors) != 1 || result.Errors[0].Path != visibleIncomplete {
+		t.Fatalf("errors = %#v, want only unprotected incomplete inspection error", result.Errors)
+	}
+
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -414,7 +446,7 @@ func TestDryRunSuppressedReviewPathsDoNotReachDownstreamSurfacesOrHistory(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, suppressed := range []string{protectedOpportunity, protectedSuggestion} {
+	for _, suppressed := range []string{protectedOpportunity, protectedSuggestion, protectedIncomplete} {
 		token, err := json.Marshal(suppressed)
 		if err != nil {
 			t.Fatal(err)
@@ -428,13 +460,13 @@ func TestDryRunSuppressedReviewPathsDoNotReachDownstreamSurfacesOrHistory(t *tes
 		"detailed list": string(detailed),
 		"raw history":   recorder.encoded,
 	} {
-		for _, suppressed := range []string{protectedOpportunity, protectedSuggestion} {
+		for _, suppressed := range []string{protectedOpportunity, protectedSuggestion, protectedIncomplete} {
 			if strings.Contains(content, suppressed) {
 				t.Fatalf("%s leaked suppressed review-only path %q:\n%s", name, suppressed, content)
 			}
 		}
 	}
-	for _, visible := range []string{visibleOpportunity, visibleSuggestion} {
+	for _, visible := range []string{visibleOpportunity, visibleSuggestion, visibleIncomplete} {
 		token, err := json.Marshal(visible)
 		if err != nil {
 			t.Fatal(err)
@@ -447,6 +479,12 @@ func TestDryRunSuppressedReviewPathsDoNotReachDownstreamSurfacesOrHistory(t *tes
 	}
 	if !strings.Contains(string(detailed), visibleOpportunity) {
 		t.Fatalf("detailed list missing visible opportunity:\n%s", detailed)
+	}
+	if !strings.Contains(string(detailed), visibleIncomplete) {
+		t.Fatalf("detailed list missing visible incomplete inspection:\n%s", detailed)
+	}
+	if strings.Contains(recorder.encoded, visibleIncomplete) {
+		t.Fatalf("raw history persisted review-only incomplete inspection path: %s", recorder.encoded)
 	}
 	if len(recorder.sessions) != 1 ||
 		recorder.sessions[0].Aggregate.OpportunityCount != 1 ||
