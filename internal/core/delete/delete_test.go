@@ -6,9 +6,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/CoreyLyn/Foal/internal/core/delete"
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 )
 
 type recordingAdapter struct {
@@ -44,6 +46,35 @@ func TestExecuteSkipsProtectedPathBeforeAdapter(t *testing.T) {
 	}
 	if result.Skipped[0].Reason.Message == "" {
 		t.Fatal("Skipped[0].Reason.Message is empty")
+	}
+}
+
+func TestExecuteWithValidatorRevalidatesUserProtectedPathBeforeAdapter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "protected.tmp")
+	if err := os.WriteFile(path, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &recordingAdapter{}
+
+	result := delete.ExecuteWithValidator(
+		context.Background(),
+		[]delete.Candidate{{Path: path, Bytes: 5}},
+		adapter,
+		pathsafe.NewValidator([]string{dir}),
+	)
+
+	if len(adapter.paths) != 0 {
+		t.Fatalf("adapter received paths %v, want none", adapter.paths)
+	}
+	if len(result.Deleted) != 0 || result.AffectedBytes != 0 {
+		t.Fatalf("result = %#v, want no deleted path or affected bytes", result)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "protected_path" {
+		t.Fatalf("skipped = %#v, want user protected path", result.Skipped)
+	}
+	if !strings.Contains(result.Skipped[0].Reason.Message, "user-defined Protection rule") {
+		t.Fatalf("message = %q, want user-defined rule identity", result.Skipped[0].Reason.Message)
 	}
 }
 

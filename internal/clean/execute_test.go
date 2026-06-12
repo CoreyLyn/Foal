@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
@@ -236,6 +237,46 @@ func TestExecuteSkipsUnsafePathsBeforeRecycleBinAdapter(t *testing.T) {
 	if result.Skipped[0].Reason.Code != "protected_path" {
 		t.Fatalf("reason code = %q, want protected_path", result.Skipped[0].Reason.Code)
 	}
+}
+
+func TestExecuteRecordsUserProtectedCandidateAsSkippedWithoutCallingRecycleBin(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "protected.tmp")
+	if err := os.WriteFile(candidate, []byte("protected"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &recordingRecycleBinAdapter{}
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Validator:         pathsafe.NewValidator([]string{root}),
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   recorder,
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+
+	if len(adapter.paths) != 0 {
+		t.Fatalf("adapter paths = %v, want none", adapter.paths)
+	}
+	if len(result.Deleted) != 0 || result.Totals.AffectedBytes != 0 {
+		t.Fatalf("result = %#v, want no deletion", result)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "protected_path" {
+		t.Fatalf("skipped = %#v, want protected_path", result.Skipped)
+	}
+	if len(recorder.items) != 1 {
+		t.Fatalf("history items = %#v, want one skipped outcome", recorder.items)
+	}
+	item := recorder.items[0]
+	if item.Result != "skipped" || item.Path != candidate || item.Rule != "test_default_rule" {
+		t.Fatalf("history item = %#v, want protected skipped outcome", item)
+	}
+	mustHaveIssue(t, item.SkippedReason, "protected_path")
 }
 
 func TestExecuteReportsRecycleBinPermissionFailureAsSkipped(t *testing.T) {

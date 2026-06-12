@@ -19,6 +19,7 @@ const plannedRecycleBinAction = "move_to_recycle_bin"
 
 type Options struct {
 	Rules                         []Rule
+	Validator                     pathsafe.Validator
 	RecycleBinAdapter             delete.Adapter
 	HistoryRecorder               history.Recorder
 	DetailedListDir               string
@@ -41,6 +42,7 @@ type Result struct {
 	Status                           string                            `json:"status"`
 	Mode                             string                            `json:"mode"`
 	DefaultRuleCatalog               []RuleSummary                     `json:"default_rule_catalog"`
+	ProtectionRules                  []ProtectionRule                  `json:"protection_rules"`
 	Candidates                       []CandidatePreview                `json:"candidates"`
 	Deleted                          []DeletedItem                     `json:"deleted"`
 	Skipped                          []SkippedItem                     `json:"skipped"`
@@ -51,6 +53,10 @@ type Result struct {
 	Totals                           Totals                            `json:"totals"`
 	DetailedListPath                 string                            `json:"-"`
 	ElapsedMS                        int64                             `json:"elapsed_ms"`
+}
+
+type ProtectionRule struct {
+	Path string `json:"path"`
 }
 
 type RuleSummary struct {
@@ -157,6 +163,7 @@ func scanDefaultCandidates(ctx context.Context, opts Options, start time.Time) R
 		Status:                           "preview",
 		Mode:                             "dry_run",
 		DefaultRuleCatalog:               defaultRuleSummaries(rules),
+		ProtectionRules:                  protectionRules(opts.Validator),
 		Candidates:                       []CandidatePreview{},
 		Deleted:                          []DeletedItem{},
 		Skipped:                          []SkippedItem{},
@@ -171,7 +178,7 @@ func scanDefaultCandidates(ctx context.Context, opts Options, start time.Time) R
 			continue
 		}
 		for _, path := range rule.CandidatePaths {
-			previewCandidate(ctx, path, rule.ID, &result)
+			previewCandidate(ctx, opts.Validator, path, rule.ID, &result)
 		}
 		for _, root := range rule.Roots {
 			select {
@@ -193,7 +200,7 @@ func scanDefaultCandidates(ctx context.Context, opts Options, start time.Time) R
 					continue
 				}
 				path := filepath.Join(root, entry.Name())
-				previewCandidate(ctx, path, rule.ID, &result)
+				previewCandidate(ctx, opts.Validator, path, rule.ID, &result)
 			}
 		}
 	}
@@ -228,7 +235,7 @@ func Execute(ctx context.Context, opts Options) Result {
 		rulesByPath[candidate.Path] = candidate.Rule
 	}
 
-	deleteResult := delete.Execute(ctx, candidates, adapter)
+	deleteResult := delete.ExecuteWithValidator(ctx, candidates, adapter, opts.Validator)
 	for _, item := range deleteResult.Deleted {
 		result.Deleted = append(result.Deleted, DeletedItem{
 			Path:  item.Path,
@@ -463,7 +470,7 @@ func DefaultRuleCatalog() []Rule {
 	}
 }
 
-func previewCandidate(ctx context.Context, path, ruleID string, result *Result) {
+func previewCandidate(ctx context.Context, validator pathsafe.Validator, path, ruleID string, result *Result) {
 	select {
 	case <-ctx.Done():
 		result.Skipped = append(result.Skipped, SkippedItem{
@@ -475,7 +482,7 @@ func previewCandidate(ctx context.Context, path, ruleID string, result *Result) 
 	default:
 	}
 
-	if reason, ok := pathsafe.ValidateDeletePath(path); !ok {
+	if reason, ok := validator.ValidateDeletePath(path); !ok {
 		result.Skipped = append(result.Skipped, SkippedItem{
 			Path:   path,
 			Rule:   ruleID,
@@ -500,6 +507,15 @@ func previewCandidate(ctx context.Context, path, ruleID string, result *Result) 
 		Rule:          ruleID,
 		PlannedAction: plannedRecycleBinAction,
 	})
+}
+
+func protectionRules(validator pathsafe.Validator) []ProtectionRule {
+	paths := validator.UserProtectionPaths()
+	rules := make([]ProtectionRule, 0, len(paths))
+	for _, path := range paths {
+		rules = append(rules, ProtectionRule{Path: path})
+	}
+	return rules
 }
 
 func measureBytes(path string) (int64, error) {

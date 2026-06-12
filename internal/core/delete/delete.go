@@ -35,6 +35,10 @@ type SkippedItem struct {
 }
 
 func Execute(ctx context.Context, candidates []Candidate, adapter Adapter) Result {
+	return ExecuteWithValidator(ctx, candidates, adapter, pathsafe.Validator{})
+}
+
+func ExecuteWithValidator(ctx context.Context, candidates []Candidate, adapter Adapter, validator pathsafe.Validator) Result {
 	var result Result
 	for _, candidate := range candidates {
 		select {
@@ -51,7 +55,7 @@ func Execute(ctx context.Context, candidates []Candidate, adapter Adapter) Resul
 		default:
 		}
 
-		if reason, ok := pathsafe.ValidateDeletePath(candidate.Path); !ok {
+		if reason, ok := validator.ValidateDeletePath(candidate.Path); !ok {
 			result.Skipped = append(result.Skipped, SkippedItem{
 				Path:   candidate.Path,
 				Bytes:  candidate.Bytes,
