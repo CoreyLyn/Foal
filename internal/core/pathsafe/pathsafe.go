@@ -90,6 +90,19 @@ func (v Validator) UserProtectionPaths() []string {
 	return paths
 }
 
+func (v Validator) IsUserProtected(path string) bool {
+	_, normalized, _, ok := NormalizeProtectionPath(path)
+	if !ok {
+		return false
+	}
+	for _, protected := range v.userProtectionRules {
+		if isSameOrDescendant(normalized, protected.normalized) {
+			return true
+		}
+	}
+	return false
+}
+
 func ValidateDeletePath(path string) (Reason, bool) {
 	return Validator{}.ValidateDeletePath(path)
 }

@@ -37,6 +37,7 @@ Foal is a safe, preview-first cleanup CLI for Windows. It is inspired by tools l
 - `foal status --json` is read-only and reports disk, OS, Foal command state, elapsed time, skipped items, and errors.
 - `foal analyze --json <path>` is read-only and reports directory totals, top children, skipped entries, and elapsed time.
 - `foal clean --dry-run --json` previews conservative cleanup candidates and reports skipped-by-default user-temp opportunities with observed bytes excluded from `Potential space`; the read-only Clean TUI presents the same review semantics without history or detailed-list writes. `foal clean --execute` does not run opportunity discovery, is the explicit confirmation path for fresh default candidates, and uses the Recycle Bin. Do not document permanent deletion or automatic elevation paths.
+- User-defined Protection rules load from `%APPDATA%\Foal\protection.txt` or `FOAL_PROTECTION_FILE`, are deny-only, and protect an exact path plus its subtree. Suppress protected path-backed review-only discoveries before totals and all downstream surfaces; do not infer a Review suggestion path from command text.
 - `foal history --json` reads operation history and reports sessions plus structured errors.
 - `foal uninstall --json` is preview-only. Do not document uninstall execution, process stopping, or leftover deletion as supported behavior.
 
@@ -44,5 +45,6 @@ Foal is a safe, preview-first cleanup CLI for Windows. It is inspired by tools l
 
 - Preserve preview-first behavior and JSON-contract-first command surfaces.
 - Every real delete path must be validated immediately before execution, even if it was already scanned or previewed.
+- Protection rules can only remove candidates or path-backed review discoveries; they never authorize cleanup or expand the default candidate set.
 - Tests should prioritize safety invariants and JSON contracts over human-output snapshots.
 - Keep README, AGENTS, and plan docs aligned when changing product boundaries.

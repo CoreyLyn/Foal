@@ -133,7 +133,12 @@ func dryRun(ctx context.Context, opts Options) Result {
 		}
 	}
 	discovery := discover(ctx)
-	result.Opportunities = append(result.Opportunities, discovery.Opportunities...)
+	for _, opportunity := range discovery.Opportunities {
+		if opts.Validator.IsUserProtected(opportunity.Path) {
+			continue
+		}
+		result.Opportunities = append(result.Opportunities, opportunity)
+	}
 	result.IncompleteOpportunityInspections = append(result.IncompleteOpportunityInspections, discovery.Incomplete...)
 	for _, incomplete := range discovery.Incomplete {
 		result.Errors = append(result.Errors, incomplete.Reason)
@@ -142,7 +147,12 @@ func dryRun(ctx context.Context, opts Options) Result {
 	if discoverSuggestions == nil {
 		discoverSuggestions = DiscoverReviewSuggestions
 	}
-	result.ReviewSuggestions = append(result.ReviewSuggestions, discoverSuggestions(ctx)...)
+	for _, suggestion := range discoverSuggestions(ctx) {
+		if suggestion.CachePath != "" && opts.Validator.IsUserProtected(suggestion.CachePath) {
+			continue
+		}
+		result.ReviewSuggestions = append(result.ReviewSuggestions, suggestion)
+	}
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)

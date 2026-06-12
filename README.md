@@ -33,6 +33,14 @@ foal uninstall --json
 
 `foal history --json` reads Foal operation history and reports recent sessions or structured history errors. `foal uninstall --json` is preview-only: it reports registry-discovered applications, installed-application footprint evidence as possible leftovers, orphaned residue as low-confidence review evidence, shared-state concerns, unknown state, skipped discovery providers, JSON `review_sections`, and an execution object whose actions are empty.
 
+### Protection Rules
+
+Foal loads optional user-defined Protection rules from `%APPDATA%\Foal\protection.txt`. Set `FOAL_PROTECTION_FILE` to select a different file. Each non-empty, non-comment line is one absolute local path; comments begin with `#`. UNC paths, relative paths, and paths containing 8.3 short-name segments are invalid.
+
+A valid entry protects that path and its entire subtree using normalized, case-insensitive, path-component-aware matching. Protection rules are deny-only: they can suppress default candidates and path-backed review-only discoveries, but can never add or authorize cleanup. Protected user-temp opportunities and Review suggestions with a resolved protected cache path are removed before totals, JSON, human output, the Clean TUI, detailed candidate lists, and history projection. Suggestions without a resolved cache path are not inferred from command text.
+
+Invalid lines are skipped with structured Protection diagnostics. A missing default file means no user-defined rules; a selected override that cannot be loaded, or a selected file with invalid UTF-8, fails the Clean operation closed before scanning or execution.
+
 ### Interactive TUI
 
 Running `foal` (or the `fo` alias) with no arguments in an interactive terminal opens a read-only TUI: a main menu over the implemented commands, a clean preview browser, and read-only viewers for uninstall, status, and history. The Clean TUI shows default candidates and skipped-by-default user-temp opportunities under its existing filters, keeps observed opportunity bytes distinct from `Potential space`, and supports cancellable reloads. Browsing records no history sessions, writes no detailed candidate list, and offers no cleanup selection or execution action. Scripts, pipes, and `--json` callers are unaffected and keep the deterministic help/command output.
