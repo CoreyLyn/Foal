@@ -83,6 +83,18 @@ func stubCleanPreviewDryRun(t *testing.T) {
 					Command:   "bun pm cache rm",
 					CachePath: `C:\Users\corey\.bun\install\cache`,
 				},
+				{
+					Tool:      "corepack",
+					Label:     "Corepack cache",
+					Command:   "corepack cache clean",
+					CachePath: `C:\Users\corey\AppData\Local\node\corepack\v1`,
+				},
+				{
+					Tool:      "mise",
+					Label:     "mise cache",
+					Command:   "mise cache clear",
+					CachePath: `C:\Users\corey\AppData\Local\mise`,
+				},
 			},
 			Totals: clean.Totals{
 				CandidateCount:           1,
@@ -149,10 +161,12 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"idle days: 9",
 		"status: skipped_by_default",
 		"reason: requires_explicit_opt_in",
-		"Review suggestions (3)",
+		"Review suggestions (5)",
 		"pnpm cache",
 		"yarn cache",
 		"bun cache",
+		"Corepack cache",
+		"mise cache",
 		"Press c to copy candidate paths to the clipboard.",
 	} {
 		if !strings.Contains(content, want) {
@@ -183,6 +197,10 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		`Cache: C:\Users\corey\AppData\Local\Yarn\Cache\v6`,
 		"Command: bun pm cache rm",
 		`Cache: C:\Users\corey\.bun\install\cache`,
+		"Command: corepack cache clean",
+		`Cache: C:\Users\corey\AppData\Local\node\corepack\v1`,
+		"Command: mise cache clear",
+		`Cache: C:\Users\corey\AppData\Local\mise`,
 	} {
 		if !strings.Contains(model.content(), want) {
 			t.Fatalf("expanded content missing %q:\n%s", want, model.content())

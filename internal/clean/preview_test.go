@@ -45,6 +45,18 @@ func TestDryRunProjectsReviewSuggestionsThroughJSONAndHumanReportWithoutBytes(t 
 			Command:   "bun pm cache rm",
 			CachePath: `C:\Users\corey\.bun\install\cache`,
 		},
+		{
+			Tool:      "corepack",
+			Label:     "Corepack cache",
+			Command:   "corepack cache clean",
+			CachePath: `C:\Users\corey\AppData\Local\node\corepack\v1`,
+		},
+		{
+			Tool:      "mise",
+			Label:     "mise cache",
+			Command:   "mise cache clear",
+			CachePath: `C:\Users\corey\AppData\Local\mise`,
+		},
 	}
 	result := clean.DryRun(context.Background(), clean.Options{
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
@@ -76,6 +88,10 @@ func TestDryRunProjectsReviewSuggestionsThroughJSONAndHumanReportWithoutBytes(t 
 		`"command":"yarn cache clean"`,
 		`"tool":"bun"`,
 		`"command":"bun pm cache rm"`,
+		`"tool":"corepack"`,
+		`"command":"corepack cache clean"`,
+		`"tool":"mise"`,
+		`"command":"mise cache clear"`,
 	} {
 		if !strings.Contains(string(encoded), want) {
 			t.Fatalf("JSON missing %q: %s", want, encoded)
@@ -95,6 +111,10 @@ func TestDryRunProjectsReviewSuggestionsThroughJSONAndHumanReportWithoutBytes(t 
 		"yarn cache clean",
 		"bun cache",
 		"bun pm cache rm",
+		"Corepack cache",
+		"corepack cache clean",
+		"mise cache",
+		"mise cache clear",
 		"Potential space: 0 bytes",
 	} {
 		if !strings.Contains(report, want) {
