@@ -38,9 +38,10 @@ var commands = []commandSpec{
 }
 
 var (
-	dryRunClean        = clean.DryRun
-	executeClean       = clean.Execute
-	newHistoryRecorder = func() (history.Recorder, error) {
+	dryRunClean                 = clean.DryRun
+	executeClean                = clean.Execute
+	loadProtectionConfiguration = clean.LoadProtectionConfiguration
+	newHistoryRecorder          = func() (history.Recorder, error) {
 		recorder, err := history.NewDefaultFileRecorder()
 		if err != nil {
 			return nil, err
@@ -212,6 +213,10 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 				Args:    append([]string(nil), args...),
 			},
 		}
+		protectionConfig := loadProtectionConfiguration()
+		cleanOptions.Validator = protectionConfig.Validator
+		cleanOptions.ProtectionDiagnostics = protectionConfig.Diagnostics
+		cleanOptions.ProtectionLoadError = protectionConfig.LoadError
 
 		var result clean.Result
 		if invocation.execute {
@@ -220,9 +225,20 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			result = dryRunClean(context.Background(), cleanOptions)
 		}
 		if opts.json {
-			return writeJSON(stdout, envelope{Command: command, Result: result})
+			code := writeJSON(stdout, envelope{Command: command, Result: result})
+			if code != exitOK {
+				return code
+			}
+			if result.Status == "error" {
+				return exitUsage
+			}
+			return exitOK
 		}
 
+		if result.Status == "error" {
+			_, _ = fmt.Fprint(stdout, clean.RenderFailureReport(result))
+			return exitUsage
+		}
 		if invocation.execute {
 			_, _ = fmt.Fprintf(stdout, "Foal clean\nExecution complete. Deleted: %d, skipped: %d, action: Recycle Bin.\n",
 				result.Totals.DeletedCount, result.Totals.SkippedCount)

@@ -57,7 +57,12 @@ type cleanPreviewLoadedMsg struct {
 // detailed-list file is written, unlike the `foal clean --dry-run` command.
 func loadCleanPreviewCmd(ctx context.Context, generation uint64) tea.Cmd {
 	return func() tea.Msg {
-		result := dryRunClean(ctx, clean.Options{})
+		config := loadProtectionConfiguration()
+		result := dryRunClean(ctx, clean.Options{
+			Validator:             config.Validator,
+			ProtectionDiagnostics: config.Diagnostics,
+			ProtectionLoadError:   config.LoadError,
+		})
 		return cleanPreviewLoadedMsg{
 			generation: generation,
 			model:      clean.NewPreviewReadModel(result),
@@ -236,6 +241,20 @@ func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPrevie
 					continue
 				}
 				builder.WriteString(fmt.Sprintf("  %s: %s\n", rule.ID, rule.Description))
+			}
+		}
+
+		if len(model.ProtectionDiagnostics) > 0 {
+			builder.WriteString("\nProtection diagnostics\n")
+			for _, diagnostic := range model.ProtectionDiagnostics {
+				builder.WriteString(fmt.Sprintf("  %s (source: %s", diagnostic.Code, diagnostic.Source))
+				if diagnostic.Line > 0 {
+					builder.WriteString(fmt.Sprintf(", line %d", diagnostic.Line))
+				}
+				builder.WriteString(fmt.Sprintf(", recoverable: %t)\n", diagnostic.Recoverable))
+				if expanded && diagnostic.Message != "" {
+					builder.WriteString(fmt.Sprintf("    %s\n", diagnostic.Message))
+				}
 			}
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -27,8 +28,8 @@ func NewValidator(userProtectionPaths []string) Validator {
 	rules := make([]protectionRule, 0, len(userProtectionPaths))
 	seen := make(map[string]struct{}, len(userProtectionPaths))
 	for _, path := range userProtectionPaths {
-		displayPath, normalized := normalizeLocalPath(path)
-		if normalized == "" {
+		displayPath, normalized, _, ok := NormalizeProtectionPath(path)
+		if !ok {
 			continue
 		}
 		if _, exists := seen[normalized]; exists {
@@ -40,7 +41,45 @@ func NewValidator(userProtectionPaths []string) Validator {
 			normalized: normalized,
 		})
 	}
-	return Validator{userProtectionRules: rules}
+	sort.SliceStable(rules, func(i, j int) bool {
+		return rules[i].normalized < rules[j].normalized
+	})
+	effective := rules[:0]
+	for _, rule := range rules {
+		covered := false
+		for _, ancestor := range effective {
+			if isSameOrDescendant(rule.normalized, ancestor.normalized) {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		effective = append(effective, rule)
+	}
+	return Validator{userProtectionRules: effective}
+}
+
+func NormalizeProtectionPath(path string) (string, string, Reason, bool) {
+	displayPath, normalized := normalizeLocalPath(path)
+	if normalized == "" {
+		reason, ok := reject("empty_path", "Protection path cannot be empty")
+		return "", "", reason, ok
+	}
+	if strings.HasPrefix(normalized, `\\`) {
+		reason, ok := reject("unc_path", "UNC paths cannot be used as Protection rules")
+		return "", "", reason, ok
+	}
+	if !filepath.IsAbs(normalized) {
+		reason, ok := reject("relative_path", "Protection path must be absolute")
+		return "", "", reason, ok
+	}
+	if containsShortNameSegment(normalized) {
+		reason, ok := reject("short_name_path", "8.3 short-name paths cannot be used as Protection rules")
+		return "", "", reason, ok
+	}
+	return displayPath, normalized, Reason{}, true
 }
 
 func (v Validator) UserProtectionPaths() []string {

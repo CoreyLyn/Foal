@@ -231,6 +231,33 @@ func TestDryRunProjectsUserProtectionRuleAndExcludesProtectedCandidate(t *testin
 	}
 }
 
+func TestPreviewReadModelAndHumanReportExposeProtectionDiagnostics(t *testing.T) {
+	source := `C:\Users\corey\AppData\Roaming\Foal\protection.txt`
+	result := clean.Result{
+		Status: "preview",
+		Mode:   "dry_run",
+		ProtectionDiagnostics: []clean.ProtectionDiagnostic{{
+			Code:        "unc_path",
+			Message:     "UNC paths cannot be used as Protection rules",
+			Recoverable: true,
+			Source:      source,
+			Line:        7,
+			Path:        `\\server\share`,
+		}},
+	}
+
+	model := clean.NewPreviewReadModel(result)
+	if len(model.ProtectionDiagnostics) != 1 || model.ProtectionDiagnostics[0].Code != "unc_path" {
+		t.Fatalf("protection diagnostics = %#v, want shared diagnostic", model.ProtectionDiagnostics)
+	}
+	report := clean.RenderPreviewReport(model)
+	for _, want := range []string{"Protection diagnostics", "unc_path", source, "line 7"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
 func TestDryRunProjectsUserTempOpportunitiesSeparatelyFromCandidates(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "foal-cache.tmp")

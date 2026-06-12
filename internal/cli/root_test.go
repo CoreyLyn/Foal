@@ -193,6 +193,105 @@ func TestKnownCommandRoutesAsJSON(t *testing.T) {
 	}
 }
 
+func TestCleanJSONLoadsSelectedProtectionFileIntoSharedContract(t *testing.T) {
+	disableHistoryRecording(t)
+	configPath := filepath.Join(t.TempDir(), "protection.txt")
+	if err := os.WriteFile(configPath, []byte("C:\\Work\\Valuable\nrelative-cache\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FOAL_PROTECTION_FILE", configPath)
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr)
+
+	if code != exitOK || stderr.Len() != 0 {
+		t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	rules := result["protection_rules"].([]interface{})
+	if len(rules) != 1 || rules[0].(map[string]interface{})["path"] != `C:\Work\Valuable` {
+		t.Fatalf("protection_rules = %#v, want selected active entry", rules)
+	}
+	diagnostics := result["protection_diagnostics"].([]interface{})
+	if len(diagnostics) != 1 {
+		t.Fatalf("protection_diagnostics = %#v, want invalid-line diagnostic", diagnostics)
+	}
+	diagnostic := diagnostics[0].(map[string]interface{})
+	if diagnostic["code"] != "relative_path" || diagnostic["line"] != float64(2) || diagnostic["source"] != configPath {
+		t.Fatalf("diagnostic = %#v, want stable source and line", diagnostic)
+	}
+}
+
+func TestCleanCommandLoadsProtectionConfigurationAfreshForEachInvocation(t *testing.T) {
+	disableHistoryRecording(t)
+	configPath := filepath.Join(t.TempDir(), "protection.txt")
+	t.Setenv("FOAL_PROTECTION_FILE", configPath)
+
+	run := func(path string) map[string]interface{} {
+		t.Helper()
+		if err := os.WriteFile(configPath, []byte(path+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		if code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr); code != exitOK {
+			t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+		}
+		return readResultObject(t, stdout.Bytes())
+	}
+
+	first := run(`C:\Work\First`)
+	second := run(`C:\Work\Second`)
+
+	firstRule := first["protection_rules"].([]interface{})[0].(map[string]interface{})["path"]
+	secondRule := second["protection_rules"].([]interface{})[0].(map[string]interface{})["path"]
+	if firstRule != `C:\Work\First` || secondRule != `C:\Work\Second` {
+		t.Fatalf("rules = %v then %v, want freshly loaded configuration", firstRule, secondRule)
+	}
+}
+
+func TestCleanJSONMissingSelectedProtectionFileFailsClosedWithStableExit(t *testing.T) {
+	disableHistoryRecording(t)
+	t.Setenv("FOAL_PROTECTION_FILE", filepath.Join(t.TempDir(), "missing.txt"))
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--execute", "--json"}, &stdout, &stderr)
+
+	if code != exitUsage || stderr.Len() != 0 {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitUsage, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	if result["status"] != "error" || result["mode"] != "execute" {
+		t.Fatalf("result = %#v, want fail-closed execute result", result)
+	}
+	if len(result["candidates"].([]interface{})) != 0 || len(result["deleted"].([]interface{})) != 0 {
+		t.Fatalf("result = %#v, want no executable candidates or deletions", result)
+	}
+	errors := result["errors"].([]interface{})
+	if len(errors) != 1 || errors[0].(map[string]interface{})["code"] != "protection_file_load_failed" {
+		t.Fatalf("errors = %#v, want structured protection load failure", errors)
+	}
+}
+
+func TestCleanHumanExecuteFailureDoesNotClaimCompletion(t *testing.T) {
+	disableHistoryRecording(t)
+	t.Setenv("FOAL_PROTECTION_FILE", filepath.Join(t.TempDir(), "missing.txt"))
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"clean", "--execute"}, &stdout, &stderr)
+
+	if code != exitUsage {
+		t.Fatalf("Run returned %d, want %d", code, exitUsage)
+	}
+	for _, want := range []string{"Clean stopped", "Configuration errors", "protection_file_load_failed"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "Execution complete") {
+		t.Fatalf("stdout claimed completion after fail-closed configuration error:\n%s", stdout.String())
+	}
+}
+
 func TestStatusJSONReportsReadOnlySystemSnapshot(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 

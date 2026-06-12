@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
@@ -222,6 +223,25 @@ func TestCleanPreviewRendersUserDefinedProtectionRuleFromReadModel(t *testing.T)
 	}
 }
 
+func TestCleanPreviewRendersProtectionDiagnosticsFromReadModel(t *testing.T) {
+	source := `C:\Users\corey\AppData\Roaming\Foal\protection.txt`
+	output := renderCleanPreviewSections(clean.PreviewReadModel{
+		ProtectionDiagnostics: []clean.ProtectionDiagnostic{{
+			Code:        "short_name_path",
+			Message:     "8.3 short-name paths cannot be used as Protection rules",
+			Recoverable: true,
+			Source:      source,
+			Line:        3,
+		}},
+	}, cleanPreviewFilterAll, false)
+
+	for _, want := range []string{"Protection diagnostics", "short_name_path", source, "line 3"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestCleanPreviewBackReturnsToMenu(t *testing.T) {
 	stubCleanPreviewDryRun(t)
 
@@ -392,6 +412,42 @@ func TestCleanPreviewRefreshKeyReloadsThroughDryRun(t *testing.T) {
 	}
 	if _, ok := cmd().(cleanPreviewLoadedMsg); !ok {
 		t.Fatal("reload command must produce cleanPreviewLoadedMsg")
+	}
+}
+
+func TestCleanPreviewReloadLoadsProtectionConfigurationAfresh(t *testing.T) {
+	originalLoader := loadProtectionConfiguration
+	originalDryRun := dryRunClean
+	loadCount := 0
+	loadProtectionConfiguration = func() clean.ProtectionConfiguration {
+		loadCount++
+		path := `C:\Work\First`
+		if loadCount == 2 {
+			path = `C:\Work\Second`
+		}
+		return clean.ProtectionConfiguration{Validator: pathsafe.NewValidator([]string{path})}
+	}
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		return clean.Result{
+			Status:          "preview",
+			Mode:            "dry_run",
+			ProtectionRules: []clean.ProtectionRule{{Path: opts.Validator.UserProtectionPaths()[0]}},
+		}
+	}
+	t.Cleanup(func() {
+		loadProtectionConfiguration = originalLoader
+		dryRunClean = originalDryRun
+	})
+
+	first := loadCleanPreviewCmd(context.Background(), 1)().(cleanPreviewLoadedMsg)
+	second := loadCleanPreviewCmd(context.Background(), 2)().(cleanPreviewLoadedMsg)
+
+	if loadCount != 2 {
+		t.Fatalf("load count = %d, want one fresh load per TUI command", loadCount)
+	}
+	if first.model.ProtectionRules[0].Path != `C:\Work\First` ||
+		second.model.ProtectionRules[0].Path != `C:\Work\Second` {
+		t.Fatalf("rules = %#v then %#v, want refreshed configuration", first.model.ProtectionRules, second.model.ProtectionRules)
 	}
 }
 
