@@ -63,7 +63,7 @@ func TestDiscoverReviewSuggestionsQueriesInstalledToolCaches(t *testing.T) {
 			tool:         "conda",
 			executable:   `C:\Users\corey\miniconda3\Scripts\conda.exe`,
 			queryArgs:    []string{"info", "--json"},
-			cleanCommand: "conda clean",
+			cleanCommand: "conda clean --all",
 			cachePath:    `D:\conda-cache\pkgs`,
 			queryOutput:  `{"pkgs_dirs":["C:\\Users\\corey\\miniconda3\\pkgs","D:\\conda-cache\\pkgs"]}`,
 		},

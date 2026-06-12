@@ -52,7 +52,7 @@ var reviewSuggestionAllowlist = map[string]reviewSuggestionTool{
 	"conda": {
 		label:        "conda cache",
 		queryArgs:    []string{"info", "--json"},
-		cleanCommand: "conda clean",
+		cleanCommand: "conda clean --all",
 		parsePaths:   parseCondaPackageDirectories,
 	},
 }
