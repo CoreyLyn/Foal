@@ -124,6 +124,36 @@ func TestDryRunProjectsReviewSuggestionsThroughJSONAndHumanReportWithoutBytes(t 
 	}
 }
 
+func TestDryRunSuppressesOnlyReviewSuggestionsWithProtectedResolvedPaths(t *testing.T) {
+	protected := `C:\Users\Corey\AppData\Local\App`
+	descendant := `c:\users\corey\appdata\local\app\cache`
+	sibling := `C:\Users\Corey\AppData\Local\Application\cache`
+	unresolvedCommand := `tool clean C:\Users\Corey\AppData\Local\App\cache`
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator:                     pathsafe.NewValidator([]string{protected}),
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+			return []clean.ReviewSuggestion{
+				{Tool: "exact", Label: "exact cache", Command: "exact clean", CachePath: protected},
+				{Tool: "descendant", Label: "descendant cache", Command: "descendant clean", CachePath: descendant},
+				{Tool: "sibling", Label: "sibling cache", Command: "sibling clean", CachePath: sibling},
+				{Tool: "unresolved", Label: "unresolved cache", Command: unresolvedCommand},
+			}
+		},
+		Rules: []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	if len(result.ReviewSuggestions) != 2 {
+		t.Fatalf("review suggestions = %#v, want sibling and unresolved suggestions", result.ReviewSuggestions)
+	}
+	if result.ReviewSuggestions[0].CachePath != sibling ||
+		result.ReviewSuggestions[1].CachePath != "" ||
+		result.ReviewSuggestions[1].Command != unresolvedCommand {
+		t.Fatalf("review suggestions = %#v, want path-aware filtering without command inference", result.ReviewSuggestions)
+	}
+}
+
 func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "cache.tmp")
@@ -316,6 +346,150 @@ func TestDryRunProjectsUserTempOpportunitiesSeparatelyFromCandidates(t *testing.
 	}
 	if result.Totals.OpportunityCount != 1 || result.Totals.OpportunityObservedBytes != 4096 {
 		t.Fatalf("opportunity totals = %#v, want separate count and observed bytes", result.Totals)
+	}
+}
+
+func TestDryRunSuppressesProtectedUserTempOpportunitiesBeforeTotals(t *testing.T) {
+	root := t.TempDir()
+	protected := filepath.Join(root, "App")
+	exact := protected
+	descendant := filepath.Join(protected, "Cache")
+	sibling := filepath.Join(root, "Application")
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator:                 pathsafe.NewValidator([]string{strings.ToUpper(`\\?\` + protected)}),
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{
+				{Path: exact, Bytes: 10, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Path: descendant, Bytes: 20, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Path: sibling, Bytes: 30, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+			}}
+		},
+		Rules: []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	if len(result.Opportunities) != 1 || result.Opportunities[0].Path != sibling {
+		t.Fatalf("opportunities = %#v, want only unprotected prefix sibling", result.Opportunities)
+	}
+	if result.Totals.OpportunityCount != 1 || result.Totals.OpportunityObservedBytes != 30 {
+		t.Fatalf("opportunity totals = %d/%d, want 1/30", result.Totals.OpportunityCount, result.Totals.OpportunityObservedBytes)
+	}
+}
+
+func TestDryRunSuppressedReviewPathsDoNotReachDownstreamSurfacesOrHistory(t *testing.T) {
+	root := t.TempDir()
+	protectedRoot := filepath.Join(root, "protected")
+	protectedOpportunity := filepath.Join(protectedRoot, "private-opportunity")
+	protectedSuggestion := filepath.Join(protectedRoot, "private-suggestion")
+	protectedIncomplete := filepath.Join(protectedRoot, "private-incomplete")
+	visibleOpportunity := filepath.Join(root, "visible-opportunity")
+	visibleSuggestion := filepath.Join(root, "visible-suggestion")
+	visibleIncomplete := filepath.Join(root, "protected-sibling-incomplete")
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator:       pathsafe.NewValidator([]string{protectedRoot}),
+		HistoryRecorder: recorder,
+		DetailedListDir: t.TempDir(),
+		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{Path: protectedOpportunity, Bytes: 40, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+					{Path: visibleOpportunity, Bytes: 50, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				},
+				Incomplete: []clean.IncompleteOpportunityInspection{
+					{
+						Path: protectedIncomplete,
+						Reason: clean.StructuredIssue{
+							Code:        "inspection_failed",
+							Message:     "protected inspection failed",
+							Recoverable: true,
+							Path:        protectedIncomplete,
+						},
+					},
+					{
+						Path: visibleIncomplete,
+						Reason: clean.StructuredIssue{
+							Code:        "inspection_failed",
+							Message:     "visible inspection failed",
+							Recoverable: true,
+							Path:        visibleIncomplete,
+						},
+					},
+				},
+			}
+		},
+		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+			return []clean.ReviewSuggestion{
+				{Tool: "private", Label: "private cache", Command: "private clean", CachePath: protectedSuggestion},
+				{Tool: "visible", Label: "visible cache", Command: "visible clean", CachePath: visibleSuggestion},
+			}
+		},
+		Rules: []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	if len(result.IncompleteOpportunityInspections) != 1 ||
+		result.IncompleteOpportunityInspections[0].Path != visibleIncomplete {
+		t.Fatalf("incomplete inspections = %#v, want only unprotected prefix sibling", result.IncompleteOpportunityInspections)
+	}
+	if len(result.Errors) != 1 || result.Errors[0].Path != visibleIncomplete {
+		t.Fatalf("errors = %#v, want only unprotected incomplete inspection error", result.Errors)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := clean.RenderPreviewReport(clean.NewPreviewReadModel(result))
+	detailed, err := os.ReadFile(result.DetailedListPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, suppressed := range []string{protectedOpportunity, protectedSuggestion, protectedIncomplete} {
+		token, err := json.Marshal(suppressed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), strings.Trim(string(token), `"`)) {
+			t.Fatalf("JSON leaked suppressed review-only path %q:\n%s", suppressed, encoded)
+		}
+	}
+	for name, content := range map[string]string{
+		"human report":  report,
+		"detailed list": string(detailed),
+		"raw history":   recorder.encoded,
+	} {
+		for _, suppressed := range []string{protectedOpportunity, protectedSuggestion, protectedIncomplete} {
+			if strings.Contains(content, suppressed) {
+				t.Fatalf("%s leaked suppressed review-only path %q:\n%s", name, suppressed, content)
+			}
+		}
+	}
+	for _, visible := range []string{visibleOpportunity, visibleSuggestion, visibleIncomplete} {
+		token, err := json.Marshal(visible)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inJSON := strings.Contains(string(encoded), strings.Trim(string(token), `"`))
+		inReport := strings.Contains(report, visible)
+		if !inJSON || !inReport {
+			t.Fatalf("visible review path %q presence JSON/report = %t/%t\nJSON: %s\nreport:\n%s", visible, inJSON, inReport, encoded, report)
+		}
+	}
+	if !strings.Contains(string(detailed), visibleOpportunity) {
+		t.Fatalf("detailed list missing visible opportunity:\n%s", detailed)
+	}
+	if !strings.Contains(string(detailed), visibleIncomplete) {
+		t.Fatalf("detailed list missing visible incomplete inspection:\n%s", detailed)
+	}
+	if strings.Contains(recorder.encoded, visibleIncomplete) {
+		t.Fatalf("raw history persisted review-only incomplete inspection path: %s", recorder.encoded)
+	}
+	if len(recorder.sessions) != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityCount != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityObservedBytes != 50 {
+		t.Fatalf("history sessions = %#v, want filtered opportunity aggregate 1/50", recorder.sessions)
 	}
 }
 

@@ -69,8 +69,8 @@ A human-readable notice that explains protected or administrator-only locations 
 _Avoid_: full preview prompt, automatic elevation, run as administrator recommendation
 
 **Protection rules**:
-Foal's active cleanup safety boundaries, including default Windows path-safety rules and any future user-defined protection entries.
-_Avoid_: whitelist, allowlist-only model
+Foal's active cleanup safety boundaries, including default Windows path-safety rules and user-defined deny-only entries loaded from `%APPDATA%\Foal\protection.txt` or `FOAL_PROTECTION_FILE`. Each valid absolute local path protects itself and its subtree using normalized, case-insensitive, path-component-aware matching. Protected path-backed review discoveries disappear before totals and downstream projection; a Review suggestion without a resolved cache path is not matched by interpreting its command text.
+_Avoid_: cleanup authorization, allow-only model
 
 **Detailed candidate list**:
 A human-readable companion file for clean preview reports that records candidates, skipped items, review clues, and reasons without authorizing later execution.

@@ -56,6 +56,8 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Treat safety, skipped reasons, and recoverability as part of the command contract.
 - Define a clean preview read model that can represent default candidates, skipped-by-default items, review clues, review suggestions, protection rules, permission boundary notices, running application skips, detailed candidate list metadata, and report totals.
 - Keep `Potential space` scoped to default candidates only; skipped-by-default items, review clues, external suggestions, and permission-boundary skips must not be counted as Foal-cleanable space.
+- Load deny-only user-defined Protection rules from `%APPDATA%\Foal\protection.txt` or `FOAL_PROTECTION_FILE`; valid entries protect an exact path and subtree but never authorize or expand cleanup.
+- Suppress protected user-temp opportunities and Review suggestions with resolved protected cache paths before totals, read-model projection, detailed lists, and history. Do not infer paths from Review suggestion command text.
 
 ## Phase 3: Verification Sprint
 
@@ -71,7 +73,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Add a Mole-inspired but Windows-native non-JSON `foal clean --dry-run` report with grouped sections, plain ASCII scan-friendly labels, clear preview-only wording, and a final summary.
 - Keep terminal output focused on summary, grouped overview, counts, and short candidate samples; put full path detail in the detailed candidate list.
 - Show at most 10 default candidates, skipped items, or inspection errors per terminal report section; when a section is truncated, point to the detailed candidate list for the full path detail.
-- Display `Protection rules` instead of `Whitelist`, using Foal's Windows path-safety boundaries as the primary language.
+- Display `Protection rules` using Foal's Windows path-safety boundaries as the primary language.
 - Include a permission boundary notice when administrator-only or protected locations are skipped, without recommending elevation as the normal path.
 - Write a detailed candidate list under Foal's config/history area as a human-readable companion artifact, not as an execution manifest.
 - Surface external tool commands as review suggestions only. Foal must not execute them, delegate cleanup to them, or count their estimates as `Potential space`.
@@ -89,6 +91,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Persist only opportunity count and observed bytes in dry-run history. Do not persist non-Foal opportunity paths in history, and do not add opportunity data to execution history.
 - Include full opportunity review data in a separate detailed candidate list section while keeping that file non-authoritative and unused by execution.
 - Do not run skipped-by-default discovery during `clean --execute`; execution continues to fresh-scan and validate only executable default candidates.
+- Keep protected review-only paths out of JSON, human output, the Clean TUI, detailed candidate lists, and raw history records while preserving unprotected siblings.
 - Do not impose a wall-clock timeout. Honor cancellation, report elapsed time, and continue scanning other top-level entries after an entry-specific incomplete inspection.
 
 ## Phase 4: Uninstall Preview Quality
