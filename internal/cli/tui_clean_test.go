@@ -64,12 +64,26 @@ func stubCleanPreviewDryRun(t *testing.T) {
 				Status:           clean.UserTempOpportunityStatus,
 				Reason:           clean.UserTempOpportunityReason,
 			}},
-			ReviewSuggestions: []clean.ReviewSuggestion{{
-				Tool:      "npm",
-				Label:     "npm cache",
-				Command:   "npm cache clean --force",
-				CachePath: `C:\Users\corey\AppData\Local\npm-cache`,
-			}},
+			ReviewSuggestions: []clean.ReviewSuggestion{
+				{
+					Tool:      "pnpm",
+					Label:     "pnpm cache",
+					Command:   "pnpm store prune",
+					CachePath: `C:\Users\corey\AppData\Local\pnpm\store\v10`,
+				},
+				{
+					Tool:      "yarn",
+					Label:     "yarn cache",
+					Command:   "yarn cache clean",
+					CachePath: `C:\Users\corey\AppData\Local\Yarn\Cache\v6`,
+				},
+				{
+					Tool:      "bun",
+					Label:     "bun cache",
+					Command:   "bun pm cache rm",
+					CachePath: `C:\Users\corey\.bun\install\cache`,
+				},
+			},
 			Totals: clean.Totals{
 				CandidateCount:           1,
 				CandidateBytes:           12,
@@ -135,8 +149,10 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"idle days: 9",
 		"status: skipped_by_default",
 		"reason: requires_explicit_opt_in",
-		"Review suggestions (1)",
-		"npm cache",
+		"Review suggestions (3)",
+		"pnpm cache",
+		"yarn cache",
+		"bun cache",
 		"Press c to copy candidate paths to the clipboard.",
 	} {
 		if !strings.Contains(content, want) {
@@ -161,8 +177,12 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 
 	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'e', Text: "e"})
 	for _, want := range []string{
-		"Command: npm cache clean --force",
-		`Cache: C:\Users\corey\AppData\Local\npm-cache`,
+		"Command: pnpm store prune",
+		`Cache: C:\Users\corey\AppData\Local\pnpm\store\v10`,
+		"Command: yarn cache clean",
+		`Cache: C:\Users\corey\AppData\Local\Yarn\Cache\v6`,
+		"Command: bun pm cache rm",
+		`Cache: C:\Users\corey\.bun\install\cache`,
 	} {
 		if !strings.Contains(model.content(), want) {
 			t.Fatalf("expanded content missing %q:\n%s", want, model.content())
