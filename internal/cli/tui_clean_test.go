@@ -57,14 +57,24 @@ func stubCleanPreviewDryRun(t *testing.T) {
 				Path:        `C:\Users\corey\AppData\Local\Temp\missing`,
 				Rule:        "foal_owned_temp_sandboxes",
 			}},
-			Opportunities: []clean.UserTempOpportunity{{
-				Path:             `C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
-				Bytes:            4096,
-				LatestModifiedAt: time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC),
-				IdleDays:         9,
-				Status:           clean.UserTempOpportunityStatus,
-				Reason:           clean.UserTempOpportunityReason,
-			}},
+			Opportunities: []clean.UserTempOpportunity{
+				{
+					Category:         clean.OpportunityCategoryUserTemp,
+					Path:             `C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+					Bytes:            4096,
+					LatestModifiedAt: time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC),
+					IdleDays:         9,
+					Status:           clean.UserTempOpportunityStatus,
+					Reason:           clean.UserTempOpportunityReason,
+				},
+				{
+					Category: clean.OpportunityCategoryCrashDumps,
+					Path:     `C:\Users\corey\AppData\Local\CrashDumps`,
+					Bytes:    8192,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
+			},
 			ReviewSuggestions: []clean.ReviewSuggestion{
 				{
 					Tool:      "pnpm",
@@ -101,8 +111,8 @@ func stubCleanPreviewDryRun(t *testing.T) {
 				CandidateCount:           1,
 				CandidateBytes:           12,
 				SkippedCount:             1,
-				OpportunityCount:         1,
-				OpportunityObservedBytes: 4096,
+				OpportunityCount:         2,
+				OpportunityObservedBytes: 12288,
 			},
 		}
 	}
@@ -156,10 +166,13 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"Inspection errors (1)",
 		"inspection_failed",
 		"Protection rules",
-		"Opportunities: 1, observed bytes: 4096 bytes",
+		"Opportunities: 2, observed bytes: 12288 bytes",
 		`C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+		"category: user_temp",
 		"latest modified: 2026-06-01T12:00:00Z",
 		"idle days: 9",
+		`C:\Users\corey\AppData\Local\CrashDumps`,
+		"category: crash_dumps",
 		"status: skipped_by_default",
 		"reason: requires_explicit_opt_in",
 		"Review suggestions (5)",
@@ -184,6 +197,8 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"Potential space: 4108 bytes",
 		"Detailed candidate list:",
 		"Run as Administrator",
+		"0001-01-01",
+		"CrashDumps (8192 bytes, category: crash_dumps, latest modified:",
 	} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("content contains forbidden execution or potential-space wording %q:\n%s", forbidden, content)

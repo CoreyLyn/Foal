@@ -314,7 +314,7 @@ func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPrevie
 func writeCleanPreviewReviewSections(builder *strings.Builder, model clean.PreviewReadModel, expanded bool) {
 	builder.WriteString(fmt.Sprintf("\nSkipped-by-default opportunities (%d)\n", len(model.Opportunities)))
 	if len(model.Opportunities) == 0 {
-		builder.WriteString("  No user-temp opportunities reported.\n")
+		builder.WriteString("  No skipped-by-default opportunities reported.\n")
 	} else {
 		builder.WriteString(fmt.Sprintf("  Opportunities: %d, observed bytes: %s (not counted as Potential space)\n",
 			model.OpportunityCount, cleanFormatBytes(model.OpportunityObservedBytes)))
@@ -323,13 +323,18 @@ func writeCleanPreviewReviewSections(builder *strings.Builder, model clean.Previ
 			entryCount = cleanPreviewSectionEntryLimit
 		}
 		for _, opportunity := range model.Opportunities[:entryCount] {
-			builder.WriteString(fmt.Sprintf("  %s (%s, latest modified: %s, idle days: %d, status: %s, reason: %s, not counted as Potential space)\n",
-				opportunity.Path,
-				cleanFormatBytes(opportunity.Bytes),
-				opportunity.LatestModifiedAt.UTC().Format(time.RFC3339),
-				opportunity.IdleDays,
-				opportunity.Status,
-				opportunity.Reason))
+			category := opportunity.Category
+			if category == "" {
+				category = clean.OpportunityCategoryUserTemp
+			}
+			builder.WriteString(fmt.Sprintf("  %s (%s, category: %s",
+				opportunity.Path, cleanFormatBytes(opportunity.Bytes), category))
+			if category == clean.OpportunityCategoryUserTemp {
+				builder.WriteString(fmt.Sprintf(", latest modified: %s, idle days: %d",
+					opportunity.LatestModifiedAt.UTC().Format(time.RFC3339), opportunity.IdleDays))
+			}
+			builder.WriteString(fmt.Sprintf(", status: %s, reason: %s, not counted as Potential space)\n",
+				opportunity.Status, opportunity.Reason))
 		}
 		if omitted := len(model.Opportunities) - entryCount; omitted > 0 {
 			builder.WriteString(fmt.Sprintf("  %d omitted from this review view.\n", omitted))

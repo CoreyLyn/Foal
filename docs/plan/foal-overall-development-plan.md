@@ -93,6 +93,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Do not run skipped-by-default discovery during `clean --execute`; execution continues to fresh-scan and validate only executable default candidates.
 - Keep protected review-only paths out of JSON, human output, the Clean TUI, detailed candidate lists, and raw history records while preserving unprotected siblings.
 - Do not impose a wall-clock timeout. Honor cancellation, report elapsed time, and continue scanning other top-level entries after an entry-specific incomplete inspection.
+- Categorize every opportunity in the shared contract. Preserve idle-age observation for `user_temp`, and observe the current user's fixed CrashDumps root as one existence-based `crash_dumps` opportunity without age fields.
 
 ## Phase 4: Uninstall Preview Quality
 

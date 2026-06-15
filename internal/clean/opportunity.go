@@ -2,6 +2,7 @@ package clean
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -11,9 +12,13 @@ import (
 )
 
 const (
-	UserTempOpportunityStatus = "skipped_by_default"
-	UserTempOpportunityReason = "requires_explicit_opt_in"
-	userTempDescendantLimit   = 100_000
+	OpportunityCategoryUserTemp   = "user_temp"
+	OpportunityCategoryCrashDumps = "crash_dumps"
+	OpportunityStatus             = "skipped_by_default"
+	OpportunityReason             = "requires_explicit_opt_in"
+	UserTempOpportunityStatus     = OpportunityStatus
+	UserTempOpportunityReason     = OpportunityReason
+	userTempDescendantLimit       = 100_000
 )
 
 var (
@@ -26,37 +31,80 @@ type UserTempDiscoveryOptions struct {
 	Now     time.Time
 }
 
-type UserTempDiscoveryResult struct {
-	Opportunities []UserTempOpportunity             `json:"opportunities"`
+type OpportunityDiscoveryOptions struct {
+	TempDir         string
+	LocalAppDataDir string
+	Now             time.Time
+}
+
+type OpportunityDiscoveryResult struct {
+	Opportunities []Opportunity                     `json:"opportunities"`
 	Incomplete    []IncompleteOpportunityInspection `json:"incomplete"`
 	ElapsedMS     int64                             `json:"elapsed_ms"`
 }
 
-type UserTempOpportunity struct {
+type UserTempDiscoveryResult = OpportunityDiscoveryResult
+
+type Opportunity struct {
+	Category         string    `json:"category"`
 	Path             string    `json:"path"`
 	Bytes            int64     `json:"bytes"`
-	LatestModifiedAt time.Time `json:"latest_modified_at"`
-	IdleDays         int       `json:"idle_days"`
+	LatestModifiedAt time.Time `json:"-"`
+	IdleDays         int       `json:"-"`
 	Status           string    `json:"status"`
 	Reason           string    `json:"reason"`
 }
 
+type UserTempOpportunity = Opportunity
+
 type IncompleteOpportunityInspection struct {
-	Path   string          `json:"path"`
-	Reason StructuredIssue `json:"reason"`
+	Category string          `json:"category"`
+	Path     string          `json:"path"`
+	Reason   StructuredIssue `json:"reason"`
 }
 
 func DiscoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOptions) UserTempDiscoveryResult {
 	return discoverUserTempOpportunities(ctx, opts, opportunityDiscoveryDependencies{
 		readDir:  os.ReadDir,
 		joinPath: joinOpportunityPath,
+		stat:     os.Lstat,
 		walkDir:  filepath.WalkDir,
 	})
+}
+
+func DiscoverOpportunities(ctx context.Context, opts OpportunityDiscoveryOptions) OpportunityDiscoveryResult {
+	return discoverOpportunities(ctx, opts, opportunityDiscoveryDependencies{
+		readDir:  os.ReadDir,
+		joinPath: joinOpportunityPath,
+		stat:     os.Lstat,
+		walkDir:  filepath.WalkDir,
+	})
+}
+
+func discoverOpportunities(ctx context.Context, opts OpportunityDiscoveryOptions, deps opportunityDiscoveryDependencies) OpportunityDiscoveryResult {
+	startedAt := time.Now()
+	result := discoverUserTempOpportunities(ctx, UserTempDiscoveryOptions{
+		TempDir: opts.TempDir,
+		Now:     opts.Now,
+	}, deps)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	localAppDataDir := opts.LocalAppDataDir
+	if localAppDataDir == "" {
+		localAppDataDir = os.Getenv("LOCALAPPDATA")
+	}
+	if localAppDataDir != "" {
+		appendExistenceObservedOpportunity(ctx, &result, OpportunityCategoryCrashDumps, filepath.Join(localAppDataDir, "CrashDumps"), deps)
+	}
+	result.ElapsedMS = time.Since(startedAt).Milliseconds()
+	return result
 }
 
 type opportunityDiscoveryDependencies struct {
 	readDir  func(string) ([]os.DirEntry, error)
 	joinPath func(string, string) string
+	stat     func(string) (os.FileInfo, error)
 	walkDir  func(string, fs.WalkDirFunc) error
 }
 
@@ -83,7 +131,7 @@ func discoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOp
 
 	select {
 	case <-ctx.Done():
-		result.Incomplete = append(result.Incomplete, incompleteInspection(root, "context_canceled", ctx.Err().Error()))
+		result.Incomplete = append(result.Incomplete, incompleteInspection(OpportunityCategoryUserTemp, root, "context_canceled", ctx.Err().Error()))
 		result.ElapsedMS = time.Since(startedAt).Milliseconds()
 		return result
 	default:
@@ -91,14 +139,14 @@ func discoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOp
 
 	entries, err := deps.readDir(root)
 	if err != nil {
-		result.Incomplete = append(result.Incomplete, incompleteInspection(root, classifyError(err), err.Error()))
+		result.Incomplete = append(result.Incomplete, incompleteInspection(OpportunityCategoryUserTemp, root, classifyError(err), err.Error()))
 		result.ElapsedMS = time.Since(startedAt).Milliseconds()
 		return result
 	}
 	for _, entry := range entries {
 		path := deps.joinPath(root, entry.Name())
 		if !isDirectChildPath(root, path) {
-			result.Incomplete = append(result.Incomplete, incompleteInspection(path, "unsafe_path", "resolved entry path is not a direct child of the user temp directory"))
+			result.Incomplete = append(result.Incomplete, incompleteInspection(OpportunityCategoryUserTemp, path, "unsafe_path", "resolved entry path is not a direct child of the user temp directory"))
 			continue
 		}
 		if isFoalOwnedTempEntry(entry.Name()) {
@@ -106,7 +154,7 @@ func discoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOp
 		}
 		inspection, err := inspectOpportunity(ctx, path, userTempDescendantLimit, deps.walkDir)
 		if err != nil {
-			result.Incomplete = append(result.Incomplete, incompleteInspection(path, classifyOpportunityInspectionError(err), err.Error()))
+			result.Incomplete = append(result.Incomplete, incompleteInspection(OpportunityCategoryUserTemp, path, classifyOpportunityInspectionError(err), err.Error()))
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				break
 			}
@@ -117,6 +165,7 @@ func discoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOp
 			continue
 		}
 		result.Opportunities = append(result.Opportunities, UserTempOpportunity{
+			Category:         OpportunityCategoryUserTemp,
 			Path:             path,
 			Bytes:            inspection.bytes,
 			LatestModifiedAt: inspection.latestModifiedAt,
@@ -127,6 +176,32 @@ func discoverUserTempOpportunities(ctx context.Context, opts UserTempDiscoveryOp
 	}
 	result.ElapsedMS = time.Since(startedAt).Milliseconds()
 	return result
+}
+
+func appendExistenceObservedOpportunity(ctx context.Context, result *OpportunityDiscoveryResult, category, path string, deps opportunityDiscoveryDependencies) {
+	if deps.stat == nil {
+		deps.stat = os.Lstat
+	}
+	_, err := deps.stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		result.Incomplete = append(result.Incomplete, incompleteInspection(category, path, classifyError(err), err.Error()))
+		return
+	}
+	inspection, err := inspectOpportunity(ctx, path, userTempDescendantLimit, deps.walkDir)
+	if err != nil {
+		result.Incomplete = append(result.Incomplete, incompleteInspection(category, path, classifyOpportunityInspectionError(err), err.Error()))
+		return
+	}
+	result.Opportunities = append(result.Opportunities, UserTempOpportunity{
+		Category: category,
+		Path:     path,
+		Bytes:    inspection.bytes,
+		Status:   UserTempOpportunityStatus,
+		Reason:   UserTempOpportunityReason,
+	})
 }
 
 func joinOpportunityPath(root, name string) string {
@@ -207,9 +282,41 @@ func isFoalOwnedTempEntry(name string) bool {
 	return strings.HasPrefix(name, "foal-") || strings.HasPrefix(name, "Foal-")
 }
 
-func incompleteInspection(path, code, message string) IncompleteOpportunityInspection {
+func incompleteInspection(category, path, code, message string) IncompleteOpportunityInspection {
 	return IncompleteOpportunityInspection{
-		Path:   path,
-		Reason: issue(code, message, true, path, ""),
+		Category: category,
+		Path:     path,
+		Reason:   issue(code, message, true, path, ""),
 	}
+}
+
+func (opportunity Opportunity) MarshalJSON() ([]byte, error) {
+	type opportunityJSON struct {
+		Category         string     `json:"category"`
+		Path             string     `json:"path"`
+		Bytes            int64      `json:"bytes"`
+		LatestModifiedAt *time.Time `json:"latest_modified_at,omitempty"`
+		IdleDays         *int       `json:"idle_days,omitempty"`
+		Status           string     `json:"status"`
+		Reason           string     `json:"reason"`
+	}
+	encoded := opportunityJSON{
+		Category: normalizedOpportunityCategory(opportunity.Category),
+		Path:     opportunity.Path,
+		Bytes:    opportunity.Bytes,
+		Status:   opportunity.Status,
+		Reason:   opportunity.Reason,
+	}
+	if normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryUserTemp {
+		encoded.LatestModifiedAt = &opportunity.LatestModifiedAt
+		encoded.IdleDays = &opportunity.IdleDays
+	}
+	return json.Marshal(encoded)
+}
+
+func normalizedOpportunityCategory(category string) string {
+	if category == "" {
+		return OpportunityCategoryUserTemp
+	}
+	return category
 }

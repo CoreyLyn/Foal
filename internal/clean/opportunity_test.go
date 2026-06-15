@@ -2,13 +2,68 @@ package clean_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 )
+
+func TestDiscoverOpportunitiesCategorizesUserTempAndCrashDumps(t *testing.T) {
+	tempRoot := t.TempDir()
+	localAppData := t.TempDir()
+	crashDumpsRoot := filepath.Join(localAppData, "CrashDumps")
+	if err := os.MkdirAll(crashDumpsRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.June, 10, 12, 0, 0, 0, time.UTC)
+	userTempPath := fileWithModification(t, tempRoot, "idle.tmp", "idle", now.Add(-8*24*time.Hour))
+	crashDumpPath := fileWithModification(t, crashDumpsRoot, "app.dmp", "crash", now)
+
+	result := clean.DiscoverOpportunities(context.Background(), clean.OpportunityDiscoveryOptions{
+		TempDir:         tempRoot,
+		LocalAppDataDir: localAppData,
+		Now:             now,
+	})
+
+	if len(result.Opportunities) != 2 {
+		t.Fatalf("opportunities = %#v, want user temp and crash dumps", result.Opportunities)
+	}
+	userTemp := result.Opportunities[0]
+	if userTemp.Category != clean.OpportunityCategoryUserTemp || userTemp.Path != userTempPath ||
+		!userTemp.LatestModifiedAt.Equal(now.Add(-8*24*time.Hour)) || userTemp.IdleDays != 8 {
+		t.Fatalf("user temp opportunity = %#v, want categorized age-observed result", userTemp)
+	}
+	crashDumps := result.Opportunities[1]
+	if crashDumps.Category != clean.OpportunityCategoryCrashDumps || crashDumps.Path != crashDumpsRoot ||
+		crashDumps.Bytes != int64(len("crash")) || !crashDumps.LatestModifiedAt.IsZero() || crashDumps.IdleDays != 0 {
+		t.Fatalf("crash dumps opportunity = %#v, want whole-root existence-observed result", crashDumps)
+	}
+	encoded, err := json.Marshal(crashDumps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "latest_modified_at") || strings.Contains(string(encoded), "idle_days") {
+		t.Fatalf("crash dumps JSON emits misleading age fields: %s", encoded)
+	}
+	if _, err := os.Stat(crashDumpPath); err != nil {
+		t.Fatalf("discovery changed crash dump %q: %v", crashDumpPath, err)
+	}
+}
+
+func TestDiscoverOpportunitiesOmitsMissingCrashDumpsWithoutIncompleteResult(t *testing.T) {
+	result := clean.DiscoverOpportunities(context.Background(), clean.OpportunityDiscoveryOptions{
+		TempDir:         t.TempDir(),
+		LocalAppDataDir: t.TempDir(),
+	})
+
+	if len(result.Opportunities) != 0 || len(result.Incomplete) != 0 {
+		t.Fatalf("result = %#v, want missing CrashDumps omitted without an inspection error", result)
+	}
+}
 
 func TestDiscoverUserTempOpportunitiesIncludesFileAtSevenDayBoundary(t *testing.T) {
 	root := t.TempDir()
@@ -31,7 +86,8 @@ func TestDiscoverUserTempOpportunitiesIncludesFileAtSevenDayBoundary(t *testing.
 		t.Fatalf("opportunities = %#v, want one", result.Opportunities)
 	}
 	got := result.Opportunities[0]
-	if got.Path != path || got.Bytes != 4 || !got.LatestModifiedAt.Equal(modified) || got.IdleDays != 7 {
+	if got.Category != clean.OpportunityCategoryUserTemp || got.Path != path || got.Bytes != 4 ||
+		!got.LatestModifiedAt.Equal(modified) || got.IdleDays != 7 {
 		t.Fatalf("opportunity = %#v, want path/bytes/latest modification/idle days", got)
 	}
 	if got.Status != "skipped_by_default" || got.Reason != "requires_explicit_opt_in" {
