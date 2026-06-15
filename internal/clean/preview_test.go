@@ -124,6 +124,93 @@ func TestDryRunProjectsReviewSuggestionsThroughJSONAndHumanReportWithoutBytes(t 
 	}
 }
 
+func TestDryRunExcludedRootsContributeOnlyDeveloperToolReviewSuggestion(t *testing.T) {
+	tempRoot := t.TempDir()
+	localAppData := t.TempDir()
+	detailedListDir := t.TempDir()
+	excludedRoots := []string{
+		filepath.Join(localAppData, "Google", "Chrome", "User Data", "Default", "Cache"),
+		filepath.Join(localAppData, "Microsoft", "Edge", "User Data", "Default", "Cache"),
+		filepath.Join(localAppData, "Mozilla", "Firefox", "Profiles", "profile", "cache2"),
+		filepath.Join(localAppData, "$Recycle.Bin"),
+		filepath.Join(localAppData, "SoftwareDistribution", "Download"),
+		filepath.Join(localAppData, "DeliveryOptimization", "Cache"),
+	}
+	developerCache := filepath.Join(localAppData, "npm-cache")
+	for _, root := range append(excludedRoots, developerCache) {
+		if err := os.MkdirAll(root, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "payload.bin"), []byte("excluded bytes"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recorder := &recordingHistoryRecorder{}
+	result := clean.DryRun(context.Background(), clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "disabled_test_rule",
+			Description:    "disabled test rule",
+			DefaultEnabled: false,
+		}},
+		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
+			TempDir:         tempRoot,
+			LocalAppDataDir: localAppData,
+		},
+		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+			return []clean.ReviewSuggestion{{
+				Tool:      "npm",
+				Label:     "npm cache",
+				Command:   "npm cache clean --force",
+				CachePath: developerCache,
+			}}
+		},
+		DetailedListDir: detailedListDir,
+		HistoryRecorder: recorder,
+	})
+
+	if len(result.Opportunities) != 0 ||
+		result.Totals.OpportunityCount != 0 ||
+		result.Totals.OpportunityObservedBytes != 0 ||
+		result.Totals.CandidateCount != 0 ||
+		result.Totals.CandidateBytes != 0 ||
+		len(result.Candidates) != 0 {
+		t.Fatalf("excluded roots affected dry-run cleanup data: %#v", result)
+	}
+	if len(result.ReviewSuggestions) != 1 || result.ReviewSuggestions[0].CachePath != developerCache {
+		t.Fatalf("review suggestions = %#v, want developer cache exactly once", result.ReviewSuggestions)
+	}
+
+	report := clean.RenderPreviewReport(clean.NewPreviewReadModel(result))
+	if strings.Count(report, developerCache) != 1 {
+		t.Fatalf("developer cache report occurrences = %d, want one Review suggestion:\n%s", strings.Count(report, developerCache), report)
+	}
+	for _, excluded := range excludedRoots {
+		if strings.Contains(report, excluded) {
+			t.Fatalf("report emitted excluded root %q:\n%s", excluded, report)
+		}
+	}
+
+	detailed, err := os.ReadFile(result.DetailedListPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, excluded := range append(excludedRoots, developerCache) {
+		if strings.Contains(string(detailed), excluded) {
+			t.Fatalf("detailed list emitted excluded or suggestion-only root %q:\n%s", excluded, detailed)
+		}
+		if strings.Contains(recorder.encoded, excluded) {
+			t.Fatalf("history emitted excluded or suggestion-only root %q:\n%s", excluded, recorder.encoded)
+		}
+	}
+	if len(recorder.sessions) != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityCount != 0 ||
+		recorder.sessions[0].Aggregate.OpportunityObservedBytes != 0 ||
+		len(recorder.items) != 0 {
+		t.Fatalf("history = %#v / %#v, want empty excluded-root contribution", recorder.sessions, recorder.items)
+	}
+}
+
 func TestDryRunSuppressesOnlyReviewSuggestionsWithProtectedResolvedPaths(t *testing.T) {
 	protected := `C:\Users\Corey\AppData\Local\App`
 	descendant := `c:\users\corey\appdata\local\app\cache`
@@ -1145,8 +1232,40 @@ func TestPreviewReadModelRepresentsSkippedUnsafePathsAndRecoverableErrors(t *tes
 	if err.Code != "inspection_failed" || !err.Recoverable || err.Path == "" {
 		t.Fatalf("error = %#v, want recoverable inspection error metadata", err)
 	}
-	if len(model.Notices) != 1 || model.Notices[0].Kind != "permission_boundary" {
-		t.Fatalf("notices = %#v, want one permission boundary notice", model.Notices)
+	if len(model.Notices) != 2 ||
+		model.Notices[0].Kind != "permission_boundary" ||
+		model.Notices[1].Kind != "permission_boundary" {
+		t.Fatalf("notices = %#v, want catalog and observed permission boundary notices", model.Notices)
+	}
+}
+
+func TestNewPreviewReadModelCommunicatesAdministratorOnlyCacheExclusionsWithoutElevationAdvice(t *testing.T) {
+	model := clean.NewPreviewReadModel(clean.Result{
+		Status: "preview",
+		Mode:   "dry_run",
+		Totals: clean.Totals{},
+	})
+
+	output := clean.RenderPreviewReport(model)
+	for _, expected := range []string{
+		"SoftwareDistribution",
+		"Delivery Optimization",
+		"administrator-only",
+		"excluded from Opportunity discovery",
+		"will not request elevation automatically",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("report missing permission-boundary wording %q:\n%s", expected, output)
+		}
+	}
+	for _, forbidden := range []string{
+		"Run as Administrator",
+		"run as administrator",
+		"enable automatic elevation",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("report recommends elevation with %q:\n%s", forbidden, output)
+		}
 	}
 }
 
