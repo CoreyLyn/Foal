@@ -1268,6 +1268,27 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 					Status:   clean.UserTempOpportunityStatus,
 					Reason:   clean.UserTempOpportunityReason,
 				},
+				{
+					Category: clean.OpportunityCategoryWindowsErrorReporting,
+					Path:     `C:\Users\corey\AppData\Local\Microsoft\Windows\WER`,
+					Bytes:    1024,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
+				{
+					Category: clean.OpportunityCategoryExplorerThumbnailCache,
+					Path:     `C:\Users\corey\AppData\Local\Microsoft\Windows\Explorer`,
+					Bytes:    2048,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
+				{
+					Category: clean.OpportunityCategoryINetCache,
+					Path:     `C:\Users\corey\AppData\Local\Microsoft\Windows\INetCache`,
+					Bytes:    4096,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
 			},
 			IncompleteOpportunityInspections: []clean.IncompleteOpportunityInspection{{
 				Path: `C:\Temp\unreadable-cache`,
@@ -1281,8 +1302,8 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 			Totals: clean.Totals{
 				CandidateCount:           1,
 				CandidateBytes:           12,
-				OpportunityCount:         2,
-				OpportunityObservedBytes: 12288,
+				OpportunityCount:         5,
+				OpportunityObservedBytes: 19456,
 			},
 		}
 	}
@@ -1295,8 +1316,8 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 	}
 	result := readResultObject(t, stdout.Bytes())
 	opportunities := result["opportunities"].([]interface{})
-	if len(opportunities) != 2 {
-		t.Fatalf("opportunities = %#v, want user temp and crash dumps", opportunities)
+	if len(opportunities) != 5 {
+		t.Fatalf("opportunities = %#v, want user temp and four current-user Windows cache categories", opportunities)
 	}
 	opportunity := opportunities[0].(map[string]interface{})
 	if opportunity["category"] != clean.OpportunityCategoryUserTemp ||
@@ -1313,12 +1334,28 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 	if _, ok := crashDumps["idle_days"]; ok {
 		t.Fatalf("crash dumps = %#v, must omit idle_days", crashDumps)
 	}
+	for index, category := range []string{
+		clean.OpportunityCategoryWindowsErrorReporting,
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
+	} {
+		cache := opportunities[index+2].(map[string]interface{})
+		if cache["category"] != category {
+			t.Fatalf("cache opportunity = %#v, want category %q", cache, category)
+		}
+		if _, ok := cache["latest_modified_at"]; ok {
+			t.Fatalf("cache opportunity = %#v, must omit latest_modified_at", cache)
+		}
+		if _, ok := cache["idle_days"]; ok {
+			t.Fatalf("cache opportunity = %#v, must omit idle_days", cache)
+		}
+	}
 	incomplete := result["incomplete_opportunity_inspections"].([]interface{})
 	if len(incomplete) != 1 {
 		t.Fatalf("incomplete inspections = %#v, want one", incomplete)
 	}
 	totals := result["totals"].(map[string]interface{})
-	if totals["candidate_bytes"] != float64(12) || totals["opportunity_count"] != float64(2) || totals["opportunity_observed_bytes"] != float64(12288) {
+	if totals["candidate_bytes"] != float64(12) || totals["opportunity_count"] != float64(5) || totals["opportunity_observed_bytes"] != float64(19456) {
 		t.Fatalf("totals = %#v, want separate candidate and opportunity totals", totals)
 	}
 }

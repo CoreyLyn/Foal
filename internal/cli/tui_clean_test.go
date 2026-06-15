@@ -74,6 +74,27 @@ func stubCleanPreviewDryRun(t *testing.T) {
 					Status:   clean.UserTempOpportunityStatus,
 					Reason:   clean.UserTempOpportunityReason,
 				},
+				{
+					Category: clean.OpportunityCategoryWindowsErrorReporting,
+					Path:     `C:\Users\corey\AppData\Local\Microsoft\Windows\WER`,
+					Bytes:    1024,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
+				{
+					Category: clean.OpportunityCategoryExplorerThumbnailCache,
+					Path:     `C:\Users\corey\AppData\Local\Microsoft\Windows\Explorer`,
+					Bytes:    2048,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
+				{
+					Category: clean.OpportunityCategoryINetCache,
+					Path:     `C:\Users\corey\AppData\Local\Microsoft\Windows\INetCache`,
+					Bytes:    4096,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
 			},
 			ReviewSuggestions: []clean.ReviewSuggestion{
 				{
@@ -111,8 +132,8 @@ func stubCleanPreviewDryRun(t *testing.T) {
 				CandidateCount:           1,
 				CandidateBytes:           12,
 				SkippedCount:             1,
-				OpportunityCount:         2,
-				OpportunityObservedBytes: 12288,
+				OpportunityCount:         5,
+				OpportunityObservedBytes: 19456,
 			},
 		}
 	}
@@ -130,7 +151,7 @@ func openCleanPreview(t *testing.T) rootModel {
 	t.Helper()
 	model := newRootModel()
 	// Wide window so long candidate paths are not clipped by the viewport.
-	next, _ := model.Update(tea.WindowSizeMsg{Width: 240, Height: 60})
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 240, Height: 80})
 	model = next.(rootModel)
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(rootModel)
@@ -166,13 +187,19 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"Inspection errors (1)",
 		"inspection_failed",
 		"Protection rules",
-		"Opportunities: 2, observed bytes: 12288 bytes",
+		"Opportunities: 5, observed bytes: 19456 bytes",
 		`C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
 		"category: user_temp",
 		"latest modified: 2026-06-01T12:00:00Z",
 		"idle days: 9",
 		`C:\Users\corey\AppData\Local\CrashDumps`,
 		"category: crash_dumps",
+		`C:\Users\corey\AppData\Local\Microsoft\Windows\WER`,
+		"category: windows_error_reporting",
+		`C:\Users\corey\AppData\Local\Microsoft\Windows\Explorer`,
+		"category: explorer_thumbnail_cache",
+		`C:\Users\corey\AppData\Local\Microsoft\Windows\INetCache`,
+		"category: inet_cache",
 		"status: skipped_by_default",
 		"reason: requires_explicit_opt_in",
 		"Review suggestions (5)",

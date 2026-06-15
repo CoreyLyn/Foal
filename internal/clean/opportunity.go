@@ -12,19 +12,33 @@ import (
 )
 
 const (
-	OpportunityCategoryUserTemp   = "user_temp"
-	OpportunityCategoryCrashDumps = "crash_dumps"
-	OpportunityStatus             = "skipped_by_default"
-	OpportunityReason             = "requires_explicit_opt_in"
-	UserTempOpportunityStatus     = OpportunityStatus
-	UserTempOpportunityReason     = OpportunityReason
-	userTempDescendantLimit       = 100_000
+	OpportunityCategoryUserTemp               = "user_temp"
+	OpportunityCategoryCrashDumps             = "crash_dumps"
+	OpportunityCategoryWindowsErrorReporting  = "windows_error_reporting"
+	OpportunityCategoryExplorerThumbnailCache = "explorer_thumbnail_cache"
+	OpportunityCategoryINetCache              = "inet_cache"
+	OpportunityStatus                         = "skipped_by_default"
+	OpportunityReason                         = "requires_explicit_opt_in"
+	UserTempOpportunityStatus                 = OpportunityStatus
+	UserTempOpportunityReason                 = OpportunityReason
+	userTempDescendantLimit                   = 100_000
 )
 
 var (
-	errOpportunityInspectionLimit = errors.New("opportunity inspection descendant limit exceeded")
-	errOpportunityReparsePoint    = errors.New("opportunity inspection encountered a reparse point")
+	errOpportunityInspectionLimit          = errors.New("opportunity inspection descendant limit exceeded")
+	errOpportunityReparsePoint             = errors.New("opportunity inspection encountered a reparse point")
+	existenceObservedOpportunityCategories = []existenceObservedOpportunityCategory{
+		{category: OpportunityCategoryCrashDumps, localAppDataPath: []string{"CrashDumps"}},
+		{category: OpportunityCategoryWindowsErrorReporting, localAppDataPath: []string{"Microsoft", "Windows", "WER"}},
+		{category: OpportunityCategoryExplorerThumbnailCache, localAppDataPath: []string{"Microsoft", "Windows", "Explorer"}},
+		{category: OpportunityCategoryINetCache, localAppDataPath: []string{"Microsoft", "Windows", "INetCache"}},
+	}
 )
+
+type existenceObservedOpportunityCategory struct {
+	category         string
+	localAppDataPath []string
+}
 
 type UserTempDiscoveryOptions struct {
 	TempDir string
@@ -95,7 +109,10 @@ func discoverOpportunities(ctx context.Context, opts OpportunityDiscoveryOptions
 		localAppDataDir = os.Getenv("LOCALAPPDATA")
 	}
 	if localAppDataDir != "" {
-		appendExistenceObservedOpportunity(ctx, &result, OpportunityCategoryCrashDumps, filepath.Join(localAppDataDir, "CrashDumps"), deps)
+		for _, definition := range existenceObservedOpportunityCategories {
+			pathParts := append([]string{localAppDataDir}, definition.localAppDataPath...)
+			appendExistenceObservedOpportunity(ctx, &result, definition.category, filepath.Join(pathParts...), deps)
+		}
 	}
 	result.ElapsedMS = time.Since(startedAt).Milliseconds()
 	return result

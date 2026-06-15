@@ -93,7 +93,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Do not run skipped-by-default discovery during `clean --execute`; execution continues to fresh-scan and validate only executable default candidates.
 - Keep protected review-only paths out of JSON, human output, the Clean TUI, detailed candidate lists, and raw history records while preserving unprotected siblings.
 - Do not impose a wall-clock timeout. Honor cancellation, report elapsed time, and continue scanning other top-level entries after an entry-specific incomplete inspection.
-- Categorize every opportunity in the shared contract. Preserve idle-age observation for `user_temp`, and observe the current user's fixed CrashDumps root as one existence-based `crash_dumps` opportunity without age fields.
+- Categorize every opportunity in the shared contract. Preserve idle-age observation for `user_temp`, and observe the current user's fixed CrashDumps, Windows Error Reporting, Explorer thumbnail cache, and INetCache roots as one existence-based `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, or `inet_cache` opportunity per existing root without age fields.
 
 ## Phase 4: Uninstall Preview Quality
 
@@ -106,7 +106,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 
 ## Phase 5: TUI (Partial)
 
-Implemented a read-only interactive TUI: running `foal` or `fo` with no arguments in an interactive terminal opens a main menu, a clean preview browser (filter/expand/scroll/cancellable reload), and read-only viewers for uninstall, status, and history. The Clean TUI includes capped, scrollable user-temp opportunity review data with count and observed bytes kept separate from `Potential space`; opportunity paths remain outside candidate-copy and execution surfaces. The TUI consumes shared read models, records no history sessions during browsing, writes no companion files, and contains no deletion, uninstall, or path-safety logic. Analyze and future extensions remain command navigation placeholders.
+Implemented a read-only interactive TUI: running `foal` or `fo` with no arguments in an interactive terminal opens a main menu, a clean preview browser (filter/expand/scroll/cancellable reload), and read-only viewers for uninstall, status, and history. The Clean TUI includes capped, scrollable categorized opportunity review data for user temp and the implemented current-user Windows cache roots, with count and observed bytes kept separate from `Potential space`; opportunity paths remain outside candidate-copy and execution surfaces. The TUI consumes shared read models, records no history sessions during browsing, writes no companion files, and contains no deletion, uninstall, or path-safety logic. Analyze and future extensions remain command navigation placeholders.
 
 The following design principles continue to govern TUI work:
 
