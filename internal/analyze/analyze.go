@@ -29,6 +29,7 @@ type ChildResult struct {
 	Name           string `json:"name"`
 	Path           string `json:"path"`
 	Kind           string `json:"kind"`
+	Classification string `json:"classification,omitempty"`
 	Bytes          int64  `json:"bytes"`
 	FileCount      int64  `json:"file_count"`
 	DirectoryCount int64  `json:"directory_count"`
@@ -117,10 +118,18 @@ func (s *scanner) addTopChild(path, kind string, totals Totals) {
 		Name:           filepath.Base(path),
 		Path:           path,
 		Kind:           kind,
+		Classification: childClassification(path, kind),
 		Bytes:          totals.Bytes,
 		FileCount:      totals.FileCount,
 		DirectoryCount: totals.DirectoryCount,
 	}
+}
+
+func childClassification(path, kind string) string {
+	if kind == "directory" && filepath.Base(path) == "node_modules" {
+		return "project_artifact_clue"
+	}
+	return ""
 }
 
 func (s *scanner) skip(path, reason, detail string) {
