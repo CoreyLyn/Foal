@@ -174,6 +174,10 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 	for index := range opportunities {
 		opportunities[index].Category = normalizedOpportunityCategory(opportunities[index].Category)
 	}
+	reviewClues := []PreviewReviewClue{{
+		Name:    "Rebuildable project artifacts",
+		Details: "Use foal analyze <path> to inspect rebuildable project directories explicitly.",
+	}}
 
 	return PreviewReadModel{
 		Title:                            "Foal clean",
@@ -184,6 +188,7 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		Skipped:                          skippedItems,
 		Opportunities:                    opportunities,
 		IncompleteOpportunityInspections: append([]IncompleteOpportunityInspection(nil), result.IncompleteOpportunityInspections...),
+		ReviewClues:                      reviewClues,
 		ReviewSuggestions:                reviewSuggestions,
 		Errors:                           append([]StructuredIssue(nil), result.Errors...),
 		Notices:                          notices,

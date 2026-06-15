@@ -809,6 +809,47 @@ func TestDryRunDoesNotPersistReviewSuggestionsInHistory(t *testing.T) {
 	}
 }
 
+func TestProjectArtifactReviewClueStaysOutOfResultDetailedListAndHistory(t *testing.T) {
+	recorder := &recordingHistoryRecorder{}
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder:               recorder,
+		DetailedListDir:               t.TempDir(),
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			Description:    "test default rule",
+			DefaultEnabled: true,
+		}},
+	})
+	model := clean.NewPreviewReadModel(result)
+	if len(model.ReviewClues) != 1 {
+		t.Fatalf("review clues = %#v, want presentation-only project artifact clue", model.ReviewClues)
+	}
+
+	encodedResult, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detailed, err := os.ReadFile(result.DetailedListPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for surface, data := range map[string]string{
+		"clean.Result JSON": string(encodedResult),
+		"detailed list":     string(detailed),
+		"history":           recorder.encoded,
+	} {
+		if strings.Contains(data, "Rebuildable project artifacts") ||
+			strings.Contains(data, "foal analyze <path>") {
+			t.Fatalf("%s contains presentation-only project artifact clue:\n%s", surface, data)
+		}
+	}
+	if len(result.Deleted) != 0 || result.Totals.DeletedCount != 0 || result.Totals.AffectedBytes != 0 {
+		t.Fatalf("dry-run gained deletion semantics: %#v", result)
+	}
+}
+
 func TestDryRunSkipsUnsafePathsThroughPathSafetyValidation(t *testing.T) {
 	result := clean.DryRun(context.Background(), clean.Options{
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
@@ -1122,6 +1163,63 @@ func TestPreviewReadModelUsesExistingDefaultCandidatesForPotentialSpace(t *testi
 	}
 }
 
+func TestNewPreviewReadModelAddsOneProjectArtifactReviewClueWithoutChangingCleanupAccounting(t *testing.T) {
+	result := clean.Result{
+		Status: "preview",
+		Mode:   "dry_run",
+		Candidates: []clean.CandidatePreview{{
+			Path:          `C:\Temp\foal-owned.tmp`,
+			Bytes:         12,
+			Rule:          "foal_owned_temp_sandboxes",
+			PlannedAction: "move_to_recycle_bin",
+		}},
+		Skipped: []clean.SkippedItem{{
+			Path: `C:\Temp\skipped.tmp`,
+			Reason: clean.StructuredIssue{
+				Code:        "protected_path",
+				Recoverable: true,
+			},
+		}},
+		Opportunities: []clean.Opportunity{{
+			Path:     `C:\Temp\old-cache`,
+			Bytes:    4096,
+			Category: clean.OpportunityCategoryUserTemp,
+		}},
+		Errors: []clean.StructuredIssue{{
+			Code:        "inspection_failed",
+			Recoverable: true,
+		}},
+		Totals: clean.Totals{
+			CandidateCount:           1,
+			SkippedCount:             1,
+			OpportunityCount:         1,
+			CandidateBytes:           12,
+			OpportunityObservedBytes: 4096,
+		},
+	}
+
+	model := clean.NewPreviewReadModel(result)
+
+	if len(model.ReviewClues) != 1 {
+		t.Fatalf("review clues = %#v, want exactly one project artifact clue", model.ReviewClues)
+	}
+	clue := model.ReviewClues[0]
+	if clue.Name != "Rebuildable project artifacts" || clue.Path != "" || !strings.Contains(clue.Details, "foal analyze <path>") {
+		t.Fatalf("review clue = %#v, want empty-path project analysis guidance", clue)
+	}
+	if model.PotentialSpaceBytes != 12 ||
+		model.CandidateCount != 1 ||
+		model.SkippedCount != 1 ||
+		model.OpportunityCount != 1 ||
+		model.OpportunityObservedBytes != 4096 ||
+		len(model.Candidates) != 1 ||
+		len(model.Skipped) != 1 ||
+		len(model.Opportunities) != 1 ||
+		len(model.Errors) != 1 {
+		t.Fatalf("project artifact clue changed cleanup accounting: %#v", model)
+	}
+}
+
 func TestPreviewReadModelProjectsOpportunitiesWithoutChangingPotentialSpace(t *testing.T) {
 	latestModifiedAt := time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC)
 	result := clean.Result{
@@ -1265,6 +1363,40 @@ func TestNewPreviewReadModelCommunicatesAdministratorOnlyCacheExclusionsWithoutE
 	} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("report recommends elevation with %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestPreviewReportRendersProjectArtifactClueAsAnalysisOnlyGuidance(t *testing.T) {
+	output := clean.RenderPreviewReport(clean.NewPreviewReadModel(clean.Result{
+		Status: "preview",
+		Mode:   "dry_run",
+	}))
+
+	start := strings.Index(output, "\nReview clues\n")
+	end := strings.Index(output[start+1:], "\nInspection errors\n")
+	if start == -1 || end == -1 {
+		t.Fatalf("output missing Review clues section:\n%s", output)
+	}
+	reviewClues := output[start : start+1+end]
+	for _, want := range []string{
+		"Rebuildable project artifacts",
+		"foal analyze <path>",
+	} {
+		if !strings.Contains(reviewClues, want) {
+			t.Fatalf("Review clues missing %q:\n%s", want, reviewClues)
+		}
+	}
+	for _, forbidden := range []string{
+		"delete",
+		"Delete",
+		"execute",
+		"Execute",
+		"default candidate",
+		"Recycle Bin",
+	} {
+		if strings.Contains(reviewClues, forbidden) {
+			t.Fatalf("Review clues contain cleanup semantics %q:\n%s", forbidden, reviewClues)
 		}
 	}
 }
