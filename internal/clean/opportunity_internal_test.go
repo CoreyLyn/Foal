@@ -5,9 +5,64 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestBuiltInOpportunityCatalogContainsOnlyApprovedV1Categories(t *testing.T) {
+	got := []string{OpportunityCategoryUserTemp}
+	for _, definition := range existenceObservedOpportunityCategories {
+		got = append(got, definition.category)
+	}
+	want := []string{
+		OpportunityCategoryUserTemp,
+		OpportunityCategoryCrashDumps,
+		OpportunityCategoryWindowsErrorReporting,
+		OpportunityCategoryExplorerThumbnailCache,
+		OpportunityCategoryINetCache,
+		OpportunityCategoryD3DShaderCache,
+		OpportunityCategoryNVIDIADXCache,
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("built-in opportunity catalog = %#v, want only approved v1 categories %#v", got, want)
+	}
+}
+
+func TestBuiltInOpportunityDiscoveryNeverInspectsExcludedRoots(t *testing.T) {
+	localAppData := `C:\Users\corey\AppData\Local`
+	inspected := []string{}
+	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
+		TempDir:         `C:\Users\corey\AppData\Local\Temp`,
+		LocalAppDataDir: localAppData,
+	}, opportunityDiscoveryDependencies{
+		readDir: func(string) ([]os.DirEntry, error) { return []os.DirEntry{}, nil },
+		stat: func(path string) (os.FileInfo, error) {
+			inspected = append(inspected, path)
+			return nil, fs.ErrNotExist
+		},
+		walkDir: func(string, fs.WalkDirFunc) error {
+			t.Fatal("missing fixed roots must not be inspected")
+			return nil
+		},
+	})
+
+	want := []string{
+		filepath.Join(localAppData, "CrashDumps"),
+		filepath.Join(localAppData, "Microsoft", "Windows", "WER"),
+		filepath.Join(localAppData, "Microsoft", "Windows", "Explorer"),
+		filepath.Join(localAppData, "Microsoft", "Windows", "INetCache"),
+		filepath.Join(localAppData, "D3DSCache"),
+		filepath.Join(localAppData, "NVIDIA", "DXCache"),
+	}
+	if !reflect.DeepEqual(inspected, want) {
+		t.Fatalf("inspected roots = %#v, want only approved fixed roots %#v", inspected, want)
+	}
+	if len(result.Opportunities) != 0 || len(result.Incomplete) != 0 {
+		t.Fatalf("result = %#v, want excluded and missing roots to contribute nothing", result)
+	}
+}
 
 func TestIncompleteOpportunityInspectionIsExcludedAndDiscoveryContinues(t *testing.T) {
 	now := time.Date(2026, time.June, 10, 12, 0, 0, 0, time.UTC)

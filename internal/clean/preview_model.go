@@ -99,6 +99,7 @@ var plainPreviewReportPresentation = previewReportPresentation{
 const previewReportSectionEntryLimit = 10
 
 const ReviewSuggestionSafetyNote = "Clearing a tool cache while the tool is installing or building can disrupt that operation. Confirm the tool is idle first."
+const administratorOnlyCacheBoundaryNotice = "Permission boundary: administrator-only caches such as SoftwareDistribution and Delivery Optimization are excluded from Opportunity discovery. Foal will not request elevation automatically."
 
 func NewPreviewReadModel(result Result) PreviewReadModel {
 	candidates := make([]PreviewCandidate, 0, len(result.Candidates))
@@ -149,7 +150,10 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		}
 	}
 
-	notices := []PreviewNotice{}
+	notices := []PreviewNotice{{
+		Kind:    "permission_boundary",
+		Message: administratorOnlyCacheBoundaryNotice,
+	}}
 	if hasPermissionBoundary {
 		notices = append(notices, PreviewNotice{
 			Kind:    "permission_boundary",
