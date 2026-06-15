@@ -701,6 +701,35 @@ func TestCleanPreviewFilterShowsReviewSectionsWithoutChangingPotentialSpace(t *t
 	}
 }
 
+func TestCleanPreviewRendersSharedProjectArtifactClueAsReadOnlyAnalysisGuidance(t *testing.T) {
+	readModel := clean.NewPreviewReadModel(clean.Result{
+		Status: "preview",
+		Mode:   "dry_run",
+	})
+
+	output := renderCleanPreviewSections(readModel, cleanPreviewFilterReview, true)
+
+	for _, want := range []string{
+		"Review clues (1)",
+		"Rebuildable project artifacts (review only)",
+		"foal analyze <path>",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{
+		"cleanup candidate",
+		"Execution complete",
+		"Deleted:",
+		"move_to_recycle_bin",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains cleanup semantics %q:\n%s", forbidden, output)
+		}
+	}
+}
+
 func TestCleanPreviewRendersReviewSuggestionSafetyNoteOnceAboveSuggestions(t *testing.T) {
 	readModel := clean.PreviewReadModel{
 		ReviewSuggestions: []clean.PreviewReviewSuggestion{

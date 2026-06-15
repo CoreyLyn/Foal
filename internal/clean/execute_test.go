@@ -2,9 +2,11 @@ package clean_test
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
@@ -56,6 +58,14 @@ func TestExecuteMovesEligibleCandidatesThroughRecycleBin(t *testing.T) {
 	}
 	if result.Totals.CandidateCount != 1 || result.Totals.DeletedCount != 1 || result.Totals.AffectedBytes != 5 {
 		t.Fatalf("totals = %#v, want one candidate/deleted and five affected bytes", result.Totals)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "Rebuildable project artifacts") ||
+		strings.Contains(string(encoded), "foal analyze <path>") {
+		t.Fatalf("execute result contains presentation-only project artifact clue: %s", encoded)
 	}
 }
 

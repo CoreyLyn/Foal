@@ -1053,6 +1053,35 @@ func TestCleanDryRunJSONIncludesReviewSuggestionsWithoutBytes(t *testing.T) {
 	}
 }
 
+func TestCleanDryRunJSONDoesNotIncludeProjectArtifactReviewClue(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	defer func() { dryRunClean = originalDryRun }()
+
+	dryRunClean = func(context.Context, clean.Options) clean.Result {
+		return clean.Result{
+			Status: "preview",
+			Mode:   "dry_run",
+			Totals: clean.Totals{},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	if _, exists := result["review_clues"]; exists {
+		t.Fatalf("clean JSON gained presentation-only review_clues: %#v", result)
+	}
+	if strings.Contains(stdout.String(), "Rebuildable project artifacts") ||
+		strings.Contains(stdout.String(), "foal analyze <path>") {
+		t.Fatalf("clean JSON contains presentation-only project clue:\n%s", stdout.String())
+	}
+}
+
 func TestCleanDryRunNonJSONGroupsSkippedErrorsAndPermissionBoundary(t *testing.T) {
 	disableHistoryRecording(t)
 	originalDryRun := dryRunClean
