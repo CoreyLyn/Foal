@@ -349,6 +349,57 @@ func TestDryRunProjectsUserTempOpportunitiesSeparatelyFromCandidates(t *testing.
 	}
 }
 
+func TestDryRunProjectsCrashDumpsThroughReadModelReportAndDetailedList(t *testing.T) {
+	crashDumpsPath := filepath.Join(t.TempDir(), "CrashDumps")
+	recorder := &recordingHistoryRecorder{}
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder: recorder,
+		DetailedListDir: t.TempDir(),
+		DiscoverOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{{
+				Category: clean.OpportunityCategoryCrashDumps,
+				Path:     crashDumpsPath,
+				Bytes:    8192,
+				Status:   clean.UserTempOpportunityStatus,
+				Reason:   clean.UserTempOpportunityReason,
+			}}}
+		},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	detailed, err := os.ReadFile(result.DetailedListPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"human report":  report,
+		"detailed list": string(detailed),
+	} {
+		for _, want := range []string{crashDumpsPath, "category: crash_dumps", "not counted as Potential space"} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s missing %q:\n%s", name, want, content)
+			}
+		}
+		for _, forbidden := range []string{"0001-01-01", "idle days: 0"} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s contains misleading age %q:\n%s", name, forbidden, content)
+			}
+		}
+	}
+	if model.PotentialSpaceBytes != 0 || model.OpportunityCount != 1 || model.OpportunityObservedBytes != 8192 {
+		t.Fatalf("model totals = %#v, want review-only 1/8192 outside Potential space", model)
+	}
+	if len(recorder.sessions) != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityCount != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityObservedBytes != 8192 ||
+		strings.Contains(recorder.encoded, crashDumpsPath) {
+		t.Fatalf("history = %#v / %s, want aggregate-only crash dump totals", recorder.sessions, recorder.encoded)
+	}
+}
+
 func TestDryRunSuppressesProtectedUserTempOpportunitiesBeforeTotals(t *testing.T) {
 	root := t.TempDir()
 	protected := filepath.Join(root, "App")
@@ -361,9 +412,9 @@ func TestDryRunSuppressesProtectedUserTempOpportunitiesBeforeTotals(t *testing.T
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{
-				{Path: exact, Bytes: 10, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
-				{Path: descendant, Bytes: 20, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
-				{Path: sibling, Bytes: 30, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Category: clean.OpportunityCategoryCrashDumps, Path: exact, Bytes: 10, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Category: clean.OpportunityCategoryCrashDumps, Path: descendant, Bytes: 20, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Category: clean.OpportunityCategoryUserTemp, Path: sibling, Bytes: 30, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
 			}}
 		},
 		Rules: []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
@@ -371,6 +422,9 @@ func TestDryRunSuppressesProtectedUserTempOpportunitiesBeforeTotals(t *testing.T
 
 	if len(result.Opportunities) != 1 || result.Opportunities[0].Path != sibling {
 		t.Fatalf("opportunities = %#v, want only unprotected prefix sibling", result.Opportunities)
+	}
+	if result.Opportunities[0].Category != clean.OpportunityCategoryUserTemp {
+		t.Fatalf("opportunity category = %q, want user_temp sibling preserved", result.Opportunities[0].Category)
 	}
 	if result.Totals.OpportunityCount != 1 || result.Totals.OpportunityObservedBytes != 30 {
 		t.Fatalf("opportunity totals = %d/%d, want 1/30", result.Totals.OpportunityCount, result.Totals.OpportunityObservedBytes)

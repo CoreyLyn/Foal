@@ -28,6 +28,8 @@ type Options struct {
 	CommandParameters             history.CommandParameters
 	UserTempDiscoveryOptions      UserTempDiscoveryOptions
 	DiscoverUserTempOpportunities func(context.Context) UserTempDiscoveryResult
+	OpportunityDiscoveryOptions   OpportunityDiscoveryOptions
+	DiscoverOpportunities         func(context.Context) OpportunityDiscoveryResult
 	DiscoverReviewSuggestions     func(context.Context) []ReviewSuggestion
 }
 
@@ -50,7 +52,7 @@ type Result struct {
 	Deleted                          []DeletedItem                     `json:"deleted"`
 	Skipped                          []SkippedItem                     `json:"skipped"`
 	Errors                           []StructuredIssue                 `json:"errors"`
-	Opportunities                    []UserTempOpportunity             `json:"opportunities"`
+	Opportunities                    []Opportunity                     `json:"opportunities"`
 	IncompleteOpportunityInspections []IncompleteOpportunityInspection `json:"incomplete_opportunity_inspections"`
 	ReviewSuggestions                []ReviewSuggestion                `json:"review_suggestions"`
 	Totals                           Totals                            `json:"totals"`
@@ -126,20 +128,32 @@ func dryRun(ctx context.Context, opts Options) Result {
 		return protectionLoadFailure("dry_run", opts, start)
 	}
 	result := scanDefaultCandidates(ctx, opts, start)
-	discover := opts.DiscoverUserTempOpportunities
+	discover := opts.DiscoverOpportunities
+	if discover == nil && opts.DiscoverUserTempOpportunities != nil {
+		discover = opts.DiscoverUserTempOpportunities
+	}
 	if discover == nil {
-		discover = func(ctx context.Context) UserTempDiscoveryResult {
-			return DiscoverUserTempOpportunities(ctx, opts.UserTempDiscoveryOptions)
+		discover = func(ctx context.Context) OpportunityDiscoveryResult {
+			discoveryOptions := opts.OpportunityDiscoveryOptions
+			if discoveryOptions.TempDir == "" {
+				discoveryOptions.TempDir = opts.UserTempDiscoveryOptions.TempDir
+			}
+			if discoveryOptions.Now.IsZero() {
+				discoveryOptions.Now = opts.UserTempDiscoveryOptions.Now
+			}
+			return DiscoverOpportunities(ctx, discoveryOptions)
 		}
 	}
 	discovery := discover(ctx)
 	for _, opportunity := range discovery.Opportunities {
+		opportunity.Category = normalizedOpportunityCategory(opportunity.Category)
 		if opts.Validator.IsUserProtected(opportunity.Path) {
 			continue
 		}
 		result.Opportunities = append(result.Opportunities, opportunity)
 	}
 	for _, incomplete := range discovery.Incomplete {
+		incomplete.Category = normalizedOpportunityCategory(incomplete.Category)
 		if opts.Validator.IsUserProtected(incomplete.Path) {
 			continue
 		}
@@ -188,7 +202,7 @@ func scanDefaultCandidates(ctx context.Context, opts Options, start time.Time) R
 		Deleted:                          []DeletedItem{},
 		Skipped:                          []SkippedItem{},
 		Errors:                           []StructuredIssue{},
-		Opportunities:                    []UserTempOpportunity{},
+		Opportunities:                    []Opportunity{},
 		IncompleteOpportunityInspections: []IncompleteOpportunityInspection{},
 		ReviewSuggestions:                []ReviewSuggestion{},
 	}
@@ -298,7 +312,7 @@ func protectionLoadFailure(mode string, opts Options, start time.Time) Result {
 		Deleted:                          []DeletedItem{},
 		Skipped:                          []SkippedItem{},
 		Errors:                           []StructuredIssue{loadError},
-		Opportunities:                    []UserTempOpportunity{},
+		Opportunities:                    []Opportunity{},
 		IncompleteOpportunityInspections: []IncompleteOpportunityInspection{},
 		ReviewSuggestions:                []ReviewSuggestion{},
 		Totals:                           Totals{},
@@ -450,9 +464,12 @@ func writeDetailedCandidateList(dir string, result Result, at time.Time) (string
 	} else {
 		for _, opportunity := range result.Opportunities {
 			builder.WriteString(fmt.Sprintf("  path: %s\n", opportunity.Path))
+			builder.WriteString(fmt.Sprintf("    category: %s\n", normalizedOpportunityCategory(opportunity.Category)))
 			builder.WriteString(fmt.Sprintf("    bytes: %d\n", opportunity.Bytes))
-			builder.WriteString(fmt.Sprintf("    latest modified: %s\n", opportunity.LatestModifiedAt.UTC().Format(time.RFC3339)))
-			builder.WriteString(fmt.Sprintf("    idle days: %d\n", opportunity.IdleDays))
+			if normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryUserTemp {
+				builder.WriteString(fmt.Sprintf("    latest modified: %s\n", opportunity.LatestModifiedAt.UTC().Format(time.RFC3339)))
+				builder.WriteString(fmt.Sprintf("    idle days: %d\n", opportunity.IdleDays))
+			}
 			builder.WriteString(fmt.Sprintf("    status: %s\n", opportunity.Status))
 			builder.WriteString(fmt.Sprintf("    reason: %s\n", opportunity.Reason))
 			builder.WriteString("    not counted as Potential space: true\n")

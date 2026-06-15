@@ -1251,14 +1251,24 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 				Rule:          "foal_owned_temp_sandboxes",
 				PlannedAction: "move_to_recycle_bin",
 			}},
-			Opportunities: []clean.UserTempOpportunity{{
-				Path:             `C:\Temp\old-tool-cache`,
-				Bytes:            4096,
-				LatestModifiedAt: time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC),
-				IdleDays:         9,
-				Status:           clean.UserTempOpportunityStatus,
-				Reason:           clean.UserTempOpportunityReason,
-			}},
+			Opportunities: []clean.UserTempOpportunity{
+				{
+					Category:         clean.OpportunityCategoryUserTemp,
+					Path:             `C:\Temp\old-tool-cache`,
+					Bytes:            4096,
+					LatestModifiedAt: time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC),
+					IdleDays:         9,
+					Status:           clean.UserTempOpportunityStatus,
+					Reason:           clean.UserTempOpportunityReason,
+				},
+				{
+					Category: clean.OpportunityCategoryCrashDumps,
+					Path:     `C:\Users\corey\AppData\Local\CrashDumps`,
+					Bytes:    8192,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
+			},
 			IncompleteOpportunityInspections: []clean.IncompleteOpportunityInspection{{
 				Path: `C:\Temp\unreadable-cache`,
 				Reason: clean.StructuredIssue{
@@ -1271,8 +1281,8 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 			Totals: clean.Totals{
 				CandidateCount:           1,
 				CandidateBytes:           12,
-				OpportunityCount:         1,
-				OpportunityObservedBytes: 4096,
+				OpportunityCount:         2,
+				OpportunityObservedBytes: 12288,
 			},
 		}
 	}
@@ -1285,19 +1295,30 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 	}
 	result := readResultObject(t, stdout.Bytes())
 	opportunities := result["opportunities"].([]interface{})
-	if len(opportunities) != 1 {
-		t.Fatalf("opportunities = %#v, want one", opportunities)
+	if len(opportunities) != 2 {
+		t.Fatalf("opportunities = %#v, want user temp and crash dumps", opportunities)
 	}
 	opportunity := opportunities[0].(map[string]interface{})
-	if opportunity["status"] != clean.UserTempOpportunityStatus || opportunity["reason"] != clean.UserTempOpportunityReason {
-		t.Fatalf("opportunity = %#v, want fixed skipped-by-default status/reason", opportunity)
+	if opportunity["category"] != clean.OpportunityCategoryUserTemp ||
+		opportunity["status"] != clean.UserTempOpportunityStatus || opportunity["reason"] != clean.UserTempOpportunityReason {
+		t.Fatalf("opportunity = %#v, want categorized skipped-by-default user temp", opportunity)
+	}
+	crashDumps := opportunities[1].(map[string]interface{})
+	if crashDumps["category"] != clean.OpportunityCategoryCrashDumps {
+		t.Fatalf("crash dumps = %#v, want stable category", crashDumps)
+	}
+	if _, ok := crashDumps["latest_modified_at"]; ok {
+		t.Fatalf("crash dumps = %#v, must omit latest_modified_at", crashDumps)
+	}
+	if _, ok := crashDumps["idle_days"]; ok {
+		t.Fatalf("crash dumps = %#v, must omit idle_days", crashDumps)
 	}
 	incomplete := result["incomplete_opportunity_inspections"].([]interface{})
 	if len(incomplete) != 1 {
 		t.Fatalf("incomplete inspections = %#v, want one", incomplete)
 	}
 	totals := result["totals"].(map[string]interface{})
-	if totals["candidate_bytes"] != float64(12) || totals["opportunity_count"] != float64(1) || totals["opportunity_observed_bytes"] != float64(4096) {
+	if totals["candidate_bytes"] != float64(12) || totals["opportunity_count"] != float64(2) || totals["opportunity_observed_bytes"] != float64(12288) {
 		t.Fatalf("totals = %#v, want separate candidate and opportunity totals", totals)
 	}
 }

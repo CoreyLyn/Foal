@@ -27,7 +27,7 @@ foal history --json
 foal uninstall --json
 ```
 
-`foal clean` requires either `--dry-run` or `--execute`; `--dry-run` previews default candidates and reports idle user-temp opportunities as skipped-by-default review data with observed bytes kept separate from `Potential space`. `--execute` does not run opportunity discovery and confirms Recycle Bin cleanup only for freshly scanned, validated Foal-owned temp sandbox candidates. Docs and verification should prefer non-destructive examples such as `foal clean --dry-run --json`.
+`foal clean` requires either `--dry-run` or `--execute`; `--dry-run` previews default candidates and reports categorized skipped-by-default review data: idle user-temp entries as `user_temp` and the current user's fixed CrashDumps root as `crash_dumps` when it exists. Observed opportunity bytes stay separate from `Potential space`. `--execute` does not run opportunity discovery and confirms Recycle Bin cleanup only for freshly scanned, validated Foal-owned temp sandbox candidates. Docs and verification should prefer non-destructive examples such as `foal clean --dry-run --json`.
 
 `foal analyze --json <path>` returns read-only directory insight with totals, top children, skipped entries, and elapsed time. `foal status --json` returns a read-only snapshot with disk capacity, OS runtime, Foal command state, elapsed time, and structured `skipped` / `errors` arrays for automation consumers.
 
@@ -56,4 +56,4 @@ Foal is inspired by tools like Mole, but it is not "Mole for Windows". The roadm
 - `history`: JSON-first record of prior Foal operations.
 - `optimize`: future read-only health checks and recommendations; not current implementation scope.
 
-The TUI is a review and navigation surface over shared read models. It does not duplicate deletion, uninstall, or path-safety logic.
+The TUI is a review and navigation surface over shared read models. Its Clean view displays the same `user_temp` and `crash_dumps` opportunity categories without writing history or detailed lists. It does not duplicate deletion, uninstall, or path-safety logic.

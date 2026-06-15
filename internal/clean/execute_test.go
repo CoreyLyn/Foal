@@ -59,7 +59,7 @@ func TestExecuteMovesEligibleCandidatesThroughRecycleBin(t *testing.T) {
 	}
 }
 
-func TestExecuteDoesNotDiscoverOrReturnUserTempOpportunities(t *testing.T) {
+func TestExecuteDoesNotDiscoverOrReturnCategorizedOpportunities(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "cache.tmp")
 	if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
@@ -75,14 +75,15 @@ func TestExecuteDoesNotDiscoverOrReturnUserTempOpportunities(t *testing.T) {
 			t.Fatal("execute invoked review suggestion discovery")
 			return nil
 		},
-		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
+		DiscoverOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			discoveryCalled = true
 			return clean.UserTempDiscoveryResult{
 				Opportunities: []clean.UserTempOpportunity{{
-					Path:   filepath.Join(root, "unrelated.tmp"),
-					Bytes:  4096,
-					Status: clean.UserTempOpportunityStatus,
-					Reason: clean.UserTempOpportunityReason,
+					Category: clean.OpportunityCategoryCrashDumps,
+					Path:     filepath.Join(root, "unrelated.tmp"),
+					Bytes:    4096,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
 				}},
 			}
 		},
@@ -95,7 +96,7 @@ func TestExecuteDoesNotDiscoverOrReturnUserTempOpportunities(t *testing.T) {
 	})
 
 	if discoveryCalled {
-		t.Fatal("execute invoked review-only user temp opportunity discovery")
+		t.Fatal("execute invoked review-only categorized opportunity discovery")
 	}
 	if len(result.Opportunities) != 0 {
 		t.Fatalf("opportunities = %#v, want none for execute", result.Opportunities)

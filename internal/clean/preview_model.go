@@ -14,7 +14,7 @@ type PreviewReadModel struct {
 	Candidates                       []PreviewCandidate
 	Skipped                          []PreviewSkippedItem
 	SkippedByDefault                 []PreviewSkippedByDefaultItem
-	Opportunities                    []UserTempOpportunity
+	Opportunities                    []Opportunity
 	IncompleteOpportunityInspections []IncompleteOpportunityInspection
 	ReviewClues                      []PreviewReviewClue
 	ReviewSuggestions                []PreviewReviewSuggestion
@@ -166,6 +166,10 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 			CachePath: suggestion.CachePath,
 		})
 	}
+	opportunities := append([]Opportunity(nil), result.Opportunities...)
+	for index := range opportunities {
+		opportunities[index].Category = normalizedOpportunityCategory(opportunities[index].Category)
+	}
 
 	return PreviewReadModel{
 		Title:                            "Foal clean",
@@ -174,7 +178,7 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		ProtectionDiagnostics:            append([]ProtectionDiagnostic(nil), result.ProtectionDiagnostics...),
 		Candidates:                       candidates,
 		Skipped:                          skippedItems,
-		Opportunities:                    append([]UserTempOpportunity(nil), result.Opportunities...),
+		Opportunities:                    opportunities,
 		IncompleteOpportunityInspections: append([]IncompleteOpportunityInspection(nil), result.IncompleteOpportunityInspections...),
 		ReviewSuggestions:                reviewSuggestions,
 		Errors:                           append([]StructuredIssue(nil), result.Errors...),
@@ -295,13 +299,14 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 			builder.WriteString(fmt.Sprintf("  Opportunities: %d, observed bytes: %s (not counted as Potential space)\n",
 				model.OpportunityCount, formatBytes(model.OpportunityObservedBytes)))
 			for _, opportunity := range model.Opportunities[:cappedEntryCount(len(model.Opportunities))] {
-				builder.WriteString(fmt.Sprintf("  %s (%s, latest modified: %s, idle days: %d, status: %s, reason: %s, not counted as Potential space)\n",
-					opportunity.Path,
-					formatBytes(opportunity.Bytes),
-					opportunity.LatestModifiedAt.UTC().Format(time.RFC3339),
-					opportunity.IdleDays,
-					opportunity.Status,
-					opportunity.Reason))
+				builder.WriteString(fmt.Sprintf("  %s (%s, category: %s",
+					opportunity.Path, formatBytes(opportunity.Bytes), normalizedOpportunityCategory(opportunity.Category)))
+				if normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryUserTemp {
+					builder.WriteString(fmt.Sprintf(", latest modified: %s, idle days: %d",
+						opportunity.LatestModifiedAt.UTC().Format(time.RFC3339), opportunity.IdleDays))
+				}
+				builder.WriteString(fmt.Sprintf(", status: %s, reason: %s, not counted as Potential space)\n",
+					opportunity.Status, opportunity.Reason))
 			}
 			writeOmittedLine(&builder, len(model.Opportunities), model.DetailedListPath)
 		}

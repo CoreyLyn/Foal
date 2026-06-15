@@ -43,6 +43,112 @@ func TestIncompleteOpportunityInspectionIsExcludedAndDiscoveryContinues(t *testi
 	}
 }
 
+func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
+	localAppData := `C:\Users\corey\AppData\Local`
+	crashDumpsRoot := filepath.Join(localAppData, "CrashDumps")
+	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
+		TempDir:         `C:\Users\corey\AppData\Local\Temp`,
+		LocalAppDataDir: localAppData,
+	}, opportunityDiscoveryDependencies{
+		readDir: func(string) ([]os.DirEntry, error) {
+			return nil, fs.ErrPermission
+		},
+		stat: func(path string) (os.FileInfo, error) {
+			if path != crashDumpsRoot {
+				t.Fatalf("stat path = %q, want %q", path, crashDumpsRoot)
+			}
+			return fakeFileInfo{name: "CrashDumps", mode: os.ModeDir}, nil
+		},
+		walkDir: func(path string, visit fs.WalkDirFunc) error {
+			return visit(path, fakeDirEntry{name: "CrashDumps", mode: os.ModeDir}, nil)
+		},
+	})
+
+	if len(result.Opportunities) != 1 ||
+		result.Opportunities[0].Category != OpportunityCategoryCrashDumps {
+		t.Fatalf("opportunities = %#v, want crash dumps despite user temp failure", result.Opportunities)
+	}
+	if len(result.Incomplete) != 1 ||
+		result.Incomplete[0].Category != OpportunityCategoryUserTemp ||
+		result.Incomplete[0].Reason.Code != "permission_denied" {
+		t.Fatalf("incomplete = %#v, want categorized user temp permission failure", result.Incomplete)
+	}
+}
+
+func TestCrashDumpsSafetyFailuresAreCategorizedAndExcluded(t *testing.T) {
+	root := `C:\Users\corey\AppData\Local\CrashDumps`
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		stat     func(string) (os.FileInfo, error)
+		walkDir  func(string, fs.WalkDirFunc) error
+		wantCode string
+	}{
+		{
+			name: "permission failure",
+			ctx:  context.Background(),
+			stat: func(string) (os.FileInfo, error) { return nil, fs.ErrPermission },
+			walkDir: func(string, fs.WalkDirFunc) error {
+				t.Fatal("permission failure must not start inspection")
+				return nil
+			},
+			wantCode: "permission_denied",
+		},
+		{
+			name: "reparse point",
+			ctx:  context.Background(),
+			stat: func(string) (os.FileInfo, error) {
+				return fakeFileInfo{name: "CrashDumps", mode: os.ModeDir}, nil
+			},
+			walkDir: func(path string, visit fs.WalkDirFunc) error {
+				return visit(path, fakeDirEntry{name: "CrashDumps", mode: os.ModeSymlink}, nil)
+			},
+			wantCode: "reparse_point",
+		},
+		{
+			name: "inspection limit",
+			ctx:  context.Background(),
+			stat: func(string) (os.FileInfo, error) {
+				return fakeFileInfo{name: "CrashDumps", mode: os.ModeDir}, nil
+			},
+			walkDir:  fakeWalkWithDescendants(userTempDescendantLimit+1, time.Now()),
+			wantCode: "inspection_limit_exceeded",
+		},
+		{
+			name: "cancellation",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			}(),
+			stat: func(string) (os.FileInfo, error) {
+				return fakeFileInfo{name: "CrashDumps", mode: os.ModeDir}, nil
+			},
+			walkDir: func(path string, visit fs.WalkDirFunc) error {
+				return visit(path, fakeDirEntry{name: "CrashDumps", mode: os.ModeDir}, nil)
+			},
+			wantCode: "context_canceled",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := UserTempDiscoveryResult{}
+			appendExistenceObservedOpportunity(test.ctx, &result, OpportunityCategoryCrashDumps, root, opportunityDiscoveryDependencies{
+				stat:    test.stat,
+				walkDir: test.walkDir,
+			})
+
+			if len(result.Opportunities) != 0 || len(result.Incomplete) != 1 {
+				t.Fatalf("result = %#v, want one incomplete inspection and no partial opportunity", result)
+			}
+			if result.Incomplete[0].Category != OpportunityCategoryCrashDumps ||
+				result.Incomplete[0].Reason.Code != test.wantCode {
+				t.Fatalf("incomplete = %#v, want crash_dumps/%s", result.Incomplete[0], test.wantCode)
+			}
+		})
+	}
+}
+
 func TestUnsafeOpportunityPathsAreIncompleteWithoutInspectionAndDiscoveryContinues(t *testing.T) {
 	now := time.Date(2026, time.June, 10, 12, 0, 0, 0, time.UTC)
 	root := `C:\Temp`
