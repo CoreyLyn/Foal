@@ -45,7 +45,12 @@ func TestIncompleteOpportunityInspectionIsExcludedAndDiscoveryContinues(t *testi
 
 func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 	localAppData := `C:\Users\corey\AppData\Local`
-	crashDumpsRoot := filepath.Join(localAppData, "CrashDumps")
+	expectedRoots := map[string]string{
+		OpportunityCategoryCrashDumps:             filepath.Join(localAppData, "CrashDumps"),
+		OpportunityCategoryWindowsErrorReporting:  filepath.Join(localAppData, "Microsoft", "Windows", "WER"),
+		OpportunityCategoryExplorerThumbnailCache: filepath.Join(localAppData, "Microsoft", "Windows", "Explorer"),
+		OpportunityCategoryINetCache:              filepath.Join(localAppData, "Microsoft", "Windows", "INetCache"),
+	}
 	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
 		TempDir:         `C:\Users\corey\AppData\Local\Temp`,
 		LocalAppDataDir: localAppData,
@@ -54,19 +59,26 @@ func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 			return nil, fs.ErrPermission
 		},
 		stat: func(path string) (os.FileInfo, error) {
-			if path != crashDumpsRoot {
-				t.Fatalf("stat path = %q, want %q", path, crashDumpsRoot)
+			for _, expected := range expectedRoots {
+				if path == expected {
+					return fakeFileInfo{name: filepath.Base(path), mode: os.ModeDir}, nil
+				}
 			}
-			return fakeFileInfo{name: "CrashDumps", mode: os.ModeDir}, nil
+			t.Fatalf("unexpected stat path %q", path)
+			return nil, fs.ErrNotExist
 		},
 		walkDir: func(path string, visit fs.WalkDirFunc) error {
-			return visit(path, fakeDirEntry{name: "CrashDumps", mode: os.ModeDir}, nil)
+			return visit(path, fakeDirEntry{name: filepath.Base(path), mode: os.ModeDir}, nil)
 		},
 	})
 
-	if len(result.Opportunities) != 1 ||
-		result.Opportunities[0].Category != OpportunityCategoryCrashDumps {
-		t.Fatalf("opportunities = %#v, want crash dumps despite user temp failure", result.Opportunities)
+	if len(result.Opportunities) != len(expectedRoots) {
+		t.Fatalf("opportunities = %#v, want every fixed category despite user temp failure", result.Opportunities)
+	}
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Path != expectedRoots[opportunity.Category] {
+			t.Fatalf("opportunity = %#v, want fixed current-user root", opportunity)
+		}
 	}
 	if len(result.Incomplete) != 1 ||
 		result.Incomplete[0].Category != OpportunityCategoryUserTemp ||
@@ -75,8 +87,16 @@ func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 	}
 }
 
-func TestCrashDumpsSafetyFailuresAreCategorizedAndExcluded(t *testing.T) {
-	root := `C:\Users\corey\AppData\Local\CrashDumps`
+func TestExistenceObservedCategorySafetyFailuresAreCategorizedAndExcluded(t *testing.T) {
+	categories := []struct {
+		category string
+		root     string
+	}{
+		{OpportunityCategoryCrashDumps, `C:\Users\corey\AppData\Local\CrashDumps`},
+		{OpportunityCategoryWindowsErrorReporting, `C:\Users\corey\AppData\Local\Microsoft\Windows\WER`},
+		{OpportunityCategoryExplorerThumbnailCache, `C:\Users\corey\AppData\Local\Microsoft\Windows\Explorer`},
+		{OpportunityCategoryINetCache, `C:\Users\corey\AppData\Local\Microsoft\Windows\INetCache`},
+	}
 	tests := []struct {
 		name     string
 		ctx      context.Context
@@ -130,22 +150,61 @@ func TestCrashDumpsSafetyFailuresAreCategorizedAndExcluded(t *testing.T) {
 			wantCode: "context_canceled",
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result := UserTempDiscoveryResult{}
-			appendExistenceObservedOpportunity(test.ctx, &result, OpportunityCategoryCrashDumps, root, opportunityDiscoveryDependencies{
-				stat:    test.stat,
-				walkDir: test.walkDir,
-			})
+	for _, category := range categories {
+		t.Run(category.category, func(t *testing.T) {
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					result := UserTempDiscoveryResult{}
+					appendExistenceObservedOpportunity(test.ctx, &result, category.category, category.root, opportunityDiscoveryDependencies{
+						stat:    test.stat,
+						walkDir: test.walkDir,
+					})
 
-			if len(result.Opportunities) != 0 || len(result.Incomplete) != 1 {
-				t.Fatalf("result = %#v, want one incomplete inspection and no partial opportunity", result)
-			}
-			if result.Incomplete[0].Category != OpportunityCategoryCrashDumps ||
-				result.Incomplete[0].Reason.Code != test.wantCode {
-				t.Fatalf("incomplete = %#v, want crash_dumps/%s", result.Incomplete[0], test.wantCode)
+					if len(result.Opportunities) != 0 || len(result.Incomplete) != 1 {
+						t.Fatalf("result = %#v, want one incomplete inspection and no partial opportunity", result)
+					}
+					if result.Incomplete[0].Category != category.category ||
+						result.Incomplete[0].Reason.Code != test.wantCode {
+						t.Fatalf("incomplete = %#v, want %s/%s", result.Incomplete[0], category.category, test.wantCode)
+					}
+				})
 			}
 		})
+	}
+}
+
+func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T) {
+	localAppData := `C:\Users\corey\AppData\Local`
+	werRoot := filepath.Join(localAppData, "Microsoft", "Windows", "WER")
+	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
+		TempDir:         `C:\Users\corey\AppData\Local\Temp`,
+		LocalAppDataDir: localAppData,
+	}, opportunityDiscoveryDependencies{
+		readDir: func(string) ([]os.DirEntry, error) { return []os.DirEntry{}, nil },
+		stat: func(path string) (os.FileInfo, error) {
+			if path == werRoot {
+				return nil, fs.ErrPermission
+			}
+			return fakeFileInfo{name: filepath.Base(path), mode: os.ModeDir}, nil
+		},
+		walkDir: func(path string, visit fs.WalkDirFunc) error {
+			return visit(path, fakeDirEntry{name: filepath.Base(path), mode: os.ModeDir}, nil)
+		},
+	})
+
+	if len(result.Opportunities) != 3 {
+		t.Fatalf("opportunities = %#v, want unaffected fixed categories", result.Opportunities)
+	}
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == OpportunityCategoryWindowsErrorReporting {
+			t.Fatalf("opportunities = %#v, must exclude incomplete WER category", result.Opportunities)
+		}
+	}
+	if len(result.Incomplete) != 1 ||
+		result.Incomplete[0].Category != OpportunityCategoryWindowsErrorReporting ||
+		result.Incomplete[0].Path != werRoot ||
+		result.Incomplete[0].Reason.Code != "permission_denied" {
+		t.Fatalf("incomplete = %#v, want categorized WER permission failure", result.Incomplete)
 	}
 }
 

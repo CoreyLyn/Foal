@@ -349,20 +349,19 @@ func TestDryRunProjectsUserTempOpportunitiesSeparatelyFromCandidates(t *testing.
 	}
 }
 
-func TestDryRunProjectsCrashDumpsThroughReadModelReportAndDetailedList(t *testing.T) {
-	crashDumpsPath := filepath.Join(t.TempDir(), "CrashDumps")
+func TestDryRunProjectsExistenceObservedCategoriesThroughReadModelReportAndDetailedList(t *testing.T) {
+	root := t.TempDir()
+	opportunities := []clean.UserTempOpportunity{
+		{Category: clean.OpportunityCategoryWindowsErrorReporting, Path: filepath.Join(root, "WER"), Bytes: 1024, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+		{Category: clean.OpportunityCategoryExplorerThumbnailCache, Path: filepath.Join(root, "Explorer"), Bytes: 2048, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+		{Category: clean.OpportunityCategoryINetCache, Path: filepath.Join(root, "INetCache"), Bytes: 4096, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+	}
 	recorder := &recordingHistoryRecorder{}
 	result := clean.DryRun(context.Background(), clean.Options{
 		HistoryRecorder: recorder,
 		DetailedListDir: t.TempDir(),
 		DiscoverOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
-			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{{
-				Category: clean.OpportunityCategoryCrashDumps,
-				Path:     crashDumpsPath,
-				Bytes:    8192,
-				Status:   clean.UserTempOpportunityStatus,
-				Reason:   clean.UserTempOpportunityReason,
-			}}}
+			return clean.UserTempDiscoveryResult{Opportunities: opportunities}
 		},
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
@@ -378,7 +377,15 @@ func TestDryRunProjectsCrashDumpsThroughReadModelReportAndDetailedList(t *testin
 		"human report":  report,
 		"detailed list": string(detailed),
 	} {
-		for _, want := range []string{crashDumpsPath, "category: crash_dumps", "not counted as Potential space"} {
+		for _, want := range []string{
+			opportunities[0].Path,
+			"category: windows_error_reporting",
+			opportunities[1].Path,
+			"category: explorer_thumbnail_cache",
+			opportunities[2].Path,
+			"category: inet_cache",
+			"not counted as Potential space",
+		} {
 			if !strings.Contains(content, want) {
 				t.Fatalf("%s missing %q:\n%s", name, want, content)
 			}
@@ -389,45 +396,54 @@ func TestDryRunProjectsCrashDumpsThroughReadModelReportAndDetailedList(t *testin
 			}
 		}
 	}
-	if model.PotentialSpaceBytes != 0 || model.OpportunityCount != 1 || model.OpportunityObservedBytes != 8192 {
-		t.Fatalf("model totals = %#v, want review-only 1/8192 outside Potential space", model)
+	if model.PotentialSpaceBytes != 0 || model.OpportunityCount != 3 || model.OpportunityObservedBytes != 7168 {
+		t.Fatalf("model totals = %#v, want review-only 3/7168 outside Potential space", model)
 	}
 	if len(recorder.sessions) != 1 ||
-		recorder.sessions[0].Aggregate.OpportunityCount != 1 ||
-		recorder.sessions[0].Aggregate.OpportunityObservedBytes != 8192 ||
-		strings.Contains(recorder.encoded, crashDumpsPath) {
-		t.Fatalf("history = %#v / %s, want aggregate-only crash dump totals", recorder.sessions, recorder.encoded)
+		recorder.sessions[0].Aggregate.OpportunityCount != 3 ||
+		recorder.sessions[0].Aggregate.OpportunityObservedBytes != 7168 {
+		t.Fatalf("history = %#v / %s, want aggregate-only category totals", recorder.sessions, recorder.encoded)
+	}
+	for _, opportunity := range opportunities {
+		if strings.Contains(recorder.encoded, opportunity.Path) {
+			t.Fatalf("history persisted review-only category path %q: %s", opportunity.Path, recorder.encoded)
+		}
 	}
 }
 
-func TestDryRunSuppressesProtectedUserTempOpportunitiesBeforeTotals(t *testing.T) {
+func TestDryRunSuppressesProtectedWindowsCacheOpportunitiesBeforeTotals(t *testing.T) {
 	root := t.TempDir()
-	protected := filepath.Join(root, "App")
-	exact := protected
-	descendant := filepath.Join(protected, "Cache")
-	sibling := filepath.Join(root, "Application")
+	wer := filepath.Join(root, "WER")
+	explorer := filepath.Join(root, "Explorer")
+	inetCache := filepath.Join(root, "INetCache")
+	visible := filepath.Join(root, "CrashDumps")
 
 	result := clean.DryRun(context.Background(), clean.Options{
-		Validator:                 pathsafe.NewValidator([]string{strings.ToUpper(`\\?\` + protected)}),
+		Validator: pathsafe.NewValidator([]string{
+			strings.ToUpper(`\\?\` + wer),
+			explorer,
+			inetCache,
+		}),
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{
-				{Category: clean.OpportunityCategoryCrashDumps, Path: exact, Bytes: 10, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
-				{Category: clean.OpportunityCategoryCrashDumps, Path: descendant, Bytes: 20, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
-				{Category: clean.OpportunityCategoryUserTemp, Path: sibling, Bytes: 30, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Category: clean.OpportunityCategoryWindowsErrorReporting, Path: wer, Bytes: 10, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Category: clean.OpportunityCategoryExplorerThumbnailCache, Path: explorer, Bytes: 20, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Category: clean.OpportunityCategoryINetCache, Path: inetCache, Bytes: 30, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Category: clean.OpportunityCategoryCrashDumps, Path: visible, Bytes: 40, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
 			}}
 		},
 		Rules: []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
 	})
 
-	if len(result.Opportunities) != 1 || result.Opportunities[0].Path != sibling {
-		t.Fatalf("opportunities = %#v, want only unprotected prefix sibling", result.Opportunities)
+	if len(result.Opportunities) != 1 || result.Opportunities[0].Path != visible {
+		t.Fatalf("opportunities = %#v, want only unprotected category", result.Opportunities)
 	}
-	if result.Opportunities[0].Category != clean.OpportunityCategoryUserTemp {
-		t.Fatalf("opportunity category = %q, want user_temp sibling preserved", result.Opportunities[0].Category)
+	if result.Opportunities[0].Category != clean.OpportunityCategoryCrashDumps {
+		t.Fatalf("opportunity category = %q, want crash_dumps preserved", result.Opportunities[0].Category)
 	}
-	if result.Totals.OpportunityCount != 1 || result.Totals.OpportunityObservedBytes != 30 {
-		t.Fatalf("opportunity totals = %d/%d, want 1/30", result.Totals.OpportunityCount, result.Totals.OpportunityObservedBytes)
+	if result.Totals.OpportunityCount != 1 || result.Totals.OpportunityObservedBytes != 40 {
+		t.Fatalf("opportunity totals = %d/%d, want 1/40", result.Totals.OpportunityCount, result.Totals.OpportunityObservedBytes)
 	}
 }
 

@@ -12,16 +12,29 @@ import (
 	"github.com/CoreyLyn/Foal/internal/clean"
 )
 
-func TestDiscoverOpportunitiesCategorizesUserTempAndCrashDumps(t *testing.T) {
+func TestDiscoverOpportunitiesCategorizesUserTempAndCurrentUserWindowsCaches(t *testing.T) {
 	tempRoot := t.TempDir()
 	localAppData := t.TempDir()
-	crashDumpsRoot := filepath.Join(localAppData, "CrashDumps")
-	if err := os.MkdirAll(crashDumpsRoot, 0700); err != nil {
-		t.Fatal(err)
-	}
 	now := time.Date(2026, time.June, 10, 12, 0, 0, 0, time.UTC)
 	userTempPath := fileWithModification(t, tempRoot, "idle.tmp", "idle", now.Add(-8*24*time.Hour))
-	crashDumpPath := fileWithModification(t, crashDumpsRoot, "app.dmp", "crash", now)
+	cacheRoots := []struct {
+		category string
+		path     string
+		file     string
+		contents string
+	}{
+		{clean.OpportunityCategoryCrashDumps, filepath.Join(localAppData, "CrashDumps"), "app.dmp", "crash"},
+		{clean.OpportunityCategoryWindowsErrorReporting, filepath.Join(localAppData, "Microsoft", "Windows", "WER"), "report.wer", "wer"},
+		{clean.OpportunityCategoryExplorerThumbnailCache, filepath.Join(localAppData, "Microsoft", "Windows", "Explorer"), "thumbcache.db", "thumb"},
+		{clean.OpportunityCategoryINetCache, filepath.Join(localAppData, "Microsoft", "Windows", "INetCache"), "cache.dat", "inet"},
+	}
+	cacheFiles := make([]string, 0, len(cacheRoots))
+	for _, cache := range cacheRoots {
+		if err := os.MkdirAll(cache.path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		cacheFiles = append(cacheFiles, fileWithModification(t, cache.path, cache.file, cache.contents, now))
+	}
 
 	result := clean.DiscoverOpportunities(context.Background(), clean.OpportunityDiscoveryOptions{
 		TempDir:         tempRoot,
@@ -29,39 +42,41 @@ func TestDiscoverOpportunitiesCategorizesUserTempAndCrashDumps(t *testing.T) {
 		Now:             now,
 	})
 
-	if len(result.Opportunities) != 2 {
-		t.Fatalf("opportunities = %#v, want user temp and crash dumps", result.Opportunities)
+	if len(result.Opportunities) != 1+len(cacheRoots) {
+		t.Fatalf("opportunities = %#v, want user temp and four current-user Windows cache roots", result.Opportunities)
 	}
 	userTemp := result.Opportunities[0]
 	if userTemp.Category != clean.OpportunityCategoryUserTemp || userTemp.Path != userTempPath ||
 		!userTemp.LatestModifiedAt.Equal(now.Add(-8*24*time.Hour)) || userTemp.IdleDays != 8 {
 		t.Fatalf("user temp opportunity = %#v, want categorized age-observed result", userTemp)
 	}
-	crashDumps := result.Opportunities[1]
-	if crashDumps.Category != clean.OpportunityCategoryCrashDumps || crashDumps.Path != crashDumpsRoot ||
-		crashDumps.Bytes != int64(len("crash")) || !crashDumps.LatestModifiedAt.IsZero() || crashDumps.IdleDays != 0 {
-		t.Fatalf("crash dumps opportunity = %#v, want whole-root existence-observed result", crashDumps)
-	}
-	encoded, err := json.Marshal(crashDumps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(encoded), "latest_modified_at") || strings.Contains(string(encoded), "idle_days") {
-		t.Fatalf("crash dumps JSON emits misleading age fields: %s", encoded)
-	}
-	if _, err := os.Stat(crashDumpPath); err != nil {
-		t.Fatalf("discovery changed crash dump %q: %v", crashDumpPath, err)
+	for index, cache := range cacheRoots {
+		opportunity := result.Opportunities[index+1]
+		if opportunity.Category != cache.category || opportunity.Path != cache.path ||
+			opportunity.Bytes != int64(len(cache.contents)) || !opportunity.LatestModifiedAt.IsZero() || opportunity.IdleDays != 0 {
+			t.Fatalf("%s opportunity = %#v, want whole-root existence-observed result", cache.category, opportunity)
+		}
+		encoded, err := json.Marshal(opportunity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "latest_modified_at") || strings.Contains(string(encoded), "idle_days") {
+			t.Fatalf("%s JSON emits misleading age fields: %s", cache.category, encoded)
+		}
+		if _, err := os.Stat(cacheFiles[index]); err != nil {
+			t.Fatalf("discovery changed %s file %q: %v", cache.category, cacheFiles[index], err)
+		}
 	}
 }
 
-func TestDiscoverOpportunitiesOmitsMissingCrashDumpsWithoutIncompleteResult(t *testing.T) {
+func TestDiscoverOpportunitiesOmitsMissingCurrentUserWindowsCacheRootsWithoutIncompleteResult(t *testing.T) {
 	result := clean.DiscoverOpportunities(context.Background(), clean.OpportunityDiscoveryOptions{
 		TempDir:         t.TempDir(),
 		LocalAppDataDir: t.TempDir(),
 	})
 
 	if len(result.Opportunities) != 0 || len(result.Incomplete) != 0 {
-		t.Fatalf("result = %#v, want missing CrashDumps omitted without an inspection error", result)
+		t.Fatalf("result = %#v, want missing current-user Windows cache roots omitted without inspection errors", result)
 	}
 }
 
