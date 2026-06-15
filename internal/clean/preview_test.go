@@ -355,6 +355,8 @@ func TestDryRunProjectsExistenceObservedCategoriesThroughReadModelReportAndDetai
 		{Category: clean.OpportunityCategoryWindowsErrorReporting, Path: filepath.Join(root, "WER"), Bytes: 1024, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
 		{Category: clean.OpportunityCategoryExplorerThumbnailCache, Path: filepath.Join(root, "Explorer"), Bytes: 2048, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
 		{Category: clean.OpportunityCategoryINetCache, Path: filepath.Join(root, "INetCache"), Bytes: 4096, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+		{Category: clean.OpportunityCategoryD3DShaderCache, Path: filepath.Join(root, "D3DSCache"), Bytes: 8192, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+		{Category: clean.OpportunityCategoryNVIDIADXCache, Path: filepath.Join(root, "NVIDIA", "DXCache"), Bytes: 16384, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
 	}
 	recorder := &recordingHistoryRecorder{}
 	result := clean.DryRun(context.Background(), clean.Options{
@@ -384,6 +386,10 @@ func TestDryRunProjectsExistenceObservedCategoriesThroughReadModelReportAndDetai
 			"category: explorer_thumbnail_cache",
 			opportunities[2].Path,
 			"category: inet_cache",
+			opportunities[3].Path,
+			"category: d3d_shader_cache",
+			opportunities[4].Path,
+			"category: nvidia_dx_cache",
 			"not counted as Potential space",
 		} {
 			if !strings.Contains(content, want) {
@@ -396,12 +402,12 @@ func TestDryRunProjectsExistenceObservedCategoriesThroughReadModelReportAndDetai
 			}
 		}
 	}
-	if model.PotentialSpaceBytes != 0 || model.OpportunityCount != 3 || model.OpportunityObservedBytes != 7168 {
-		t.Fatalf("model totals = %#v, want review-only 3/7168 outside Potential space", model)
+	if model.PotentialSpaceBytes != 0 || model.OpportunityCount != 5 || model.OpportunityObservedBytes != 31744 {
+		t.Fatalf("model totals = %#v, want review-only 5/31744 outside Potential space", model)
 	}
 	if len(recorder.sessions) != 1 ||
-		recorder.sessions[0].Aggregate.OpportunityCount != 3 ||
-		recorder.sessions[0].Aggregate.OpportunityObservedBytes != 7168 {
+		recorder.sessions[0].Aggregate.OpportunityCount != 5 ||
+		recorder.sessions[0].Aggregate.OpportunityObservedBytes != 31744 {
 		t.Fatalf("history = %#v / %s, want aggregate-only category totals", recorder.sessions, recorder.encoded)
 	}
 	for _, opportunity := range opportunities {
@@ -416,6 +422,8 @@ func TestDryRunSuppressesProtectedWindowsCacheOpportunitiesBeforeTotals(t *testi
 	wer := filepath.Join(root, "WER")
 	explorer := filepath.Join(root, "Explorer")
 	inetCache := filepath.Join(root, "INetCache")
+	d3d := filepath.Join(root, "D3DSCache")
+	nvidia := filepath.Join(root, "NVIDIA", "DXCache")
 	visible := filepath.Join(root, "CrashDumps")
 
 	result := clean.DryRun(context.Background(), clean.Options{
@@ -423,6 +431,8 @@ func TestDryRunSuppressesProtectedWindowsCacheOpportunitiesBeforeTotals(t *testi
 			strings.ToUpper(`\\?\` + wer),
 			explorer,
 			inetCache,
+			d3d,
+			nvidia,
 		}),
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
@@ -430,6 +440,8 @@ func TestDryRunSuppressesProtectedWindowsCacheOpportunitiesBeforeTotals(t *testi
 				{Category: clean.OpportunityCategoryWindowsErrorReporting, Path: wer, Bytes: 10, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
 				{Category: clean.OpportunityCategoryExplorerThumbnailCache, Path: explorer, Bytes: 20, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
 				{Category: clean.OpportunityCategoryINetCache, Path: inetCache, Bytes: 30, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Category: clean.OpportunityCategoryD3DShaderCache, Path: d3d, Bytes: 35, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
+				{Category: clean.OpportunityCategoryNVIDIADXCache, Path: nvidia, Bytes: 37, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
 				{Category: clean.OpportunityCategoryCrashDumps, Path: visible, Bytes: 40, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason},
 			}}
 		},

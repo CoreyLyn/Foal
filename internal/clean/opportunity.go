@@ -17,6 +17,8 @@ const (
 	OpportunityCategoryWindowsErrorReporting  = "windows_error_reporting"
 	OpportunityCategoryExplorerThumbnailCache = "explorer_thumbnail_cache"
 	OpportunityCategoryINetCache              = "inet_cache"
+	OpportunityCategoryD3DShaderCache         = "d3d_shader_cache"
+	OpportunityCategoryNVIDIADXCache          = "nvidia_dx_cache"
 	OpportunityStatus                         = "skipped_by_default"
 	OpportunityReason                         = "requires_explicit_opt_in"
 	UserTempOpportunityStatus                 = OpportunityStatus
@@ -32,6 +34,8 @@ var (
 		{category: OpportunityCategoryWindowsErrorReporting, localAppDataPath: []string{"Microsoft", "Windows", "WER"}},
 		{category: OpportunityCategoryExplorerThumbnailCache, localAppDataPath: []string{"Microsoft", "Windows", "Explorer"}},
 		{category: OpportunityCategoryINetCache, localAppDataPath: []string{"Microsoft", "Windows", "INetCache"}},
+		{category: OpportunityCategoryD3DShaderCache, localAppDataPath: []string{"D3DSCache"}},
+		{category: OpportunityCategoryNVIDIADXCache, localAppDataPath: []string{"NVIDIA", "DXCache"}},
 	}
 )
 
