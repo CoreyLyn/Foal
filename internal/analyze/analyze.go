@@ -10,6 +10,16 @@ import (
 
 const defaultTopChildLimit = 10
 
+var projectArtifactDirectoryNames = map[string]struct{}{
+	"node_modules": {},
+	"target":       {},
+	"dist":         {},
+	"build":        {},
+	".build":       {},
+	".next":        {},
+	"__pycache__":  {},
+}
+
 type Result struct {
 	Status      string        `json:"status"`
 	Root        string        `json:"root"`
@@ -126,7 +136,8 @@ func (s *scanner) addTopChild(path, kind string, totals Totals) {
 }
 
 func childClassification(path, kind string) string {
-	if kind == "directory" && filepath.Base(path) == "node_modules" {
+	_, isProjectArtifact := projectArtifactDirectoryNames[filepath.Base(path)]
+	if kind == "directory" && isProjectArtifact {
 		return "project_artifact_clue"
 	}
 	return ""

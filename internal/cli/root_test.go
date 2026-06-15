@@ -410,12 +410,11 @@ func TestAnalyzeJSONReportsDirectoryInsight(t *testing.T) {
 
 func TestAnalyzeJSONReportsOptionalProjectArtifactClueClassification(t *testing.T) {
 	root := t.TempDir()
-	nodeModules := filepath.Join(root, "node_modules")
-	if err := os.Mkdir(nodeModules, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(nodeModules, "package.js"), []byte("module"), 0644); err != nil {
-		t.Fatal(err)
+	artifactNames := []string{"node_modules", "target", "dist", "build", ".build", ".next", "__pycache__"}
+	for _, name := range artifactNames {
+		if err := os.Mkdir(filepath.Join(root, name), 0755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ordinary := filepath.Join(root, "source")
 	if err := os.Mkdir(ordinary, 0755); err != nil {
@@ -438,8 +437,10 @@ func TestAnalyzeJSONReportsOptionalProjectArtifactClueClassification(t *testing.
 		child := rawChild.(map[string]interface{})
 		childrenByName[child["name"].(string)] = child
 	}
-	if got := childrenByName["node_modules"]["classification"]; got != "project_artifact_clue" {
-		t.Fatalf("node_modules classification = %v, want project_artifact_clue", got)
+	for _, name := range artifactNames {
+		if got := childrenByName[name]["classification"]; got != "project_artifact_clue" {
+			t.Fatalf("%s classification = %v, want project_artifact_clue", name, got)
+		}
 	}
 	if _, ok := childrenByName["source"]["classification"]; ok {
 		t.Fatalf("source unexpectedly has classification: %#v", childrenByName["source"])
