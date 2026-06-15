@@ -7,49 +7,61 @@ import (
 	"testing"
 )
 
-func TestRunClassifiesDirectNodeModulesDirectoryAsProjectArtifactClue(t *testing.T) {
+func TestRunClassifiesDirectHighConfidenceArtifactDirectoriesAsProjectArtifactClues(t *testing.T) {
 	root := t.TempDir()
-	nodeModules := filepath.Join(root, "node_modules")
-	if err := os.Mkdir(nodeModules, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(nodeModules, "package.js"), []byte("module"), 0644); err != nil {
-		t.Fatal(err)
+	artifactNames := []string{"node_modules", "target", "dist", "build", ".build", ".next", "__pycache__"}
+	for _, name := range artifactNames {
+		path := filepath.Join(root, name)
+		if err := os.Mkdir(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "artifact.bin"), []byte(name), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	result := Run(root)
 
-	if len(result.TopChildren) != 1 {
-		t.Fatalf("len(TopChildren) = %d, want 1", len(result.TopChildren))
+	if len(result.TopChildren) != len(artifactNames) {
+		t.Fatalf("len(TopChildren) = %d, want %d", len(result.TopChildren), len(artifactNames))
 	}
-	child := result.TopChildren[0]
-	if child.Name != "node_modules" {
-		t.Fatalf("Name = %q, want node_modules", child.Name)
+	childrenByName := make(map[string]ChildResult, len(result.TopChildren))
+	for _, child := range result.TopChildren {
+		childrenByName[child.Name] = child
 	}
-	if child.Path != nodeModules {
-		t.Fatalf("Path = %q, want %q", child.Path, nodeModules)
-	}
-	if child.Kind != "directory" {
-		t.Fatalf("Kind = %q, want directory", child.Kind)
-	}
-	if child.Classification != "project_artifact_clue" {
-		t.Fatalf("Classification = %q, want project_artifact_clue", child.Classification)
+	for _, name := range artifactNames {
+		child, ok := childrenByName[name]
+		if !ok {
+			t.Fatalf("TopChildren missing %q: %#v", name, result.TopChildren)
+		}
+		if child.Path != filepath.Join(root, name) {
+			t.Fatalf("%s Path = %q, want %q", name, child.Path, filepath.Join(root, name))
+		}
+		if child.Kind != "directory" {
+			t.Fatalf("%s Kind = %q, want directory", name, child.Kind)
+		}
+		if child.Classification != "project_artifact_clue" {
+			t.Fatalf("%s Classification = %q, want project_artifact_clue", name, child.Classification)
+		}
 	}
 }
 
 func TestRunDoesNotClassifyNonMatchingProjectArtifactClues(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "node_modules"), []byte("file"), 0644); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"node_modules", "target", ".next"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("file"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	for _, name := range []string{"node_modules_backup", "source"} {
+	for _, name := range []string{"bin", "obj", "source", "node_modules_backup", "dist-cache", "project"} {
 		if err := os.Mkdir(filepath.Join(root, name), 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	nested := filepath.Join(root, "project", "node_modules")
-	if err := os.MkdirAll(nested, 0755); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"node_modules", "build", "__pycache__"} {
+		if err := os.Mkdir(filepath.Join(root, "project", name), 0755); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	result := Run(root)
@@ -58,8 +70,11 @@ func TestRunDoesNotClassifyNonMatchingProjectArtifactClues(t *testing.T) {
 		if child.Classification != "" {
 			t.Fatalf("%s Classification = %q, want empty", child.Name, child.Classification)
 		}
-		if child.Name == "node_modules" && child.Kind != "file" {
-			t.Fatalf("node_modules Kind = %q, want file", child.Kind)
+		switch child.Name {
+		case "node_modules", "target", ".next":
+			if child.Kind != "file" {
+				t.Fatalf("%s Kind = %q, want file", child.Name, child.Kind)
+			}
 		}
 	}
 }
