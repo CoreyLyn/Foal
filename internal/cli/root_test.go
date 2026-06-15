@@ -1289,6 +1289,20 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 					Status:   clean.UserTempOpportunityStatus,
 					Reason:   clean.UserTempOpportunityReason,
 				},
+				{
+					Category: clean.OpportunityCategoryD3DShaderCache,
+					Path:     `C:\Users\corey\AppData\Local\D3DSCache`,
+					Bytes:    2048,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
+				{
+					Category: clean.OpportunityCategoryNVIDIADXCache,
+					Path:     `C:\Users\corey\AppData\Local\NVIDIA\DXCache`,
+					Bytes:    4096,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
 			},
 			IncompleteOpportunityInspections: []clean.IncompleteOpportunityInspection{{
 				Path: `C:\Temp\unreadable-cache`,
@@ -1302,8 +1316,8 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 			Totals: clean.Totals{
 				CandidateCount:           1,
 				CandidateBytes:           12,
-				OpportunityCount:         5,
-				OpportunityObservedBytes: 19456,
+				OpportunityCount:         7,
+				OpportunityObservedBytes: 25600,
 			},
 		}
 	}
@@ -1316,8 +1330,8 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 	}
 	result := readResultObject(t, stdout.Bytes())
 	opportunities := result["opportunities"].([]interface{})
-	if len(opportunities) != 5 {
-		t.Fatalf("opportunities = %#v, want user temp and four current-user Windows cache categories", opportunities)
+	if len(opportunities) != 7 {
+		t.Fatalf("opportunities = %#v, want user temp and six current-user Windows cache categories", opportunities)
 	}
 	opportunity := opportunities[0].(map[string]interface{})
 	if opportunity["category"] != clean.OpportunityCategoryUserTemp ||
@@ -1338,6 +1352,8 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 		clean.OpportunityCategoryWindowsErrorReporting,
 		clean.OpportunityCategoryExplorerThumbnailCache,
 		clean.OpportunityCategoryINetCache,
+		clean.OpportunityCategoryD3DShaderCache,
+		clean.OpportunityCategoryNVIDIADXCache,
 	} {
 		cache := opportunities[index+2].(map[string]interface{})
 		if cache["category"] != category {
@@ -1355,7 +1371,7 @@ func TestCleanDryRunJSONIncludesSkippedByDefaultOpportunityContract(t *testing.T
 		t.Fatalf("incomplete inspections = %#v, want one", incomplete)
 	}
 	totals := result["totals"].(map[string]interface{})
-	if totals["candidate_bytes"] != float64(12) || totals["opportunity_count"] != float64(5) || totals["opportunity_observed_bytes"] != float64(19456) {
+	if totals["candidate_bytes"] != float64(12) || totals["opportunity_count"] != float64(7) || totals["opportunity_observed_bytes"] != float64(25600) {
 		t.Fatalf("totals = %#v, want separate candidate and opportunity totals", totals)
 	}
 }

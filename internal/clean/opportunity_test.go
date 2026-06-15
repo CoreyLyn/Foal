@@ -27,6 +27,8 @@ func TestDiscoverOpportunitiesCategorizesUserTempAndCurrentUserWindowsCaches(t *
 		{clean.OpportunityCategoryWindowsErrorReporting, filepath.Join(localAppData, "Microsoft", "Windows", "WER"), "report.wer", "wer"},
 		{clean.OpportunityCategoryExplorerThumbnailCache, filepath.Join(localAppData, "Microsoft", "Windows", "Explorer"), "thumbcache.db", "thumb"},
 		{clean.OpportunityCategoryINetCache, filepath.Join(localAppData, "Microsoft", "Windows", "INetCache"), "cache.dat", "inet"},
+		{clean.OpportunityCategoryD3DShaderCache, filepath.Join(localAppData, "D3DSCache"), "shader.bin", "d3d"},
+		{clean.OpportunityCategoryNVIDIADXCache, filepath.Join(localAppData, "NVIDIA", "DXCache"), "shader.bin", "nvidia"},
 	}
 	cacheFiles := make([]string, 0, len(cacheRoots))
 	for _, cache := range cacheRoots {
@@ -43,7 +45,7 @@ func TestDiscoverOpportunitiesCategorizesUserTempAndCurrentUserWindowsCaches(t *
 	})
 
 	if len(result.Opportunities) != 1+len(cacheRoots) {
-		t.Fatalf("opportunities = %#v, want user temp and four current-user Windows cache roots", result.Opportunities)
+		t.Fatalf("opportunities = %#v, want user temp and six current-user Windows cache roots", result.Opportunities)
 	}
 	userTemp := result.Opportunities[0]
 	if userTemp.Category != clean.OpportunityCategoryUserTemp || userTemp.Path != userTempPath ||

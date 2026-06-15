@@ -50,6 +50,8 @@ func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 		OpportunityCategoryWindowsErrorReporting:  filepath.Join(localAppData, "Microsoft", "Windows", "WER"),
 		OpportunityCategoryExplorerThumbnailCache: filepath.Join(localAppData, "Microsoft", "Windows", "Explorer"),
 		OpportunityCategoryINetCache:              filepath.Join(localAppData, "Microsoft", "Windows", "INetCache"),
+		OpportunityCategoryD3DShaderCache:         filepath.Join(localAppData, "D3DSCache"),
+		OpportunityCategoryNVIDIADXCache:          filepath.Join(localAppData, "NVIDIA", "DXCache"),
 	}
 	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
 		TempDir:         `C:\Users\corey\AppData\Local\Temp`,
@@ -96,6 +98,8 @@ func TestExistenceObservedCategorySafetyFailuresAreCategorizedAndExcluded(t *tes
 		{OpportunityCategoryWindowsErrorReporting, `C:\Users\corey\AppData\Local\Microsoft\Windows\WER`},
 		{OpportunityCategoryExplorerThumbnailCache, `C:\Users\corey\AppData\Local\Microsoft\Windows\Explorer`},
 		{OpportunityCategoryINetCache, `C:\Users\corey\AppData\Local\Microsoft\Windows\INetCache`},
+		{OpportunityCategoryD3DShaderCache, `C:\Users\corey\AppData\Local\D3DSCache`},
+		{OpportunityCategoryNVIDIADXCache, `C:\Users\corey\AppData\Local\NVIDIA\DXCache`},
 	}
 	tests := []struct {
 		name     string
@@ -175,14 +179,15 @@ func TestExistenceObservedCategorySafetyFailuresAreCategorizedAndExcluded(t *tes
 
 func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T) {
 	localAppData := `C:\Users\corey\AppData\Local`
-	werRoot := filepath.Join(localAppData, "Microsoft", "Windows", "WER")
+	d3dRoot := filepath.Join(localAppData, "D3DSCache")
+	nvidiaRoot := filepath.Join(localAppData, "NVIDIA", "DXCache")
 	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
 		TempDir:         `C:\Users\corey\AppData\Local\Temp`,
 		LocalAppDataDir: localAppData,
 	}, opportunityDiscoveryDependencies{
 		readDir: func(string) ([]os.DirEntry, error) { return []os.DirEntry{}, nil },
 		stat: func(path string) (os.FileInfo, error) {
-			if path == werRoot {
+			if path == d3dRoot {
 				return nil, fs.ErrPermission
 			}
 			return fakeFileInfo{name: filepath.Base(path), mode: os.ModeDir}, nil
@@ -192,19 +197,26 @@ func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T)
 		},
 	})
 
-	if len(result.Opportunities) != 3 {
+	if len(result.Opportunities) != 5 {
 		t.Fatalf("opportunities = %#v, want unaffected fixed categories", result.Opportunities)
 	}
+	foundNVIDIA := false
 	for _, opportunity := range result.Opportunities {
-		if opportunity.Category == OpportunityCategoryWindowsErrorReporting {
-			t.Fatalf("opportunities = %#v, must exclude incomplete WER category", result.Opportunities)
+		if opportunity.Category == OpportunityCategoryD3DShaderCache {
+			t.Fatalf("opportunities = %#v, must exclude incomplete D3D category", result.Opportunities)
+		}
+		if opportunity.Category == OpportunityCategoryNVIDIADXCache && opportunity.Path == nvidiaRoot {
+			foundNVIDIA = true
 		}
 	}
+	if !foundNVIDIA {
+		t.Fatalf("opportunities = %#v, want NVIDIA category after D3D failure", result.Opportunities)
+	}
 	if len(result.Incomplete) != 1 ||
-		result.Incomplete[0].Category != OpportunityCategoryWindowsErrorReporting ||
-		result.Incomplete[0].Path != werRoot ||
+		result.Incomplete[0].Category != OpportunityCategoryD3DShaderCache ||
+		result.Incomplete[0].Path != d3dRoot ||
 		result.Incomplete[0].Reason.Code != "permission_denied" {
-		t.Fatalf("incomplete = %#v, want categorized WER permission failure", result.Incomplete)
+		t.Fatalf("incomplete = %#v, want categorized D3D permission failure", result.Incomplete)
 	}
 }
 

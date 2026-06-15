@@ -95,6 +95,20 @@ func stubCleanPreviewDryRun(t *testing.T) {
 					Status:   clean.UserTempOpportunityStatus,
 					Reason:   clean.UserTempOpportunityReason,
 				},
+				{
+					Category: clean.OpportunityCategoryD3DShaderCache,
+					Path:     `C:\Users\corey\AppData\Local\D3DSCache`,
+					Bytes:    2048,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
+				{
+					Category: clean.OpportunityCategoryNVIDIADXCache,
+					Path:     `C:\Users\corey\AppData\Local\NVIDIA\DXCache`,
+					Bytes:    4096,
+					Status:   clean.UserTempOpportunityStatus,
+					Reason:   clean.UserTempOpportunityReason,
+				},
 			},
 			ReviewSuggestions: []clean.ReviewSuggestion{
 				{
@@ -132,8 +146,8 @@ func stubCleanPreviewDryRun(t *testing.T) {
 				CandidateCount:           1,
 				CandidateBytes:           12,
 				SkippedCount:             1,
-				OpportunityCount:         5,
-				OpportunityObservedBytes: 19456,
+				OpportunityCount:         7,
+				OpportunityObservedBytes: 25600,
 			},
 		}
 	}
@@ -187,7 +201,7 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"Inspection errors (1)",
 		"inspection_failed",
 		"Protection rules",
-		"Opportunities: 5, observed bytes: 19456 bytes",
+		"Opportunities: 7, observed bytes: 25600 bytes",
 		`C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
 		"category: user_temp",
 		"latest modified: 2026-06-01T12:00:00Z",
@@ -200,6 +214,10 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"category: explorer_thumbnail_cache",
 		`C:\Users\corey\AppData\Local\Microsoft\Windows\INetCache`,
 		"category: inet_cache",
+		`C:\Users\corey\AppData\Local\D3DSCache`,
+		"category: d3d_shader_cache",
+		`C:\Users\corey\AppData\Local\NVIDIA\DXCache`,
+		"category: nvidia_dx_cache",
 		"status: skipped_by_default",
 		"reason: requires_explicit_opt_in",
 		"Review suggestions (5)",
