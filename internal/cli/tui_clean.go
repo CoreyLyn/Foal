@@ -59,9 +59,10 @@ func loadCleanPreviewCmd(ctx context.Context, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		config := loadProtectionConfiguration()
 		result := dryRunClean(ctx, clean.Options{
-			Validator:             config.Validator,
-			ProtectionDiagnostics: config.Diagnostics,
-			ProtectionLoadError:   config.LoadError,
+			Validator:                 config.Validator,
+			ProtectionDiagnostics:     config.Diagnostics,
+			ProtectionLoadError:       config.LoadError,
+			DetectRunningApplications: clean.DetectSupportedBrowserApplications,
 		})
 		return cleanPreviewLoadedMsg{
 			generation: generation,

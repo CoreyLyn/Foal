@@ -131,6 +131,24 @@ func TestExecuteDoesNotDiscoverOrReturnCategorizedOpportunities(t *testing.T) {
 	}
 }
 
+func TestExecuteDoesNotPerformRunningApplicationDetection(t *testing.T) {
+	result := clean.Execute(context.Background(), clean.Options{
+		RecycleBinAdapter: &recordingRecycleBinAdapter{},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			t.Fatal("execute invoked browser running application detection")
+			return nil
+		},
+		Rules: []clean.Rule{{
+			ID:             "disabled_test_rule",
+			DefaultEnabled: false,
+		}},
+	})
+
+	if len(result.RunningApplications) != 0 || len(result.Opportunities) != 0 || result.Totals.OpportunityCount != 0 {
+		t.Fatalf("execute review-only state = %#v, want none", result)
+	}
+}
+
 func TestDryRunOpportunityNeverReachesExecuteAdapterOrHistory(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "foal-owned.tmp")
