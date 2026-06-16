@@ -30,6 +30,7 @@ type Options struct {
 	DiscoverUserTempOpportunities func(context.Context) UserTempDiscoveryResult
 	OpportunityDiscoveryOptions   OpportunityDiscoveryOptions
 	DiscoverOpportunities         func(context.Context) OpportunityDiscoveryResult
+	BrowserCacheDiscoveryOptions  BrowserCacheDiscoveryOptions
 	DiscoverReviewSuggestions     func(context.Context) []ReviewSuggestion
 	DetectRunningApplications     func(context.Context) []RunningApplicationState
 }
@@ -190,12 +191,7 @@ func dryRun(ctx context.Context, opts Options) Result {
 		result.ReviewSuggestions = append(result.ReviewSuggestions, suggestion)
 	}
 	if opts.DetectRunningApplications != nil {
-		for _, state := range opts.DetectRunningApplications(ctx) {
-			result.RunningApplications = append(result.RunningApplications, state)
-			if state.State == RunningApplicationStateUnknown {
-				result.Errors = append(result.Errors, runningApplicationUnknownIssue(state))
-			}
-		}
+		applyBrowserCacheReview(ctx, opts, &result)
 	}
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
@@ -211,6 +207,129 @@ func dryRun(ctx context.Context, opts Options) Result {
 	}
 	recordHistorySession(ctx, opts, result, start, time.Now())
 	return result
+}
+
+func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result) {
+	preStates := opts.DetectRunningApplications(ctx)
+	result.RunningApplications = append(result.RunningApplications, preStates...)
+	for _, state := range preStates {
+		if state.State == RunningApplicationStateUnknown {
+			result.Errors = append(result.Errors, runningApplicationUnknownIssue(state))
+		}
+	}
+	if localAppDataDir := browserCacheLocalAppDataDir(opts.BrowserCacheDiscoveryOptions); localAppDataDir != "" {
+		suppressed, protectedRulePaths := chromeDiscoverySuppressed(chromeUserDataRoot(localAppDataDir), opts.Validator)
+		if suppressed {
+			suppressProtectionRules(result, protectedRulePaths)
+			return
+		}
+	}
+	chromePreState, ok := runningApplicationStateFor(preStates, ApplicationGoogleChrome)
+	if !ok || chromePreState.State != RunningApplicationStateIdle {
+		return
+	}
+
+	discovery := discoverChromeBrowserCache(ctx, opts.BrowserCacheDiscoveryOptions, opts.Validator)
+	if discovery.suppressed {
+		suppressProtectionRules(result, discovery.suppressedProtectionPaths)
+		return
+	}
+	if discovery.diagnostic != nil {
+		result.Errors = append(result.Errors, *discovery.diagnostic)
+		return
+	}
+	if discovery.incomplete != nil {
+		if !browserOpportunityPathProtected(opts.Validator, discovery.incomplete) {
+			result.IncompleteOpportunityInspections = append(result.IncompleteOpportunityInspections, *discovery.incomplete)
+			result.Errors = append(result.Errors, discovery.incomplete.Reason)
+		}
+		return
+	}
+
+	postStates := opts.DetectRunningApplications(ctx)
+	chromePostState, ok := runningApplicationStateFor(postStates, ApplicationGoogleChrome)
+	if !ok {
+		return
+	}
+	if chromePostState.State != RunningApplicationStateIdle {
+		replaceRunningApplicationState(result, chromePostState)
+		if chromePostState.State == RunningApplicationStateUnknown {
+			result.Errors = append(result.Errors, runningApplicationUnknownIssue(chromePostState))
+		}
+		return
+	}
+	if discovery.opportunity == nil || browserOpportunityProtected(opts.Validator, *discovery.opportunity) {
+		return
+	}
+	result.Opportunities = append(result.Opportunities, *discovery.opportunity)
+}
+
+func browserCacheLocalAppDataDir(opts BrowserCacheDiscoveryOptions) string {
+	if opts.LocalAppDataDir != "" {
+		return opts.LocalAppDataDir
+	}
+	return os.Getenv("LOCALAPPDATA")
+}
+
+func runningApplicationStateFor(states []RunningApplicationState, application string) (RunningApplicationState, bool) {
+	for _, state := range states {
+		if state.Application == application {
+			return state, true
+		}
+	}
+	return RunningApplicationState{}, false
+}
+
+func replaceRunningApplicationState(result *Result, replacement RunningApplicationState) {
+	for index, state := range result.RunningApplications {
+		if state.Application == replacement.Application {
+			result.RunningApplications[index] = replacement
+			return
+		}
+	}
+	result.RunningApplications = append(result.RunningApplications, replacement)
+}
+
+func browserOpportunityProtected(validator pathsafe.Validator, opportunity Opportunity) bool {
+	if validator.IsUserProtected(opportunity.Path) {
+		return true
+	}
+	if opportunity.BrowserCache == nil {
+		return false
+	}
+	for _, profile := range opportunity.BrowserCache.Profiles {
+		if validator.IsUserProtected(profile.Path) {
+			return true
+		}
+		for _, cache := range profile.Caches {
+			if validator.IsUserProtected(cache.Path) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func browserOpportunityPathProtected(validator pathsafe.Validator, incomplete *IncompleteOpportunityInspection) bool {
+	return incomplete != nil && validator.IsUserProtected(incomplete.Path)
+}
+
+func suppressProtectionRules(result *Result, suppressedPaths []string) {
+	if len(suppressedPaths) == 0 || len(result.ProtectionRules) == 0 {
+		return
+	}
+	suppressed := make(map[string]struct{}, len(suppressedPaths))
+	for _, path := range suppressedPaths {
+		suppressed[strings.ToLower(filepath.Clean(path))] = struct{}{}
+	}
+	filtered := result.ProtectionRules[:0]
+	for _, rule := range result.ProtectionRules {
+		if _, ok := suppressed[strings.ToLower(filepath.Clean(rule.Path))]; ok {
+			continue
+		}
+		filtered = append(filtered, rule)
+	}
+	result.ProtectionRules = filtered
 }
 
 func scanDefaultCandidates(ctx context.Context, opts Options, start time.Time) Result {
@@ -525,6 +644,22 @@ func writeDetailedCandidateList(dir string, result Result, at time.Time) (string
 			if normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryUserTemp {
 				builder.WriteString(fmt.Sprintf("    latest modified: %s\n", opportunity.LatestModifiedAt.UTC().Format(time.RFC3339)))
 				builder.WriteString(fmt.Sprintf("    idle days: %d\n", opportunity.IdleDays))
+			}
+			if opportunity.BrowserCache != nil {
+				builder.WriteString(fmt.Sprintf("    browser: %s\n", applicationDisplayName(opportunity.BrowserCache.Browser)))
+				builder.WriteString(fmt.Sprintf("    profiles: %d\n", opportunity.BrowserCache.ProfileCount))
+				for _, profile := range opportunity.BrowserCache.Profiles {
+					builder.WriteString(fmt.Sprintf("    profile: %s\n", profile.ID))
+					if profile.Name != "" {
+						builder.WriteString(fmt.Sprintf("      name: %s\n", profile.Name))
+					}
+					builder.WriteString(fmt.Sprintf("      path: %s\n", profile.Path))
+					for _, cache := range profile.Caches {
+						builder.WriteString(fmt.Sprintf("      cache: %s\n", cache.Kind))
+						builder.WriteString(fmt.Sprintf("        path: %s\n", cache.Path))
+						builder.WriteString(fmt.Sprintf("        bytes: %d\n", cache.Bytes))
+					}
+				}
 			}
 			builder.WriteString(fmt.Sprintf("    status: %s\n", opportunity.Status))
 			builder.WriteString(fmt.Sprintf("    reason: %s\n", opportunity.Reason))

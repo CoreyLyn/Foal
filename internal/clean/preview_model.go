@@ -332,9 +332,18 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 			builder.WriteString(fmt.Sprintf("  Opportunities: %d, observed bytes: %s (not counted as Potential space)\n",
 				model.OpportunityCount, formatBytes(model.OpportunityObservedBytes)))
 			for _, opportunity := range model.Opportunities[:cappedEntryCount(len(model.Opportunities))] {
-				builder.WriteString(fmt.Sprintf("  %s (%s, category: %s",
-					opportunity.Path, formatBytes(opportunity.Bytes), normalizedOpportunityCategory(opportunity.Category)))
-				if normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryUserTemp {
+				category := normalizedOpportunityCategory(opportunity.Category)
+				if opportunity.BrowserCache != nil {
+					builder.WriteString(fmt.Sprintf("  %s browser cache (%s, category: %s, profiles: %d",
+						applicationDisplayName(opportunity.BrowserCache.Browser),
+						formatBytes(opportunity.Bytes),
+						category,
+						opportunity.BrowserCache.ProfileCount))
+				} else {
+					builder.WriteString(fmt.Sprintf("  %s (%s, category: %s",
+						opportunity.Path, formatBytes(opportunity.Bytes), category))
+				}
+				if category == OpportunityCategoryUserTemp {
 					builder.WriteString(fmt.Sprintf(", latest modified: %s, idle days: %d",
 						opportunity.LatestModifiedAt.UTC().Format(time.RFC3339), opportunity.IdleDays))
 				}

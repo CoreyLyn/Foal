@@ -19,6 +19,7 @@ const (
 	OpportunityCategoryINetCache              = "inet_cache"
 	OpportunityCategoryD3DShaderCache         = "d3d_shader_cache"
 	OpportunityCategoryNVIDIADXCache          = "nvidia_dx_cache"
+	OpportunityCategoryBrowserCache           = "browser_cache"
 	OpportunityStatus                         = "skipped_by_default"
 	OpportunityReason                         = "requires_explicit_opt_in"
 	UserTempOpportunityStatus                 = OpportunityStatus
@@ -55,6 +56,10 @@ type OpportunityDiscoveryOptions struct {
 	Now             time.Time
 }
 
+type BrowserCacheDiscoveryOptions struct {
+	LocalAppDataDir string
+}
+
 type OpportunityDiscoveryResult struct {
 	Opportunities []Opportunity                     `json:"opportunities"`
 	Incomplete    []IncompleteOpportunityInspection `json:"incomplete"`
@@ -64,16 +69,36 @@ type OpportunityDiscoveryResult struct {
 type UserTempDiscoveryResult = OpportunityDiscoveryResult
 
 type Opportunity struct {
-	Category         string    `json:"category"`
-	Path             string    `json:"path"`
-	Bytes            int64     `json:"bytes"`
-	LatestModifiedAt time.Time `json:"-"`
-	IdleDays         int       `json:"-"`
-	Status           string    `json:"status"`
-	Reason           string    `json:"reason"`
+	Category         string                         `json:"category"`
+	Path             string                         `json:"path"`
+	Bytes            int64                          `json:"bytes"`
+	LatestModifiedAt time.Time                      `json:"-"`
+	IdleDays         int                            `json:"-"`
+	Status           string                         `json:"status"`
+	Reason           string                         `json:"reason"`
+	BrowserCache     *BrowserCacheOpportunityDetail `json:"browser_cache,omitempty"`
 }
 
 type UserTempOpportunity = Opportunity
+
+type BrowserCacheOpportunityDetail struct {
+	Browser      string                      `json:"browser"`
+	ProfileCount int                         `json:"profile_count"`
+	Profiles     []BrowserCacheProfileDetail `json:"profiles"`
+}
+
+type BrowserCacheProfileDetail struct {
+	ID     string                  `json:"id"`
+	Name   string                  `json:"name,omitempty"`
+	Path   string                  `json:"path"`
+	Caches []BrowserCacheDirectory `json:"caches"`
+}
+
+type BrowserCacheDirectory struct {
+	Kind  string `json:"kind"`
+	Path  string `json:"path"`
+	Bytes int64  `json:"bytes"`
+}
 
 type IncompleteOpportunityInspection struct {
 	Category string          `json:"category"`
@@ -327,6 +352,24 @@ func (opportunity Opportunity) MarshalJSON() ([]byte, error) {
 		Bytes:    opportunity.Bytes,
 		Status:   opportunity.Status,
 		Reason:   opportunity.Reason,
+	}
+	if opportunity.BrowserCache != nil {
+		type browserOpportunityJSON struct {
+			Category     string                         `json:"category"`
+			Path         string                         `json:"path"`
+			Bytes        int64                          `json:"bytes"`
+			Status       string                         `json:"status"`
+			Reason       string                         `json:"reason"`
+			BrowserCache *BrowserCacheOpportunityDetail `json:"browser_cache,omitempty"`
+		}
+		return json.Marshal(browserOpportunityJSON{
+			Category:     normalizedOpportunityCategory(opportunity.Category),
+			Path:         opportunity.Path,
+			Bytes:        opportunity.Bytes,
+			Status:       opportunity.Status,
+			Reason:       opportunity.Reason,
+			BrowserCache: opportunity.BrowserCache,
+		})
 	}
 	if normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryUserTemp {
 		encoded.LatestModifiedAt = &opportunity.LatestModifiedAt

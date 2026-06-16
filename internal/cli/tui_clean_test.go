@@ -629,6 +629,52 @@ func TestCleanPreviewLoadAndReloadRenderBrowserRunningStateFromSharedReadModel(t
 	}
 }
 
+func TestCleanPreviewRendersChromeBrowserCacheOpportunityAsSummary(t *testing.T) {
+	model := clean.PreviewReadModel{
+		Opportunities: []clean.Opportunity{{
+			Category: clean.OpportunityCategoryBrowserCache,
+			Path:     `C:\Users\corey\AppData\Local\Google\Chrome\User Data`,
+			Bytes:    12,
+			Status:   clean.OpportunityStatus,
+			Reason:   clean.OpportunityReason,
+			BrowserCache: &clean.BrowserCacheOpportunityDetail{
+				Browser:      clean.ApplicationGoogleChrome,
+				ProfileCount: 2,
+				Profiles: []clean.BrowserCacheProfileDetail{{
+					ID:   "Default",
+					Path: `C:\Users\corey\AppData\Local\Google\Chrome\User Data\Default`,
+					Caches: []clean.BrowserCacheDirectory{{
+						Kind:  "Code Cache",
+						Path:  `C:\Users\corey\AppData\Local\Google\Chrome\User Data\Default\Code Cache`,
+						Bytes: 4,
+					}},
+				}},
+			},
+		}},
+		OpportunityCount:         1,
+		OpportunityObservedBytes: 12,
+	}
+
+	output := renderCleanPreviewSections(model, cleanPreviewFilterReview, true)
+
+	for _, want := range []string{
+		"Google Chrome browser cache",
+		"category: browser_cache",
+		"profiles: 2",
+		"observed bytes: 12 bytes",
+		"not counted as Potential space",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("TUI output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{"Code Cache", `\Default`, `\User Data`} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("TUI output contains noisy Chrome detail %q:\n%s", forbidden, output)
+		}
+	}
+}
+
 func TestCleanPreviewScrollClampsAtBounds(t *testing.T) {
 	candidates := make([]clean.PreviewCandidate, 60)
 	for index := range candidates {
