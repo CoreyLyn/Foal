@@ -64,6 +64,10 @@ _Avoid_: cleanup candidates, executable actions
 Plain ASCII presentation-only labels used in non-JSON output to make preview state, skipped state, clean state, clues, and review suggestions easier to scan.
 _Avoid_: Unicode symbols, JSON status codes, execution semantics
 
+**Report category**:
+A presentation grouping that organizes mixed Clean review states by a user-recognizable domain such as `System`, `User essentials`, `Browsers`, or `Developer tools`. A Report category may contain default candidates, skipped-by-default opportunities, running-application skips, review clues, suggestions, or inspection diagnostics; the category never changes an item's execution eligibility, JSON status, or contribution to Potential space.
+_Avoid_: cleanup rule group, execution authorization, JSON status
+
 **Permission boundary notice**:
 A human-readable notice that explains protected or administrator-only locations were skipped without recommending elevation as the normal path.
 _Avoid_: full preview prompt, automatic elevation, run as administrator recommendation
@@ -95,6 +99,14 @@ _Avoid_: default project scan, default clean candidate
 **Running application skip**:
 A skipped-by-default report state for cleanup opportunities tied to currently running applications or services, especially sync clients, browsers, IDEs, AI tools, containers, and virtualization tools.
 _Avoid_: close-and-clean prompt, default candidate
+
+**Running application detection**:
+A read-only three-state check used before and after inspecting application-owned caches: `running` means Foal does not inspect or measure the cache and reports a Running application skip, `idle` means Foal may measure it as skipped-by-default review data, and `unknown` means Foal safely skips inspection and reports a recoverable diagnostic. An unknown result never implies that the application is idle. For a supported multi-process browser, any matching browser process makes the whole browser `running`; Foal does not infer per-profile idleness from process command lines. If the application becomes running or unknown during inspection, Foal discards the measured review data and reports the safe skip instead.
+_Avoid_: unknown treated as idle, process stopping, close-and-clean prompt
+
+**Browser cache opportunity**:
+A skipped-by-default, path-backed review discovery for a supported browser's `Cache`, `Code Cache`, and `GPUCache` directories, measured only after Running application detection confirms the browser is idle. The first supported browsers are Google Chrome and Microsoft Edge. Foal uses the current user's browser data root as the existence boundary: a missing `User Data` root is silently absent, while an existing root with a missing, unreadable, or invalid `Local State` profile catalog produces an unknown result. Foal does not use installation discovery or guess profile directories by scanning `User Data`. JSON represents one Browser cache opportunity per browser with total observed bytes, profile count, and profile-specific cache detail; human output shows the browser summary, while detailed review surfaces may expand the profile paths. A browser summary is reported only when every identified profile can be inspected completely; any incomplete profile inspection discards the whole browser's measured result rather than presenting a partial total. If any profile cache path is protected by Protection rules, Foal suppresses the entire browser opportunity before totals and downstream projection instead of presenting a partial browser summary. A recognized cache directory that does not exist contributes zero bytes and is not an incomplete inspection; a browser whose complete recognized cache total is zero produces no Opportunity. Each existing recognized cache directory uses the standard 100,000-descendant Opportunity inspection limit, and an unsafe, unreadable, canceled, or over-limit inspection invalidates the browser summary. Cookies, history, credentials, extensions, download records, Service Worker data, and whole browser profile directories are excluded.
+_Avoid_: browser data, browsing history, cookies, credentials, default candidate
 
 **Clean preview read model**:
 A shared representation of clean preview sections, candidates, skipped-by-default items, review clues, suggestions, protection rules, notices, totals, and detailed-list metadata for JSON, human output, and future TUI consumers.
