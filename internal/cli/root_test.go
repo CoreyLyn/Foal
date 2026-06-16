@@ -193,6 +193,44 @@ func TestKnownCommandRoutesAsJSON(t *testing.T) {
 	}
 }
 
+func TestCleanDryRunEnablesRunningApplicationDetection(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		if opts.DetectRunningApplications == nil {
+			t.Fatal("dry-run must enable browser running application detection")
+		}
+		return clean.Result{Status: "preview", Mode: "dry_run"}
+	}
+	t.Cleanup(func() { dryRunClean = originalDryRun })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--dry-run", "--json"}, &stdout, &stderr)
+
+	if code != exitOK || stderr.Len() != 0 {
+		t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+	}
+}
+
+func TestCleanExecuteDoesNotEnableRunningApplicationDetection(t *testing.T) {
+	disableHistoryRecording(t)
+	originalExecute := executeClean
+	executeClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		if opts.DetectRunningApplications != nil {
+			t.Fatal("execute must not perform browser running application detection")
+		}
+		return clean.Result{Status: "ok", Mode: "execute"}
+	}
+	t.Cleanup(func() { executeClean = originalExecute })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--execute", "--json"}, &stdout, &stderr)
+
+	if code != exitOK || stderr.Len() != 0 {
+		t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+	}
+}
+
 func TestCleanJSONLoadsSelectedProtectionFileIntoSharedContract(t *testing.T) {
 	disableHistoryRecording(t)
 	configPath := filepath.Join(t.TempDir(), "protection.txt")

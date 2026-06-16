@@ -222,6 +222,7 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 		if invocation.execute {
 			result = executeClean(context.Background(), cleanOptions)
 		} else {
+			cleanOptions.DetectRunningApplications = clean.DetectSupportedBrowserApplications
 			result = dryRunClean(context.Background(), cleanOptions)
 		}
 		if opts.json {

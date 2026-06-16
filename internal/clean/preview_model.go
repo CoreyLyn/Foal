@@ -170,6 +170,18 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 			CachePath: suggestion.CachePath,
 		})
 	}
+	runningApplicationSkips := make([]PreviewRunningApplicationSkip, 0, len(result.RunningApplications))
+	for _, state := range result.RunningApplications {
+		if state.State != RunningApplicationStateRunning {
+			continue
+		}
+		displayName := applicationDisplayName(state.Application)
+		runningApplicationSkips = append(runningApplicationSkips, PreviewRunningApplicationSkip{
+			Name:        displayName + " browser review",
+			Application: displayName,
+			Reason:      displayName + " is running; browser cache review was skipped.",
+		})
+	}
 	opportunities := append([]Opportunity(nil), result.Opportunities...)
 	for index := range opportunities {
 		opportunities[index].Category = normalizedOpportunityCategory(opportunities[index].Category)
@@ -190,6 +202,7 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		IncompleteOpportunityInspections: append([]IncompleteOpportunityInspection(nil), result.IncompleteOpportunityInspections...),
 		ReviewClues:                      reviewClues,
 		ReviewSuggestions:                reviewSuggestions,
+		RunningApplicationSkips:          runningApplicationSkips,
 		Errors:                           append([]StructuredIssue(nil), result.Errors...),
 		Notices:                          notices,
 		PotentialSpaceBytes:              potentialSpace,
@@ -199,6 +212,17 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		OpportunityObservedBytes:         result.Totals.OpportunityObservedBytes,
 		DetailedListPath:                 result.DetailedListPath,
 		Summary:                          "Dry-run summary: No changes were made. Re-run with foal clean --execute to move these default candidates to the Recycle Bin.",
+	}
+}
+
+func applicationDisplayName(application string) string {
+	switch application {
+	case ApplicationGoogleChrome:
+		return "Google Chrome"
+	case ApplicationMicrosoftEdge:
+		return "Microsoft Edge"
+	default:
+		return application
 	}
 }
 

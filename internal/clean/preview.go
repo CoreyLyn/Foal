@@ -31,6 +31,7 @@ type Options struct {
 	OpportunityDiscoveryOptions   OpportunityDiscoveryOptions
 	DiscoverOpportunities         func(context.Context) OpportunityDiscoveryResult
 	DiscoverReviewSuggestions     func(context.Context) []ReviewSuggestion
+	DetectRunningApplications     func(context.Context) []RunningApplicationState
 }
 
 type Rule struct {
@@ -55,6 +56,7 @@ type Result struct {
 	Opportunities                    []Opportunity                     `json:"opportunities"`
 	IncompleteOpportunityInspections []IncompleteOpportunityInspection `json:"incomplete_opportunity_inspections"`
 	ReviewSuggestions                []ReviewSuggestion                `json:"review_suggestions"`
+	RunningApplications              []RunningApplicationState         `json:"running_applications"`
 	Totals                           Totals                            `json:"totals"`
 	DetailedListPath                 string                            `json:"-"`
 	ElapsedMS                        int64                             `json:"elapsed_ms"`
@@ -95,6 +97,23 @@ type ReviewSuggestion struct {
 	Label     string `json:"label"`
 	Command   string `json:"command"`
 	CachePath string `json:"cache_path"`
+}
+
+type RunningApplicationStatus string
+
+const (
+	ApplicationGoogleChrome              = "google_chrome"
+	ApplicationMicrosoftEdge             = "microsoft_edge"
+	RunningApplicationStateRunning       = RunningApplicationStatus("running")
+	RunningApplicationStateIdle          = RunningApplicationStatus("idle")
+	RunningApplicationStateUnknown       = RunningApplicationStatus("unknown")
+	runningApplicationDetectionIssueCode = "running_application_detection_unknown"
+)
+
+type RunningApplicationState struct {
+	Application string                   `json:"application"`
+	State       RunningApplicationStatus `json:"state"`
+	Message     string                   `json:"message,omitempty"`
 }
 
 type StructuredIssue struct {
@@ -170,6 +189,14 @@ func dryRun(ctx context.Context, opts Options) Result {
 		}
 		result.ReviewSuggestions = append(result.ReviewSuggestions, suggestion)
 	}
+	if opts.DetectRunningApplications != nil {
+		for _, state := range opts.DetectRunningApplications(ctx) {
+			result.RunningApplications = append(result.RunningApplications, state)
+			if state.State == RunningApplicationStateUnknown {
+				result.Errors = append(result.Errors, runningApplicationUnknownIssue(state))
+			}
+		}
+	}
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
@@ -205,6 +232,7 @@ func scanDefaultCandidates(ctx context.Context, opts Options, start time.Time) R
 		Opportunities:                    []Opportunity{},
 		IncompleteOpportunityInspections: []IncompleteOpportunityInspection{},
 		ReviewSuggestions:                []ReviewSuggestion{},
+		RunningApplications:              []RunningApplicationState{},
 	}
 
 	for _, rule := range rules {
@@ -315,6 +343,7 @@ func protectionLoadFailure(mode string, opts Options, start time.Time) Result {
 		Opportunities:                    []Opportunity{},
 		IncompleteOpportunityInspections: []IncompleteOpportunityInspection{},
 		ReviewSuggestions:                []ReviewSuggestion{},
+		RunningApplications:              []RunningApplicationState{},
 		Totals:                           Totals{},
 		ElapsedMS:                        time.Since(start).Milliseconds(),
 	}
@@ -346,7 +375,9 @@ func recordHistorySession(ctx context.Context, opts Options, result Result, star
 }
 
 func withoutOpportunityReviewData(result Result) Result {
+	result.RunningApplications = nil
 	if len(result.IncompleteOpportunityInspections) == 0 {
+		result.Errors = withoutRunningApplicationDiagnostics(result.Errors)
 		result.Opportunities = nil
 		return result
 	}
@@ -359,12 +390,37 @@ func withoutOpportunityReviewData(result Result) Result {
 		if _, reviewOnly := incompleteIssues[structuredIssueKey(issue)]; reviewOnly {
 			continue
 		}
+		if issue.Code == runningApplicationDetectionIssueCode {
+			continue
+		}
 		errorsForHistory = append(errorsForHistory, issue)
 	}
 	result.Opportunities = nil
 	result.IncompleteOpportunityInspections = nil
 	result.Errors = errorsForHistory
 	return result
+}
+
+func withoutRunningApplicationDiagnostics(issues []StructuredIssue) []StructuredIssue {
+	if len(issues) == 0 {
+		return issues
+	}
+	filtered := make([]StructuredIssue, 0, len(issues))
+	for _, issue := range issues {
+		if issue.Code == runningApplicationDetectionIssueCode {
+			continue
+		}
+		filtered = append(filtered, issue)
+	}
+	return filtered
+}
+
+func runningApplicationUnknownIssue(state RunningApplicationState) StructuredIssue {
+	message := state.Message
+	if message == "" {
+		message = applicationDisplayName(state.Application) + " process state could not be determined; browser review was skipped."
+	}
+	return issue(runningApplicationDetectionIssueCode, message, true, "", "browser_review")
 }
 
 func structuredIssueKey(issue StructuredIssue) string {

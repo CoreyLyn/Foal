@@ -211,6 +211,125 @@ func TestDryRunExcludedRootsContributeOnlyDeveloperToolReviewSuggestion(t *testi
 	}
 }
 
+func TestDryRunProjectsRunningBrowsersAsRunningApplicationSkipsWithoutBrowserCacheData(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "foal-cache.tmp")
+	if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder: recorder,
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationGoogleChrome, State: clean.RunningApplicationStateRunning},
+				{Application: clean.ApplicationMicrosoftEdge, State: clean.RunningApplicationStateRunning},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+
+	if len(result.RunningApplications) != 2 {
+		t.Fatalf("running applications = %#v, want Chrome and Edge", result.RunningApplications)
+	}
+	if len(result.Opportunities) != 0 || result.Totals.OpportunityCount != 0 || result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("browser running state affected opportunities: %#v", result)
+	}
+	if result.Totals.CandidateCount != 1 || result.Totals.CandidateBytes != 5 || result.Totals.DeletedCount != 0 {
+		t.Fatalf("totals = %#v, want candidate-only accounting", result.Totals)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"running_applications":[`,
+		`"application":"google_chrome"`,
+		`"state":"running"`,
+		`"application":"microsoft_edge"`,
+	} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("JSON missing %q: %s", want, encoded)
+		}
+	}
+	for _, forbidden := range []string{"browser_cache", "Cache", "GPUCache", "Code Cache"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("JSON introduced browser cache detail %q: %s", forbidden, encoded)
+		}
+		if strings.Contains(recorder.encoded, forbidden) {
+			t.Fatalf("history introduced browser cache detail %q: %s", forbidden, recorder.encoded)
+		}
+	}
+
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	for _, want := range []string{
+		"Running application skips",
+		"Google Chrome",
+		"Microsoft Edge",
+		"Potential space: 5 bytes",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+	if len(recorder.sessions) != 1 ||
+		recorder.sessions[0].Aggregate.CandidateCount != 1 ||
+		recorder.sessions[0].Aggregate.ErrorCount != 0 ||
+		len(recorder.items) != 1 {
+		t.Fatalf("history = %#v / %#v, want candidate-only dry-run history", recorder.sessions, recorder.items)
+	}
+}
+
+func TestDryRunProjectsUnknownBrowserStateAsRecoverableDiagnosticsWithoutBrowserCacheData(t *testing.T) {
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder: recorder,
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationGoogleChrome, State: clean.RunningApplicationStateUnknown, Message: "process snapshot failed"},
+				{Application: clean.ApplicationMicrosoftEdge, State: clean.RunningApplicationStateIdle},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	if len(result.Errors) != 1 || result.Errors[0].Code != "running_application_detection_unknown" || !result.Errors[0].Recoverable {
+		t.Fatalf("errors = %#v, want recoverable unknown browser diagnostic", result.Errors)
+	}
+	if len(result.RunningApplications) != 2 || result.RunningApplications[1].State != clean.RunningApplicationStateIdle {
+		t.Fatalf("running applications = %#v, want unknown Chrome and idle Edge", result.RunningApplications)
+	}
+	if result.Totals.CandidateCount != 0 || result.Totals.OpportunityCount != 0 || result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("totals = %#v, want unknown state outside cleanup accounting", result.Totals)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"browser_cache", "Cache", "GPUCache", "Code Cache"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("JSON introduced browser cache detail %q: %s", forbidden, encoded)
+		}
+	}
+	if len(recorder.sessions) != 1 ||
+		recorder.sessions[0].Aggregate.ErrorCount != 0 ||
+		len(recorder.items) != 0 ||
+		strings.Contains(recorder.encoded, "running_application_detection_unknown") {
+		t.Fatalf("history = %#v / %#v / %s, want no browser diagnostic history", recorder.sessions, recorder.items, recorder.encoded)
+	}
+}
+
 func TestDryRunSuppressesOnlyReviewSuggestionsWithProtectedResolvedPaths(t *testing.T) {
 	protected := `C:\Users\Corey\AppData\Local\App`
 	descendant := `c:\users\corey\appdata\local\app\cache`

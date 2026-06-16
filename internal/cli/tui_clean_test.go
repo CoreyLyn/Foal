@@ -576,6 +576,59 @@ func TestCleanPreviewReloadLoadsProtectionConfigurationAfresh(t *testing.T) {
 	}
 }
 
+func TestCleanPreviewLoadAndReloadRenderBrowserRunningStateFromSharedReadModel(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	loadCount := 0
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		if opts.DetectRunningApplications == nil {
+			t.Fatal("clean TUI load must use shared browser running application detection")
+		}
+		loadCount++
+		if loadCount == 1 {
+			return clean.Result{
+				Status: "preview",
+				Mode:   "dry_run",
+				RunningApplications: []clean.RunningApplicationState{{
+					Application: clean.ApplicationGoogleChrome,
+					State:       clean.RunningApplicationStateRunning,
+				}},
+			}
+		}
+		return clean.Result{
+			Status: "preview",
+			Mode:   "dry_run",
+			RunningApplications: []clean.RunningApplicationState{{
+				Application: clean.ApplicationMicrosoftEdge,
+				State:       clean.RunningApplicationStateUnknown,
+				Message:     "process snapshot failed",
+			}},
+			Errors: []clean.StructuredIssue{{
+				Code:        "running_application_detection_unknown",
+				Message:     "process snapshot failed",
+				Recoverable: true,
+				Rule:        "browser_review",
+			}},
+		}
+	}
+	t.Cleanup(func() { dryRunClean = originalDryRun })
+
+	first := loadCleanPreviewCmd(context.Background(), 1)().(cleanPreviewLoadedMsg)
+	firstOutput := renderCleanPreviewSections(first.model, cleanPreviewFilterReview, true)
+	if !strings.Contains(firstOutput, "Running application skips (1)") ||
+		!strings.Contains(firstOutput, "Google Chrome") ||
+		!strings.Contains(firstOutput, "browser cache review was skipped") {
+		t.Fatalf("first load missing running browser skip:\n%s", firstOutput)
+	}
+
+	second := loadCleanPreviewCmd(context.Background(), 2)().(cleanPreviewLoadedMsg)
+	secondOutput := renderCleanPreviewSections(second.model, cleanPreviewFilterErrors, true)
+	if !strings.Contains(secondOutput, "running_application_detection_unknown") ||
+		!strings.Contains(secondOutput, "process snapshot failed") {
+		t.Fatalf("reload missing unknown browser diagnostic:\n%s", secondOutput)
+	}
+}
+
 func TestCleanPreviewScrollClampsAtBounds(t *testing.T) {
 	candidates := make([]clean.PreviewCandidate, 60)
 	for index := range candidates {
