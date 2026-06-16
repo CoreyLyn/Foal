@@ -675,6 +675,52 @@ func TestCleanPreviewRendersChromeBrowserCacheOpportunityAsSummary(t *testing.T)
 	}
 }
 
+func TestCleanPreviewRendersEdgeBrowserCacheOpportunityAsSummary(t *testing.T) {
+	model := clean.PreviewReadModel{
+		Opportunities: []clean.Opportunity{{
+			Category: clean.OpportunityCategoryBrowserCache,
+			Path:     `C:\Users\corey\AppData\Local\Microsoft\Edge\User Data`,
+			Bytes:    12,
+			Status:   clean.OpportunityStatus,
+			Reason:   clean.OpportunityReason,
+			BrowserCache: &clean.BrowserCacheOpportunityDetail{
+				Browser:      clean.ApplicationMicrosoftEdge,
+				ProfileCount: 2,
+				Profiles: []clean.BrowserCacheProfileDetail{{
+					ID:   "Default",
+					Path: `C:\Users\corey\AppData\Local\Microsoft\Edge\User Data\Default`,
+					Caches: []clean.BrowserCacheDirectory{{
+						Kind:  "GPUCache",
+						Path:  `C:\Users\corey\AppData\Local\Microsoft\Edge\User Data\Default\GPUCache`,
+						Bytes: 4,
+					}},
+				}},
+			},
+		}},
+		OpportunityCount:         1,
+		OpportunityObservedBytes: 12,
+	}
+
+	output := renderCleanPreviewSections(model, cleanPreviewFilterReview, true)
+
+	for _, want := range []string{
+		"Microsoft Edge browser cache",
+		"category: browser_cache",
+		"profiles: 2",
+		"observed bytes: 12 bytes",
+		"not counted as Potential space",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("TUI output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{"GPUCache", `\Default`, `\User Data`} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("TUI output contains noisy Edge detail %q:\n%s", forbidden, output)
+		}
+	}
+}
+
 func TestCleanPreviewScrollClampsAtBounds(t *testing.T) {
 	candidates := make([]clean.PreviewCandidate, 60)
 	for index := range candidates {
