@@ -18,7 +18,23 @@ const (
 	browserCacheRuleID = "browser_cache"
 )
 
-var chromeCacheDirectoryKinds = []string{"Cache", "Code Cache", "GPUCache"}
+var browserCacheDirectoryKinds = []string{"Cache", "Code Cache", "GPUCache"}
+
+type browserCacheConfig struct {
+	application      string
+	localAppDataPath []string
+}
+
+var browserCacheConfigs = []browserCacheConfig{
+	{
+		application:      ApplicationGoogleChrome,
+		localAppDataPath: []string{"Google", "Chrome", "User Data"},
+	},
+	{
+		application:      ApplicationMicrosoftEdge,
+		localAppDataPath: []string{"Microsoft", "Edge", "User Data"},
+	},
+}
 
 type browserCacheDiscoveryResult struct {
 	opportunity               *Opportunity
@@ -28,17 +44,21 @@ type browserCacheDiscoveryResult struct {
 	suppressedProtectionPaths []string
 }
 
-type chromeLocalState struct {
+type browserLocalState struct {
 	Profile struct {
-		InfoCache map[string]chromeProfileInfo `json:"info_cache"`
+		InfoCache map[string]browserProfileInfo `json:"info_cache"`
 	} `json:"profile"`
 }
 
-type chromeProfileInfo struct {
+type browserProfileInfo struct {
 	Name string `json:"name"`
 }
 
 func discoverChromeBrowserCache(ctx context.Context, opts BrowserCacheDiscoveryOptions, validator pathsafe.Validator) browserCacheDiscoveryResult {
+	return discoverBrowserCache(ctx, browserCacheConfigs[0], opts, validator)
+}
+
+func discoverBrowserCache(ctx context.Context, config browserCacheConfig, opts BrowserCacheDiscoveryOptions, validator pathsafe.Validator) browserCacheDiscoveryResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -49,8 +69,8 @@ func discoverChromeBrowserCache(ctx context.Context, opts BrowserCacheDiscoveryO
 	if localAppDataDir == "" {
 		return browserCacheDiscoveryResult{}
 	}
-	userDataRoot := chromeUserDataRoot(localAppDataDir)
-	suppressed, protectedRulePaths := chromeDiscoverySuppressed(userDataRoot, validator)
+	userDataRoot := browserUserDataRoot(localAppDataDir, config)
+	suppressed, protectedRulePaths := browserDiscoverySuppressed(userDataRoot, validator)
 	if suppressed {
 		return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: protectedRulePaths}
 	}
@@ -61,7 +81,7 @@ func discoverChromeBrowserCache(ctx context.Context, opts BrowserCacheDiscoveryO
 		return browserCacheDiscoveryResult{diagnostic: &diagnostic}
 	}
 
-	profiles, err := readChromeProfileCatalog(userDataRoot)
+	profiles, err := readBrowserProfileCatalog(userDataRoot, config)
 	if err != nil {
 		diagnostic := browserCacheDiagnostic(userDataRoot, "browser_profile_catalog_unknown", err.Error())
 		return browserCacheDiscoveryResult{diagnostic: &diagnostic}
@@ -71,7 +91,7 @@ func discoverChromeBrowserCache(ctx context.Context, opts BrowserCacheDiscoveryO
 	}
 
 	detail := BrowserCacheOpportunityDetail{
-		Browser:      ApplicationGoogleChrome,
+		Browser:      config.application,
 		ProfileCount: len(profiles),
 		Profiles:     make([]BrowserCacheProfileDetail, 0, len(profiles)),
 	}
@@ -79,18 +99,18 @@ func discoverChromeBrowserCache(ctx context.Context, opts BrowserCacheDiscoveryO
 	for _, profile := range profiles {
 		profilePath := filepath.Join(userDataRoot, profile.id)
 		if validator.IsUserProtected(profilePath) {
-			return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: protectedRulePaths}
+			return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: browserProtectedRulePaths(userDataRoot, validator)}
 		}
 		profileDetail := BrowserCacheProfileDetail{
 			ID:     profile.id,
 			Name:   profile.name,
 			Path:   profilePath,
-			Caches: make([]BrowserCacheDirectory, 0, len(chromeCacheDirectoryKinds)),
+			Caches: make([]BrowserCacheDirectory, 0, len(browserCacheDirectoryKinds)),
 		}
-		for _, kind := range chromeCacheDirectoryKinds {
+		for _, kind := range browserCacheDirectoryKinds {
 			cachePath := filepath.Join(profilePath, kind)
 			if validator.IsUserProtected(cachePath) {
-				return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: protectedRulePaths}
+				return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: browserProtectedRulePaths(userDataRoot, validator)}
 			}
 			if _, err := os.Lstat(cachePath); errors.Is(err, fs.ErrNotExist) {
 				profileDetail.Caches = append(profileDetail.Caches, BrowserCacheDirectory{Kind: kind, Path: cachePath})
@@ -132,20 +152,24 @@ type chromeProfileCatalogEntry struct {
 }
 
 func readChromeProfileCatalog(userDataRoot string) ([]chromeProfileCatalogEntry, error) {
+	return readBrowserProfileCatalog(userDataRoot, browserCacheConfigs[0])
+}
+
+func readBrowserProfileCatalog(userDataRoot string, config browserCacheConfig) ([]chromeProfileCatalogEntry, error) {
 	data, err := os.ReadFile(filepath.Join(userDataRoot, "Local State"))
 	if err != nil {
 		return nil, err
 	}
-	var localState chromeLocalState
+	var localState browserLocalState
 	if err := json.Unmarshal(data, &localState); err != nil {
-		return nil, fmt.Errorf("Chrome Local State profile catalog is invalid: %w", err)
+		return nil, fmt.Errorf("%s Local State profile catalog is invalid: %w", applicationDisplayName(config.application), err)
 	}
 	if localState.Profile.InfoCache == nil {
-		return nil, errors.New("Chrome Local State profile catalog is missing")
+		return nil, fmt.Errorf("%s Local State profile catalog is missing", applicationDisplayName(config.application))
 	}
 	profiles := make([]chromeProfileCatalogEntry, 0, len(localState.Profile.InfoCache))
 	for id, profile := range localState.Profile.InfoCache {
-		if isExcludedChromeProfileID(id) {
+		if isExcludedBrowserProfileID(id) {
 			continue
 		}
 		profiles = append(profiles, chromeProfileCatalogEntry{id: id, name: profile.Name})
@@ -157,11 +181,20 @@ func readChromeProfileCatalog(userDataRoot string) ([]chromeProfileCatalogEntry,
 }
 
 func isExcludedChromeProfileID(id string) bool {
+	return isExcludedBrowserProfileID(id)
+}
+
+func isExcludedBrowserProfileID(id string) bool {
 	return id == "Guest Profile" || id == "System Profile"
 }
 
 func chromeUserDataRoot(localAppDataDir string) string {
-	return filepath.Join(localAppDataDir, "Google", "Chrome", "User Data")
+	return browserUserDataRoot(localAppDataDir, browserCacheConfigs[0])
+}
+
+func browserUserDataRoot(localAppDataDir string, config browserCacheConfig) string {
+	pathParts := append([]string{localAppDataDir}, config.localAppDataPath...)
+	return filepath.Join(pathParts...)
 }
 
 func browserCacheDiagnostic(path, code, message string) StructuredIssue {
@@ -169,11 +202,19 @@ func browserCacheDiagnostic(path, code, message string) StructuredIssue {
 }
 
 func chromeDiscoverySuppressed(userDataRoot string, validator pathsafe.Validator) (bool, []string) {
-	protectedRulePaths := chromeProtectedRulePaths(userDataRoot, validator)
+	return browserDiscoverySuppressed(userDataRoot, validator)
+}
+
+func browserDiscoverySuppressed(userDataRoot string, validator pathsafe.Validator) (bool, []string) {
+	protectedRulePaths := browserProtectedRulePaths(userDataRoot, validator)
 	return len(protectedRulePaths) > 0 || validator.IsUserProtected(userDataRoot), protectedRulePaths
 }
 
 func chromeProtectedRulePaths(userDataRoot string, validator pathsafe.Validator) []string {
+	return browserProtectedRulePaths(userDataRoot, validator)
+}
+
+func browserProtectedRulePaths(userDataRoot string, validator pathsafe.Validator) []string {
 	root := filepath.Clean(userDataRoot)
 	var paths []string
 	for _, path := range validator.UserProtectionPaths() {

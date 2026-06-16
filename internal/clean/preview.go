@@ -217,19 +217,25 @@ func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result) 
 			result.Errors = append(result.Errors, runningApplicationUnknownIssue(state))
 		}
 	}
+	for _, config := range browserCacheConfigs {
+		applyOneBrowserCacheReview(ctx, opts, result, preStates, config)
+	}
+}
+
+func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Result, preStates []RunningApplicationState, config browserCacheConfig) {
 	if localAppDataDir := browserCacheLocalAppDataDir(opts.BrowserCacheDiscoveryOptions); localAppDataDir != "" {
-		suppressed, protectedRulePaths := chromeDiscoverySuppressed(chromeUserDataRoot(localAppDataDir), opts.Validator)
+		suppressed, protectedRulePaths := browserDiscoverySuppressed(browserUserDataRoot(localAppDataDir, config), opts.Validator)
 		if suppressed {
 			suppressProtectionRules(result, protectedRulePaths)
 			return
 		}
 	}
-	chromePreState, ok := runningApplicationStateFor(preStates, ApplicationGoogleChrome)
-	if !ok || chromePreState.State != RunningApplicationStateIdle {
+	preState, ok := runningApplicationStateFor(preStates, config.application)
+	if !ok || preState.State != RunningApplicationStateIdle {
 		return
 	}
 
-	discovery := discoverChromeBrowserCache(ctx, opts.BrowserCacheDiscoveryOptions, opts.Validator)
+	discovery := discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)
 	if discovery.suppressed {
 		suppressProtectionRules(result, discovery.suppressedProtectionPaths)
 		return
@@ -247,14 +253,14 @@ func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result) 
 	}
 
 	postStates := opts.DetectRunningApplications(ctx)
-	chromePostState, ok := runningApplicationStateFor(postStates, ApplicationGoogleChrome)
+	postState, ok := runningApplicationStateFor(postStates, config.application)
 	if !ok {
 		return
 	}
-	if chromePostState.State != RunningApplicationStateIdle {
-		replaceRunningApplicationState(result, chromePostState)
-		if chromePostState.State == RunningApplicationStateUnknown {
-			result.Errors = append(result.Errors, runningApplicationUnknownIssue(chromePostState))
+	if postState.State != RunningApplicationStateIdle {
+		replaceRunningApplicationState(result, postState)
+		if postState.State == RunningApplicationStateUnknown {
+			result.Errors = append(result.Errors, runningApplicationUnknownIssue(postState))
 		}
 		return
 	}
