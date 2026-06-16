@@ -328,8 +328,16 @@ func writeCleanPreviewReviewSections(builder *strings.Builder, model clean.Previ
 			if category == "" {
 				category = clean.OpportunityCategoryUserTemp
 			}
-			builder.WriteString(fmt.Sprintf("  %s (%s, category: %s",
-				opportunity.Path, cleanFormatBytes(opportunity.Bytes), category))
+			if opportunity.BrowserCache != nil {
+				builder.WriteString(fmt.Sprintf("  %s browser cache (%s, category: %s, profiles: %d",
+					cleanBrowserDisplayName(opportunity.BrowserCache.Browser),
+					cleanFormatBytes(opportunity.Bytes),
+					category,
+					opportunity.BrowserCache.ProfileCount))
+			} else {
+				builder.WriteString(fmt.Sprintf("  %s (%s, category: %s",
+					opportunity.Path, cleanFormatBytes(opportunity.Bytes), category))
+			}
 			if category == clean.OpportunityCategoryUserTemp {
 				builder.WriteString(fmt.Sprintf(", latest modified: %s, idle days: %d",
 					opportunity.LatestModifiedAt.UTC().Format(time.RFC3339), opportunity.IdleDays))
@@ -410,5 +418,16 @@ func writeCleanPreviewReviewSections(builder *strings.Builder, model clean.Previ
 				builder.WriteString(fmt.Sprintf("    %s\n", suggestion.NextStep))
 			}
 		}
+	}
+}
+
+func cleanBrowserDisplayName(application string) string {
+	switch application {
+	case clean.ApplicationGoogleChrome:
+		return "Google Chrome"
+	case clean.ApplicationMicrosoftEdge:
+		return "Microsoft Edge"
+	default:
+		return application
 	}
 }

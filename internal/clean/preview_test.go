@@ -330,6 +330,237 @@ func TestDryRunProjectsUnknownBrowserStateAsRecoverableDiagnosticsWithoutBrowser
 	}
 }
 
+func TestDryRunReportsChromeBrowserCacheOpportunityThroughReviewSurfaces(t *testing.T) {
+	localAppData := t.TempDir()
+	userDataRoot := filepath.Join(localAppData, "Google", "Chrome", "User Data")
+	writeChromeLocalState(t, userDataRoot, map[string]string{
+		"Default":        "Corey",
+		"Profile 1":      "Work",
+		"Guest Profile":  "Guest",
+		"System Profile": "System",
+	})
+	writeFile(t, filepath.Join(userDataRoot, "Default", "Cache", "cache.bin"), "cache")
+	writeFile(t, filepath.Join(userDataRoot, "Default", "Code Cache", "code.bin"), "code")
+	writeFile(t, filepath.Join(userDataRoot, "Default", "History"), "history must not count")
+	writeFile(t, filepath.Join(userDataRoot, "Default", "Cookies"), "cookies must not count")
+	writeFile(t, filepath.Join(userDataRoot, "Default", "Extensions", "extension.bin"), "extension must not count")
+	writeFile(t, filepath.Join(userDataRoot, "Default", "Service Worker", "worker.bin"), "worker must not count")
+	writeFile(t, filepath.Join(userDataRoot, "Profile 1", "GPUCache", "gpu.bin"), "gpu")
+	writeFile(t, filepath.Join(userDataRoot, "Guest Profile", "Cache", "guest.bin"), "guest must not count")
+	writeFile(t, filepath.Join(userDataRoot, "System Profile", "Cache", "system.bin"), "system must not count")
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder: recorder,
+		DetailedListDir: filepath.Join(t.TempDir(), "Foal", "history"),
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: localAppData,
+		},
+		DetectRunningApplications: idleChromeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	if len(result.Opportunities) != 1 {
+		t.Fatalf("opportunities = %#v, want one Chrome browser cache opportunity", result.Opportunities)
+	}
+	opportunity := result.Opportunities[0]
+	if opportunity.Category != clean.OpportunityCategoryBrowserCache ||
+		opportunity.Bytes != 12 ||
+		opportunity.Status != clean.OpportunityStatus ||
+		opportunity.Reason != clean.OpportunityReason ||
+		opportunity.BrowserCache == nil ||
+		opportunity.BrowserCache.Browser != clean.ApplicationGoogleChrome ||
+		opportunity.BrowserCache.ProfileCount != 2 {
+		t.Fatalf("Chrome opportunity = %#v, want complete browser cache summary", opportunity)
+	}
+	if result.Totals.OpportunityCount != 1 ||
+		result.Totals.OpportunityObservedBytes != 12 ||
+		result.Totals.CandidateBytes != 0 ||
+		result.Totals.CandidateCount != 0 {
+		t.Fatalf("totals = %#v, want observed-only Chrome bytes", result.Totals)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonText := string(encoded)
+	for _, want := range []string{
+		`"category":"browser_cache"`,
+		`"browser":"google_chrome"`,
+		`"profile_count":2`,
+		`"id":"Default"`,
+		`"id":"Profile 1"`,
+		`"kind":"Cache"`,
+		`"kind":"Code Cache"`,
+		`"kind":"GPUCache"`,
+		`"opportunity_observed_bytes":12`,
+		`"candidate_bytes":0`,
+	} {
+		if !strings.Contains(jsonText, want) {
+			t.Fatalf("JSON missing %q: %s", want, jsonText)
+		}
+	}
+	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "Service Worker", "move_to_recycle_bin"} {
+		if strings.Contains(jsonText, forbidden) {
+			t.Fatalf("JSON contains excluded Chrome data %q: %s", forbidden, jsonText)
+		}
+	}
+
+	report := clean.RenderPreviewReport(clean.NewPreviewReadModel(result))
+	for _, want := range []string{
+		"Google Chrome browser cache",
+		"category: browser_cache",
+		"profiles: 2",
+		"observed bytes: 12 bytes",
+		"Potential space: 0 bytes",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("human report missing %q:\n%s", want, report)
+		}
+	}
+	for _, noisy := range []string{"Profile 1", "Code Cache", "GPUCache", "History", "Cookies", "Extensions", "Service Worker"} {
+		if strings.Contains(report, noisy) {
+			t.Fatalf("human report contains noisy Chrome detail %q:\n%s", noisy, report)
+		}
+	}
+
+	detailed, err := os.ReadFile(result.DetailedListPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detailedText := string(detailed)
+	for _, want := range []string{
+		"browser: Google Chrome",
+		"profiles: 2",
+		"profile: Default",
+		"profile: Profile 1",
+		filepath.Join(userDataRoot, "Default", "Cache"),
+		filepath.Join(userDataRoot, "Default", "Code Cache"),
+		filepath.Join(userDataRoot, "Default", "GPUCache"),
+	} {
+		if !strings.Contains(detailedText, want) {
+			t.Fatalf("detailed review data missing %q:\n%s", want, detailedText)
+		}
+	}
+	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "Service Worker"} {
+		if strings.Contains(detailedText, forbidden) {
+			t.Fatalf("detailed review data contains excluded Chrome path %q:\n%s", forbidden, detailedText)
+		}
+		if strings.Contains(recorder.encoded, forbidden) || strings.Contains(recorder.encoded, userDataRoot) {
+			t.Fatalf("history persisted Chrome path/detail %q: %s", forbidden, recorder.encoded)
+		}
+	}
+	if len(recorder.sessions) != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityCount != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityObservedBytes != 12 ||
+		len(recorder.items) != 0 {
+		t.Fatalf("history = %#v / %#v, want privacy-preserving Chrome aggregate only", recorder.sessions, recorder.items)
+	}
+}
+
+func TestDryRunDiscardsChromeBrowserCacheWhenPostInspectionStateIsUnsafe(t *testing.T) {
+	localAppData := t.TempDir()
+	userDataRoot := filepath.Join(localAppData, "Google", "Chrome", "User Data")
+	writeChromeLocalState(t, userDataRoot, map[string]string{"Default": "Corey"})
+	writeFile(t, filepath.Join(userDataRoot, "Default", "Cache", "cache.bin"), "cache")
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: localAppData},
+		DetectRunningApplications: sequenceChromeDetector(
+			clean.RunningApplicationStateIdle,
+			clean.RunningApplicationStateRunning,
+		),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	if len(result.Opportunities) != 0 || result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("Chrome data survived unsafe post-check: %#v", result)
+	}
+	model := clean.NewPreviewReadModel(result)
+	if len(model.RunningApplicationSkips) != 1 || !strings.Contains(model.RunningApplicationSkips[0].Name, "Google Chrome") {
+		t.Fatalf("running skips = %#v, want Chrome safe skip", model.RunningApplicationSkips)
+	}
+}
+
+func TestDryRunSuppressesProtectedChromeBrowserCacheWithoutLeakingPaths(t *testing.T) {
+	localAppData := t.TempDir()
+	userDataRoot := filepath.Join(localAppData, "Google", "Chrome", "User Data")
+	protectedCache := filepath.Join(userDataRoot, "Default", "Cache")
+	writeChromeLocalState(t, userDataRoot, map[string]string{"Default": "Corey"})
+	writeFile(t, filepath.Join(protectedCache, "cache.bin"), "cache")
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator:       pathsafe.NewValidator([]string{protectedCache}),
+		HistoryRecorder: recorder,
+		DetailedListDir: filepath.Join(t.TempDir(), "Foal", "history"),
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: localAppData,
+		},
+		DetectRunningApplications: idleChromeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := clean.RenderPreviewReport(clean.NewPreviewReadModel(result))
+	detailed, err := os.ReadFile(result.DetailedListPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{
+		"JSON":          string(encoded),
+		"human output":  report,
+		"detailed list": string(detailed),
+		"history":       recorder.encoded,
+	} {
+		for _, forbidden := range []string{protectedCache, userDataRoot, "browser_cache", "Google Chrome browser cache"} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("%s leaked protected Chrome data %q:\n%s", name, forbidden, text)
+			}
+		}
+	}
+	if len(result.Opportunities) != 0 ||
+		len(result.IncompleteOpportunityInspections) != 0 ||
+		result.Totals.OpportunityCount != 0 ||
+		result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("protected Chrome cache affected result: %#v", result)
+	}
+}
+
+func TestDryRunReportsChromeCatalogProblemsAsDiagnosticsWithoutScanningCaches(t *testing.T) {
+	localAppData := t.TempDir()
+	userDataRoot := filepath.Join(localAppData, "Google", "Chrome", "User Data")
+	cachePath := filepath.Join(userDataRoot, "Default", "Cache")
+	if err := os.MkdirAll(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: localAppData},
+		DetectRunningApplications:    idleChromeDetector(),
+		DiscoverOpportunities:        noUserTempOpportunities,
+		DiscoverReviewSuggestions:    noReviewSuggestions,
+		Rules:                        []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	if len(result.Opportunities) != 0 || len(result.Errors) != 1 || result.Errors[0].Code != "browser_profile_catalog_unknown" {
+		t.Fatalf("result = %#v, want catalog diagnostic without cache scan", result)
+	}
+	if strings.Contains(clean.RenderPreviewReport(clean.NewPreviewReadModel(result)), cachePath) {
+		t.Fatalf("catalog diagnostic leaked cache path")
+	}
+}
+
 func TestDryRunSuppressesOnlyReviewSuggestionsWithProtectedResolvedPaths(t *testing.T) {
 	protected := `C:\Users\Corey\AppData\Local\App`
 	descendant := `c:\users\corey\appdata\local\app\cache`
@@ -396,6 +627,63 @@ func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 	}
 	if result.Totals.CandidateCount != 1 || result.Totals.CandidateBytes != 5 || result.Totals.SkippedCount != 0 {
 		t.Fatalf("totals = %#v, want one candidate and no skipped", result.Totals)
+	}
+}
+
+func TestDryRunSuppressesProtectedChromeRootBeforeCatalogDiagnostics(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		protectionPath func(string, string) string
+	}{
+		{
+			name: "browser root",
+			protectionPath: func(localAppData, userDataRoot string) string {
+				return userDataRoot
+			},
+		},
+		{
+			name: "ancestor",
+			protectionPath: func(localAppData, userDataRoot string) string {
+				return localAppData
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			localAppData := t.TempDir()
+			userDataRoot := filepath.Join(localAppData, "Google", "Chrome", "User Data")
+			if err := os.MkdirAll(userDataRoot, 0700); err != nil {
+				t.Fatal(err)
+			}
+
+			result := clean.DryRun(context.Background(), clean.Options{
+				Validator:                    pathsafe.NewValidator([]string{test.protectionPath(localAppData, userDataRoot)}),
+				BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: localAppData},
+				Rules: []clean.Rule{{
+					ID:             "disabled_test_rule",
+					DefaultEnabled: false,
+				}},
+				DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+					return nil
+				},
+				DiscoverOpportunities: func(context.Context) clean.OpportunityDiscoveryResult {
+					return clean.OpportunityDiscoveryResult{}
+				},
+				DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+					return []clean.RunningApplicationState{{
+						Application: clean.ApplicationGoogleChrome,
+						State:       clean.RunningApplicationStateIdle,
+					}}
+				},
+			})
+
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), userDataRoot) || len(result.Errors) != 0 {
+				t.Fatalf("protected Chrome root leaked through diagnostics: result=%#v json=%s", result, encoded)
+			}
+		})
 	}
 }
 
@@ -1833,6 +2121,58 @@ func TestDryRunDetailedListContainsCompleteSkippedByDefaultOpportunities(t *test
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("detailed list missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func writeChromeLocalState(t *testing.T, userDataRoot string, profiles map[string]string) {
+	t.Helper()
+	if err := os.MkdirAll(userDataRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	info := make(map[string]map[string]string, len(profiles))
+	for id, name := range profiles {
+		info[id] = map[string]string{"name": name}
+	}
+	payload := map[string]any{
+		"profile": map[string]any{
+			"info_cache": info,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(userDataRoot, "Local State"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func idleChromeDetector() func(context.Context) []clean.RunningApplicationState {
+	return sequenceChromeDetector(clean.RunningApplicationStateIdle, clean.RunningApplicationStateIdle)
+}
+
+func sequenceChromeDetector(states ...clean.RunningApplicationStatus) func(context.Context) []clean.RunningApplicationState {
+	call := 0
+	return func(context.Context) []clean.RunningApplicationState {
+		state := states[len(states)-1]
+		if call < len(states) {
+			state = states[call]
+		}
+		call++
+		return []clean.RunningApplicationState{
+			{Application: clean.ApplicationGoogleChrome, State: state},
+			{Application: clean.ApplicationMicrosoftEdge, State: clean.RunningApplicationStateIdle},
 		}
 	}
 }
