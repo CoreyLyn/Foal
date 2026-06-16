@@ -205,7 +205,7 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"excluded from Opportunity discovery",
 		"will not request elevation automatically",
 		"Protection rules",
-		"Opportunities: 7, observed bytes: 25600 bytes",
+		"Review-only opportunities: 7, observed bytes: 25600 bytes",
 		`C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
 		"category: user_temp",
 		"latest modified: 2026-06-01T12:00:00Z",
@@ -661,7 +661,7 @@ func TestCleanPreviewRendersChromeBrowserCacheOpportunityAsSummary(t *testing.T)
 		"Google Chrome browser cache",
 		"category: browser_cache",
 		"profiles: 2",
-		"observed bytes: 12 bytes",
+		"12 bytes",
 		"not counted as Potential space",
 	} {
 		if !strings.Contains(output, want) {
@@ -707,7 +707,7 @@ func TestCleanPreviewRendersEdgeBrowserCacheOpportunityAsSummary(t *testing.T) {
 		"Microsoft Edge browser cache",
 		"category: browser_cache",
 		"profiles: 2",
-		"observed bytes: 12 bytes",
+		"12 bytes",
 		"not counted as Potential space",
 	} {
 		if !strings.Contains(output, want) {
@@ -717,6 +717,102 @@ func TestCleanPreviewRendersEdgeBrowserCacheOpportunityAsSummary(t *testing.T) {
 	for _, forbidden := range []string{"GPUCache", `\Default`, `\User Data`} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("TUI output contains noisy Edge detail %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestCleanPreviewTUIRendersSharedFoalReportCategories(t *testing.T) {
+	model := clean.PreviewReadModel{
+		ProtectionRules: []clean.PreviewProtectionRule{{
+			ID:          "foal_owned_temp_sandboxes",
+			Description: "Foal-owned temporary sandbox entries",
+		}},
+		Candidates: []clean.PreviewCandidate{{
+			Path:          `C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+			Bytes:         12,
+			Rule:          "foal_owned_temp_sandboxes",
+			PlannedAction: "move_to_recycle_bin",
+		}},
+		Opportunities: []clean.Opportunity{
+			{
+				Category: clean.OpportunityCategoryUserTemp,
+				Path:     `C:\Users\corey\AppData\Local\Temp\old-cache`,
+				Bytes:    20,
+				Status:   clean.OpportunityStatus,
+				Reason:   clean.OpportunityReason,
+			},
+			{
+				Category: clean.OpportunityCategoryWindowsErrorReporting,
+				Path:     `C:\Users\corey\AppData\Local\Microsoft\Windows\WER`,
+				Bytes:    30,
+				Status:   clean.OpportunityStatus,
+				Reason:   clean.OpportunityReason,
+			},
+			{
+				Category: clean.OpportunityCategoryBrowserCache,
+				Path:     `C:\Users\corey\AppData\Local\Microsoft\Edge\User Data`,
+				Bytes:    40,
+				Status:   clean.OpportunityStatus,
+				Reason:   clean.OpportunityReason,
+				BrowserCache: &clean.BrowserCacheOpportunityDetail{
+					Browser:      clean.ApplicationMicrosoftEdge,
+					ProfileCount: 1,
+				},
+			},
+		},
+		ReviewSuggestions: []clean.PreviewReviewSuggestion{{
+			Label:   "Go build cache",
+			Command: "go clean -cache",
+		}},
+		ReviewClues: []clean.PreviewReviewClue{{
+			Name:    "Rebuildable project artifacts",
+			Details: "Use foal analyze <path> to inspect rebuildable project directories explicitly.",
+		}},
+		RunningApplicationSkips: []clean.PreviewRunningApplicationSkip{{
+			Name:        "Google Chrome browser review",
+			Application: "Google Chrome",
+			Reason:      "Google Chrome is running; browser cache review was skipped.",
+		}},
+		Notices: []clean.PreviewNotice{{
+			Kind:    "permission_boundary",
+			Message: "Permission boundary: administrator-only caches are excluded.",
+		}},
+		PotentialSpaceBytes:      12,
+		CandidateCount:           1,
+		OpportunityCount:         3,
+		OpportunityObservedBytes: 90,
+		Summary:                  "Dry-run summary: No changes were made.",
+	}
+
+	output := renderCleanPreviewSections(model, cleanPreviewFilterAll, true)
+
+	assertContainsInOrder(t, output, []string{
+		"System",
+		`C:\Users\corey\AppData\Local\Microsoft\Windows\WER`,
+		"User essentials",
+		"status: default candidate",
+		`C:\Users\corey\AppData\Local\Temp\old-cache`,
+		"Browsers",
+		"Microsoft Edge browser cache",
+		"status: running skip",
+		"Developer tools",
+		"status: Review suggestion",
+		"Project artifacts",
+		"status: Review clue",
+		"Protection",
+	})
+	for _, forbidden := range []string{
+		"Applications",
+		"Cloud",
+		"Virtualization",
+		"Potential space: 102 bytes",
+		"Execution complete",
+		"Deleted:",
+		"close browser",
+		"Run as Administrator",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("TUI output contains forbidden category or semantic drift %q:\n%s", forbidden, output)
 		}
 	}
 }
@@ -815,7 +911,7 @@ func TestCleanPreviewFilterShowsReviewSectionsWithoutChangingPotentialSpace(t *t
 	for _, want := range []string{
 		"Filter: review",
 		"Potential space: 12 bytes",
-		"Skipped by default (1)",
+		"status: skipped by default",
 		"Browser cache family",
 		"requires explicit future opt-in",
 		"Review clues (1)",
@@ -826,7 +922,8 @@ func TestCleanPreviewFilterShowsReviewSectionsWithoutChangingPotentialSpace(t *t
 		"SyncClient.exe",
 		"not counted as Potential space",
 		"review only",
-		"skipped, not executable here",
+		"status: running skip",
+		"not executable here",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
@@ -857,6 +954,7 @@ func TestCleanPreviewRendersSharedProjectArtifactClueAsReadOnlyAnalysisGuidance(
 	for _, want := range []string{
 		"Review clues (1)",
 		"Rebuildable project artifacts (review only)",
+		"status: Review clue",
 		"foal analyze <path>",
 	} {
 		if !strings.Contains(output, want) {
@@ -925,8 +1023,8 @@ func TestCleanPreviewCapsHighVolumeOpportunityRendering(t *testing.T) {
 
 	output := renderCleanPreviewSections(model, cleanPreviewFilterReview, false)
 
-	if !strings.Contains(output, "Skipped-by-default opportunities (11)") ||
-		!strings.Contains(output, "1 omitted from this review view.") {
+	if !strings.Contains(output, "Skipped by default: 11 user-temp opportunity item(s)") ||
+		!strings.Contains(output, "1 omitted.") {
 		t.Fatalf("output missing high-volume summary:\n%s", output)
 	}
 	if !strings.Contains(output, `opportunity-J`) {

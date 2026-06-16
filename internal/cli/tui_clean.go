@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -223,211 +222,22 @@ func (m cleanModel) headerContent() string {
 
 func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPreviewFilter, expanded bool) string {
 	var builder strings.Builder
-
-	if len(model.Notices) > 0 && cleanPreviewFilterAllows(filter, cleanPreviewFilterAll) {
-		builder.WriteString("\nNotices\n")
-		for _, notice := range model.Notices {
-			builder.WriteString(fmt.Sprintf("  %s\n", notice.Message))
+	for _, category := range clean.PreviewReportCategories(model, clean.PreviewReportCategoryOptions{
+		EntryLimit:        cleanPreviewSectionEntryLimit,
+		Expanded:          expanded,
+		IncludeCandidates: cleanPreviewFilterAllows(filter, cleanPreviewFilterCandidates),
+		IncludeSkipped:    cleanPreviewFilterAllows(filter, cleanPreviewFilterSkipped),
+		IncludeReview:     cleanPreviewFilterAllows(filter, cleanPreviewFilterReview),
+		IncludeErrors:     cleanPreviewFilterAllows(filter, cleanPreviewFilterErrors),
+		IncludeSummary:    cleanPreviewFilterAllows(filter, cleanPreviewFilterErrors),
+	}) {
+		builder.WriteString("\n")
+		builder.WriteString(category.Name)
+		builder.WriteString("\n")
+		for _, line := range category.Lines {
+			builder.WriteString(line)
+			builder.WriteString("\n")
 		}
 	}
-
-	if cleanPreviewFilterAllows(filter, cleanPreviewFilterAll) {
-		builder.WriteString("\nProtection rules\n")
-		if len(model.ProtectionRules) == 0 {
-			builder.WriteString("  No default-enabled protection rules were reported.\n")
-		} else {
-			for _, rule := range model.ProtectionRules {
-				if rule.UserDefined {
-					builder.WriteString(fmt.Sprintf("  %s (user-defined Protection rule)\n", rule.Path))
-					continue
-				}
-				builder.WriteString(fmt.Sprintf("  %s: %s\n", rule.ID, rule.Description))
-			}
-		}
-
-		if len(model.ProtectionDiagnostics) > 0 {
-			builder.WriteString("\nProtection diagnostics\n")
-			for _, diagnostic := range model.ProtectionDiagnostics {
-				builder.WriteString(fmt.Sprintf("  %s (source: %s", diagnostic.Code, diagnostic.Source))
-				if diagnostic.Line > 0 {
-					builder.WriteString(fmt.Sprintf(", line %d", diagnostic.Line))
-				}
-				builder.WriteString(fmt.Sprintf(", recoverable: %t)\n", diagnostic.Recoverable))
-				if expanded && diagnostic.Message != "" {
-					builder.WriteString(fmt.Sprintf("    %s\n", diagnostic.Message))
-				}
-			}
-		}
-	}
-
-	if cleanPreviewFilterAllows(filter, cleanPreviewFilterCandidates) {
-		builder.WriteString(fmt.Sprintf("\nDefault candidates (%d)\n", len(model.Candidates)))
-		if len(model.Candidates) == 0 {
-			builder.WriteString("  No default candidates found.\n")
-		} else {
-			for _, candidate := range model.Candidates {
-				builder.WriteString(fmt.Sprintf("  %s (%s, rule: %s, preview action metadata: Recycle Bin)\n",
-					candidate.Path, cleanFormatBytes(candidate.Bytes), candidate.Rule))
-				if expanded && candidate.PlannedAction != "" {
-					builder.WriteString(fmt.Sprintf("    planned action metadata: %s\n", candidate.PlannedAction))
-				}
-			}
-		}
-	}
-
-	if cleanPreviewFilterAllows(filter, cleanPreviewFilterSkipped) {
-		builder.WriteString(fmt.Sprintf("\nSkipped items (%d)\n", len(model.Skipped)))
-		if len(model.Skipped) == 0 {
-			builder.WriteString("  No skipped cleanup paths reported.\n")
-		} else {
-			for _, skipped := range model.Skipped {
-				builder.WriteString(fmt.Sprintf("  %s (rule: %s, reason: %s, not counted as Potential space)\n",
-					skipped.Path, skipped.Rule, skipped.Reason.Code))
-				if expanded && skipped.Reason.Message != "" {
-					builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason.Message))
-				}
-			}
-		}
-	}
-
-	if cleanPreviewFilterAllows(filter, cleanPreviewFilterReview) {
-		writeCleanPreviewReviewSections(&builder, model, expanded)
-	}
-
-	if cleanPreviewFilterAllows(filter, cleanPreviewFilterErrors) {
-		builder.WriteString(fmt.Sprintf("\nInspection errors (%d)\n", len(model.Errors)))
-		if len(model.Errors) == 0 {
-			builder.WriteString("  No recoverable inspection errors reported.\n")
-		} else {
-			for _, err := range model.Errors {
-				builder.WriteString(fmt.Sprintf("  %s (rule: %s, error: %s, recoverable: %t)\n",
-					err.Path, err.Rule, err.Code, err.Recoverable))
-				if expanded && err.Message != "" {
-					builder.WriteString(fmt.Sprintf("    %s\n", err.Message))
-				}
-			}
-		}
-	}
-
 	return builder.String()
-}
-
-func writeCleanPreviewReviewSections(builder *strings.Builder, model clean.PreviewReadModel, expanded bool) {
-	builder.WriteString(fmt.Sprintf("\nSkipped-by-default opportunities (%d)\n", len(model.Opportunities)))
-	if len(model.Opportunities) == 0 {
-		builder.WriteString("  No skipped-by-default opportunities reported.\n")
-	} else {
-		builder.WriteString(fmt.Sprintf("  Opportunities: %d, observed bytes: %s (not counted as Potential space)\n",
-			model.OpportunityCount, cleanFormatBytes(model.OpportunityObservedBytes)))
-		entryCount := len(model.Opportunities)
-		if entryCount > cleanPreviewSectionEntryLimit {
-			entryCount = cleanPreviewSectionEntryLimit
-		}
-		for _, opportunity := range model.Opportunities[:entryCount] {
-			category := opportunity.Category
-			if category == "" {
-				category = clean.OpportunityCategoryUserTemp
-			}
-			if opportunity.BrowserCache != nil {
-				builder.WriteString(fmt.Sprintf("  %s browser cache (%s, category: %s, profiles: %d",
-					cleanBrowserDisplayName(opportunity.BrowserCache.Browser),
-					cleanFormatBytes(opportunity.Bytes),
-					category,
-					opportunity.BrowserCache.ProfileCount))
-			} else {
-				builder.WriteString(fmt.Sprintf("  %s (%s, category: %s",
-					opportunity.Path, cleanFormatBytes(opportunity.Bytes), category))
-			}
-			if category == clean.OpportunityCategoryUserTemp {
-				builder.WriteString(fmt.Sprintf(", latest modified: %s, idle days: %d",
-					opportunity.LatestModifiedAt.UTC().Format(time.RFC3339), opportunity.IdleDays))
-			}
-			builder.WriteString(fmt.Sprintf(", status: %s, reason: %s, not counted as Potential space)\n",
-				opportunity.Status, opportunity.Reason))
-		}
-		if omitted := len(model.Opportunities) - entryCount; omitted > 0 {
-			builder.WriteString(fmt.Sprintf("  %d omitted from this review view.\n", omitted))
-		}
-	}
-
-	builder.WriteString(fmt.Sprintf("\nSkipped by default (%d)\n", len(model.SkippedByDefault)))
-	if len(model.SkippedByDefault) == 0 {
-		builder.WriteString("  No skipped-by-default review items reported.\n")
-	} else {
-		for _, skipped := range model.SkippedByDefault {
-			builder.WriteString(fmt.Sprintf("  %s", skipped.Name))
-			if skipped.Path != "" {
-				builder.WriteString(fmt.Sprintf(" - %s", skipped.Path))
-			}
-			builder.WriteString(" (not counted as Potential space)\n")
-			if expanded && skipped.Reason != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason))
-			}
-		}
-	}
-
-	builder.WriteString(fmt.Sprintf("\nReview clues (%d)\n", len(model.ReviewClues)))
-	if len(model.ReviewClues) == 0 {
-		builder.WriteString("  No review clues reported.\n")
-	} else {
-		for _, clue := range model.ReviewClues {
-			builder.WriteString(fmt.Sprintf("  %s", clue.Name))
-			if clue.Path != "" {
-				builder.WriteString(fmt.Sprintf(" - %s", clue.Path))
-			}
-			builder.WriteString(" (review only)\n")
-			if expanded && clue.Details != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", clue.Details))
-			}
-		}
-	}
-
-	builder.WriteString(fmt.Sprintf("\nRunning application skips (%d)\n", len(model.RunningApplicationSkips)))
-	if len(model.RunningApplicationSkips) == 0 {
-		builder.WriteString("  No running application skips reported.\n")
-	} else {
-		for _, skipped := range model.RunningApplicationSkips {
-			builder.WriteString(fmt.Sprintf("  %s", skipped.Name))
-			if skipped.Application != "" {
-				builder.WriteString(fmt.Sprintf(" (%s)", skipped.Application))
-			}
-			if skipped.Path != "" {
-				builder.WriteString(fmt.Sprintf(" - %s", skipped.Path))
-			}
-			builder.WriteString(" (skipped, not executable here)\n")
-			if expanded && skipped.Reason != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason))
-			}
-		}
-	}
-
-	builder.WriteString(fmt.Sprintf("\nReview suggestions (%d)\n", len(model.ReviewSuggestions)))
-	if len(model.ReviewSuggestions) == 0 {
-		builder.WriteString("  No review suggestions reported.\n")
-	} else {
-		builder.WriteString(fmt.Sprintf("  %s\n", clean.ReviewSuggestionSafetyNote))
-		for _, suggestion := range model.ReviewSuggestions {
-			builder.WriteString(fmt.Sprintf("  %s\n", suggestion.Label))
-			if expanded && suggestion.Command != "" {
-				builder.WriteString(fmt.Sprintf("    Command: %s\n", suggestion.Command))
-			}
-			if expanded && suggestion.CachePath != "" {
-				builder.WriteString(fmt.Sprintf("    Cache: %s\n", suggestion.CachePath))
-			}
-			if expanded && suggestion.Command == "" && suggestion.NextStep != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", suggestion.NextStep))
-			}
-		}
-	}
-}
-
-func cleanBrowserDisplayName(application string) string {
-	switch application {
-	case clean.ApplicationGoogleChrome:
-		return "Google Chrome"
-	case clean.ApplicationMicrosoftEdge:
-		return "Microsoft Edge"
-	default:
-		return application
-	}
 }

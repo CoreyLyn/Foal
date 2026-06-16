@@ -417,7 +417,7 @@ func TestDryRunReportsChromeBrowserCacheOpportunityThroughReviewSurfaces(t *test
 		"Google Chrome browser cache",
 		"category: browser_cache",
 		"profiles: 2",
-		"observed bytes: 12 bytes",
+		"Observed opportunity bytes: 12 bytes",
 		"Potential space: 0 bytes",
 	} {
 		if !strings.Contains(report, want) {
@@ -548,7 +548,7 @@ func TestDryRunReportsEdgeBrowserCacheOpportunityThroughSharedReviewSurfaces(t *
 		"Microsoft Edge browser cache",
 		"category: browser_cache",
 		"profiles: 2",
-		"observed bytes: 12 bytes",
+		"Observed opportunity bytes: 12 bytes",
 		"Potential space: 0 bytes",
 	} {
 		if !strings.Contains(report, want) {
@@ -2085,14 +2085,15 @@ func TestPreviewReportRendersProjectArtifactClueAsAnalysisOnlyGuidance(t *testin
 		Mode:   "dry_run",
 	}))
 
-	start := strings.Index(output, "\nReview clues\n")
-	end := strings.Index(output[start+1:], "\nInspection errors\n")
+	start := strings.Index(output, "\nProject artifacts\n")
+	end := strings.Index(output[start+1:], "\nProtection\n")
 	if start == -1 || end == -1 {
-		t.Fatalf("output missing Review clues section:\n%s", output)
+		t.Fatalf("output missing Project artifacts section:\n%s", output)
 	}
 	reviewClues := output[start : start+1+end]
 	for _, want := range []string{
 		"Rebuildable project artifacts",
+		"status: Review clue",
 		"foal analyze <path>",
 	} {
 		if !strings.Contains(reviewClues, want) {
@@ -2160,7 +2161,7 @@ func TestPreviewReportRendersReviewOnlySectionsWithoutExecutionSemantics(t *test
 		"Potential space: 12 bytes",
 		"Default candidates",
 		`C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
-		"Skipped by default",
+		"status: skipped by default",
 		"Browser cache family",
 		"Review clues",
 		"Project artifact clue",
@@ -2189,6 +2190,141 @@ func TestPreviewReportRendersReviewOnlySectionsWithoutExecutionSemantics(t *test
 	}
 }
 
+func TestPreviewReportCategoriesGroupCleanReviewPresentationWithoutSemanticDrift(t *testing.T) {
+	model := clean.PreviewReadModel{
+		Title: "Foal clean",
+		ProtectionRules: []clean.PreviewProtectionRule{{
+			ID:          "foal_owned_temp_sandboxes",
+			Description: "Foal-owned temporary sandbox entries",
+		}},
+		ProtectionDiagnostics: []clean.ProtectionDiagnostic{{
+			Code:        "relative_path",
+			Source:      `C:\Users\corey\AppData\Roaming\Foal\protection.txt`,
+			Line:        2,
+			Recoverable: true,
+		}},
+		Candidates: []clean.PreviewCandidate{{
+			Path:          `C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+			Bytes:         12,
+			Rule:          "foal_owned_temp_sandboxes",
+			PlannedAction: "move_to_recycle_bin",
+		}},
+		Opportunities: []clean.Opportunity{
+			{
+				Category:         clean.OpportunityCategoryUserTemp,
+				Path:             `C:\Users\corey\AppData\Local\Temp\old-cache`,
+				Bytes:            20,
+				LatestModifiedAt: time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC),
+				IdleDays:         9,
+				Status:           clean.OpportunityStatus,
+				Reason:           clean.OpportunityReason,
+			},
+			{
+				Category: clean.OpportunityCategoryCrashDumps,
+				Path:     `C:\Users\corey\AppData\Local\CrashDumps`,
+				Bytes:    30,
+				Status:   clean.OpportunityStatus,
+				Reason:   clean.OpportunityReason,
+			},
+			{
+				Category: clean.OpportunityCategoryBrowserCache,
+				Path:     `C:\Users\corey\AppData\Local\Google\Chrome\User Data`,
+				Bytes:    40,
+				Status:   clean.OpportunityStatus,
+				Reason:   clean.OpportunityReason,
+				BrowserCache: &clean.BrowserCacheOpportunityDetail{
+					Browser:      clean.ApplicationGoogleChrome,
+					ProfileCount: 1,
+				},
+			},
+		},
+		ReviewSuggestions: []clean.PreviewReviewSuggestion{{
+			Label:     "npm cache",
+			Command:   "npm cache clean --force",
+			CachePath: `C:\Users\corey\AppData\Local\npm-cache`,
+		}},
+		RunningApplicationSkips: []clean.PreviewRunningApplicationSkip{{
+			Name:        "Microsoft Edge browser review",
+			Application: "Microsoft Edge",
+			Reason:      "Microsoft Edge is running; browser cache review was skipped.",
+		}},
+		Errors: []clean.StructuredIssue{{
+			Code:        "running_application_detection_unknown",
+			Message:     "process snapshot failed",
+			Recoverable: true,
+			Rule:        "browser_review",
+		}},
+		Notices: []clean.PreviewNotice{{
+			Kind:    "permission_boundary",
+			Message: "Permission boundary: administrator-only caches are excluded.",
+		}},
+		ReviewClues: []clean.PreviewReviewClue{{
+			Name:    "Rebuildable project artifacts",
+			Details: "Use foal analyze <path> to inspect rebuildable project directories explicitly.",
+		}},
+		PotentialSpaceBytes:      12,
+		CandidateCount:           1,
+		OpportunityCount:         3,
+		OpportunityObservedBytes: 90,
+		Summary:                  "Dry-run summary: No changes were made.",
+	}
+
+	output := clean.RenderPreviewReport(model)
+	assertTextContainsInOrder(t, output, []string{
+		"System",
+		"Permission boundary",
+		`C:\Users\corey\AppData\Local\CrashDumps`,
+		"User essentials",
+		"status: default candidate",
+		`C:\Users\corey\AppData\Local\Temp\old-cache`,
+		"category: user_temp",
+		"Browsers",
+		"Google Chrome browser cache",
+		"status: running skip",
+		"Browser inspection diagnostic",
+		"Developer tools",
+		"status: Review suggestion",
+		"Project artifacts",
+		"status: Review clue",
+		"Protection",
+		"status: Protection diagnostic",
+		"Summary",
+		"Potential space: 12 bytes",
+		"Observed opportunity bytes: 90 bytes",
+		"Dry-run summary: No changes were made.",
+	})
+	for _, forbidden := range []string{
+		"Applications",
+		"Cloud",
+		"Virtualization",
+		"Potential space: 102 bytes",
+		"close browser",
+		"process stopping",
+		"permanent deletion",
+		"Run as Administrator",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("report contains forbidden presentation or semantic drift %q:\n%s", forbidden, output)
+		}
+	}
+
+	categories := clean.PreviewReportCategories(model, clean.PreviewReportCategoryOptions{
+		IncludeCandidates: true,
+		IncludeSkipped:    true,
+		IncludeReview:     true,
+		IncludeErrors:     true,
+		IncludeSummary:    true,
+	})
+	gotNames := make([]string, 0, len(categories))
+	for _, category := range categories {
+		gotNames = append(gotNames, category.Name)
+	}
+	wantNames := []string{"System", "User essentials", "Browsers", "Developer tools", "Project artifacts", "Protection", "Summary"}
+	if strings.Join(gotNames, "|") != strings.Join(wantNames, "|") {
+		t.Fatalf("categories = %v, want %v", gotNames, wantNames)
+	}
+}
+
 func TestPreviewReportRendersReviewSuggestionSafetyNoteOnceAboveSuggestions(t *testing.T) {
 	model := clean.PreviewReadModel{
 		Title: "Foal clean",
@@ -2204,7 +2340,7 @@ func TestPreviewReportRendersReviewSuggestionSafetyNoteOnceAboveSuggestions(t *t
 	if strings.Count(output, note) != 1 {
 		t.Fatalf("safety note count = %d, want 1:\n%s", strings.Count(output, note), output)
 	}
-	headingIndex := strings.Index(output, "Review suggestions\n")
+	headingIndex := strings.Index(output, "Review suggestions (2)\n")
 	noteIndex := strings.Index(output, note)
 	firstSuggestionIndex := strings.Index(output, "Review npm cache")
 	if headingIndex == -1 || noteIndex <= headingIndex || firstSuggestionIndex <= noteIndex {
@@ -2310,8 +2446,8 @@ func TestPreviewReportCapsSkippedByDefaultOpportunities(t *testing.T) {
 
 	for _, want := range []string{
 		"Potential space: 12 bytes",
-		"Skipped by default",
-		"Opportunities: 11, observed bytes: 66 bytes (not counted as Potential space)",
+		"Skipped by default: 11 user-temp opportunity item(s)",
+		"Observed opportunity bytes: 66 bytes (not counted as Potential space)",
 		`C:\Users\corey\AppData\Local\Temp\old-cache-09`,
 		"latest modified: 2026-05-10T12:00:00Z",
 		"idle days: 19",
@@ -2465,6 +2601,22 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertTextContainsInOrder(t *testing.T, text string, values []string) {
+	t.Helper()
+
+	previous := -1
+	for _, value := range values {
+		index := strings.Index(text, value)
+		if index == -1 {
+			t.Fatalf("missing ordered value %q in:\n%s", value, text)
+		}
+		if index < previous {
+			t.Fatalf("%q appeared before the prior value in:\n%s", value, text)
+		}
+		previous = index
 	}
 }
 

@@ -101,6 +101,21 @@ const previewReportSectionEntryLimit = 10
 const ReviewSuggestionSafetyNote = "Clearing a tool cache while the tool is installing or building can disrupt that operation. Confirm the tool is idle first."
 const administratorOnlyCacheBoundaryNotice = "Permission boundary: administrator-only caches such as SoftwareDistribution and Delivery Optimization are excluded from Opportunity discovery. Foal will not request elevation automatically."
 
+type PreviewReportCategory struct {
+	Name  string
+	Lines []string
+}
+
+type PreviewReportCategoryOptions struct {
+	EntryLimit        int
+	Expanded          bool
+	IncludeCandidates bool
+	IncludeSkipped    bool
+	IncludeReview     bool
+	IncludeErrors     bool
+	IncludeSummary    bool
+}
+
 func NewPreviewReadModel(result Result) PreviewReadModel {
 	candidates := make([]PreviewCandidate, 0, len(result.Candidates))
 	var potentialSpace int64
@@ -263,177 +278,375 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 	builder.WriteString(model.Title)
 	builder.WriteString("\n")
 	builder.WriteString("Preview only: Foal inspected default cleanup candidates and did not change files.\n")
-	builder.WriteString(fmt.Sprintf("Potential space: %s\n", formatBytes(model.PotentialSpaceBytes)))
-	if model.DetailedListPath != "" {
-		builder.WriteString(fmt.Sprintf("Detailed candidate list: %s\n", model.DetailedListPath))
+	writePreviewReportCategories(&builder, previewReportCategories(model, PreviewReportCategoryOptions{
+		EntryLimit:        previewReportSectionEntryLimit,
+		Expanded:          true,
+		IncludeCandidates: true,
+		IncludeSkipped:    true,
+		IncludeReview:     true,
+		IncludeErrors:     true,
+		IncludeSummary:    true,
+	}, presentation))
+	return builder.String()
+}
+
+func PreviewReportCategories(model PreviewReadModel, opts PreviewReportCategoryOptions) []PreviewReportCategory {
+	return previewReportCategories(model, opts, plainPreviewReportPresentation)
+}
+
+func previewReportCategories(model PreviewReadModel, opts PreviewReportCategoryOptions, presentation previewReportPresentation) []PreviewReportCategory {
+	if opts.EntryLimit <= 0 {
+		opts.EntryLimit = previewReportSectionEntryLimit
 	}
-	builder.WriteString("\nProtection rules\n")
+	categories := make([]PreviewReportCategory, 0, 7)
+	add := func(name string, lines []string) {
+		if len(lines) == 0 {
+			return
+		}
+		categories = append(categories, PreviewReportCategory{Name: name, Lines: lines})
+	}
+	if opts.IncludeReview {
+		add("System", systemReportLines(model, opts))
+	}
+	if opts.IncludeCandidates || opts.IncludeSkipped || opts.IncludeReview {
+		add("User essentials", userEssentialsReportLines(model, opts, presentation))
+	}
+	if opts.IncludeReview || opts.IncludeErrors {
+		add("Browsers", browserReportLines(model, opts))
+	}
+	if opts.IncludeReview {
+		add("Developer tools", developerToolReportLines(model, opts))
+		add("Project artifacts", projectArtifactReportLines(model, opts))
+		add("Protection", protectionReportLines(model, opts))
+	}
+	if opts.IncludeSummary {
+		add("Summary", summaryReportLines(model, opts, presentation))
+	}
+	return categories
+}
+
+func writePreviewReportCategories(builder *strings.Builder, categories []PreviewReportCategory) {
+	for _, category := range categories {
+		builder.WriteString("\n")
+		builder.WriteString(category.Name)
+		builder.WriteString("\n")
+		for _, line := range category.Lines {
+			builder.WriteString(line)
+			builder.WriteString("\n")
+		}
+	}
+}
+
+func systemReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions) []string {
+	var lines []string
+	if len(model.Notices) > 0 {
+		lines = append(lines, "  Notices")
+		for _, notice := range model.Notices {
+			lines = append(lines, fmt.Sprintf("    %s", notice.Message))
+		}
+	}
+	systemOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
+		category := normalizedOpportunityCategory(opportunity.Category)
+		return category != OpportunityCategoryUserTemp && category != OpportunityCategoryBrowserCache
+	})
+	if len(systemOpportunities) > 0 {
+		lines = append(lines, fmt.Sprintf("  Skipped by default: %d system opportunity item(s)", len(systemOpportunities)+omitted))
+		lines = append(lines, opportunityLines(systemOpportunities)...)
+		if omitted > 0 {
+			lines = append(lines, omittedLine(omitted, model.DetailedListPath))
+		}
+	}
+	for _, incomplete := range model.IncompleteOpportunityInspections {
+		category := normalizedOpportunityCategory(incomplete.Category)
+		if category == OpportunityCategoryUserTemp || category == OpportunityCategoryBrowserCache {
+			continue
+		}
+		lines = append(lines, incompleteInspectionLine(incomplete))
+	}
+	return lines
+}
+
+func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions, presentation previewReportPresentation) []string {
+	var lines []string
+	if opts.IncludeCandidates {
+		lines = append(lines, fmt.Sprintf("  Default candidates (%d)", len(model.Candidates)))
+		if len(model.Candidates) == 0 {
+			lines = append(lines, "    No default candidates found.")
+		} else {
+			entryCount := cappedEntryCountFor(len(model.Candidates), opts.EntryLimit)
+			for _, candidate := range model.Candidates[:entryCount] {
+				lines = append(lines, fmt.Sprintf("    %s (%s, %srule: %s, planned action: Recycle Bin)",
+					candidate.Path, formatBytes(candidate.Bytes), statusLabel(presentation.defaultCandidateLabel), candidate.Rule))
+			}
+			if omitted := len(model.Candidates) - entryCount; omitted > 0 {
+				lines = append(lines, omittedLine(omitted, model.DetailedListPath))
+			}
+		}
+	}
+	if opts.IncludeSkipped {
+		lines = append(lines, fmt.Sprintf("  Skipped items (%d)", len(model.Skipped)))
+		if len(model.Skipped) == 0 {
+			lines = append(lines, "    No skipped cleanup paths reported.")
+		} else {
+			entryCount := cappedEntryCountFor(len(model.Skipped), opts.EntryLimit)
+			for _, skipped := range model.Skipped[:entryCount] {
+				lines = append(lines, fmt.Sprintf("    %s (%srule: %s, reason: %s, recoverable: %t)",
+					skipped.Path, statusLabel(presentation.skippedLabel), skipped.Rule, skipped.Reason.Code, skipped.Reason.Recoverable))
+				if opts.Expanded && skipped.Reason.Message != "" {
+					lines = append(lines, fmt.Sprintf("      %s", skipped.Reason.Message))
+				}
+			}
+			if omitted := len(model.Skipped) - entryCount; omitted > 0 {
+				lines = append(lines, omittedLine(omitted, model.DetailedListPath))
+			}
+		}
+	}
+	if opts.IncludeReview {
+		userOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
+			return normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryUserTemp
+		})
+		if len(userOpportunities) > 0 {
+			lines = append(lines, fmt.Sprintf("  Skipped by default: %d user-temp opportunity item(s)", len(userOpportunities)+omitted))
+			lines = append(lines, opportunityLines(userOpportunities)...)
+			if omitted > 0 {
+				lines = append(lines, omittedLine(omitted, model.DetailedListPath))
+			}
+		}
+		for _, skipped := range model.SkippedByDefault {
+			line := fmt.Sprintf("    %s", skipped.Name)
+			if skipped.Path != "" {
+				line += fmt.Sprintf(" - %s", skipped.Path)
+			}
+			if skipped.Bytes > 0 {
+				line += fmt.Sprintf(" (%s, status: skipped by default, not counted as Potential space)", formatBytes(skipped.Bytes))
+			} else {
+				line += " (status: skipped by default, not counted as Potential space)"
+			}
+			lines = append(lines, line)
+			if opts.Expanded && skipped.Reason != "" {
+				lines = append(lines, fmt.Sprintf("      %s", skipped.Reason))
+			}
+		}
+		for _, incomplete := range model.IncompleteOpportunityInspections {
+			if normalizedOpportunityCategory(incomplete.Category) == OpportunityCategoryUserTemp {
+				lines = append(lines, incompleteInspectionLine(incomplete))
+			}
+		}
+	}
+	return lines
+}
+
+func browserReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions) []string {
+	var lines []string
+	if opts.IncludeReview {
+		browserOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
+			return normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryBrowserCache
+		})
+		if len(browserOpportunities) > 0 {
+			lines = append(lines, fmt.Sprintf("  Skipped by default: %d browser opportunity item(s)", len(browserOpportunities)+omitted))
+			lines = append(lines, opportunityLines(browserOpportunities)...)
+			if omitted > 0 {
+				lines = append(lines, omittedLine(omitted, model.DetailedListPath))
+			}
+		}
+		if len(model.RunningApplicationSkips) > 0 {
+			lines = append(lines, fmt.Sprintf("  Running application skips (%d)", len(model.RunningApplicationSkips)))
+			for _, skipped := range model.RunningApplicationSkips {
+				line := fmt.Sprintf("    %s", skipped.Name)
+				if skipped.Application != "" {
+					line += fmt.Sprintf(" (%s)", skipped.Application)
+				}
+				if skipped.Path != "" {
+					line += fmt.Sprintf(" - %s", skipped.Path)
+				}
+				line += " (status: running skip, not executable here)"
+				lines = append(lines, line)
+				if opts.Expanded && skipped.Reason != "" {
+					lines = append(lines, fmt.Sprintf("      %s", skipped.Reason))
+				}
+			}
+		}
+		for _, incomplete := range model.IncompleteOpportunityInspections {
+			if normalizedOpportunityCategory(incomplete.Category) == OpportunityCategoryBrowserCache {
+				lines = append(lines, incompleteInspectionLine(incomplete))
+			}
+		}
+	}
+	if opts.IncludeErrors {
+		for _, err := range model.Errors {
+			if isBrowserDiagnostic(err) {
+				lines = append(lines, fmt.Sprintf("    Browser inspection diagnostic: %s (status: inspection incomplete, recoverable: %t)", err.Code, err.Recoverable))
+				if opts.Expanded && err.Message != "" {
+					lines = append(lines, fmt.Sprintf("      %s", err.Message))
+				}
+			}
+		}
+	}
+	return lines
+}
+
+func developerToolReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions) []string {
+	if len(model.ReviewSuggestions) == 0 {
+		return nil
+	}
+	lines := []string{
+		fmt.Sprintf("  Review suggestions (%d)", len(model.ReviewSuggestions)),
+		fmt.Sprintf("    %s", ReviewSuggestionSafetyNote),
+	}
+	for _, suggestion := range model.ReviewSuggestions {
+		lines = append(lines, fmt.Sprintf("    %s (status: Review suggestion)", suggestion.Label))
+		if opts.Expanded && suggestion.Command != "" {
+			lines = append(lines, fmt.Sprintf("      Command: %s", suggestion.Command))
+		}
+		if opts.Expanded && suggestion.CachePath != "" {
+			lines = append(lines, fmt.Sprintf("      Cache: %s", suggestion.CachePath))
+		}
+		if opts.Expanded && suggestion.Command == "" && suggestion.NextStep != "" {
+			lines = append(lines, fmt.Sprintf("      %s", suggestion.NextStep))
+		}
+	}
+	return lines
+}
+
+func projectArtifactReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions) []string {
+	if len(model.ReviewClues) == 0 {
+		return nil
+	}
+	lines := []string{fmt.Sprintf("  Review clues (%d)", len(model.ReviewClues))}
+	for _, clue := range model.ReviewClues {
+		line := fmt.Sprintf("    %s (review only) (status: Review clue)", clue.Name)
+		if clue.Path != "" {
+			line = fmt.Sprintf("    %s - %s (review only) (status: Review clue)", clue.Name, clue.Path)
+		}
+		lines = append(lines, line)
+		if opts.Expanded && clue.Details != "" {
+			lines = append(lines, fmt.Sprintf("      %s", clue.Details))
+		}
+	}
+	return lines
+}
+
+func protectionReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions) []string {
+	var lines []string
+	lines = append(lines, "  Protection rules")
 	if len(model.ProtectionRules) == 0 {
-		builder.WriteString("  No default-enabled protection rules were reported.\n")
+		lines = append(lines, "    No default-enabled protection rules were reported.")
 	} else {
 		for _, rule := range model.ProtectionRules {
 			if rule.UserDefined {
-				builder.WriteString(fmt.Sprintf("  %s (user-defined Protection rule)\n", rule.Path))
+				lines = append(lines, fmt.Sprintf("    %s (user-defined Protection rule)", rule.Path))
 				continue
 			}
-			builder.WriteString(fmt.Sprintf("  %s: %s\n", rule.ID, rule.Description))
+			lines = append(lines, fmt.Sprintf("    %s: %s", rule.ID, rule.Description))
 		}
 	}
-
 	if len(model.ProtectionDiagnostics) > 0 {
-		builder.WriteString("\nProtection diagnostics\n")
+		lines = append(lines, fmt.Sprintf("  Protection diagnostics (%d)", len(model.ProtectionDiagnostics)))
 		for _, diagnostic := range model.ProtectionDiagnostics {
-			builder.WriteString(fmt.Sprintf("  %s (source: %s", diagnostic.Code, diagnostic.Source))
+			line := fmt.Sprintf("    %s (status: Protection diagnostic, source: %s", diagnostic.Code, diagnostic.Source)
 			if diagnostic.Line > 0 {
-				builder.WriteString(fmt.Sprintf(", line %d", diagnostic.Line))
+				line += fmt.Sprintf(", line %d", diagnostic.Line)
 			}
-			builder.WriteString(fmt.Sprintf(", recoverable: %t)\n", diagnostic.Recoverable))
-			if diagnostic.Message != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", diagnostic.Message))
-			}
-		}
-	}
-
-	if len(model.Notices) > 0 {
-		builder.WriteString("\nNotices\n")
-		for _, notice := range model.Notices {
-			builder.WriteString(fmt.Sprintf("  %s\n", notice.Message))
-		}
-	}
-
-	builder.WriteString("\nDefault candidates\n")
-	if len(model.Candidates) == 0 {
-		builder.WriteString("  No default candidates found.\n")
-	} else {
-		for _, candidate := range model.Candidates[:cappedEntryCount(len(model.Candidates))] {
-			builder.WriteString(fmt.Sprintf("  %s (%s, %srule: %s, planned action: Recycle Bin)\n",
-				candidate.Path, formatBytes(candidate.Bytes), statusLabel(presentation.defaultCandidateLabel), candidate.Rule))
-		}
-		writeOmittedLine(&builder, len(model.Candidates), model.DetailedListPath)
-	}
-
-	builder.WriteString("\nSkipped items\n")
-	if len(model.Skipped) == 0 {
-		builder.WriteString("  No skipped cleanup paths reported.\n")
-	} else {
-		for _, skipped := range model.Skipped[:cappedEntryCount(len(model.Skipped))] {
-			builder.WriteString(fmt.Sprintf("  %s (%srule: %s, reason: %s, recoverable: %t)\n",
-				skipped.Path, statusLabel(presentation.skippedLabel), skipped.Rule, skipped.Reason.Code, skipped.Reason.Recoverable))
-			if skipped.Reason.Message != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason.Message))
-			}
-		}
-		writeOmittedLine(&builder, len(model.Skipped), model.DetailedListPath)
-	}
-
-	if len(model.Opportunities) > 0 || len(model.SkippedByDefault) > 0 {
-		builder.WriteString("\nSkipped by default\n")
-		if len(model.Opportunities) > 0 {
-			builder.WriteString(fmt.Sprintf("  Opportunities: %d, observed bytes: %s (not counted as Potential space)\n",
-				model.OpportunityCount, formatBytes(model.OpportunityObservedBytes)))
-			for _, opportunity := range model.Opportunities[:cappedEntryCount(len(model.Opportunities))] {
-				category := normalizedOpportunityCategory(opportunity.Category)
-				if opportunity.BrowserCache != nil {
-					builder.WriteString(fmt.Sprintf("  %s browser cache (%s, category: %s, profiles: %d",
-						applicationDisplayName(opportunity.BrowserCache.Browser),
-						formatBytes(opportunity.Bytes),
-						category,
-						opportunity.BrowserCache.ProfileCount))
-				} else {
-					builder.WriteString(fmt.Sprintf("  %s (%s, category: %s",
-						opportunity.Path, formatBytes(opportunity.Bytes), category))
-				}
-				if category == OpportunityCategoryUserTemp {
-					builder.WriteString(fmt.Sprintf(", latest modified: %s, idle days: %d",
-						opportunity.LatestModifiedAt.UTC().Format(time.RFC3339), opportunity.IdleDays))
-				}
-				builder.WriteString(fmt.Sprintf(", status: %s, reason: %s, not counted as Potential space)\n",
-					opportunity.Status, opportunity.Reason))
-			}
-			writeOmittedLine(&builder, len(model.Opportunities), model.DetailedListPath)
-		}
-		for _, skipped := range model.SkippedByDefault {
-			builder.WriteString(fmt.Sprintf("  %s", skipped.Name))
-			if skipped.Path != "" {
-				builder.WriteString(fmt.Sprintf(" - %s", skipped.Path))
-			}
-			if skipped.Bytes > 0 {
-				builder.WriteString(fmt.Sprintf(" (%s, not counted as Potential space)", formatBytes(skipped.Bytes)))
-			}
-			builder.WriteString("\n")
-			if skipped.Reason != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason))
+			line += fmt.Sprintf(", recoverable: %t)", diagnostic.Recoverable)
+			lines = append(lines, line)
+			if opts.Expanded && diagnostic.Message != "" {
+				lines = append(lines, fmt.Sprintf("      %s", diagnostic.Message))
 			}
 		}
 	}
+	return lines
+}
 
-	if len(model.ReviewClues) > 0 {
-		builder.WriteString("\nReview clues\n")
-		for _, clue := range model.ReviewClues {
-			builder.WriteString(fmt.Sprintf("  %s", clue.Name))
-			if clue.Path != "" {
-				builder.WriteString(fmt.Sprintf(" - %s", clue.Path))
-			}
-			builder.WriteString("\n")
-			if clue.Details != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", clue.Details))
-			}
-		}
+func summaryReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions, presentation previewReportPresentation) []string {
+	lines := []string{
+		fmt.Sprintf("  Potential space: %s", formatBytes(model.PotentialSpaceBytes)),
+		fmt.Sprintf("  Observed opportunity bytes: %s (not counted as Potential space)", formatBytes(model.OpportunityObservedBytes)),
 	}
-
-	if len(model.ReviewSuggestions) > 0 {
-		builder.WriteString("\nReview suggestions\n")
-		builder.WriteString(fmt.Sprintf("  %s\n", ReviewSuggestionSafetyNote))
-		for _, suggestion := range model.ReviewSuggestions {
-			builder.WriteString(fmt.Sprintf("  %s\n", suggestion.Label))
-			if suggestion.Command != "" {
-				builder.WriteString(fmt.Sprintf("    Command: %s\n", suggestion.Command))
-			}
-			if suggestion.CachePath != "" {
-				builder.WriteString(fmt.Sprintf("    Cache: %s\n", suggestion.CachePath))
-			}
-			if suggestion.Command == "" && suggestion.NextStep != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", suggestion.NextStep))
-			}
-		}
+	if model.DetailedListPath != "" {
+		lines = append(lines, fmt.Sprintf("  Detailed candidate list: %s", model.DetailedListPath))
 	}
-
-	if len(model.RunningApplicationSkips) > 0 {
-		builder.WriteString("\nRunning application skips\n")
-		for _, skipped := range model.RunningApplicationSkips {
-			builder.WriteString(fmt.Sprintf("  %s", skipped.Name))
-			if skipped.Application != "" {
-				builder.WriteString(fmt.Sprintf(" (%s)", skipped.Application))
-			}
-			if skipped.Path != "" {
-				builder.WriteString(fmt.Sprintf(" - %s", skipped.Path))
-			}
-			builder.WriteString("\n")
-			if skipped.Reason != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", skipped.Reason))
-			}
-		}
-	}
-
-	builder.WriteString("\nInspection errors\n")
+	lines = append(lines, fmt.Sprintf("  Inspection errors (%d)", len(model.Errors)))
 	if len(model.Errors) == 0 {
-		builder.WriteString("  No recoverable inspection errors reported.\n")
+		lines = append(lines, "    No recoverable inspection errors reported.")
 	} else {
-		for _, err := range model.Errors[:cappedEntryCount(len(model.Errors))] {
-			builder.WriteString(fmt.Sprintf("  %s (%srule: %s, error: %s, recoverable: %t)\n",
+		entryCount := cappedEntryCountFor(len(model.Errors), opts.EntryLimit)
+		for _, err := range model.Errors[:entryCount] {
+			lines = append(lines, fmt.Sprintf("    %s (%srule: %s, error: %s, recoverable: %t)",
 				err.Path, statusLabel(presentation.inspectionErrorLabel), err.Rule, err.Code, err.Recoverable))
-			if err.Message != "" {
-				builder.WriteString(fmt.Sprintf("    %s\n", err.Message))
+			if opts.Expanded && err.Message != "" {
+				lines = append(lines, fmt.Sprintf("      %s", err.Message))
 			}
 		}
-		writeOmittedLine(&builder, len(model.Errors), model.DetailedListPath)
+		if omitted := len(model.Errors) - entryCount; omitted > 0 {
+			lines = append(lines, omittedLine(omitted, model.DetailedListPath))
+		}
 	}
+	lines = append(lines, fmt.Sprintf("  Candidates: %d, skipped: %d, errors: %d.", model.CandidateCount, model.SkippedCount, len(model.Errors)))
+	if model.Summary != "" {
+		lines = append(lines, fmt.Sprintf("  %s", model.Summary))
+	}
+	return lines
+}
 
-	builder.WriteString("\n")
-	builder.WriteString(fmt.Sprintf("Candidates: %d, skipped: %d, errors: %d.\n", model.CandidateCount, model.SkippedCount, len(model.Errors)))
-	builder.WriteString(model.Summary)
-	builder.WriteString("\n")
-	return builder.String()
+func categorizedOpportunities(opportunities []Opportunity, limit int, include func(Opportunity) bool) ([]Opportunity, int) {
+	var selected []Opportunity
+	for _, opportunity := range opportunities {
+		if include(opportunity) {
+			selected = append(selected, opportunity)
+		}
+	}
+	entryCount := cappedEntryCountFor(len(selected), limit)
+	return selected[:entryCount], len(selected) - entryCount
+}
+
+func opportunityLines(opportunities []Opportunity) []string {
+	lines := make([]string, 0, len(opportunities))
+	for _, opportunity := range opportunities {
+		category := normalizedOpportunityCategory(opportunity.Category)
+		var line string
+		if opportunity.BrowserCache != nil {
+			line = fmt.Sprintf("    %s browser cache (%s, category: %s, profiles: %d",
+				applicationDisplayName(opportunity.BrowserCache.Browser),
+				formatBytes(opportunity.Bytes),
+				category,
+				opportunity.BrowserCache.ProfileCount)
+		} else {
+			line = fmt.Sprintf("    %s (%s, category: %s",
+				opportunity.Path, formatBytes(opportunity.Bytes), category)
+		}
+		if category == OpportunityCategoryUserTemp {
+			line += fmt.Sprintf(", latest modified: %s, idle days: %d",
+				opportunity.LatestModifiedAt.UTC().Format(time.RFC3339), opportunity.IdleDays)
+		}
+		line += fmt.Sprintf(", status: %s, reason: %s, not counted as Potential space)",
+			opportunity.Status, opportunity.Reason)
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func incompleteInspectionLine(incomplete IncompleteOpportunityInspection) string {
+	return fmt.Sprintf("    %s (category: %s, status: inspection incomplete, reason: %s, recoverable: %t)",
+		incomplete.Path, normalizedOpportunityCategory(incomplete.Category), incomplete.Reason.Code, incomplete.Reason.Recoverable)
+}
+
+func isBrowserDiagnostic(issue StructuredIssue) bool {
+	return issue.Code == runningApplicationDetectionIssueCode || issue.Rule == "browser_review"
+}
+
+func cappedEntryCountFor(count, limit int) int {
+	if count > limit {
+		return limit
+	}
+	return count
+}
+
+func omittedLine(omitted int, detailedListPath string) string {
+	line := fmt.Sprintf("    %d omitted.", omitted)
+	if detailedListPath != "" {
+		line += fmt.Sprintf(" See detailed candidate list for full path detail: %s", detailedListPath)
+	}
+	return line
 }
 
 func cappedEntryCount(count int) int {
