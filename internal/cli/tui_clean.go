@@ -14,31 +14,24 @@ import (
 type cleanPreviewFilter string
 
 const (
-	cleanPreviewFilterAll         cleanPreviewFilter = "all"
-	cleanPreviewFilterCandidates  cleanPreviewFilter = "default candidates"
-	cleanPreviewFilterSkipped     cleanPreviewFilter = "skipped"
-	cleanPreviewFilterReview      cleanPreviewFilter = "review"
-	cleanPreviewFilterErrors      cleanPreviewFilter = "errors"
-	cleanPreviewSectionEntryLimit                    = 10
+	cleanPreviewFilterAll               cleanPreviewFilter = "all"
+	cleanPreviewFilterActionablePreview cleanPreviewFilter = "actionable preview"
+	cleanPreviewFilterReviewOnly        cleanPreviewFilter = "review-only"
+	cleanPreviewFilterDiagnostics       cleanPreviewFilter = "diagnostics"
+	cleanPreviewSectionEntryLimit                          = 10
 )
 
 func nextCleanPreviewFilter(filter cleanPreviewFilter) cleanPreviewFilter {
 	switch filter {
 	case cleanPreviewFilterAll:
-		return cleanPreviewFilterCandidates
-	case cleanPreviewFilterCandidates:
-		return cleanPreviewFilterSkipped
-	case cleanPreviewFilterSkipped:
-		return cleanPreviewFilterReview
-	case cleanPreviewFilterReview:
-		return cleanPreviewFilterErrors
+		return cleanPreviewFilterActionablePreview
+	case cleanPreviewFilterActionablePreview:
+		return cleanPreviewFilterReviewOnly
+	case cleanPreviewFilterReviewOnly:
+		return cleanPreviewFilterDiagnostics
 	default:
 		return cleanPreviewFilterAll
 	}
-}
-
-func cleanPreviewFilterAllows(active, section cleanPreviewFilter) bool {
-	return active == cleanPreviewFilterAll || active == section
 }
 
 func cleanFormatBytes(bytes int64) string {
@@ -217,15 +210,17 @@ func (m cleanModel) headerContent() string {
 func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPreviewFilter, expanded bool) string {
 	var builder strings.Builder
 	for _, category := range clean.PreviewReportCategories(model, clean.PreviewReportCategoryOptions{
-		EntryLimit:        cleanPreviewSectionEntryLimit,
-		Expanded:          expanded,
-		Compact:           true,
-		IncludeCandidates: cleanPreviewFilterAllows(filter, cleanPreviewFilterCandidates),
-		IncludeSkipped:    cleanPreviewFilterAllows(filter, cleanPreviewFilterSkipped),
-		IncludeReview:     cleanPreviewFilterAllows(filter, cleanPreviewFilterReview),
-		IncludeErrors:     cleanPreviewFilterAllows(filter, cleanPreviewFilterErrors),
-		IncludeSummary:    true,
-		PreviewSummary:    true,
+		EntryLimit:                   cleanPreviewSectionEntryLimit,
+		Expanded:                     expanded,
+		Compact:                      true,
+		IncludeCandidates:            cleanPreviewFilterIncludesCandidates(filter),
+		IncludeSkipped:               cleanPreviewFilterIncludesSkipped(filter),
+		IncludeReview:                cleanPreviewFilterIncludesReview(filter),
+		IncludeErrors:                cleanPreviewFilterIncludesDiagnostics(filter),
+		IncludeIncompleteInspections: cleanPreviewFilterIncludesInspectionDiagnostics(filter),
+		IncludeProtectionDiagnostics: cleanPreviewFilterIncludesProtectionDiagnostics(filter),
+		IncludeSummary:               true,
+		PreviewSummary:               true,
 	}) {
 		builder.WriteString("\n")
 		builder.WriteString(category.Name)
@@ -236,4 +231,30 @@ func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPrevie
 		}
 	}
 	return builder.String()
+}
+
+func cleanPreviewFilterIncludesCandidates(filter cleanPreviewFilter) bool {
+	return filter == cleanPreviewFilterAll || filter == cleanPreviewFilterActionablePreview
+}
+
+func cleanPreviewFilterIncludesSkipped(filter cleanPreviewFilter) bool {
+	return filter == cleanPreviewFilterAll || filter == cleanPreviewFilterActionablePreview
+}
+
+func cleanPreviewFilterIncludesReview(filter cleanPreviewFilter) bool {
+	return filter == cleanPreviewFilterAll || filter == cleanPreviewFilterReviewOnly
+}
+
+func cleanPreviewFilterIncludesDiagnostics(filter cleanPreviewFilter) bool {
+	return filter == cleanPreviewFilterAll ||
+		filter == cleanPreviewFilterActionablePreview ||
+		filter == cleanPreviewFilterDiagnostics
+}
+
+func cleanPreviewFilterIncludesInspectionDiagnostics(filter cleanPreviewFilter) bool {
+	return filter == cleanPreviewFilterAll || filter == cleanPreviewFilterDiagnostics
+}
+
+func cleanPreviewFilterIncludesProtectionDiagnostics(filter cleanPreviewFilter) bool {
+	return filter == cleanPreviewFilterAll || filter == cleanPreviewFilterDiagnostics
 }
