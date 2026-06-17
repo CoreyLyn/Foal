@@ -109,12 +109,13 @@ type PreviewReportCategory struct {
 type PreviewReportCategoryOptions struct {
 	EntryLimit        int
 	Expanded          bool
+	Compact           bool
 	IncludeCandidates bool
 	IncludeSkipped    bool
 	IncludeReview     bool
 	IncludeErrors     bool
 	IncludeSummary    bool
-	PreviewSummary     bool
+	PreviewSummary    bool
 }
 
 func NewPreviewReadModel(result Result) PreviewReadModel {
@@ -343,7 +344,7 @@ func systemReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions
 	if len(model.Notices) > 0 {
 		lines = append(lines, "  Notices")
 		for _, notice := range model.Notices {
-			lines = append(lines, fmt.Sprintf("    %s", notice.Message))
+			lines = append(lines, fmt.Sprintf("    %s%s", markerPrefix(opts, "boundary"), notice.Message))
 		}
 	}
 	systemOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
@@ -352,7 +353,7 @@ func systemReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions
 	})
 	if len(systemOpportunities) > 0 {
 		lines = append(lines, fmt.Sprintf("  Skipped by default: %d system opportunity item(s)", len(systemOpportunities)+omitted))
-		lines = append(lines, opportunityLines(systemOpportunities)...)
+		lines = append(lines, opportunityLines(systemOpportunities, opts)...)
 		if omitted > 0 {
 			lines = append(lines, omittedLine(omitted, model.DetailedListPath))
 		}
@@ -362,7 +363,7 @@ func systemReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions
 		if category == OpportunityCategoryUserTemp || category == OpportunityCategoryBrowserCache {
 			continue
 		}
-		lines = append(lines, incompleteInspectionLine(incomplete))
+		lines = append(lines, incompleteInspectionLine(incomplete, opts))
 	}
 	return lines
 }
@@ -372,10 +373,22 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 	if opts.IncludeCandidates {
 		lines = append(lines, fmt.Sprintf("  Default candidates (%d)", len(model.Candidates)))
 		if len(model.Candidates) == 0 {
-			lines = append(lines, "    No default candidates found.")
+			lines = append(lines, fmt.Sprintf("    %sNo default candidates found.", markerPrefix(opts, "loaded")))
 		} else {
 			entryCount := cappedEntryCountFor(len(model.Candidates), opts.EntryLimit)
 			for _, candidate := range model.Candidates[:entryCount] {
+				if opts.Compact {
+					label := compactPathLabel(candidate.Path)
+					if opts.Expanded {
+						label = candidate.Path
+					}
+					line := fmt.Sprintf("    [candidate] %s (%s)", label, formatBytes(candidate.Bytes))
+					if opts.Expanded {
+						line += fmt.Sprintf(" (status: %s, rule: %s, planned action: Recycle Bin)", presentation.defaultCandidateLabel, candidate.Rule)
+					}
+					lines = append(lines, line)
+					continue
+				}
 				lines = append(lines, fmt.Sprintf("    %s (%s, %srule: %s, planned action: Recycle Bin)",
 					candidate.Path, formatBytes(candidate.Bytes), statusLabel(presentation.defaultCandidateLabel), candidate.Rule))
 			}
@@ -387,10 +400,27 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 	if opts.IncludeSkipped {
 		lines = append(lines, fmt.Sprintf("  Skipped items (%d)", len(model.Skipped)))
 		if len(model.Skipped) == 0 {
-			lines = append(lines, "    No skipped cleanup paths reported.")
+			lines = append(lines, fmt.Sprintf("    %sNo skipped cleanup paths reported.", markerPrefix(opts, "loaded")))
 		} else {
 			entryCount := cappedEntryCountFor(len(model.Skipped), opts.EntryLimit)
 			for _, skipped := range model.Skipped[:entryCount] {
+				if opts.Compact {
+					label := compactPathLabel(skipped.Path)
+					if opts.Expanded {
+						label = skipped.Path
+					}
+					line := fmt.Sprintf("    [boundary] %s (rule: %s, reason: %s, recoverable: %t)",
+						label, skipped.Rule, skipped.Reason.Code, skipped.Reason.Recoverable)
+					if opts.Expanded {
+						line = fmt.Sprintf("    [boundary] %s (status: %s, rule: %s, reason: %s, recoverable: %t)",
+							label, presentation.skippedLabel, skipped.Rule, skipped.Reason.Code, skipped.Reason.Recoverable)
+					}
+					lines = append(lines, line)
+					if opts.Expanded && skipped.Reason.Message != "" {
+						lines = append(lines, fmt.Sprintf("      %s", skipped.Reason.Message))
+					}
+					continue
+				}
 				lines = append(lines, fmt.Sprintf("    %s (%srule: %s, reason: %s, recoverable: %t)",
 					skipped.Path, statusLabel(presentation.skippedLabel), skipped.Rule, skipped.Reason.Code, skipped.Reason.Recoverable))
 				if opts.Expanded && skipped.Reason.Message != "" {
@@ -408,15 +438,19 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 		})
 		if len(userOpportunities) > 0 {
 			lines = append(lines, fmt.Sprintf("  Skipped by default: %d user-temp opportunity item(s)", len(userOpportunities)+omitted))
-			lines = append(lines, opportunityLines(userOpportunities)...)
+			lines = append(lines, opportunityLines(userOpportunities, opts)...)
 			if omitted > 0 {
 				lines = append(lines, omittedLine(omitted, model.DetailedListPath))
 			}
 		}
 		for _, skipped := range model.SkippedByDefault {
-			line := fmt.Sprintf("    %s", skipped.Name)
+			line := fmt.Sprintf("    %s%s", markerPrefix(opts, "opportunity"), skipped.Name)
 			if skipped.Path != "" {
-				line += fmt.Sprintf(" - %s", skipped.Path)
+				path := compactPathLabel(skipped.Path)
+				if opts.Expanded {
+					path = skipped.Path
+				}
+				line += fmt.Sprintf(" - %s", path)
 			}
 			if skipped.Bytes > 0 {
 				line += fmt.Sprintf(" (%s, status: skipped by default, not counted as Potential space)", formatBytes(skipped.Bytes))
@@ -430,7 +464,7 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 		}
 		for _, incomplete := range model.IncompleteOpportunityInspections {
 			if normalizedOpportunityCategory(incomplete.Category) == OpportunityCategoryUserTemp {
-				lines = append(lines, incompleteInspectionLine(incomplete))
+				lines = append(lines, incompleteInspectionLine(incomplete, opts))
 			}
 		}
 	}
@@ -445,7 +479,7 @@ func browserReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 		})
 		if len(browserOpportunities) > 0 {
 			lines = append(lines, fmt.Sprintf("  Skipped by default: %d browser opportunity item(s)", len(browserOpportunities)+omitted))
-			lines = append(lines, opportunityLines(browserOpportunities)...)
+			lines = append(lines, opportunityLines(browserOpportunities, opts)...)
 			if omitted > 0 {
 				lines = append(lines, omittedLine(omitted, model.DetailedListPath))
 			}
@@ -453,14 +487,22 @@ func browserReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 		if len(model.RunningApplicationSkips) > 0 {
 			lines = append(lines, fmt.Sprintf("  Running application skips (%d)", len(model.RunningApplicationSkips)))
 			for _, skipped := range model.RunningApplicationSkips {
-				line := fmt.Sprintf("    %s", skipped.Name)
+				line := fmt.Sprintf("    %s%s", markerPrefix(opts, "boundary"), skipped.Name)
 				if skipped.Application != "" {
 					line += fmt.Sprintf(" (%s)", skipped.Application)
 				}
 				if skipped.Path != "" {
-					line += fmt.Sprintf(" - %s", skipped.Path)
+					path := compactPathLabel(skipped.Path)
+					if opts.Expanded {
+						path = skipped.Path
+					}
+					line += fmt.Sprintf(" - %s", path)
 				}
-				line += " (status: running skip, not executable here)"
+				if opts.Compact && !opts.Expanded {
+					line += " (running skip, not executable here)"
+				} else {
+					line += " (status: running skip, not executable here)"
+				}
 				lines = append(lines, line)
 				if opts.Expanded && skipped.Reason != "" {
 					lines = append(lines, fmt.Sprintf("      %s", skipped.Reason))
@@ -469,14 +511,14 @@ func browserReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 		}
 		for _, incomplete := range model.IncompleteOpportunityInspections {
 			if normalizedOpportunityCategory(incomplete.Category) == OpportunityCategoryBrowserCache {
-				lines = append(lines, incompleteInspectionLine(incomplete))
+				lines = append(lines, incompleteInspectionLine(incomplete, opts))
 			}
 		}
 	}
 	if opts.IncludeErrors {
 		for _, err := range model.Errors {
 			if isBrowserDiagnostic(err) {
-				lines = append(lines, fmt.Sprintf("    Browser inspection diagnostic: %s (status: inspection incomplete, recoverable: %t)", err.Code, err.Recoverable))
+				lines = append(lines, fmt.Sprintf("    %sBrowser inspection diagnostic: %s (status: inspection incomplete, recoverable: %t)", markerPrefix(opts, "diagnostic"), err.Code, err.Recoverable))
 				if opts.Expanded && err.Message != "" {
 					lines = append(lines, fmt.Sprintf("      %s", err.Message))
 				}
@@ -495,7 +537,11 @@ func developerToolReportLines(model PreviewReadModel, opts PreviewReportCategory
 		fmt.Sprintf("    %s", ReviewSuggestionSafetyNote),
 	}
 	for _, suggestion := range model.ReviewSuggestions {
-		lines = append(lines, fmt.Sprintf("    %s (status: Review suggestion)", suggestion.Label))
+		if opts.Compact {
+			lines = append(lines, fmt.Sprintf("    [review] %s (Review suggestion) (status: Review suggestion)", suggestion.Label))
+		} else {
+			lines = append(lines, fmt.Sprintf("    %s (status: Review suggestion)", suggestion.Label))
+		}
 		if opts.Expanded && suggestion.Command != "" {
 			lines = append(lines, fmt.Sprintf("      Command: %s", suggestion.Command))
 		}
@@ -515,9 +561,13 @@ func projectArtifactReportLines(model PreviewReadModel, opts PreviewReportCatego
 	}
 	lines := []string{fmt.Sprintf("  Review clues (%d)", len(model.ReviewClues))}
 	for _, clue := range model.ReviewClues {
-		line := fmt.Sprintf("    %s (review only) (status: Review clue)", clue.Name)
+		line := fmt.Sprintf("    %s%s (review only) (status: Review clue)", markerPrefix(opts, "review"), clue.Name)
 		if clue.Path != "" {
-			line = fmt.Sprintf("    %s - %s (review only) (status: Review clue)", clue.Name, clue.Path)
+			path := compactPathLabel(clue.Path)
+			if opts.Expanded {
+				path = clue.Path
+			}
+			line = fmt.Sprintf("    %s%s - %s (review only) (status: Review clue)", markerPrefix(opts, "review"), clue.Name, path)
 		}
 		lines = append(lines, line)
 		if opts.Expanded && clue.Details != "" {
@@ -531,20 +581,32 @@ func protectionReportLines(model PreviewReadModel, opts PreviewReportCategoryOpt
 	var lines []string
 	lines = append(lines, "  Protection rules")
 	if len(model.ProtectionRules) == 0 {
-		lines = append(lines, "    No default-enabled protection rules were reported.")
+		if opts.Compact {
+			lines = append(lines, "    [loaded] Protection rules not reported.")
+		} else {
+			lines = append(lines, "    No default-enabled protection rules were reported.")
+		}
 	} else {
 		for _, rule := range model.ProtectionRules {
 			if rule.UserDefined {
-				lines = append(lines, fmt.Sprintf("    %s (user-defined Protection rule)", rule.Path))
+				path := rule.Path
+				if opts.Compact && !opts.Expanded {
+					path = compactPathLabel(rule.Path)
+				}
+				lines = append(lines, fmt.Sprintf("    %s%s (user-defined Protection rule)", markerPrefix(opts, "boundary"), path))
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("    %s: %s", rule.ID, rule.Description))
+			lines = append(lines, fmt.Sprintf("    %s%s: %s", markerPrefix(opts, "boundary"), rule.ID, rule.Description))
 		}
 	}
 	if len(model.ProtectionDiagnostics) > 0 {
 		lines = append(lines, fmt.Sprintf("  Protection diagnostics (%d)", len(model.ProtectionDiagnostics)))
 		for _, diagnostic := range model.ProtectionDiagnostics {
-			line := fmt.Sprintf("    %s (status: Protection diagnostic, source: %s", diagnostic.Code, diagnostic.Source)
+			source := diagnostic.Source
+			if opts.Compact && !opts.Expanded {
+				source = compactPathLabel(diagnostic.Source)
+			}
+			line := fmt.Sprintf("    %s%s (status: Protection diagnostic, source: %s", markerPrefix(opts, "diagnostic"), diagnostic.Code, source)
 			if diagnostic.Line > 0 {
 				line += fmt.Sprintf(", line %d", diagnostic.Line)
 			}
@@ -576,10 +638,22 @@ func summaryReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 	}
 	lines = append(lines, fmt.Sprintf("  Inspection errors (%d)", len(model.Errors)))
 	if len(model.Errors) == 0 {
-		lines = append(lines, "    No recoverable inspection errors reported.")
+		lines = append(lines, fmt.Sprintf("    %sNo recoverable inspection errors reported.", markerPrefix(opts, "loaded")))
 	} else {
 		entryCount := cappedEntryCountFor(len(model.Errors), opts.EntryLimit)
 		for _, err := range model.Errors[:entryCount] {
+			if opts.Compact {
+				label := compactPathLabel(err.Path)
+				if opts.Expanded {
+					label = err.Path
+				}
+				lines = append(lines, fmt.Sprintf("    [diagnostic] %s (rule: %s, error: %s, recoverable: %t)",
+					label, err.Rule, err.Code, err.Recoverable))
+				if opts.Expanded && err.Message != "" {
+					lines = append(lines, fmt.Sprintf("      %s", err.Message))
+				}
+				continue
+			}
 			lines = append(lines, fmt.Sprintf("    %s (%srule: %s, error: %s, recoverable: %t)",
 				err.Path, statusLabel(presentation.inspectionErrorLabel), err.Rule, err.Code, err.Recoverable))
 			if opts.Expanded && err.Message != "" {
@@ -612,20 +686,25 @@ func categorizedOpportunities(opportunities []Opportunity, limit int, include fu
 	return selected[:entryCount], len(selected) - entryCount
 }
 
-func opportunityLines(opportunities []Opportunity) []string {
+func opportunityLines(opportunities []Opportunity, opts PreviewReportCategoryOptions) []string {
 	lines := make([]string, 0, len(opportunities))
 	for _, opportunity := range opportunities {
 		category := normalizedOpportunityCategory(opportunity.Category)
 		var line string
 		if opportunity.BrowserCache != nil {
-			line = fmt.Sprintf("    %s browser cache (%s, category: %s, profiles: %d",
+			line = fmt.Sprintf("    %s%s browser cache (%s, category: %s, profiles: %d",
+				markerPrefix(opts, "opportunity"),
 				applicationDisplayName(opportunity.BrowserCache.Browser),
 				formatBytes(opportunity.Bytes),
 				category,
 				opportunity.BrowserCache.ProfileCount)
 		} else {
-			line = fmt.Sprintf("    %s (%s, category: %s",
-				opportunity.Path, formatBytes(opportunity.Bytes), category)
+			label := opportunity.Path
+			if opts.Compact && !opts.Expanded {
+				label = compactPathLabel(opportunity.Path)
+			}
+			line = fmt.Sprintf("    %s%s (%s, category: %s",
+				markerPrefix(opts, "opportunity"), label, formatBytes(opportunity.Bytes), category)
 		}
 		if category == OpportunityCategoryUserTemp {
 			line += fmt.Sprintf(", latest modified: %s, idle days: %d",
@@ -638,9 +717,13 @@ func opportunityLines(opportunities []Opportunity) []string {
 	return lines
 }
 
-func incompleteInspectionLine(incomplete IncompleteOpportunityInspection) string {
-	return fmt.Sprintf("    %s (category: %s, status: inspection incomplete, reason: %s, recoverable: %t)",
-		incomplete.Path, normalizedOpportunityCategory(incomplete.Category), incomplete.Reason.Code, incomplete.Reason.Recoverable)
+func incompleteInspectionLine(incomplete IncompleteOpportunityInspection, opts PreviewReportCategoryOptions) string {
+	path := incomplete.Path
+	if opts.Compact && !opts.Expanded {
+		path = compactPathLabel(incomplete.Path)
+	}
+	return fmt.Sprintf("    %s%s (category: %s, status: inspection incomplete, reason: %s, recoverable: %t)",
+		markerPrefix(opts, "diagnostic"), path, normalizedOpportunityCategory(incomplete.Category), incomplete.Reason.Code, incomplete.Reason.Recoverable)
 }
 
 func isBrowserDiagnostic(issue StructuredIssue) bool {
@@ -686,6 +769,27 @@ func statusLabel(label string) string {
 		return ""
 	}
 	return fmt.Sprintf("status: %s, ", label)
+}
+
+func markerPrefix(opts PreviewReportCategoryOptions, marker string) string {
+	if !opts.Compact {
+		return ""
+	}
+	return fmt.Sprintf("[%s] ", marker)
+}
+
+func compactPathLabel(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return trimmed
+	}
+	trimmed = strings.TrimPrefix(trimmed, `\\?\`)
+	trimmed = strings.TrimRight(trimmed, `\/`)
+	lastSeparator := strings.LastIndexAny(trimmed, `\/`)
+	if lastSeparator >= 0 && lastSeparator+1 < len(trimmed) {
+		return trimmed[lastSeparator+1:]
+	}
+	return trimmed
 }
 
 func formatBytes(bytes int64) string {
