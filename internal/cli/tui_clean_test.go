@@ -196,9 +196,9 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"Dry-run complete",
 		"No files changed.",
 		"Default candidates (1)",
-		`C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+		"[candidate] foal-default.tmp (12 bytes)",
 		"Skipped items (1)",
-		`\\?\C:\Windows\System32`,
+		"[boundary] System32",
 		"protected_path",
 		"Inspection errors (1)",
 		"inspection_failed",
@@ -208,21 +208,21 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"will not request elevation automatically",
 		"Protection rules",
 		"Observed opportunity bytes: 25600 bytes (not counted as Potential space)",
-		`C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+		"[opportunity] old-tool-cache",
 		"category: user_temp",
 		"latest modified: 2026-06-01T12:00:00Z",
 		"idle days: 9",
-		`C:\Users\corey\AppData\Local\CrashDumps`,
+		"[opportunity] CrashDumps",
 		"category: crash_dumps",
-		`C:\Users\corey\AppData\Local\Microsoft\Windows\WER`,
+		"[opportunity] WER",
 		"category: windows_error_reporting",
-		`C:\Users\corey\AppData\Local\Microsoft\Windows\Explorer`,
+		"[opportunity] Explorer",
 		"category: explorer_thumbnail_cache",
-		`C:\Users\corey\AppData\Local\Microsoft\Windows\INetCache`,
+		"[opportunity] INetCache",
 		"category: inet_cache",
-		`C:\Users\corey\AppData\Local\D3DSCache`,
+		"[opportunity] D3DSCache",
 		"category: d3d_shader_cache",
-		`C:\Users\corey\AppData\Local\NVIDIA\DXCache`,
+		"[opportunity] DXCache",
 		"category: nvidia_dx_cache",
 		"status: skipped_by_default",
 		"reason: requires_explicit_opt_in",
@@ -262,6 +262,15 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 
 	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'e', Text: "e"})
 	for _, want := range []string{
+		`C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+		`\\?\C:\Windows\System32`,
+		`C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+		`C:\Users\corey\AppData\Local\CrashDumps`,
+		`C:\Users\corey\AppData\Local\Microsoft\Windows\WER`,
+		`C:\Users\corey\AppData\Local\Microsoft\Windows\Explorer`,
+		`C:\Users\corey\AppData\Local\Microsoft\Windows\INetCache`,
+		`C:\Users\corey\AppData\Local\D3DSCache`,
+		`C:\Users\corey\AppData\Local\NVIDIA\DXCache`,
 		"Command: pnpm store prune",
 		`Cache: C:\Users\corey\AppData\Local\pnpm\store\v10`,
 		"Command: yarn cache clean",
@@ -326,6 +335,103 @@ func TestCleanPreviewTUIUsesCompactHeaderAndBottomSummary(t *testing.T) {
 	}
 }
 
+func TestCleanPreviewTUIRendersStatusMarkersAndCompactLabels(t *testing.T) {
+	model := clean.PreviewReadModel{
+		Candidates: []clean.PreviewCandidate{{
+			Path:          `C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+			Bytes:         12,
+			Rule:          "foal_owned_temp_sandboxes",
+			PlannedAction: "move_to_recycle_bin",
+		}},
+		Skipped: []clean.PreviewSkippedItem{{
+			Path: `\\?\C:\Windows\System32`,
+			Reason: clean.StructuredIssue{
+				Code:        "protected_path",
+				Message:     "protected Windows location",
+				Recoverable: true,
+			},
+		}},
+		Opportunities: []clean.Opportunity{{
+			Category:         clean.OpportunityCategoryUserTemp,
+			Path:             `C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+			Bytes:            4096,
+			LatestModifiedAt: time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC),
+			IdleDays:         9,
+			Status:           clean.OpportunityStatus,
+			Reason:           clean.OpportunityReason,
+		}},
+		ReviewSuggestions: []clean.PreviewReviewSuggestion{{
+			Label:     "pnpm cache",
+			Command:   "pnpm store prune",
+			CachePath: `C:\Users\corey\AppData\Local\pnpm\store\v10`,
+		}},
+		Errors: []clean.StructuredIssue{{
+			Code:        "inspection_failed",
+			Path:        `C:\Users\corey\AppData\Local\Temp\missing`,
+			Recoverable: true,
+		}},
+		PotentialSpaceBytes:      12,
+		CandidateCount:           1,
+		SkippedCount:             1,
+		OpportunityCount:         1,
+		OpportunityObservedBytes: 4096,
+	}
+
+	compact := renderCleanPreviewSections(model, cleanPreviewFilterAll, false)
+	for _, want := range []string{
+		"[candidate] foal-default.tmp (12 bytes)",
+		"[boundary] System32",
+		"[opportunity] old-tool-cache (4096 bytes, category: user_temp",
+		"[review] pnpm cache (Review suggestion)",
+		"[diagnostic] missing (rule: , error: inspection_failed, recoverable: true)",
+		"[loaded] Protection rules not reported.",
+	} {
+		if !strings.Contains(compact, want) {
+			t.Fatalf("compact output missing %q:\n%s", want, compact)
+		}
+	}
+	for _, forbidden := range []string{
+		`C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+		`C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+		"safe to delete",
+		"authorized",
+		"Cleanup complete",
+		"Deleted:",
+	} {
+		if strings.Contains(compact, forbidden) {
+			t.Fatalf("compact output contains forbidden detail or wording %q:\n%s", forbidden, compact)
+		}
+	}
+
+	expanded := renderCleanPreviewSections(model, cleanPreviewFilterAll, true)
+	for _, want := range []string{
+		`C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+		"rule: foal_owned_temp_sandboxes",
+		"planned action: Recycle Bin",
+		`C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+		"status: skipped_by_default",
+		"reason: requires_explicit_opt_in",
+		"Command: pnpm store prune",
+		`Cache: C:\Users\corey\AppData\Local\pnpm\store\v10`,
+	} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded output missing %q:\n%s", want, expanded)
+		}
+	}
+
+	emptyLoaded := renderCleanPreviewSections(clean.PreviewReadModel{}, cleanPreviewFilterAll, false)
+	for _, want := range []string{
+		"[loaded] No default candidates found.",
+		"[loaded] No skipped cleanup paths reported.",
+		"[loaded] Protection rules not reported.",
+		"[loaded] No recoverable inspection errors reported.",
+	} {
+		if !strings.Contains(emptyLoaded, want) {
+			t.Fatalf("empty loaded output missing %q:\n%s", want, emptyLoaded)
+		}
+	}
+}
+
 func TestCleanPreviewRendersUserDefinedProtectionRuleFromReadModel(t *testing.T) {
 	path := `C:\Users\corey\Work\Valuable`
 	output := renderCleanPreviewSections(clean.PreviewReadModel{
@@ -333,7 +439,7 @@ func TestCleanPreviewRendersUserDefinedProtectionRuleFromReadModel(t *testing.T)
 			Path:        path,
 			UserDefined: true,
 		}},
-	}, cleanPreviewFilterAll, false)
+	}, cleanPreviewFilterAll, true)
 
 	if !strings.Contains(output, path) || !strings.Contains(output, "user-defined Protection rule") {
 		t.Fatalf("output missing active user protection rule:\n%s", output)
@@ -411,7 +517,7 @@ func TestCleanPreviewRendersProtectionDiagnosticsFromReadModel(t *testing.T) {
 			Source:      source,
 			Line:        3,
 		}},
-	}, cleanPreviewFilterAll, false)
+	}, cleanPreviewFilterAll, true)
 
 	for _, want := range []string{"Protection diagnostics", "short_name_path", source, "line 3"} {
 		if !strings.Contains(output, want) {

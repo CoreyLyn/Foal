@@ -219,12 +219,13 @@ func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPrevie
 	for _, category := range clean.PreviewReportCategories(model, clean.PreviewReportCategoryOptions{
 		EntryLimit:        cleanPreviewSectionEntryLimit,
 		Expanded:          expanded,
+		Compact:           true,
 		IncludeCandidates: cleanPreviewFilterAllows(filter, cleanPreviewFilterCandidates),
 		IncludeSkipped:    cleanPreviewFilterAllows(filter, cleanPreviewFilterSkipped),
 		IncludeReview:     cleanPreviewFilterAllows(filter, cleanPreviewFilterReview),
 		IncludeErrors:     cleanPreviewFilterAllows(filter, cleanPreviewFilterErrors),
 		IncludeSummary:    true,
-		PreviewSummary:     true,
+		PreviewSummary:    true,
 	}) {
 		builder.WriteString("\n")
 		builder.WriteString(category.Name)
