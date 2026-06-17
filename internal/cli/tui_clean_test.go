@@ -190,9 +190,11 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 
 	content := model.content()
 	for _, want := range []string{
-		"Clean preview TUI",
-		"Read-only review over foal clean --dry-run",
+		"Foal Clean",
+		"Preview only - no files changed.",
 		"Potential space: 12 bytes",
+		"Dry-run complete",
+		"No files changed.",
 		"Default candidates (1)",
 		`C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
 		"Skipped items (1)",
@@ -205,7 +207,7 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"excluded from Opportunity discovery",
 		"will not request elevation automatically",
 		"Protection rules",
-		"Review-only opportunities: 7, observed bytes: 25600 bytes",
+		"Observed opportunity bytes: 25600 bytes (not counted as Potential space)",
 		`C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
 		"category: user_temp",
 		"latest modified: 2026-06-01T12:00:00Z",
@@ -237,6 +239,10 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
+		"Clean preview TUI",
+		"Read-only review over foal clean --dry-run",
+		"Foal main menu",
+		"Cleanup complete",
 		"Execution complete",
 		"Deleted:",
 		"Execute",
@@ -269,6 +275,53 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 	} {
 		if !strings.Contains(model.content(), want) {
 			t.Fatalf("expanded content missing %q:\n%s", want, model.content())
+		}
+	}
+}
+
+func TestCleanPreviewTUIUsesCompactHeaderAndBottomSummary(t *testing.T) {
+	stubCleanPreviewDryRun(t)
+
+	model := openCleanPreview(t)
+	content := model.content()
+	header := model.clean.headerContent()
+
+	for _, want := range []string{
+		"Foal Clean",
+		"Preview only - no files changed.",
+		"Filter: all",
+	} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("header missing %q:\n%s", want, header)
+		}
+	}
+	for _, forbidden := range []string{
+		"Foal main menu",
+		"Potential space:",
+		"Review-only opportunities:",
+		"Candidates:",
+		"Dry-run complete",
+		"Cleanup complete",
+	} {
+		if strings.Contains(header, forbidden) {
+			t.Fatalf("header contains non-compact summary or menu wording %q:\n%s", forbidden, header)
+		}
+	}
+
+	summaryIndex := strings.LastIndex(content, "Summary")
+	if summaryIndex == -1 {
+		t.Fatalf("content missing Summary category:\n%s", content)
+	}
+	for _, want := range []string{
+		"Dry-run complete",
+		"No files changed.",
+		"Potential space: 12 bytes",
+		"Observed opportunity bytes: 25600 bytes (not counted as Potential space)",
+		"Default candidates: 1 | Skipped: 1 | Diagnostics: 1",
+	} {
+		index := strings.LastIndex(content, want)
+		if index <= summaryIndex {
+			t.Fatalf("%q should render in bottom Summary:\n%s", want, content)
 		}
 	}
 }

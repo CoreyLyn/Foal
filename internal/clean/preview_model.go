@@ -114,6 +114,7 @@ type PreviewReportCategoryOptions struct {
 	IncludeReview     bool
 	IncludeErrors     bool
 	IncludeSummary    bool
+	PreviewSummary     bool
 }
 
 func NewPreviewReadModel(result Result) PreviewReadModel {
@@ -562,6 +563,14 @@ func summaryReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 		fmt.Sprintf("  Potential space: %s", formatBytes(model.PotentialSpaceBytes)),
 		fmt.Sprintf("  Observed opportunity bytes: %s (not counted as Potential space)", formatBytes(model.OpportunityObservedBytes)),
 	}
+	if opts.PreviewSummary {
+		lines = []string{
+			"  Dry-run complete",
+			"  No files changed.",
+			fmt.Sprintf("  Potential space: %s", formatBytes(model.PotentialSpaceBytes)),
+			fmt.Sprintf("  Observed opportunity bytes: %s (not counted as Potential space)", formatBytes(model.OpportunityObservedBytes)),
+		}
+	}
 	if model.DetailedListPath != "" {
 		lines = append(lines, fmt.Sprintf("  Detailed candidate list: %s", model.DetailedListPath))
 	}
@@ -581,7 +590,11 @@ func summaryReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 			lines = append(lines, omittedLine(omitted, model.DetailedListPath))
 		}
 	}
-	lines = append(lines, fmt.Sprintf("  Candidates: %d, skipped: %d, errors: %d.", model.CandidateCount, model.SkippedCount, len(model.Errors)))
+	if opts.PreviewSummary {
+		lines = append(lines, fmt.Sprintf("  Default candidates: %d | Skipped: %d | Diagnostics: %d", model.CandidateCount, model.SkippedCount, len(model.Errors)))
+	} else {
+		lines = append(lines, fmt.Sprintf("  Candidates: %d, skipped: %d, errors: %d.", model.CandidateCount, model.SkippedCount, len(model.Errors)))
+	}
 	if model.Summary != "" {
 		lines = append(lines, fmt.Sprintf("  %s", model.Summary))
 	}

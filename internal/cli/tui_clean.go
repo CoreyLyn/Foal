@@ -201,14 +201,8 @@ func (m cleanModel) content() string {
 
 func (m cleanModel) headerContent() string {
 	var builder strings.Builder
-	builder.WriteString("+--------------------------------------------------+\n")
-	builder.WriteString("| Clean preview TUI                                |\n")
-	builder.WriteString("| Read-only review over foal clean --dry-run       |\n")
-	builder.WriteString("+--------------------------------------------------+\n\n")
-	builder.WriteString(fmt.Sprintf("Potential space: %s\n", cleanFormatBytes(m.model.PotentialSpaceBytes)))
-	builder.WriteString(fmt.Sprintf("Review-only opportunities: %d, observed bytes: %s (not counted as Potential space)\n",
-		m.model.OpportunityCount, cleanFormatBytes(m.model.OpportunityObservedBytes)))
-	builder.WriteString(fmt.Sprintf("Candidates: %d, skipped: %d, errors: %d\n", m.model.CandidateCount, m.model.SkippedCount, len(m.model.Errors)))
+	builder.WriteString("Foal Clean\n")
+	builder.WriteString("Preview only - no files changed.\n")
 	builder.WriteString(fmt.Sprintf("Filter: %s | Scroll: %d%% | Expanded: %t\n", m.filter, int(m.vp.ScrollPercent()*100), m.expanded))
 	if m.model.DetailedListPath != "" {
 		builder.WriteString(fmt.Sprintf("Detailed candidate list: %s\n", m.model.DetailedListPath))
@@ -229,7 +223,8 @@ func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPrevie
 		IncludeSkipped:    cleanPreviewFilterAllows(filter, cleanPreviewFilterSkipped),
 		IncludeReview:     cleanPreviewFilterAllows(filter, cleanPreviewFilterReview),
 		IncludeErrors:     cleanPreviewFilterAllows(filter, cleanPreviewFilterErrors),
-		IncludeSummary:    cleanPreviewFilterAllows(filter, cleanPreviewFilterErrors),
+		IncludeSummary:    true,
+		PreviewSummary:     true,
 	}) {
 		builder.WriteString("\n")
 		builder.WriteString(category.Name)
