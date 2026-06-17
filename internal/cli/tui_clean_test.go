@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -638,7 +640,19 @@ func TestCleanPreviewBrowsingRecordsNoHistoryAndWritesNoFiles(t *testing.T) {
 		newHistoryDir = originalDir
 	})
 
-	openCleanPreview(t)
+	model := openCleanPreview(t)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	model = next.(rootModel)
+	if cmd == nil {
+		t.Fatal("reload must return a load command")
+	}
+	msg := cmd()
+	loaded, ok := msg.(cleanPreviewLoadedMsg)
+	if !ok {
+		t.Fatalf("reload command produced %T, want cleanPreviewLoadedMsg", msg)
+	}
+	next, _ = model.Update(loaded)
+	_ = next.(rootModel)
 }
 
 func TestCleanPreviewCopyKeySendsCandidatePathsToClipboard(t *testing.T) {
@@ -662,6 +676,142 @@ func TestCleanPreviewCopyKeySendsCandidatePathsToClipboard(t *testing.T) {
 	}
 	if !strings.Contains(model.content(), "Copied 1 candidate path(s) to the clipboard.") {
 		t.Fatalf("content missing copy confirmation:\n%s", model.content())
+	}
+}
+
+func TestCleanPreviewCopyPayloadExcludesAllReviewOnlySurfaces(t *testing.T) {
+	originalCopy := copyTextToClipboard
+	copied := ""
+	copyTextToClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	t.Cleanup(func() { copyTextToClipboard = originalCopy })
+
+	protectedRoot := `C:\Users\corey\AppData\Local\Protected`
+	protectedOpportunity := protectedRoot + `\private-opportunity`
+	protectedSuggestion := protectedRoot + `\private-suggestion`
+	protectedIncomplete := protectedRoot + `\private-incomplete`
+	candidatePath := filepath.Join(t.TempDir(), "foal-default.tmp")
+	if err := os.WriteFile(candidatePath, []byte("default candidate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reviewCluePath := `D:\Code\Personal\Foal\node_modules`
+	browserUserDataPath := `C:\Users\corey\AppData\Local\Google\Chrome\User Data`
+	browserProfilePath := browserUserDataPath + `\Default`
+	browserCachePath := browserProfilePath + `\Code Cache`
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator: pathsafe.NewValidator([]string{protectedRoot}),
+		DiscoverOpportunities: func(context.Context) clean.OpportunityDiscoveryResult {
+			return clean.OpportunityDiscoveryResult{
+				Opportunities: []clean.Opportunity{
+					{
+						Category: clean.OpportunityCategoryUserTemp,
+						Path:     protectedOpportunity,
+						Bytes:    10,
+						Status:   clean.OpportunityStatus,
+						Reason:   clean.OpportunityReason,
+					},
+					{
+						Category: clean.OpportunityCategoryUserTemp,
+						Path:     `C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+						Bytes:    20,
+						Status:   clean.OpportunityStatus,
+						Reason:   clean.OpportunityReason,
+					},
+					{
+						Category: clean.OpportunityCategoryBrowserCache,
+						Path:     browserUserDataPath,
+						Bytes:    30,
+						Status:   clean.OpportunityStatus,
+						Reason:   clean.OpportunityReason,
+						BrowserCache: &clean.BrowserCacheOpportunityDetail{
+							Browser:      clean.ApplicationGoogleChrome,
+							ProfileCount: 1,
+							Profiles: []clean.BrowserCacheProfileDetail{{
+								ID:   "Default",
+								Path: browserProfilePath,
+								Caches: []clean.BrowserCacheDirectory{{
+									Kind:  "Code Cache",
+									Path:  browserCachePath,
+									Bytes: 30,
+								}},
+							}},
+						},
+					},
+				},
+				Incomplete: []clean.IncompleteOpportunityInspection{
+					{
+						Category: clean.OpportunityCategoryUserTemp,
+						Path:     protectedIncomplete,
+						Reason: clean.StructuredIssue{
+							Code:        "inspection_failed",
+							Message:     "protected inspection failed",
+							Recoverable: true,
+							Path:        protectedIncomplete,
+						},
+					},
+					{
+						Category: clean.OpportunityCategoryUserTemp,
+						Path:     `C:\Users\corey\AppData\Local\Temp\partial-cache`,
+						Reason: clean.StructuredIssue{
+							Code:        "inspection_limit",
+							Message:     "partial inspection",
+							Recoverable: true,
+							Path:        `C:\Users\corey\AppData\Local\Temp\partial-cache`,
+						},
+					},
+				},
+			}
+		},
+		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+			return []clean.ReviewSuggestion{
+				{Label: "private cache", Command: "private clean", CachePath: protectedSuggestion},
+				{Label: "pnpm cache", Command: "pnpm store prune", CachePath: `C:\Users\corey\AppData\Local\pnpm\store\v10`},
+			}
+		},
+		Rules: []clean.Rule{{
+			ID:             "test_default_rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidatePath},
+		}},
+	})
+	readModel := clean.NewPreviewReadModel(result)
+	readModel.ReviewClues = append(readModel.ReviewClues, clean.PreviewReviewClue{
+		Name:    "Project artifact clue",
+		Path:    reviewCluePath,
+		Details: "review manually before deleting",
+	})
+	model := cleanModel{
+		filter:  cleanPreviewFilterReviewOnly,
+		vp:      viewport.New(viewport.WithWidth(120), viewport.WithHeight(40)),
+		width:   120,
+		height:  48,
+		loading: false,
+		model:   readModel,
+	}
+
+	model.handleKey("c")
+
+	if want := candidatePath + "\n"; copied != want {
+		t.Fatalf("clipboard payload = %q, want only default candidate path %q", copied, want)
+	}
+	for _, forbidden := range []string{
+		"old-tool-cache",
+		"partial-cache",
+		"pnpm",
+		"node_modules",
+		browserUserDataPath,
+		browserProfilePath,
+		browserCachePath,
+		protectedOpportunity,
+		protectedSuggestion,
+		protectedIncomplete,
+		reviewCluePath,
+	} {
+		if strings.Contains(copied, forbidden) {
+			t.Fatalf("clipboard payload includes review-only or protected data %q: %q", forbidden, copied)
+		}
 	}
 }
 
