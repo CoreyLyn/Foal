@@ -64,6 +64,14 @@ _Avoid_: cleanup candidates, executable actions
 Plain ASCII presentation-only labels used in non-JSON output to make preview state, skipped state, clean state, clues, and review suggestions easier to scan.
 _Avoid_: Unicode symbols, JSON status codes, execution semantics
 
+**TUI status markers**:
+Presentation-only symbols used by interactive Foal views to make review state easier to scan. In the Clean TUI, markers emphasize safety semantics: default candidates remain previewed Recycle Bin candidates, skipped-by-default opportunities remain non-executable review data, review clues and suggestions remain manual investigation prompts, running/protected/permission skips remain boundaries, and diagnostics remain recoverable inspection evidence. A positive marker must not imply cleanup authorization or completed deletion.
+_Avoid_: JSON status code, cleanup authorization, execution result, safe-to-delete signal
+
+**TUI compact item labels**:
+Presentation-only item summaries used by interactive Foal views to keep grouped review lists scannable. The Clean TUI may show a short item name, marker, count, size, or status by default while keeping full paths and contract fields available through expansion or existing detailed review surfaces. Compact labels do not remove evidence from the read model, do not hide protected-path suppression behavior, and do not make browser profile or cache-directory paths part of the default summary.
+_Avoid_: lossy read model, path suppression bypass, browser profile listing by default, execution manifest
+
 **Report category**:
 A presentation grouping that organizes mixed Clean review states by a user-recognizable domain such as `System`, `User essentials`, `Browsers`, or `Developer tools`. A Report category may contain default candidates, skipped-by-default opportunities, running-application skips, review clues, suggestions, or inspection diagnostics; the category never changes an item's execution eligibility, JSON status, or contribution to Potential space.
 _Avoid_: cleanup rule group, execution authorization, JSON status
@@ -143,6 +151,10 @@ _Avoid_: Mole brand clone, Mac maintenance wording, decorative UI that obscures 
 **Clean TUI preview view**:
 The first TUI review surface slice, focused on browsing the existing clean preview read model for `foal clean --dry-run` sections, totals, candidates, skipped items, review clues, notices, and suggestions.
 _Avoid_: multi-command TUI platform, new scanner rules, TUI cleanup execution
+
+**Clean TUI report presentation**:
+A scan-friendly presentation mode for the Clean TUI that renders the existing Clean preview read model as grouped report content, with compact visual status markers and summary-first review context while preserving read-only behavior and shared command semantics.
+_Avoid_: new discovery behavior, JSON status change, execution affordance, cleanup completion claim
 
 **Read-only TUI action model**:
 A TUI interaction boundary where navigation, filtering, expansion, scrolling, reload, and clipboard-copy review affordances are allowed, while cleanup execution, uninstaller execution, process stopping, elevation prompts, and leftover deletion are absent, and where browsing itself records no history sessions and writes no companion files.
