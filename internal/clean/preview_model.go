@@ -107,15 +107,17 @@ type PreviewReportCategory struct {
 }
 
 type PreviewReportCategoryOptions struct {
-	EntryLimit        int
-	Expanded          bool
-	Compact           bool
-	IncludeCandidates bool
-	IncludeSkipped    bool
-	IncludeReview     bool
-	IncludeErrors     bool
-	IncludeSummary    bool
-	PreviewSummary    bool
+	EntryLimit                   int
+	Expanded                     bool
+	Compact                      bool
+	IncludeCandidates            bool
+	IncludeSkipped               bool
+	IncludeReview                bool
+	IncludeErrors                bool
+	IncludeIncompleteInspections bool
+	IncludeProtectionDiagnostics bool
+	IncludeSummary               bool
+	PreviewSummary               bool
 }
 
 func NewPreviewReadModel(result Result) PreviewReadModel {
@@ -281,13 +283,15 @@ func renderPreviewReport(model PreviewReadModel, presentation previewReportPrese
 	builder.WriteString("\n")
 	builder.WriteString("Preview only: Foal inspected default cleanup candidates and did not change files.\n")
 	writePreviewReportCategories(&builder, previewReportCategories(model, PreviewReportCategoryOptions{
-		EntryLimit:        previewReportSectionEntryLimit,
-		Expanded:          true,
-		IncludeCandidates: true,
-		IncludeSkipped:    true,
-		IncludeReview:     true,
-		IncludeErrors:     true,
-		IncludeSummary:    true,
+		EntryLimit:                   previewReportSectionEntryLimit,
+		Expanded:                     true,
+		IncludeCandidates:            true,
+		IncludeSkipped:               true,
+		IncludeReview:                true,
+		IncludeErrors:                true,
+		IncludeIncompleteInspections: true,
+		IncludeProtectionDiagnostics: true,
+		IncludeSummary:               true,
 	}, presentation))
 	return builder.String()
 }
@@ -307,18 +311,20 @@ func previewReportCategories(model PreviewReadModel, opts PreviewReportCategoryO
 		}
 		categories = append(categories, PreviewReportCategory{Name: name, Lines: lines})
 	}
-	if opts.IncludeReview {
+	if opts.IncludeReview || opts.IncludeIncompleteInspections {
 		add("System", systemReportLines(model, opts))
 	}
-	if opts.IncludeCandidates || opts.IncludeSkipped || opts.IncludeReview {
+	if opts.IncludeCandidates || opts.IncludeSkipped || opts.IncludeReview || opts.IncludeIncompleteInspections {
 		add("User essentials", userEssentialsReportLines(model, opts, presentation))
 	}
-	if opts.IncludeReview || opts.IncludeErrors {
+	if opts.IncludeReview || opts.IncludeErrors || opts.IncludeIncompleteInspections {
 		add("Browsers", browserReportLines(model, opts))
 	}
 	if opts.IncludeReview {
 		add("Developer tools", developerToolReportLines(model, opts))
 		add("Project artifacts", projectArtifactReportLines(model, opts))
+	}
+	if opts.IncludeReview || opts.IncludeProtectionDiagnostics {
 		add("Protection", protectionReportLines(model, opts))
 	}
 	if opts.IncludeSummary {
@@ -358,12 +364,14 @@ func systemReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions
 			lines = append(lines, omittedLine(omitted, model.DetailedListPath))
 		}
 	}
-	for _, incomplete := range model.IncompleteOpportunityInspections {
-		category := normalizedOpportunityCategory(incomplete.Category)
-		if category == OpportunityCategoryUserTemp || category == OpportunityCategoryBrowserCache {
-			continue
+	if opts.IncludeIncompleteInspections {
+		for _, incomplete := range model.IncompleteOpportunityInspections {
+			category := normalizedOpportunityCategory(incomplete.Category)
+			if category == OpportunityCategoryUserTemp || category == OpportunityCategoryBrowserCache {
+				continue
+			}
+			lines = append(lines, incompleteInspectionLine(incomplete, opts))
 		}
-		lines = append(lines, incompleteInspectionLine(incomplete, opts))
 	}
 	return lines
 }
@@ -462,6 +470,8 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 				lines = append(lines, fmt.Sprintf("      %s", skipped.Reason))
 			}
 		}
+	}
+	if opts.IncludeIncompleteInspections {
 		for _, incomplete := range model.IncompleteOpportunityInspections {
 			if normalizedOpportunityCategory(incomplete.Category) == OpportunityCategoryUserTemp {
 				lines = append(lines, incompleteInspectionLine(incomplete, opts))
@@ -509,6 +519,8 @@ func browserReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 				}
 			}
 		}
+	}
+	if opts.IncludeIncompleteInspections {
 		for _, incomplete := range model.IncompleteOpportunityInspections {
 			if normalizedOpportunityCategory(incomplete.Category) == OpportunityCategoryBrowserCache {
 				lines = append(lines, incompleteInspectionLine(incomplete, opts))
@@ -579,27 +591,29 @@ func projectArtifactReportLines(model PreviewReadModel, opts PreviewReportCatego
 
 func protectionReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions) []string {
 	var lines []string
-	lines = append(lines, "  Protection rules")
-	if len(model.ProtectionRules) == 0 {
-		if opts.Compact {
-			lines = append(lines, "    [loaded] Protection rules not reported.")
-		} else {
-			lines = append(lines, "    No default-enabled protection rules were reported.")
-		}
-	} else {
-		for _, rule := range model.ProtectionRules {
-			if rule.UserDefined {
-				path := rule.Path
-				if opts.Compact && !opts.Expanded {
-					path = compactPathLabel(rule.Path)
-				}
-				lines = append(lines, fmt.Sprintf("    %s%s (user-defined Protection rule)", markerPrefix(opts, "boundary"), path))
-				continue
+	if opts.IncludeReview {
+		lines = append(lines, "  Protection rules")
+		if len(model.ProtectionRules) == 0 {
+			if opts.Compact {
+				lines = append(lines, "    [loaded] Protection rules not reported.")
+			} else {
+				lines = append(lines, "    No default-enabled protection rules were reported.")
 			}
-			lines = append(lines, fmt.Sprintf("    %s%s: %s", markerPrefix(opts, "boundary"), rule.ID, rule.Description))
+		} else {
+			for _, rule := range model.ProtectionRules {
+				if rule.UserDefined {
+					path := rule.Path
+					if opts.Compact && !opts.Expanded {
+						path = compactPathLabel(rule.Path)
+					}
+					lines = append(lines, fmt.Sprintf("    %s%s (user-defined Protection rule)", markerPrefix(opts, "boundary"), path))
+					continue
+				}
+				lines = append(lines, fmt.Sprintf("    %s%s: %s", markerPrefix(opts, "boundary"), rule.ID, rule.Description))
+			}
 		}
 	}
-	if len(model.ProtectionDiagnostics) > 0 {
+	if opts.IncludeProtectionDiagnostics && len(model.ProtectionDiagnostics) > 0 {
 		lines = append(lines, fmt.Sprintf("  Protection diagnostics (%d)", len(model.ProtectionDiagnostics)))
 		for _, diagnostic := range model.ProtectionDiagnostics {
 			source := diagnostic.Source
@@ -636,32 +650,34 @@ func summaryReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 	if model.DetailedListPath != "" {
 		lines = append(lines, fmt.Sprintf("  Detailed candidate list: %s", model.DetailedListPath))
 	}
-	lines = append(lines, fmt.Sprintf("  Inspection errors (%d)", len(model.Errors)))
-	if len(model.Errors) == 0 {
-		lines = append(lines, fmt.Sprintf("    %sNo recoverable inspection errors reported.", markerPrefix(opts, "loaded")))
-	} else {
-		entryCount := cappedEntryCountFor(len(model.Errors), opts.EntryLimit)
-		for _, err := range model.Errors[:entryCount] {
-			if opts.Compact {
-				label := compactPathLabel(err.Path)
-				if opts.Expanded {
-					label = err.Path
+	if opts.IncludeErrors {
+		lines = append(lines, fmt.Sprintf("  Inspection errors (%d)", len(model.Errors)))
+		if len(model.Errors) == 0 {
+			lines = append(lines, fmt.Sprintf("    %sNo recoverable inspection errors reported.", markerPrefix(opts, "loaded")))
+		} else {
+			entryCount := cappedEntryCountFor(len(model.Errors), opts.EntryLimit)
+			for _, err := range model.Errors[:entryCount] {
+				if opts.Compact {
+					label := compactPathLabel(err.Path)
+					if opts.Expanded {
+						label = err.Path
+					}
+					lines = append(lines, fmt.Sprintf("    [diagnostic] %s (rule: %s, error: %s, recoverable: %t)",
+						label, err.Rule, err.Code, err.Recoverable))
+					if opts.Expanded && err.Message != "" {
+						lines = append(lines, fmt.Sprintf("      %s", err.Message))
+					}
+					continue
 				}
-				lines = append(lines, fmt.Sprintf("    [diagnostic] %s (rule: %s, error: %s, recoverable: %t)",
-					label, err.Rule, err.Code, err.Recoverable))
+				lines = append(lines, fmt.Sprintf("    %s (%srule: %s, error: %s, recoverable: %t)",
+					err.Path, statusLabel(presentation.inspectionErrorLabel), err.Rule, err.Code, err.Recoverable))
 				if opts.Expanded && err.Message != "" {
 					lines = append(lines, fmt.Sprintf("      %s", err.Message))
 				}
-				continue
 			}
-			lines = append(lines, fmt.Sprintf("    %s (%srule: %s, error: %s, recoverable: %t)",
-				err.Path, statusLabel(presentation.inspectionErrorLabel), err.Rule, err.Code, err.Recoverable))
-			if opts.Expanded && err.Message != "" {
-				lines = append(lines, fmt.Sprintf("      %s", err.Message))
+			if omitted := len(model.Errors) - entryCount; omitted > 0 {
+				lines = append(lines, omittedLine(omitted, model.DetailedListPath))
 			}
-		}
-		if omitted := len(model.Errors) - entryCount; omitted > 0 {
-			lines = append(lines, omittedLine(omitted, model.DetailedListPath))
 		}
 	}
 	if opts.PreviewSummary {

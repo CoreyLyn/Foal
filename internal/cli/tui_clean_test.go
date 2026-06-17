@@ -773,7 +773,7 @@ func TestCleanPreviewLoadAndReloadRenderBrowserRunningStateFromSharedReadModel(t
 	t.Cleanup(func() { dryRunClean = originalDryRun })
 
 	first := loadCleanPreviewCmd(context.Background(), 1)().(cleanPreviewLoadedMsg)
-	firstOutput := renderCleanPreviewSections(first.model, cleanPreviewFilterReview, true)
+	firstOutput := renderCleanPreviewSections(first.model, cleanPreviewFilterReviewOnly, true)
 	if !strings.Contains(firstOutput, "Running application skips (1)") ||
 		!strings.Contains(firstOutput, "Google Chrome") ||
 		!strings.Contains(firstOutput, "browser cache review was skipped") {
@@ -781,7 +781,7 @@ func TestCleanPreviewLoadAndReloadRenderBrowserRunningStateFromSharedReadModel(t
 	}
 
 	second := loadCleanPreviewCmd(context.Background(), 2)().(cleanPreviewLoadedMsg)
-	secondOutput := renderCleanPreviewSections(second.model, cleanPreviewFilterErrors, true)
+	secondOutput := renderCleanPreviewSections(second.model, cleanPreviewFilterDiagnostics, true)
 	if !strings.Contains(secondOutput, "running_application_detection_unknown") ||
 		!strings.Contains(secondOutput, "process snapshot failed") {
 		t.Fatalf("reload missing unknown browser diagnostic:\n%s", secondOutput)
@@ -814,7 +814,7 @@ func TestCleanPreviewRendersChromeBrowserCacheOpportunityAsSummary(t *testing.T)
 		OpportunityObservedBytes: 12,
 	}
 
-	output := renderCleanPreviewSections(model, cleanPreviewFilterReview, true)
+	output := renderCleanPreviewSections(model, cleanPreviewFilterReviewOnly, true)
 
 	for _, want := range []string{
 		"Google Chrome browser cache",
@@ -860,7 +860,7 @@ func TestCleanPreviewRendersEdgeBrowserCacheOpportunityAsSummary(t *testing.T) {
 		OpportunityObservedBytes: 12,
 	}
 
-	output := renderCleanPreviewSections(model, cleanPreviewFilterReview, true)
+	output := renderCleanPreviewSections(model, cleanPreviewFilterReviewOnly, true)
 
 	for _, want := range []string{
 		"Microsoft Edge browser cache",
@@ -1015,22 +1015,183 @@ func TestCleanPreviewFilterKeyCyclesAndResetsScroll(t *testing.T) {
 	model := newCleanModel(80, 16)
 	model.applyLoaded(cleanPreviewLoadedMsg{model: clean.PreviewReadModel{}})
 
-	model.handleKey("f")
-	if model.filter != cleanPreviewFilterCandidates {
-		t.Fatalf("filter = %q, want %q", model.filter, cleanPreviewFilterCandidates)
-	}
-	if !model.vp.AtTop() {
-		t.Fatal("changing the filter must reset scroll to the top")
+	for _, want := range []cleanPreviewFilter{
+		cleanPreviewFilterActionablePreview,
+		cleanPreviewFilterReviewOnly,
+		cleanPreviewFilterDiagnostics,
+		cleanPreviewFilterAll,
+	} {
+		model.handleKey("f")
+		if model.filter != want {
+			t.Fatalf("filter = %q, want %q", model.filter, want)
+		}
+		if !model.vp.AtTop() {
+			t.Fatal("changing the filter must reset scroll to the top")
+		}
 	}
 }
 
-func TestCleanPreviewFilterShowsReviewSectionsWithoutChangingPotentialSpace(t *testing.T) {
+func TestCleanPreviewIntentFiltersRenderFocusedSectionsWithoutChangingTotals(t *testing.T) {
+	readModel := clean.PreviewReadModel{
+		Title: "Foal clean",
+		Candidates: []clean.PreviewCandidate{{
+			Path:          `C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
+			Bytes:         12,
+			Rule:          "foal_owned_temp_sandboxes",
+			PlannedAction: "move_to_recycle_bin",
+		}},
+		Skipped: []clean.PreviewSkippedItem{{
+			Path: `\\?\C:\Windows\System32`,
+			Reason: clean.StructuredIssue{
+				Code:        "protected_path",
+				Recoverable: true,
+			},
+		}},
+		SkippedByDefault: []clean.PreviewSkippedByDefaultItem{{
+			Name:   "Browser cache family",
+			Path:   `C:\Users\corey\AppData\Local\Browser\Cache`,
+			Bytes:  4096,
+			Reason: "requires explicit future opt-in",
+		}},
+		Opportunities: []clean.Opportunity{{
+			Category: clean.OpportunityCategoryUserTemp,
+			Path:     `C:\Users\corey\AppData\Local\Temp\old-tool-cache`,
+			Bytes:    4096,
+			Status:   clean.OpportunityStatus,
+			Reason:   clean.OpportunityReason,
+		}},
+		IncompleteOpportunityInspections: []clean.IncompleteOpportunityInspection{{
+			Category: clean.OpportunityCategoryUserTemp,
+			Path:     `C:\Users\corey\AppData\Local\Temp\partial-cache`,
+			Reason: clean.StructuredIssue{
+				Code:        "inspection_limit",
+				Recoverable: true,
+			},
+		}},
+		ReviewClues: []clean.PreviewReviewClue{{
+			Name:    "Project artifact clue",
+			Path:    `D:\Code\Personal\Foal\node_modules`,
+			Details: "review manually before deleting",
+		}},
+		ReviewSuggestions: []clean.PreviewReviewSuggestion{{
+			Label:    "Open Windows Storage settings",
+			NextStep: "Use Windows Settings to review large app storage.",
+		}},
+		RunningApplicationSkips: []clean.PreviewRunningApplicationSkip{{
+			Name:        "Sync client cache",
+			Application: "SyncClient.exe",
+			Path:        `C:\Users\corey\Sync\Cache`,
+			Reason:      "application is running",
+		}},
+		ProtectionDiagnostics: []clean.ProtectionDiagnostic{{
+			Code:        "invalid_protection_rule",
+			Source:      `C:\Users\corey\AppData\Roaming\Foal\protection.txt`,
+			Recoverable: true,
+		}},
+		Errors: []clean.StructuredIssue{{
+			Code:        "inspection_failed",
+			Path:        `C:\Users\corey\AppData\Local\Temp\missing`,
+			Recoverable: true,
+		}},
+		PotentialSpaceBytes:      12,
+		CandidateCount:           1,
+		SkippedCount:             1,
+		OpportunityCount:         2,
+		OpportunityObservedBytes: 8192,
+	}
+
+	assertFilterOutput := func(filter cleanPreviewFilter, want []string, forbidden []string) {
+		t.Helper()
+		output := renderCleanPreviewSections(readModel, filter, true)
+		for _, text := range []string{
+			"Potential space: 12 bytes",
+			"Observed opportunity bytes: 8192 bytes (not counted as Potential space)",
+			"Default candidates: 1 | Skipped: 1 | Diagnostics: 1",
+		} {
+			if !strings.Contains(output, text) {
+				t.Fatalf("%s output changed summary %q:\n%s", filter, text, output)
+			}
+		}
+		for _, text := range want {
+			if !strings.Contains(output, text) {
+				t.Fatalf("%s output missing %q:\n%s", filter, text, output)
+			}
+		}
+		for _, text := range forbidden {
+			if strings.Contains(output, text) {
+				t.Fatalf("%s output contains forbidden %q:\n%s", filter, text, output)
+			}
+		}
+	}
+
+	assertFilterOutput(cleanPreviewFilterAll, []string{
+		"Default candidates (1)",
+		"Skipped items (1)",
+		"old-tool-cache",
+		"Project artifact clue",
+		"Review suggestions (1)",
+		"SyncClient.exe",
+		"inspection_limit",
+		"invalid_protection_rule",
+		"inspection_failed",
+	}, nil)
+	assertFilterOutput(cleanPreviewFilterActionablePreview, []string{
+		"Default candidates (1)",
+		"Skipped items (1)",
+		"inspection_failed",
+	}, []string{
+		"old-tool-cache",
+		"Browser cache family",
+		"Project artifact clue",
+		"Review suggestions (1)",
+		"SyncClient.exe",
+		"inspection_limit",
+		"invalid_protection_rule",
+	})
+	assertFilterOutput(cleanPreviewFilterReviewOnly, []string{
+		"old-tool-cache",
+		"Browser cache family",
+		"Project artifact clue",
+		"Review suggestions (1)",
+		"SyncClient.exe",
+	}, []string{
+		"Default candidates (1)",
+		"Skipped items (1)",
+		"inspection_failed",
+		"inspection_limit",
+		"invalid_protection_rule",
+	})
+	assertFilterOutput(cleanPreviewFilterDiagnostics, []string{
+		"inspection_failed",
+		"inspection_limit",
+		"invalid_protection_rule",
+	}, []string{
+		"Default candidates (1)",
+		"Skipped items (1)",
+		"old-tool-cache",
+		"Browser cache family",
+		"Project artifact clue",
+		"Review suggestions (1)",
+		"SyncClient.exe",
+	})
+}
+
+func TestCleanPreviewFilterKeepsCopyPayloadScopedToDefaultCandidates(t *testing.T) {
+	originalCopy := copyTextToClipboard
+	copied := ""
+	copyTextToClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+	t.Cleanup(func() { copyTextToClipboard = originalCopy })
+
 	model := cleanModel{
-		filter:   cleanPreviewFilterReview,
+		filter:   cleanPreviewFilterReviewOnly,
 		expanded: true,
 		vp:       viewport.New(viewport.WithWidth(80), viewport.WithHeight(40)),
 		width:    80,
 		height:   48,
+		loading:  false,
 		model: clean.PreviewReadModel{
 			Title: "Foal clean",
 			Candidates: []clean.PreviewCandidate{{
@@ -1065,39 +1226,14 @@ func TestCleanPreviewFilterShowsReviewSectionsWithoutChangingPotentialSpace(t *t
 		},
 	}
 
-	output := model.headerContent() + renderCleanPreviewSections(model.model, model.filter, model.expanded)
+	model.handleKey("c")
 
-	for _, want := range []string{
-		"Filter: review",
-		"Potential space: 12 bytes",
-		"status: skipped by default",
-		"Browser cache family",
-		"requires explicit future opt-in",
-		"Review clues (1)",
-		"Project artifact clue",
-		"Review suggestions (1)",
-		"Use Windows Settings to review large app storage.",
-		"Running application skips (1)",
-		"SyncClient.exe",
-		"not counted as Potential space",
-		"review only",
-		"status: running skip",
-		"not executable here",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("output missing %q:\n%s", want, output)
-		}
+	if want := `C:\Users\corey\AppData\Local\Temp\foal-default.tmp` + "\n"; copied != want {
+		t.Fatalf("clipboard payload = %q, want %q", copied, want)
 	}
-	for _, forbidden := range []string{
-		"Potential space: 4108 bytes",
-		"Default candidates (1)",
-		"preview action metadata: Recycle Bin)\n  Browser cache family",
-		"cleanup candidate",
-		"Execution complete",
-		"Deleted:",
-	} {
-		if strings.Contains(output, forbidden) {
-			t.Fatalf("output contains forbidden review/execution wording %q:\n%s", forbidden, output)
+	for _, forbidden := range []string{"Browser cache family", "node_modules", "Open Windows Storage settings", "Sync client cache"} {
+		if strings.Contains(copied, forbidden) {
+			t.Fatalf("clipboard payload includes review-only text %q: %q", forbidden, copied)
 		}
 	}
 }
@@ -1108,7 +1244,7 @@ func TestCleanPreviewRendersSharedProjectArtifactClueAsReadOnlyAnalysisGuidance(
 		Mode:   "dry_run",
 	})
 
-	output := renderCleanPreviewSections(readModel, cleanPreviewFilterReview, true)
+	output := renderCleanPreviewSections(readModel, cleanPreviewFilterReviewOnly, true)
 
 	for _, want := range []string{
 		"Review clues (1)",
@@ -1140,7 +1276,7 @@ func TestCleanPreviewRendersReviewSuggestionSafetyNoteOnceAboveSuggestions(t *te
 		},
 	}
 
-	output := renderCleanPreviewSections(readModel, cleanPreviewFilterReview, true)
+	output := renderCleanPreviewSections(readModel, cleanPreviewFilterReviewOnly, true)
 	note := "Clearing a tool cache while the tool is installing or building can disrupt that operation. Confirm the tool is idle first."
 
 	if strings.Count(output, note) != 1 {
@@ -1155,7 +1291,7 @@ func TestCleanPreviewRendersReviewSuggestionSafetyNoteOnceAboveSuggestions(t *te
 }
 
 func TestCleanPreviewOmitsReviewSuggestionSafetyNoteWithoutSuggestions(t *testing.T) {
-	output := renderCleanPreviewSections(clean.PreviewReadModel{}, cleanPreviewFilterReview, true)
+	output := renderCleanPreviewSections(clean.PreviewReadModel{}, cleanPreviewFilterReviewOnly, true)
 
 	if strings.Contains(output, clean.ReviewSuggestionSafetyNote) {
 		t.Fatalf("safety note must not render without suggestions:\n%s", output)
@@ -1180,7 +1316,7 @@ func TestCleanPreviewCapsHighVolumeOpportunityRendering(t *testing.T) {
 		OpportunityObservedBytes: 66,
 	}
 
-	output := renderCleanPreviewSections(model, cleanPreviewFilterReview, false)
+	output := renderCleanPreviewSections(model, cleanPreviewFilterReviewOnly, false)
 
 	if !strings.Contains(output, "Skipped by default: 11 user-temp opportunity item(s)") ||
 		!strings.Contains(output, "1 omitted.") {
