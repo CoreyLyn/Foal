@@ -131,14 +131,15 @@ type ReviewSuggestion struct {
 type RunningApplicationStatus string
 
 const (
-	ApplicationGoogleChrome              = "google_chrome"
-	ApplicationMicrosoftEdge             = "microsoft_edge"
-	RunningApplicationStateRunning       = RunningApplicationStatus("running")
-	RunningApplicationStateIdle          = RunningApplicationStatus("idle")
-	RunningApplicationStateUnknown       = RunningApplicationStatus("unknown")
-	runningApplicationDetectionIssueCode = "running_application_detection_unknown"
-	recycleBinDisabledIssueCode          = "recycle_bin_disabled"
-	recycleBinCapacityIssueCode          = "recycle_bin_capacity"
+	ApplicationGoogleChrome                = "google_chrome"
+	ApplicationMicrosoftEdge               = "microsoft_edge"
+	RunningApplicationStateRunning         = RunningApplicationStatus("running")
+	RunningApplicationStateIdle            = RunningApplicationStatus("idle")
+	RunningApplicationStateUnknown         = RunningApplicationStatus("unknown")
+	runningApplicationDetectionIssueCode   = "running_application_detection_unknown"
+	recycleBinDisabledIssueCode            = "recycle_bin_disabled"
+	recycleBinCapacityIssueCode            = "recycle_bin_capacity"
+	recycleBinCapacityProbeFailedIssueCode = "recycle_bin_capacity_probe_failed"
 )
 
 type RunningApplicationState struct {
@@ -524,29 +525,36 @@ func Execute(ctx context.Context, opts Options) Result {
 
 			// Check Recycle Bin capacity before attempting deletion
 			cfg, err := probe(opportunity.Path)
-			if err == nil {
-				if cfg.NukeOnDelete {
-					// Recycle Bin disabled for this volume - skip
-					result.Skipped = append(result.Skipped, SkippedItem{
-						Path:   opportunity.Path,
-						Bytes:  opportunity.Bytes,
-						Rule:   OpportunityCategoryUserTemp,
-						Reason: issue(recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted", true, opportunity.Path, OpportunityCategoryUserTemp),
-					})
-					continue
-				}
-				if opportunity.Bytes > cfg.MaxCapacity {
-					// Item too large for Recycle Bin - skip
-					result.Skipped = append(result.Skipped, SkippedItem{
-						Path:   opportunity.Path,
-						Bytes:  opportunity.Bytes,
-						Rule:   OpportunityCategoryUserTemp,
-						Reason: issue(recycleBinCapacityIssueCode, "Item exceeds Recycle Bin capacity for this volume", true, opportunity.Path, OpportunityCategoryUserTemp),
-					})
-					continue
-				}
+			if err != nil {
+				// Probe failed - fail closed, skip item rather than risk permanent deletion
+				result.Skipped = append(result.Skipped, SkippedItem{
+					Path:   opportunity.Path,
+					Bytes:  opportunity.Bytes,
+					Rule:   OpportunityCategoryUserTemp,
+					Reason: issue(recycleBinCapacityProbeFailedIssueCode, "Recycle Bin capacity check failed; skipping rather than risking permanent deletion", true, opportunity.Path, OpportunityCategoryUserTemp),
+				})
+				continue
 			}
-			// If probe failed, we proceed cautiously (fail open rather than fail closed)
+			if cfg.NukeOnDelete {
+				// Recycle Bin disabled for this volume - skip
+				result.Skipped = append(result.Skipped, SkippedItem{
+					Path:   opportunity.Path,
+					Bytes:  opportunity.Bytes,
+					Rule:   OpportunityCategoryUserTemp,
+					Reason: issue(recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted", true, opportunity.Path, OpportunityCategoryUserTemp),
+				})
+				continue
+			}
+			if opportunity.Bytes > cfg.MaxCapacity {
+				// Item too large for Recycle Bin - skip
+				result.Skipped = append(result.Skipped, SkippedItem{
+					Path:   opportunity.Path,
+					Bytes:  opportunity.Bytes,
+					Rule:   OpportunityCategoryUserTemp,
+					Reason: issue(recycleBinCapacityIssueCode, "Item exceeds Recycle Bin capacity for this volume", true, opportunity.Path, OpportunityCategoryUserTemp),
+				})
+				continue
+			}
 
 			optInCandidates = append(optInCandidates, delete.Candidate{
 				Path:  opportunity.Path,

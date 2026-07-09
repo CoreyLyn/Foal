@@ -962,7 +962,7 @@ func TestExecuteOptInAllowsItemWhenWithinRecycleBinCapacity(t *testing.T) {
 	}
 }
 
-func TestExecuteOptInProceedsWhenProbeFails(t *testing.T) {
+func TestExecuteOptInSkipsWhenProbeFails(t *testing.T) {
 	root := t.TempDir()
 	userTempPath := root + string(filepath.Separator) + "old_temp_dir"
 	if err := os.Mkdir(userTempPath, 0700); err != nil {
@@ -1009,21 +1009,19 @@ func TestExecuteOptInProceedsWhenProbeFails(t *testing.T) {
 
 	result := clean.Execute(context.Background(), opts)
 
-	// Probe failure should be fail-open - adapter should still receive the path
-	found := false
+	// Probe failure should be fail-closed - adapter should NOT receive the path
 	for _, p := range adapter.paths {
 		if p == userTempPath {
-			found = true
-			break
+			t.Fatalf("expected adapter to NOT receive path when probe fails (fail closed)")
 		}
 	}
-	if !found {
-		t.Fatalf("expected adapter to receive path when probe fails (fail open)")
-	}
 
-	// Should be deleted despite probe failure
-	if result.Totals.OptInDeletedCount != 1 {
-		t.Fatalf("expected OptInDeletedCount 1 when probe fails, got %d", result.Totals.OptInDeletedCount)
+	// Should be skipped with recycle_bin_capacity_probe_failed reason
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped item when probe fails, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "recycle_bin_capacity_probe_failed" {
+		t.Fatalf("expected reason code recycle_bin_capacity_probe_failed, got %q", result.Skipped[0].Reason.Code)
 	}
 }
 
