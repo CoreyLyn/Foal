@@ -1956,3 +1956,184 @@ func assertContainsInOrder(t *testing.T, text string, values []string) {
 		previous = index
 	}
 }
+
+func TestCleanOptInUserTempDryRun(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	defer func() { dryRunClean = originalDryRun }()
+
+	var capturedOpts clean.Options
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		capturedOpts = opts
+		return clean.Result{
+			Status: "preview",
+			Mode:   "dry_run",
+			OptInCandidates: []clean.OptInCandidate{{
+				Path:          `C:\Temp\old-cache`,
+				Bytes:         4096,
+				Category:      clean.OpportunityCategoryUserTemp,
+				PlannedAction: "move_to_recycle_bin",
+			}},
+			Totals: clean.Totals{
+				OptInCandidateCount:   1,
+				OptInReclaimableBytes: 4096,
+			},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--dry-run", "--opt-in", "user_temp", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if len(capturedOpts.OptIn) != 1 || capturedOpts.OptIn[0] != clean.OpportunityCategoryUserTemp {
+		t.Fatalf("opts.OptIn = %#v, want user_temp", capturedOpts.OptIn)
+	}
+	result := readResultObject(t, stdout.Bytes())
+	optInCandidates, ok := result["opt_in_candidates"].([]interface{})
+	if !ok || len(optInCandidates) != 1 {
+		t.Fatalf("opt_in_candidates = %#v, want one item", result["opt_in_candidates"])
+	}
+}
+
+func TestCleanOptInAllDryRun(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	defer func() { dryRunClean = originalDryRun }()
+
+	var capturedOpts clean.Options
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		capturedOpts = opts
+		return clean.Result{Status: "preview", Mode: "dry_run"}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--dry-run", "--opt-in", "all", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if len(capturedOpts.OptIn) != 1 || capturedOpts.OptIn[0] != clean.OpportunityCategoryUserTemp {
+		t.Fatalf("opts.OptIn = %#v, want user_temp when using all", capturedOpts.OptIn)
+	}
+}
+
+func TestCleanOptInInvalidName(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--dry-run", "--opt-in", "invalid-name", "--json"}, &stdout, &stderr)
+
+	if code != exitUsage {
+		t.Fatalf("Run returned %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	var got envelope
+	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON error: %v\n%s", err, stderr.String())
+	}
+	if got.Error == nil || got.Error.Code != "invalid_opt_in_name" {
+		t.Fatalf("error.code = %q, want invalid_opt_in_name", got.Error.Code)
+	}
+	if !strings.Contains(got.Error.Message, "user_temp") || !strings.Contains(got.Error.Message, "all") {
+		t.Fatalf("error.message missing valid names: %q", got.Error.Message)
+	}
+}
+
+func TestCleanOptInWithoutMode(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--opt-in", "user_temp", "--json"}, &stdout, &stderr)
+
+	if code != exitUsage {
+		t.Fatalf("Run returned %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	var got envelope
+	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON error: %v\n%s", err, stderr.String())
+	}
+	if got.Error == nil || got.Error.Code != "invalid_clean_invocation" {
+		t.Fatalf("error.code = %q, want invalid_clean_invocation", got.Error.Code)
+	}
+}
+
+func TestCleanExecuteWithOptInUserTemp(t *testing.T) {
+	disableHistoryRecording(t)
+	originalExecute := executeClean
+	defer func() { executeClean = originalExecute }()
+
+	var capturedOpts clean.Options
+	executeClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		capturedOpts = opts
+		return clean.Result{
+			Status: "ok",
+			Mode:   "execute",
+			Deleted: []clean.DeletedItem{{
+				Path:    `C:\Temp\old-cache`,
+				Bytes:   4096,
+				Rule:    clean.OpportunityCategoryUserTemp,
+				IsOptIn: true,
+			}},
+			Totals: clean.Totals{
+				DeletedCount:       1,
+				OptInDeletedCount:  1,
+				AffectedBytes:      4096,
+				OptInAffectedBytes: 4096,
+			},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--execute", "--opt-in", "user_temp", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if len(capturedOpts.OptIn) != 1 || capturedOpts.OptIn[0] != clean.OpportunityCategoryUserTemp {
+		t.Fatalf("opts.OptIn = %#v, want user_temp", capturedOpts.OptIn)
+	}
+	result := readResultObject(t, stdout.Bytes())
+	deleted, ok := result["deleted"].([]interface{})
+	if !ok || len(deleted) != 1 {
+		t.Fatalf("deleted = %#v, want one item", deleted)
+	}
+	deletedItem := deleted[0].(map[string]interface{})
+	if deletedItem["is_opt_in"] != true {
+		t.Fatalf("deleted item missing is_opt_in=true: %#v", deletedItem)
+	}
+}
+
+func TestCleanExecuteWithoutOptInDoesNotIncludeUserTempOpportunitiesInHistory(t *testing.T) {
+	disableHistoryRecording(t)
+	originalExecute := executeClean
+	defer func() { executeClean = originalExecute }()
+
+	executeClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		return clean.Result{
+			Status: "ok",
+			Mode:   "execute",
+			Totals: clean.Totals{
+				OptInDeletedCount:  0,
+				OptInAffectedBytes: 0,
+			},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--execute", "--json"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	totals, ok := result["totals"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("totals = %#v, want object", result["totals"])
+	}
+	if val, ok := totals["opt_in_deleted_count"]; ok && val != float64(0) {
+		t.Fatalf("totals.opt_in_deleted_count = %v, want 0", val)
+	}
+}

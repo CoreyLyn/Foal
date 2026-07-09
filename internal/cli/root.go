@@ -200,6 +200,30 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			})
 		}
 
+		// Validate opt-in names
+		optInEnabled, invalidNames, validNames := clean.NormalizedOptInSet(invocation.optIn)
+		if len(invalidNames) > 0 {
+			var validList string
+			for i, name := range validNames {
+				if i > 0 {
+					validList += ", "
+				}
+				validList += fmt.Sprintf("%q", name)
+			}
+			return writeError(stderr, opts.json, command, args, jsonError{
+				Code:        "invalid_opt_in_name",
+				Message:     fmt.Sprintf("invalid opt-in name(s): %q; valid names are %s", invalidNames, validList),
+				Recoverable: true,
+				Command:     command,
+				Args:        args,
+			})
+		}
+		// Build opt-in slice for clean.Options
+		var optInSlice []string
+		for name := range optInEnabled {
+			optInSlice = append(optInSlice, name)
+		}
+
 		recorder, _ := newHistoryRecorder()
 		detailedListDir := ""
 		if invocation.dryRun && !opts.json {
@@ -212,6 +236,7 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 				Command: "clean",
 				Args:    append([]string(nil), args...),
 			},
+			OptIn: optInSlice,
 		}
 		protectionConfig := loadProtectionConfiguration()
 		cleanOptions.Validator = protectionConfig.Validator
@@ -340,27 +365,39 @@ func isKnownCommand(name string) bool {
 type cleanInvocation struct {
 	dryRun  bool
 	execute bool
+	optIn   []string
 }
 
 func validateCleanArgs(args []string) (cleanInvocation, error) {
 	var invocation cleanInvocation
 	dryRun := false
 	execute := false
-	for _, arg := range args {
+	var optIn []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		switch arg {
 		case "--dry-run":
 			dryRun = true
 		case "--execute":
 			execute = true
+		case "--opt-in":
+			if i+1 >= len(args) {
+				return invocation, fmt.Errorf("--opt-in requires an argument (use \"all\" for all available, or a specific name like \"user_temp\")")
+			}
+			i++
+			optIn = append(optIn, args[i])
 		default:
 			return invocation, fmt.Errorf("unknown clean option: %s", arg)
 		}
 	}
-	invocation = cleanInvocation{dryRun: dryRun, execute: execute}
+	invocation = cleanInvocation{dryRun: dryRun, execute: execute, optIn: optIn}
 	if dryRun && execute {
 		return invocation, fmt.Errorf("clean accepts either --dry-run or --execute, not both")
 	}
 	if !dryRun && !execute {
+		if len(optIn) > 0 {
+			return invocation, fmt.Errorf("--opt-in requires either --dry-run or --execute")
+		}
 		return invocation, fmt.Errorf("clean requires explicit --dry-run preview or --execute confirmation")
 	}
 	return invocation, nil
