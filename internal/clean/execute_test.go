@@ -610,27 +610,72 @@ func TestExecuteOptInUserTempMovesToRecycleBinAndRecordsHistory(t *testing.T) {
 	}
 }
 
-func TestOptInAllResolvesToUserTemp(t *testing.T) {
+func TestOptInAllResolvesToAllCategories(t *testing.T) {
 	enabled, invalid, valid := clean.NormalizedOptInSet([]string{"all"})
 	if len(invalid) != 0 {
 		t.Fatalf("expected no invalid names, got %v", invalid)
 	}
-	if !enabled[clean.OpportunityCategoryUserTemp] {
-		t.Fatalf("expected user_temp to be enabled by \"all\"")
+	// All 8 categories should be enabled
+	expectedCategories := []string{
+		clean.OpportunityCategoryUserTemp,
+		clean.OpportunityCategoryCrashDumps,
+		clean.OpportunityCategoryWindowsErrorReporting,
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
+		clean.OpportunityCategoryD3DShaderCache,
+		clean.OpportunityCategoryNVIDIADXCache,
+		clean.OpportunityCategoryBrowserCache,
 	}
-	// Verify valid names list includes user_temp and all
-	foundUserTemp := false
-	foundAll := false
+	for _, cat := range expectedCategories {
+		if !enabled[cat] {
+			t.Fatalf("expected %q to be enabled by \"all\"", cat)
+		}
+	}
+	if len(enabled) != len(expectedCategories) {
+		t.Fatalf("expected %d enabled categories, got %d", len(expectedCategories), len(enabled))
+	}
+	// Verify valid names list includes all categories and "all"
+	found := make(map[string]bool)
 	for _, name := range valid {
-		if name == clean.OpportunityCategoryUserTemp {
-			foundUserTemp = true
-		}
-		if name == "all" {
-			foundAll = true
+		found[name] = true
+	}
+	for _, cat := range expectedCategories {
+		if !found[cat] {
+			t.Fatalf("valid names missing expected category %q, got %v", cat, valid)
 		}
 	}
-	if !foundUserTemp || !foundAll {
-		t.Fatalf("valid names missing expected entries, got %v", valid)
+	if !found["all"] {
+		t.Fatalf("valid names missing \"all\", got %v", valid)
+	}
+	if len(valid) != len(expectedCategories)+1 {
+		t.Fatalf("expected %d valid names, got %d", len(expectedCategories)+1, len(valid))
+	}
+}
+
+func TestOptInIndividualCategories(t *testing.T) {
+	categories := []string{
+		clean.OpportunityCategoryUserTemp,
+		clean.OpportunityCategoryCrashDumps,
+		clean.OpportunityCategoryWindowsErrorReporting,
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
+		clean.OpportunityCategoryD3DShaderCache,
+		clean.OpportunityCategoryNVIDIADXCache,
+		clean.OpportunityCategoryBrowserCache,
+	}
+	for _, cat := range categories {
+		t.Run(cat, func(t *testing.T) {
+			enabled, invalid, _ := clean.NormalizedOptInSet([]string{cat})
+			if len(invalid) != 0 {
+				t.Fatalf("expected no invalid names for %q, got %v", cat, invalid)
+			}
+			if len(enabled) != 1 {
+				t.Fatalf("expected exactly 1 enabled category for %q, got %d", cat, len(enabled))
+			}
+			if !enabled[cat] {
+				t.Fatalf("expected %q to be enabled", cat)
+			}
+		})
 	}
 }
 
@@ -642,8 +687,73 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	if len(valid) < 2 {
-		t.Fatalf("expected valid names list to include at least user_temp and all, got %v", valid)
+	// Should have 8 categories + "all"
+	if len(valid) != 9 {
+		t.Fatalf("expected 9 valid names, got %v", valid)
+	}
+}
+
+func TestDryRunOptInCategoriesShowOptInCandidatesNotOpportunities(t *testing.T) {
+	testCategories := []struct {
+		name     string
+		category string
+	}{
+		{name: "crash_dumps", category: clean.OpportunityCategoryCrashDumps},
+		{name: "windows_error_reporting", category: clean.OpportunityCategoryWindowsErrorReporting},
+		{name: "explorer_thumbnail_cache", category: clean.OpportunityCategoryExplorerThumbnailCache},
+		{name: "inet_cache", category: clean.OpportunityCategoryINetCache},
+		{name: "d3d_shader_cache", category: clean.OpportunityCategoryD3DShaderCache},
+		{name: "nvidia_dx_cache", category: clean.OpportunityCategoryNVIDIADXCache},
+	}
+	for _, tc := range testCategories {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			categoryPath := filepath.Join(root, tc.category)
+			if err := os.Mkdir(categoryPath, 0700); err != nil {
+				t.Fatal(err)
+			}
+			testFile := filepath.Join(categoryPath, "test.txt")
+			if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+				t.Fatal(err)
+			}
+
+			opts := clean.Options{
+				OptIn: []string{tc.category},
+				DiscoverOpportunities: func(ctx context.Context) clean.OpportunityDiscoveryResult {
+					return clean.OpportunityDiscoveryResult{
+						Opportunities: []clean.Opportunity{
+							{
+								Category: tc.category,
+								Path:     categoryPath,
+								Bytes:    4,
+								Status:   clean.OpportunityStatus,
+								Reason:   clean.OpportunityReason,
+							},
+						},
+					}
+				},
+			}
+
+			result := clean.DryRun(context.Background(), opts)
+			if len(result.Opportunities) != 0 {
+				t.Fatalf("expected no opportunities when opted in to %q, got %d", tc.category, len(result.Opportunities))
+			}
+			if len(result.OptInCandidates) != 1 {
+				t.Fatalf("expected 1 opt-in candidate for %q, got %d", tc.category, len(result.OptInCandidates))
+			}
+			if result.OptInCandidates[0].Path != categoryPath {
+				t.Fatalf("opt-in candidate path mismatch for %q, got %q want %q", tc.category, result.OptInCandidates[0].Path, categoryPath)
+			}
+			if result.OptInCandidates[0].Category != tc.category {
+				t.Fatalf("opt-in candidate category mismatch for %q, got %q want %q", tc.category, result.OptInCandidates[0].Category, tc.category)
+			}
+			if result.Totals.OptInCandidateCount != 1 {
+				t.Fatalf("expected opt-in candidate count 1 for %q, got %d", tc.category, result.Totals.OptInCandidateCount)
+			}
+			if result.Totals.OptInReclaimableBytes != 4 {
+				t.Fatalf("expected opt-in reclaimable bytes 4 for %q, got %d", tc.category, result.Totals.OptInReclaimableBytes)
+			}
+		})
 	}
 }
 

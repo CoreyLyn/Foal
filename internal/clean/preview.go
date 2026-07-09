@@ -186,7 +186,6 @@ func dryRun(ctx context.Context, opts Options) Result {
 
 	// Resolve opt-in set
 	optInEnabled, _, _ := NormalizedOptInSet(opts.OptIn)
-	userTempOptedIn := optInUserTempEnabled(optInEnabled)
 
 	discover := opts.DiscoverOpportunities
 	if discover == nil && opts.DiscoverUserTempOpportunities != nil {
@@ -210,16 +209,19 @@ func dryRun(ctx context.Context, opts Options) Result {
 		if opts.Validator.IsUserProtected(opportunity.Path) {
 			continue
 		}
-		if userTempOptedIn && opportunity.Category == OpportunityCategoryUserTemp {
-			result.OptInCandidates = append(result.OptInCandidates, OptInCandidate{
-				Path:           opportunity.Path,
-				Bytes:          opportunity.Bytes,
-				Category:       opportunity.Category,
-				IsUserTemp:     true,
-				LatestModified: opportunity.LatestModifiedAt.Unix(),
-				IdleDays:       opportunity.IdleDays,
-				PlannedAction:  plannedRecycleBinAction,
-			})
+		if optInCategoryEnabled(optInEnabled, opportunity.Category) {
+			candidate := OptInCandidate{
+				Path:          opportunity.Path,
+				Bytes:         opportunity.Bytes,
+				Category:      opportunity.Category,
+				PlannedAction: plannedRecycleBinAction,
+			}
+			if opportunity.Category == OpportunityCategoryUserTemp {
+				candidate.IsUserTemp = true
+				candidate.LatestModified = opportunity.LatestModifiedAt.Unix()
+				candidate.IdleDays = opportunity.IdleDays
+			}
+			result.OptInCandidates = append(result.OptInCandidates, candidate)
 		} else {
 			result.Opportunities = append(result.Opportunities, opportunity)
 		}
@@ -243,7 +245,7 @@ func dryRun(ctx context.Context, opts Options) Result {
 		result.ReviewSuggestions = append(result.ReviewSuggestions, suggestion)
 	}
 	if opts.DetectRunningApplications != nil {
-		applyBrowserCacheReview(ctx, opts, &result)
+		applyBrowserCacheReview(ctx, opts, &result, optInEnabled)
 	}
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
@@ -261,7 +263,7 @@ func dryRun(ctx context.Context, opts Options) Result {
 	return result
 }
 
-func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result) {
+func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result, optInEnabled map[string]bool) {
 	preStates := opts.DetectRunningApplications(ctx)
 	result.RunningApplications = append(result.RunningApplications, preStates...)
 	for _, state := range preStates {
@@ -270,11 +272,11 @@ func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result) 
 		}
 	}
 	for _, config := range browserCacheConfigs {
-		applyOneBrowserCacheReview(ctx, opts, result, preStates, config)
+		applyOneBrowserCacheReview(ctx, opts, result, preStates, config, optInEnabled)
 	}
 }
 
-func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Result, preStates []RunningApplicationState, config browserCacheConfig) {
+func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Result, preStates []RunningApplicationState, config browserCacheConfig, optInEnabled map[string]bool) {
 	if localAppDataDir := browserCacheLocalAppDataDir(opts.BrowserCacheDiscoveryOptions); localAppDataDir != "" {
 		suppressed, protectedRulePaths := browserDiscoverySuppressed(browserUserDataRoot(localAppDataDir, config), opts.Validator)
 		if suppressed {
@@ -319,7 +321,16 @@ func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Resul
 	if discovery.opportunity == nil || browserOpportunityProtected(opts.Validator, *discovery.opportunity) {
 		return
 	}
-	result.Opportunities = append(result.Opportunities, *discovery.opportunity)
+	if optInCategoryEnabled(optInEnabled, OpportunityCategoryBrowserCache) {
+		result.OptInCandidates = append(result.OptInCandidates, OptInCandidate{
+			Path:          discovery.opportunity.Path,
+			Bytes:         discovery.opportunity.Bytes,
+			Category:      OpportunityCategoryBrowserCache,
+			PlannedAction: plannedRecycleBinAction,
+		})
+	} else {
+		result.Opportunities = append(result.Opportunities, *discovery.opportunity)
+	}
 }
 
 func browserCacheLocalAppDataDir(opts BrowserCacheDiscoveryOptions) string {
@@ -496,88 +507,165 @@ func Execute(ctx context.Context, opts Options) Result {
 		})
 	}
 
-	// Now, handle opted-in user_temp
+	// Now, handle all opted-in categories
 	optInEnabled, _, _ := NormalizedOptInSet(opts.OptIn)
-	if optInUserTempEnabled(optInEnabled) {
-		discover := opts.DiscoverUserTempOpportunities
-		if discover == nil {
-			discover = func(ctx context.Context) UserTempDiscoveryResult {
-				return DiscoverUserTempOpportunities(ctx, opts.UserTempDiscoveryOptions)
-			}
-		}
-		discovery := discover(ctx)
 
+	if len(optInEnabled) > 0 {
 		// Get the capacity probe (use default if not injected)
 		probe := opts.RecycleBinCapacityProbe
 		if probe == nil {
 			probe = RecycleBinVolumeCapacity
 		}
 
-		// Collect eligible user_temp paths, checking Recycle Bin capacity first
-		var optInCandidates []delete.Candidate
-		for _, opportunity := range discovery.Opportunities {
-			if opportunity.Category != OpportunityCategoryUserTemp {
-				continue
-			}
-			if opts.Validator.IsUserProtected(opportunity.Path) {
-				continue
-			}
+		// Struct to track path with its category and byte size
+		type optInPath struct {
+			path     string
+			bytes    int64
+			category string
+		}
+		var pathsToProcess []optInPath
 
-			// Check Recycle Bin capacity before attempting deletion
-			cfg, err := probe(opportunity.Path)
+		// Process non-browser categories first
+		if optInCategoryEnabled(optInEnabled, OpportunityCategoryUserTemp) ||
+			optInCategoryEnabled(optInEnabled, OpportunityCategoryCrashDumps) ||
+			optInCategoryEnabled(optInEnabled, OpportunityCategoryWindowsErrorReporting) ||
+			optInCategoryEnabled(optInEnabled, OpportunityCategoryExplorerThumbnailCache) ||
+			optInCategoryEnabled(optInEnabled, OpportunityCategoryINetCache) ||
+			optInCategoryEnabled(optInEnabled, OpportunityCategoryD3DShaderCache) ||
+			optInCategoryEnabled(optInEnabled, OpportunityCategoryNVIDIADXCache) {
+
+			discover := opts.DiscoverOpportunities
+			if discover == nil && opts.DiscoverUserTempOpportunities != nil {
+				discover = opts.DiscoverUserTempOpportunities
+			}
+			if discover == nil {
+				discover = func(ctx context.Context) OpportunityDiscoveryResult {
+					discoveryOptions := opts.OpportunityDiscoveryOptions
+					if discoveryOptions.TempDir == "" {
+						discoveryOptions.TempDir = opts.UserTempDiscoveryOptions.TempDir
+					}
+					if discoveryOptions.Now.IsZero() {
+						discoveryOptions.Now = opts.UserTempDiscoveryOptions.Now
+					}
+					return DiscoverOpportunities(ctx, discoveryOptions)
+				}
+			}
+			discovery := discover(ctx)
+			for _, opportunity := range discovery.Opportunities {
+				opportunity.Category = normalizedOpportunityCategory(opportunity.Category)
+				if optInCategoryEnabled(optInEnabled, opportunity.Category) {
+					pathsToProcess = append(pathsToProcess, optInPath{
+						path:     opportunity.Path,
+						bytes:    opportunity.Bytes,
+						category: opportunity.Category,
+					})
+				}
+			}
+		}
+
+		// Process browser cache separately - it needs running app detection and uses individual cache paths
+		if optInCategoryEnabled(optInEnabled, OpportunityCategoryBrowserCache) && opts.DetectRunningApplications != nil {
+			preStates := opts.DetectRunningApplications(ctx)
+			for _, config := range browserCacheConfigs {
+				// Check if browser is idle before discovery
+				preState, ok := runningApplicationStateFor(preStates, config.application)
+				if !ok || preState.State != RunningApplicationStateIdle {
+					continue
+				}
+				discovery := discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)
+				if discovery.suppressed || discovery.diagnostic != nil || discovery.incomplete != nil || discovery.opportunity == nil || browserOpportunityProtected(opts.Validator, *discovery.opportunity) {
+					continue
+				}
+				// Post-check that browser is still idle
+				postStates := opts.DetectRunningApplications(ctx)
+				postState, ok := runningApplicationStateFor(postStates, config.application)
+				if !ok || postState.State != RunningApplicationStateIdle {
+					continue
+				}
+				// Add each individual cache directory
+				if discovery.opportunity.BrowserCache != nil {
+					for _, profile := range discovery.opportunity.BrowserCache.Profiles {
+						for _, cache := range profile.Caches {
+							if cache.Bytes > 0 {
+								pathsToProcess = append(pathsToProcess, optInPath{
+									path:     cache.Path,
+									bytes:    cache.Bytes,
+									category: OpportunityCategoryBrowserCache,
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Now process all collected paths - check protection and capacity first
+		var optInCandidates []delete.Candidate
+		categoryByPath := make(map[string]string)
+		bytesByPath := make(map[string]int64)
+
+		for _, p := range pathsToProcess {
+			if opts.Validator.IsUserProtected(p.path) {
+				continue
+			}
+			// Check Recycle Bin capacity
+			cfg, err := probe(p.path)
 			if err != nil {
-				// Probe failed - fail closed, skip item rather than risk permanent deletion
 				result.Skipped = append(result.Skipped, SkippedItem{
-					Path:   opportunity.Path,
-					Bytes:  opportunity.Bytes,
-					Rule:   OpportunityCategoryUserTemp,
-					Reason: issue(recycleBinCapacityProbeFailedIssueCode, "Recycle Bin capacity check failed; skipping rather than risking permanent deletion", true, opportunity.Path, OpportunityCategoryUserTemp),
+					Path:   p.path,
+					Bytes:  p.bytes,
+					Rule:   p.category,
+					Reason: issue(recycleBinCapacityProbeFailedIssueCode, "Recycle Bin capacity check failed; skipping rather than risking permanent deletion", true, p.path, p.category),
 				})
 				continue
 			}
 			if cfg.NukeOnDelete {
-				// Recycle Bin disabled for this volume - skip
 				result.Skipped = append(result.Skipped, SkippedItem{
-					Path:   opportunity.Path,
-					Bytes:  opportunity.Bytes,
-					Rule:   OpportunityCategoryUserTemp,
-					Reason: issue(recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted", true, opportunity.Path, OpportunityCategoryUserTemp),
+					Path:   p.path,
+					Bytes:  p.bytes,
+					Rule:   p.category,
+					Reason: issue(recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted", true, p.path, p.category),
 				})
 				continue
 			}
-			if opportunity.Bytes > cfg.MaxCapacity {
-				// Item too large for Recycle Bin - skip
+			if p.bytes > cfg.MaxCapacity {
 				result.Skipped = append(result.Skipped, SkippedItem{
-					Path:   opportunity.Path,
-					Bytes:  opportunity.Bytes,
-					Rule:   OpportunityCategoryUserTemp,
-					Reason: issue(recycleBinCapacityIssueCode, "Item exceeds Recycle Bin capacity for this volume", true, opportunity.Path, OpportunityCategoryUserTemp),
+					Path:   p.path,
+					Bytes:  p.bytes,
+					Rule:   p.category,
+					Reason: issue(recycleBinCapacityIssueCode, "Item exceeds Recycle Bin capacity for this volume", true, p.path, p.category),
 				})
 				continue
 			}
-
 			optInCandidates = append(optInCandidates, delete.Candidate{
-				Path:  opportunity.Path,
-				Bytes: opportunity.Bytes,
+				Path:  p.path,
+				Bytes: p.bytes,
 			})
+			categoryByPath[p.path] = p.category
+			bytesByPath[p.path] = p.bytes
 		}
-		// Execute them
-		optInDeleteResult := delete.ExecuteWithValidator(ctx, optInCandidates, adapter, opts.Validator)
-		for _, item := range optInDeleteResult.Deleted {
-			result.Deleted = append(result.Deleted, DeletedItem{
-				Path:    item.Path,
-				Bytes:   item.Bytes,
-				Rule:    OpportunityCategoryUserTemp,
-				IsOptIn: true,
-			})
-		}
-		for _, item := range optInDeleteResult.Skipped {
-			result.Skipped = append(result.Skipped, SkippedItem{
-				Path:   item.Path,
-				Bytes:  item.Bytes,
-				Rule:   OpportunityCategoryUserTemp,
-				Reason: issue(item.Reason.Code, item.Reason.Message, true, item.Path, OpportunityCategoryUserTemp),
-			})
+
+		// Execute all opt-in candidates
+		if len(optInCandidates) > 0 {
+			optInDeleteResult := delete.ExecuteWithValidator(ctx, optInCandidates, adapter, opts.Validator)
+			for _, item := range optInDeleteResult.Deleted {
+				category := categoryByPath[item.Path]
+				result.Deleted = append(result.Deleted, DeletedItem{
+					Path:    item.Path,
+					Bytes:   item.Bytes,
+					Rule:    category,
+					IsOptIn: true,
+				})
+			}
+			for _, item := range optInDeleteResult.Skipped {
+				category := categoryByPath[item.Path]
+				result.Skipped = append(result.Skipped, SkippedItem{
+					Path:   item.Path,
+					Bytes:  item.Bytes,
+					Rule:   category,
+					Reason: issue(item.Reason.Code, item.Reason.Message, true, item.Path, category),
+				})
+			}
 		}
 	}
 
@@ -984,6 +1072,13 @@ func issue(code, message string, recoverable bool, path, ruleID string) Structur
 func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []string, valid []string) {
 	valid = []string{
 		OpportunityCategoryUserTemp,
+		OpportunityCategoryCrashDumps,
+		OpportunityCategoryWindowsErrorReporting,
+		OpportunityCategoryExplorerThumbnailCache,
+		OpportunityCategoryINetCache,
+		OpportunityCategoryD3DShaderCache,
+		OpportunityCategoryNVIDIADXCache,
+		OpportunityCategoryBrowserCache,
 		"all",
 	}
 	enabled = make(map[string]bool)
@@ -999,20 +1094,32 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 			all = true
 			continue
 		}
-		if name == OpportunityCategoryUserTemp {
-			enabled[name] = true
-			continue
+		// Check if name is any valid category
+		validName := false
+		for _, v := range valid {
+			if v == name && v != "all" {
+				enabled[name] = true
+				validName = true
+				break
+			}
 		}
-		invalid = append(invalid, name)
+		if !validName {
+			invalid = append(invalid, name)
+		}
 	}
 	if all {
-		enabled[OpportunityCategoryUserTemp] = true
+		// Enable all categories except "all" itself
+		for _, v := range valid {
+			if v != "all" {
+				enabled[v] = true
+			}
+		}
 	}
 	return enabled, invalid, valid
 }
 
-func optInUserTempEnabled(enabled map[string]bool) bool {
-	return enabled[OpportunityCategoryUserTemp]
+func optInCategoryEnabled(enabled map[string]bool, category string) bool {
+	return enabled[category]
 }
 
 func classifyError(err error) string {

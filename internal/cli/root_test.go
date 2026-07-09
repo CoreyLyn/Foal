@@ -2014,8 +2014,28 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
 	}
-	if len(capturedOpts.OptIn) != 1 || capturedOpts.OptIn[0] != clean.OpportunityCategoryUserTemp {
-		t.Fatalf("opts.OptIn = %#v, want user_temp when using all", capturedOpts.OptIn)
+	// Verify all categories are enabled (order in slice isn't guaranteed)
+	enabled := make(map[string]bool)
+	for _, name := range capturedOpts.OptIn {
+		enabled[name] = true
+	}
+	expectedCategories := []string{
+		clean.OpportunityCategoryUserTemp,
+		clean.OpportunityCategoryCrashDumps,
+		clean.OpportunityCategoryWindowsErrorReporting,
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
+		clean.OpportunityCategoryD3DShaderCache,
+		clean.OpportunityCategoryNVIDIADXCache,
+		clean.OpportunityCategoryBrowserCache,
+	}
+	if len(enabled) != len(expectedCategories) {
+		t.Fatalf("opts.OptIn has %d categories, want %d: %#v", len(enabled), len(expectedCategories), capturedOpts.OptIn)
+	}
+	for _, cat := range expectedCategories {
+		if !enabled[cat] {
+			t.Fatalf("opts.OptIn missing category %q: %#v", cat, capturedOpts.OptIn)
+		}
 	}
 }
 
@@ -2036,8 +2056,22 @@ func TestCleanOptInInvalidName(t *testing.T) {
 	if got.Error == nil || got.Error.Code != "invalid_opt_in_name" {
 		t.Fatalf("error.code = %q, want invalid_opt_in_name", got.Error.Code)
 	}
-	if !strings.Contains(got.Error.Message, "user_temp") || !strings.Contains(got.Error.Message, "all") {
-		t.Fatalf("error.message missing valid names: %q", got.Error.Message)
+	// Verify all valid names are in the message
+	validNames := []string{
+		"user_temp",
+		"crash_dumps",
+		"windows_error_reporting",
+		"explorer_thumbnail_cache",
+		"inet_cache",
+		"d3d_shader_cache",
+		"nvidia_dx_cache",
+		"browser_cache",
+		"all",
+	}
+	for _, name := range validNames {
+		if !strings.Contains(got.Error.Message, name) {
+			t.Fatalf("error.message missing valid name %q: %q", name, got.Error.Message)
+		}
 	}
 }
 
