@@ -3,6 +3,7 @@ package clean_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -752,5 +753,334 @@ func TestExecuteWithoutOptInDoesNotTouchUserTemp(t *testing.T) {
 				t.Fatalf("history should not include user temp path without opt-in")
 			}
 		}
+	}
+}
+
+func TestExecuteOptInSkipsWhenRecycleBinDisabled(t *testing.T) {
+	root := t.TempDir()
+	userTempPath := root + string(filepath.Separator) + "old_temp_dir"
+	if err := os.Mkdir(userTempPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(userTempPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	eightDaysAgo := time.Now().AddDate(0, 0, -8)
+	if err := os.Chtimes(testFile, eightDaysAgo, eightDaysAgo); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Fake probe that returns Recycle Bin disabled
+	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
+		return clean.RecycleBinVolumeConfig{
+			NukeOnDelete: true,
+			MaxCapacity:  100 * 1024 * 1024,
+		}, nil
+	}
+
+	opts := clean.Options{
+		Rules:                   []clean.Rule{},
+		RecycleBinAdapter:       adapter,
+		OptIn:                   []string{"user_temp"},
+		RecycleBinCapacityProbe: fakeProbe,
+		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{
+						Category:         clean.OpportunityCategoryUserTemp,
+						Path:             userTempPath,
+						Bytes:            4,
+						LatestModifiedAt: eightDaysAgo,
+						IdleDays:         8,
+						Status:           clean.UserTempOpportunityStatus,
+						Reason:           clean.UserTempOpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Adapter should NOT receive the path
+	for _, p := range adapter.paths {
+		if p == userTempPath {
+			t.Fatalf("expected adapter to not receive path when Recycle Bin is disabled")
+		}
+	}
+
+	// Should be skipped with recycle_bin_disabled reason
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped item, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "recycle_bin_disabled" {
+		t.Fatalf("expected reason code recycle_bin_disabled, got %q", result.Skipped[0].Reason.Code)
+	}
+	if result.Skipped[0].Path != userTempPath {
+		t.Fatalf("skipped path mismatch, got %q", result.Skipped[0].Path)
+	}
+}
+
+func TestExecuteOptInSkipsWhenItemExceedsRecycleBinCapacity(t *testing.T) {
+	root := t.TempDir()
+	userTempPath := root + string(filepath.Separator) + "old_temp_dir"
+	if err := os.Mkdir(userTempPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(userTempPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	eightDaysAgo := time.Now().AddDate(0, 0, -8)
+	if err := os.Chtimes(testFile, eightDaysAgo, eightDaysAgo); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Fake probe that returns small MaxCapacity (1 byte)
+	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
+		return clean.RecycleBinVolumeConfig{
+			NukeOnDelete: false,
+			MaxCapacity:  1, // Only 1 byte capacity
+		}, nil
+	}
+
+	opts := clean.Options{
+		Rules:                   []clean.Rule{},
+		RecycleBinAdapter:       adapter,
+		OptIn:                   []string{"user_temp"},
+		RecycleBinCapacityProbe: fakeProbe,
+		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{
+						Category:         clean.OpportunityCategoryUserTemp,
+						Path:             userTempPath,
+						Bytes:            4, // 4 bytes exceeds capacity
+						LatestModifiedAt: eightDaysAgo,
+						IdleDays:         8,
+						Status:           clean.UserTempOpportunityStatus,
+						Reason:           clean.UserTempOpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Adapter should NOT receive the path
+	for _, p := range adapter.paths {
+		if p == userTempPath {
+			t.Fatalf("expected adapter to not receive path when item exceeds capacity")
+		}
+	}
+
+	// Should be skipped with recycle_bin_capacity reason
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped item, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "recycle_bin_capacity" {
+		t.Fatalf("expected reason code recycle_bin_capacity, got %q", result.Skipped[0].Reason.Code)
+	}
+}
+
+func TestExecuteOptInAllowsItemWhenWithinRecycleBinCapacity(t *testing.T) {
+	root := t.TempDir()
+	userTempPath := root + string(filepath.Separator) + "old_temp_dir"
+	if err := os.Mkdir(userTempPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(userTempPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	eightDaysAgo := time.Now().AddDate(0, 0, -8)
+	if err := os.Chtimes(testFile, eightDaysAgo, eightDaysAgo); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Fake probe that returns large enough capacity
+	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
+		return clean.RecycleBinVolumeConfig{
+			NukeOnDelete: false,
+			MaxCapacity:  100 * 1024, // 100 KB
+		}, nil
+	}
+
+	opts := clean.Options{
+		Rules:                   []clean.Rule{},
+		RecycleBinAdapter:       adapter,
+		OptIn:                   []string{"user_temp"},
+		RecycleBinCapacityProbe: fakeProbe,
+		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{
+						Category:         clean.OpportunityCategoryUserTemp,
+						Path:             userTempPath,
+						Bytes:            4, // 4 bytes fits
+						LatestModifiedAt: eightDaysAgo,
+						IdleDays:         8,
+						Status:           clean.UserTempOpportunityStatus,
+						Reason:           clean.UserTempOpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Adapter should receive the path
+	found := false
+	for _, p := range adapter.paths {
+		if p == userTempPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive path when item fits capacity")
+	}
+
+	// Should be deleted, not skipped
+	if len(result.Skipped) != 0 {
+		t.Fatalf("expected no skipped items, got %d", len(result.Skipped))
+	}
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1, got %d", result.Totals.OptInDeletedCount)
+	}
+}
+
+func TestExecuteOptInProceedsWhenProbeFails(t *testing.T) {
+	root := t.TempDir()
+	userTempPath := root + string(filepath.Separator) + "old_temp_dir"
+	if err := os.Mkdir(userTempPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(userTempPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	eightDaysAgo := time.Now().AddDate(0, 0, -8)
+	if err := os.Chtimes(testFile, eightDaysAgo, eightDaysAgo); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Fake probe that returns an error
+	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
+		return clean.RecycleBinVolumeConfig{}, errors.New("probe failed")
+	}
+
+	opts := clean.Options{
+		Rules:                   []clean.Rule{},
+		RecycleBinAdapter:       adapter,
+		OptIn:                   []string{"user_temp"},
+		RecycleBinCapacityProbe: fakeProbe,
+		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{
+						Category:         clean.OpportunityCategoryUserTemp,
+						Path:             userTempPath,
+						Bytes:            4,
+						LatestModifiedAt: eightDaysAgo,
+						IdleDays:         8,
+						Status:           clean.UserTempOpportunityStatus,
+						Reason:           clean.UserTempOpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Probe failure should be fail-open - adapter should still receive the path
+	found := false
+	for _, p := range adapter.paths {
+		if p == userTempPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive path when probe fails (fail open)")
+	}
+
+	// Should be deleted despite probe failure
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1 when probe fails, got %d", result.Totals.OptInDeletedCount)
+	}
+}
+
+func TestExecuteOptInUsesDefaultProbeWhenNotInjected(t *testing.T) {
+	root := t.TempDir()
+	userTempPath := root + string(filepath.Separator) + "old_temp_dir"
+	if err := os.Mkdir(userTempPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(userTempPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	eightDaysAgo := time.Now().AddDate(0, 0, -8)
+	if err := os.Chtimes(testFile, eightDaysAgo, eightDaysAgo); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Don't inject a probe - should use the default
+	opts := clean.Options{
+		Rules:             []clean.Rule{},
+		RecycleBinAdapter: adapter,
+		OptIn:             []string{"user_temp"},
+		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{
+						Category:         clean.OpportunityCategoryUserTemp,
+						Path:             userTempPath,
+						Bytes:            4,
+						LatestModifiedAt: eightDaysAgo,
+						IdleDays:         8,
+						Status:           clean.UserTempOpportunityStatus,
+						Reason:           clean.UserTempOpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Default probe should allow deletion
+	found := false
+	for _, p := range adapter.paths {
+		if p == userTempPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive path with default probe")
+	}
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1 with default probe, got %d", result.Totals.OptInDeletedCount)
 	}
 }

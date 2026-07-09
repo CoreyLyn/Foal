@@ -17,6 +17,20 @@ import (
 
 const plannedRecycleBinAction = "move_to_recycle_bin"
 
+// RecycleBinVolumeConfig holds the Recycle Bin configuration for a volume.
+type RecycleBinVolumeConfig struct {
+	// NukeOnDelete is true if the Recycle Bin is disabled for this volume
+	// (items are permanently deleted immediately).
+	NukeOnDelete bool
+	// MaxCapacity is the maximum size in bytes that can be stored in the
+	// Recycle Bin for this volume.
+	MaxCapacity int64
+}
+
+// RecycleBinCapacityProbe returns the Recycle Bin configuration for the
+// volume containing the given path.
+type RecycleBinCapacityProbe func(path string) (RecycleBinVolumeConfig, error)
+
 type Options struct {
 	Rules                         []Rule
 	Validator                     pathsafe.Validator
@@ -34,6 +48,7 @@ type Options struct {
 	DiscoverReviewSuggestions     func(context.Context) []ReviewSuggestion
 	DetectRunningApplications     func(context.Context) []RunningApplicationState
 	OptIn                         []string
+	RecycleBinCapacityProbe       RecycleBinCapacityProbe
 }
 
 type Rule struct {
@@ -122,6 +137,8 @@ const (
 	RunningApplicationStateIdle          = RunningApplicationStatus("idle")
 	RunningApplicationStateUnknown       = RunningApplicationStatus("unknown")
 	runningApplicationDetectionIssueCode = "running_application_detection_unknown"
+	recycleBinDisabledIssueCode          = "recycle_bin_disabled"
+	recycleBinCapacityIssueCode          = "recycle_bin_capacity"
 )
 
 type RunningApplicationState struct {
@@ -488,7 +505,14 @@ func Execute(ctx context.Context, opts Options) Result {
 			}
 		}
 		discovery := discover(ctx)
-		// Collect eligible user_temp paths
+
+		// Get the capacity probe (use default if not injected)
+		probe := opts.RecycleBinCapacityProbe
+		if probe == nil {
+			probe = RecycleBinVolumeCapacity
+		}
+
+		// Collect eligible user_temp paths, checking Recycle Bin capacity first
 		var optInCandidates []delete.Candidate
 		for _, opportunity := range discovery.Opportunities {
 			if opportunity.Category != OpportunityCategoryUserTemp {
@@ -497,6 +521,33 @@ func Execute(ctx context.Context, opts Options) Result {
 			if opts.Validator.IsUserProtected(opportunity.Path) {
 				continue
 			}
+
+			// Check Recycle Bin capacity before attempting deletion
+			cfg, err := probe(opportunity.Path)
+			if err == nil {
+				if cfg.NukeOnDelete {
+					// Recycle Bin disabled for this volume - skip
+					result.Skipped = append(result.Skipped, SkippedItem{
+						Path:   opportunity.Path,
+						Bytes:  opportunity.Bytes,
+						Rule:   OpportunityCategoryUserTemp,
+						Reason: issue(recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted", true, opportunity.Path, OpportunityCategoryUserTemp),
+					})
+					continue
+				}
+				if opportunity.Bytes > cfg.MaxCapacity {
+					// Item too large for Recycle Bin - skip
+					result.Skipped = append(result.Skipped, SkippedItem{
+						Path:   opportunity.Path,
+						Bytes:  opportunity.Bytes,
+						Rule:   OpportunityCategoryUserTemp,
+						Reason: issue(recycleBinCapacityIssueCode, "Item exceeds Recycle Bin capacity for this volume", true, opportunity.Path, OpportunityCategoryUserTemp),
+					})
+					continue
+				}
+			}
+			// If probe failed, we proceed cautiously (fail open rather than fail closed)
+
 			optInCandidates = append(optInCandidates, delete.Candidate{
 				Path:  opportunity.Path,
 				Bytes: opportunity.Bytes,
