@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
@@ -468,4 +469,288 @@ type failingRecycleBinAdapter struct {
 
 func (a failingRecycleBinAdapter) MoveToRecycleBin(string) error {
 	return a.err
+}
+
+func TestDryRunOptInUserTempShowsOptInCandidatesNotOpportunities(t *testing.T) {
+	root := t.TempDir()
+	userTempPath := filepath.Join(root, "old_temp_dir")
+	if err := os.Mkdir(userTempPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(userTempPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set modification time to 8 days ago
+	eightDaysAgo := time.Now().AddDate(0, 0, -8)
+	if err := os.Chtimes(testFile, eightDaysAgo, eightDaysAgo); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := clean.Options{
+		OptIn: []string{"user_temp"},
+		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{
+						Category:         clean.OpportunityCategoryUserTemp,
+						Path:             userTempPath,
+						Bytes:            4,
+						LatestModifiedAt: eightDaysAgo,
+						IdleDays:         8,
+						Status:           clean.UserTempOpportunityStatus,
+						Reason:           clean.UserTempOpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.DryRun(context.Background(), opts)
+	if len(result.Opportunities) != 0 {
+		t.Fatalf("expected no opportunities when opted in, got %d", len(result.Opportunities))
+	}
+	if len(result.OptInCandidates) != 1 {
+		t.Fatalf("expected 1 opt-in candidate, got %d", len(result.OptInCandidates))
+	}
+	if result.OptInCandidates[0].Path != userTempPath {
+		t.Fatalf("opt-in candidate path mismatch, got %q want %q", result.OptInCandidates[0].Path, userTempPath)
+	}
+	if result.Totals.OptInCandidateCount != 1 {
+		t.Fatalf("expected opt-in candidate count 1, got %d", result.Totals.OptInCandidateCount)
+	}
+	if result.Totals.OptInReclaimableBytes != 4 {
+		t.Fatalf("expected opt-in reclaimable bytes 4, got %d", result.Totals.OptInReclaimableBytes)
+	}
+}
+
+func TestExecuteOptInUserTempMovesToRecycleBinAndRecordsHistory(t *testing.T) {
+	root := t.TempDir()
+	userTempPath := filepath.Join(root, "old_temp_dir")
+	if err := os.Mkdir(userTempPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(userTempPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set modification time to 8 days ago
+	eightDaysAgo := time.Now().AddDate(0, 0, -8)
+	if err := os.Chtimes(testFile, eightDaysAgo, eightDaysAgo); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+	recorder := &recordingHistoryRecorder{}
+
+	opts := clean.Options{
+		Rules:             []clean.Rule{},
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   recorder,
+		OptIn:             []string{"user_temp"},
+		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{
+						Category:         clean.OpportunityCategoryUserTemp,
+						Path:             userTempPath,
+						Bytes:            4,
+						LatestModifiedAt: eightDaysAgo,
+						IdleDays:         8,
+						Status:           clean.UserTempOpportunityStatus,
+						Reason:           clean.UserTempOpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+	// Check only that our user temp was deleted, ignore others
+	found := false
+	for _, p := range adapter.paths {
+		if p == userTempPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to delete %q, got %v", userTempPath, adapter.paths)
+	}
+	// Check that our specific item is marked as opt-in
+	foundDeleted := false
+	for _, d := range result.Deleted {
+		if d.Path == userTempPath {
+			foundDeleted = true
+			if !d.IsOptIn {
+				t.Fatalf("expected deleted item to be marked as IsOptIn")
+			}
+		}
+	}
+	if !foundDeleted {
+		t.Fatalf("expected deleted items to include %q", userTempPath)
+	}
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1, got %d", result.Totals.OptInDeletedCount)
+	}
+	if result.Totals.OptInAffectedBytes != 4 {
+		t.Fatalf("expected OptInAffectedBytes 4, got %d", result.Totals.OptInAffectedBytes)
+	}
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("expected 1 history session, got %d", len(recorder.sessions))
+	}
+	if recorder.sessions[0].Aggregate.OptInDeletedCount != 1 {
+		t.Fatalf("history OptInDeletedCount mismatch, got %d want 1", recorder.sessions[0].Aggregate.OptInDeletedCount)
+	}
+	if recorder.sessions[0].Aggregate.OptInAffectedBytes != 4 {
+		t.Fatalf("history OptInAffectedBytes mismatch, got %d want 4", recorder.sessions[0].Aggregate.OptInAffectedBytes)
+	}
+}
+
+func TestOptInAllResolvesToUserTemp(t *testing.T) {
+	enabled, invalid, valid := clean.NormalizedOptInSet([]string{"all"})
+	if len(invalid) != 0 {
+		t.Fatalf("expected no invalid names, got %v", invalid)
+	}
+	if !enabled[clean.OpportunityCategoryUserTemp] {
+		t.Fatalf("expected user_temp to be enabled by \"all\"")
+	}
+	// Verify valid names list includes user_temp and all
+	foundUserTemp := false
+	foundAll := false
+	for _, name := range valid {
+		if name == clean.OpportunityCategoryUserTemp {
+			foundUserTemp = true
+		}
+		if name == "all" {
+			foundAll = true
+		}
+	}
+	if !foundUserTemp || !foundAll {
+		t.Fatalf("valid names missing expected entries, got %v", valid)
+	}
+}
+
+func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
+	enabled, invalid, valid := clean.NormalizedOptInSet([]string{"invalid_name"})
+	if len(enabled) != 0 {
+		t.Fatalf("expected no enabled categories for invalid name, got %v", enabled)
+	}
+	if len(invalid) != 1 || invalid[0] != "invalid_name" {
+		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
+	}
+	if len(valid) < 2 {
+		t.Fatalf("expected valid names list to include at least user_temp and all, got %v", valid)
+	}
+}
+
+func TestOptInUserTempRespectsProtectionRules(t *testing.T) {
+	root := t.TempDir()
+	userTempPath := filepath.Join(root, "old_temp_dir")
+	if err := os.Mkdir(userTempPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(userTempPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set modification time to 8 days ago
+	eightDaysAgo := time.Now().AddDate(0, 0, -8)
+	if err := os.Chtimes(testFile, eightDaysAgo, eightDaysAgo); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+	// Protect the path
+	validator := pathsafe.NewValidator([]string{userTempPath})
+
+	opts := clean.Options{
+		Rules:             []clean.Rule{},
+		RecycleBinAdapter: adapter,
+		Validator:         validator,
+		OptIn:             []string{"user_temp"},
+		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
+			return clean.UserTempDiscoveryResult{
+				Opportunities: []clean.UserTempOpportunity{
+					{
+						Category:         clean.OpportunityCategoryUserTemp,
+						Path:             userTempPath,
+						Bytes:            4,
+						LatestModifiedAt: eightDaysAgo,
+						IdleDays:         8,
+						Status:           clean.UserTempOpportunityStatus,
+						Reason:           clean.UserTempOpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	// Dry run should not show it as opt-in candidate (should be suppressed)
+	dryRunResult := clean.DryRun(context.Background(), opts)
+	if len(dryRunResult.OptInCandidates) != 0 {
+		t.Fatalf("expected no opt-in candidates for protected path, got %d", len(dryRunResult.OptInCandidates))
+	}
+	// Execute should not delete it
+	executeResult := clean.Execute(context.Background(), opts)
+	// Check only our user temp wasn't deleted
+	for _, p := range adapter.paths {
+		if p == userTempPath {
+			t.Fatalf("expected adapter to not delete protected path %q, but it did", userTempPath)
+		}
+	}
+	for _, d := range executeResult.Deleted {
+		if d.Path == userTempPath {
+			t.Fatalf("expected deleted items to not include protected path %q, but it did", userTempPath)
+		}
+	}
+}
+
+func TestExecuteWithoutOptInDoesNotTouchUserTemp(t *testing.T) {
+	root := t.TempDir()
+	userTempPath := filepath.Join(root, "old_temp_dir")
+	if err := os.Mkdir(userTempPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(userTempPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+	recorder := &recordingHistoryRecorder{}
+	discoveryCalled := false
+
+	opts := clean.Options{
+		Rules:             []clean.Rule{},
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   recorder,
+		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
+			discoveryCalled = true
+			return clean.UserTempDiscoveryResult{}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+	if discoveryCalled {
+		t.Fatalf("execute should not call user temp discovery without opt-in")
+	}
+	for _, d := range result.Deleted {
+		if d.Path == userTempPath {
+			t.Fatalf("execute without opt-in should not delete user temp items")
+		}
+	}
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("OptInDeletedCount should be 0 without opt-in")
+	}
+	if len(recorder.sessions) > 0 {
+		for _, item := range recorder.items {
+			if item.Path == userTempPath {
+				t.Fatalf("history should not include user temp path without opt-in")
+			}
+		}
+	}
 }

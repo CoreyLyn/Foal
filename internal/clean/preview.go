@@ -33,6 +33,7 @@ type Options struct {
 	BrowserCacheDiscoveryOptions  BrowserCacheDiscoveryOptions
 	DiscoverReviewSuggestions     func(context.Context) []ReviewSuggestion
 	DetectRunningApplications     func(context.Context) []RunningApplicationState
+	OptIn                         []string
 }
 
 type Rule struct {
@@ -55,6 +56,7 @@ type Result struct {
 	Skipped                          []SkippedItem                     `json:"skipped"`
 	Errors                           []StructuredIssue                 `json:"errors"`
 	Opportunities                    []Opportunity                     `json:"opportunities"`
+	OptInCandidates                  []OptInCandidate                  `json:"opt_in_candidates"`
 	IncompleteOpportunityInspections []IncompleteOpportunityInspection `json:"incomplete_opportunity_inspections"`
 	ReviewSuggestions                []ReviewSuggestion                `json:"review_suggestions"`
 	RunningApplications              []RunningApplicationState         `json:"running_applications"`
@@ -88,9 +90,20 @@ type SkippedItem struct {
 }
 
 type DeletedItem struct {
-	Path  string `json:"path"`
-	Bytes int64  `json:"bytes"`
-	Rule  string `json:"rule"`
+	Path    string `json:"path"`
+	Bytes   int64  `json:"bytes"`
+	Rule    string `json:"rule"`
+	IsOptIn bool   `json:"is_opt_in,omitempty"`
+}
+
+type OptInCandidate struct {
+	Path           string `json:"path"`
+	Bytes          int64  `json:"bytes"`
+	Category       string `json:"category"`
+	IsUserTemp     bool   `json:"is_user_temp,omitempty"`
+	LatestModified int64  `json:"latest_modified,omitempty"`
+	IdleDays       int    `json:"idle_days,omitempty"`
+	PlannedAction  string `json:"planned_action"`
 }
 
 type ReviewSuggestion struct {
@@ -132,6 +145,10 @@ type Totals struct {
 	OpportunityCount         int   `json:"opportunity_count"`
 	CandidateBytes           int64 `json:"candidate_bytes"`
 	OpportunityObservedBytes int64 `json:"opportunity_observed_bytes"`
+	OptInCandidateCount      int   `json:"opt_in_candidate_count"`
+	OptInReclaimableBytes    int64 `json:"opt_in_reclaimable_bytes"`
+	OptInDeletedCount        int   `json:"opt_in_deleted_count"`
+	OptInAffectedBytes       int64 `json:"opt_in_affected_bytes"`
 	AffectedBytes            int64 `json:"affected_bytes"`
 }
 
@@ -148,6 +165,11 @@ func dryRun(ctx context.Context, opts Options) Result {
 		return protectionLoadFailure("dry_run", opts, start)
 	}
 	result := scanDefaultCandidates(ctx, opts, start)
+
+	// Resolve opt-in set
+	optInEnabled, _, _ := NormalizedOptInSet(opts.OptIn)
+	userTempOptedIn := optInUserTempEnabled(optInEnabled)
+
 	discover := opts.DiscoverOpportunities
 	if discover == nil && opts.DiscoverUserTempOpportunities != nil {
 		discover = opts.DiscoverUserTempOpportunities
@@ -170,7 +192,19 @@ func dryRun(ctx context.Context, opts Options) Result {
 		if opts.Validator.IsUserProtected(opportunity.Path) {
 			continue
 		}
-		result.Opportunities = append(result.Opportunities, opportunity)
+		if userTempOptedIn && opportunity.Category == OpportunityCategoryUserTemp {
+			result.OptInCandidates = append(result.OptInCandidates, OptInCandidate{
+				Path:           opportunity.Path,
+				Bytes:          opportunity.Bytes,
+				Category:       opportunity.Category,
+				IsUserTemp:     true,
+				LatestModified: opportunity.LatestModifiedAt.Unix(),
+				IdleDays:       opportunity.IdleDays,
+				PlannedAction:  plannedRecycleBinAction,
+			})
+		} else {
+			result.Opportunities = append(result.Opportunities, opportunity)
+		}
 	}
 	for _, incomplete := range discovery.Incomplete {
 		incomplete.Category = normalizedOpportunityCategory(incomplete.Category)
@@ -415,6 +449,7 @@ func Execute(ctx context.Context, opts Options) Result {
 		adapter = delete.WindowsRecycleBinAdapter{}
 	}
 
+	// First, handle default candidates
 	candidates := make([]delete.Candidate, 0, len(result.Candidates))
 	rulesByPath := make(map[string]string, len(result.Candidates))
 	for _, candidate := range result.Candidates {
@@ -441,6 +476,50 @@ func Execute(ctx context.Context, opts Options) Result {
 			Rule:   ruleID,
 			Reason: issue(item.Reason.Code, item.Reason.Message, true, item.Path, ruleID),
 		})
+	}
+
+	// Now, handle opted-in user_temp
+	optInEnabled, _, _ := NormalizedOptInSet(opts.OptIn)
+	if optInUserTempEnabled(optInEnabled) {
+		discover := opts.DiscoverUserTempOpportunities
+		if discover == nil {
+			discover = func(ctx context.Context) UserTempDiscoveryResult {
+				return DiscoverUserTempOpportunities(ctx, opts.UserTempDiscoveryOptions)
+			}
+		}
+		discovery := discover(ctx)
+		// Collect eligible user_temp paths
+		var optInCandidates []delete.Candidate
+		for _, opportunity := range discovery.Opportunities {
+			if opportunity.Category != OpportunityCategoryUserTemp {
+				continue
+			}
+			if opts.Validator.IsUserProtected(opportunity.Path) {
+				continue
+			}
+			optInCandidates = append(optInCandidates, delete.Candidate{
+				Path:  opportunity.Path,
+				Bytes: opportunity.Bytes,
+			})
+		}
+		// Execute them
+		optInDeleteResult := delete.ExecuteWithValidator(ctx, optInCandidates, adapter, opts.Validator)
+		for _, item := range optInDeleteResult.Deleted {
+			result.Deleted = append(result.Deleted, DeletedItem{
+				Path:    item.Path,
+				Bytes:   item.Bytes,
+				Rule:    OpportunityCategoryUserTemp,
+				IsOptIn: true,
+			})
+		}
+		for _, item := range optInDeleteResult.Skipped {
+			result.Skipped = append(result.Skipped, SkippedItem{
+				Path:   item.Path,
+				Bytes:  item.Bytes,
+				Rule:   OpportunityCategoryUserTemp,
+				Reason: issue(item.Reason.Code, item.Reason.Message, true, item.Path, OpportunityCategoryUserTemp),
+			})
+		}
 	}
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
@@ -493,6 +572,8 @@ func recordHistorySession(ctx context.Context, opts Options, result Result, star
 			OpportunityCount:         result.Totals.OpportunityCount,
 			CandidateBytes:           result.Totals.CandidateBytes,
 			OpportunityObservedBytes: result.Totals.OpportunityObservedBytes,
+			OptInDeletedCount:        result.Totals.OptInDeletedCount,
+			OptInAffectedBytes:       result.Totals.OptInAffectedBytes,
 			AffectedBytes:            result.Totals.AffectedBytes,
 		},
 	}
@@ -838,6 +919,43 @@ func issue(code, message string, recoverable bool, path, ruleID string) Structur
 	}
 }
 
+// NormalizedOptInSet returns the set of opt-in categories enabled, resolving
+// "all" to all implemented categories. Returns the set, a list of invalid
+// names (if any), and the list of valid names for error reporting.
+func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []string, valid []string) {
+	valid = []string{
+		OpportunityCategoryUserTemp,
+		"all",
+	}
+	enabled = make(map[string]bool)
+	seen := make(map[string]bool)
+	all := false
+	for _, name := range optIn {
+		name = strings.ToLower(name)
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if name == "all" {
+			all = true
+			continue
+		}
+		if name == OpportunityCategoryUserTemp {
+			enabled[name] = true
+			continue
+		}
+		invalid = append(invalid, name)
+	}
+	if all {
+		enabled[OpportunityCategoryUserTemp] = true
+	}
+	return enabled, invalid, valid
+}
+
+func optInUserTempEnabled(enabled map[string]bool) bool {
+	return enabled[OpportunityCategoryUserTemp]
+}
+
 func classifyError(err error) string {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -855,12 +973,22 @@ func totals(result Result) Totals {
 		bytes += candidate.Bytes
 	}
 	var affectedBytes int64
+	var optInAffectedBytes int64
+	var optInDeletedCount int
 	for _, deleted := range result.Deleted {
 		affectedBytes += deleted.Bytes
+		if deleted.IsOptIn {
+			optInAffectedBytes += deleted.Bytes
+			optInDeletedCount++
+		}
 	}
 	var opportunityBytes int64
 	for _, opportunity := range result.Opportunities {
 		opportunityBytes += opportunity.Bytes
+	}
+	var optInReclaimableBytes int64
+	for _, candidate := range result.OptInCandidates {
+		optInReclaimableBytes += candidate.Bytes
 	}
 	return Totals{
 		CandidateCount:           len(result.Candidates),
@@ -869,6 +997,10 @@ func totals(result Result) Totals {
 		OpportunityCount:         len(result.Opportunities),
 		CandidateBytes:           bytes,
 		OpportunityObservedBytes: opportunityBytes,
+		OptInCandidateCount:      len(result.OptInCandidates),
+		OptInReclaimableBytes:    optInReclaimableBytes,
+		OptInDeletedCount:        optInDeletedCount,
+		OptInAffectedBytes:       optInAffectedBytes,
 		AffectedBytes:            affectedBytes,
 	}
 }

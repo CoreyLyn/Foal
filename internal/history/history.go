@@ -38,6 +38,8 @@ type AggregateOutcomes struct {
 	OpportunityCount         int   `json:"opportunity_count"`
 	CandidateBytes           int64 `json:"candidate_bytes"`
 	OpportunityObservedBytes int64 `json:"opportunity_observed_bytes"`
+	OptInDeletedCount        int   `json:"opt_in_deleted_count"`
+	OptInAffectedBytes       int64 `json:"opt_in_affected_bytes"`
 	AffectedBytes            int64 `json:"affected_bytes"`
 }
 
