@@ -1192,3 +1192,292 @@ func TestExecuteOptInUsesDefaultProbeWhenNotInjected(t *testing.T) {
 		t.Fatalf("expected OptInDeletedCount 1 with default probe, got %d", result.Totals.OptInDeletedCount)
 	}
 }
+
+// TestExecuteOptInNonUserTempCategoryExecutes verifies a non-user_temp category executes via Recycle Bin
+func TestExecuteOptInNonUserTempCategoryExecutes(t *testing.T) {
+	root := t.TempDir()
+	crashDumpsPath := filepath.Join(root, "CrashDumps")
+	if err := os.Mkdir(crashDumpsPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(crashDumpsPath, "dump.dmp")
+	if err := os.WriteFile(testFile, []byte("dump data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+	recorder := &recordingHistoryRecorder{}
+
+	opts := clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false, // Disable default candidate
+		}},
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   recorder,
+		OptIn:             []string{"crash_dumps"},
+		DiscoverOpportunities: func(ctx context.Context) clean.OpportunityDiscoveryResult {
+			return clean.OpportunityDiscoveryResult{
+				Opportunities: []clean.Opportunity{
+					{
+						Category: clean.OpportunityCategoryCrashDumps,
+						Path:     crashDumpsPath,
+						Bytes:    9, // "dump data"
+						Status:   clean.OpportunityStatus,
+						Reason:   clean.OpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Verify the adapter received the path
+	found := false
+	for _, p := range adapter.paths {
+		if p == crashDumpsPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive crash_dumps path, got %v", adapter.paths)
+	}
+
+	// Verify deleted item is marked IsOptIn with correct category as rule
+	optInDeletedCount := 0
+	for _, d := range result.Deleted {
+		if d.IsOptIn {
+			optInDeletedCount++
+			if d.Rule != clean.OpportunityCategoryCrashDumps {
+				t.Fatalf("expected deleted item rule to be crash_dumps, got %q", d.Rule)
+			}
+		}
+	}
+	if optInDeletedCount != 1 {
+		t.Fatalf("expected 1 IsOptIn deleted item, got %d", optInDeletedCount)
+	}
+
+	// Verify history records the opt-in deletion
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("expected 1 history session, got %d", len(recorder.sessions))
+	}
+	if recorder.sessions[0].Aggregate.OptInDeletedCount != 1 {
+		t.Fatalf("history missing OptInDeletedCount = 1, got %d", recorder.sessions[0].Aggregate.OptInDeletedCount)
+	}
+	if recorder.sessions[0].Aggregate.OptInAffectedBytes != 9 {
+		t.Fatalf("history missing OptInAffectedBytes = 9, got %d", recorder.sessions[0].Aggregate.OptInAffectedBytes)
+	}
+}
+
+// TestExecuteOptInBrowserCacheSkipsWhenBrowserRunning verifies browser_cache skips when browser is running
+func TestExecuteOptInBrowserCacheSkipsWhenBrowserRunning(t *testing.T) {
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Create a detector that reports Chrome as running
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationGoogleChrome,
+				State:       clean.RunningApplicationStateRunning,
+			},
+		}
+	}
+
+	opts := clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false, // Disable default candidate
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"browser_cache"},
+		DetectRunningApplications: detector,
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Verify nothing was deleted as opt-in (browser was running)
+	for _, d := range result.Deleted {
+		if d.IsOptIn {
+			t.Fatalf("expected 0 IsOptIn deleted items when browser is running, got at least 1")
+		}
+	}
+	// Verify adapter was not called with browser cache paths (no opt-in deletions)
+	if len(adapter.paths) != 0 {
+		t.Fatalf("expected adapter to receive 0 paths when browser is running, got %d: %v", len(adapter.paths), adapter.paths)
+	}
+}
+
+// TestExecuteOptInBrowserCacheCleansWhenBrowserIdle verifies browser_cache cleans when browser is idle
+func TestExecuteOptInBrowserCacheCleansWhenBrowserIdle(t *testing.T) {
+	root := t.TempDir()
+	localAppData := filepath.Join(root, "AppData", "Local")
+	chromeUserData := filepath.Join(localAppData, "Google", "Chrome", "User Data")
+	defaultCache := filepath.Join(chromeUserData, "Default", "Cache")
+	if err := os.MkdirAll(defaultCache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(chromeUserData, "Local State"), []byte(`{"profile":{"info_cache":{"Default":{"name":"Person 1"}}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cacheFile := filepath.Join(defaultCache, "data.bin")
+	if err := os.WriteFile(cacheFile, []byte("cache data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Create a detector that reports Chrome as idle
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationGoogleChrome,
+				State:       clean.RunningApplicationStateIdle,
+			},
+			{
+				Application: clean.ApplicationMicrosoftEdge,
+				State:       clean.RunningApplicationStateIdle,
+			},
+		}
+	}
+
+	opts := clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false, // Disable default candidate
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"browser_cache"},
+		DetectRunningApplications: detector,
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: localAppData,
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Verify the cache path was deleted (browser was idle)
+	found := false
+	for _, p := range adapter.paths {
+		if p == defaultCache {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive browser cache path, got %v", adapter.paths)
+	}
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1 when browser is idle, got %d", result.Totals.OptInDeletedCount)
+	}
+}
+
+// TestExecuteOptInNonUserTempCategoryRespectsCapacityPreCheck verifies capacity pre-check applies to non-user_temp categories
+func TestExecuteOptInNonUserTempCategoryRespectsCapacityPreCheck(t *testing.T) {
+	root := t.TempDir()
+	crashDumpsPath := filepath.Join(root, "CrashDumps")
+	if err := os.Mkdir(crashDumpsPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(crashDumpsPath, "large_dump.dmp")
+	if err := os.WriteFile(testFile, []byte("large dump data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Fake probe that returns very small MaxCapacity
+	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
+		return clean.RecycleBinVolumeConfig{
+			NukeOnDelete: false,
+			MaxCapacity:  1, // Only 1 byte capacity
+		}, nil
+	}
+
+	opts := clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false, // Disable default candidate
+		}},
+		RecycleBinAdapter:       adapter,
+		OptIn:                   []string{"crash_dumps"},
+		RecycleBinCapacityProbe: fakeProbe,
+		DiscoverOpportunities: func(ctx context.Context) clean.OpportunityDiscoveryResult {
+			return clean.OpportunityDiscoveryResult{
+				Opportunities: []clean.Opportunity{
+					{
+						Category: clean.OpportunityCategoryCrashDumps,
+						Path:     crashDumpsPath,
+						Bytes:    16, // "large dump data"
+						Status:   clean.OpportunityStatus,
+						Reason:   clean.OpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Verify adapter did NOT receive the path (capacity check failed)
+	for _, p := range adapter.paths {
+		if p == crashDumpsPath {
+			t.Fatalf("expected adapter to NOT receive crash_dumps path when over capacity")
+		}
+	}
+
+	// Verify item was skipped with recycle_bin_capacity reason
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped item when over capacity, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "recycle_bin_capacity" {
+		t.Fatalf("expected reason code recycle_bin_capacity, got %q", result.Skipped[0].Reason.Code)
+	}
+	if result.Skipped[0].Rule != clean.OpportunityCategoryCrashDumps {
+		t.Fatalf("expected skipped item rule to be crash_dumps, got %q", result.Skipped[0].Rule)
+	}
+}
+
+// TestExecuteWithoutOptInDoesNotRunDetection verifies default execute without opt-in does not run running-application detection
+func TestExecuteWithoutOptInDoesNotRunDetection(t *testing.T) {
+	adapter := &recordingRecycleBinAdapter{}
+	detectionCalled := false
+
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		detectionCalled = true
+		return nil
+	}
+
+	// Set up a default candidate to ensure Execute runs
+	root := t.TempDir()
+	candidate := filepath.Join(root, "foal-owned.tmp")
+	if err := os.WriteFile(candidate, []byte("temp data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := clean.Options{
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{}, // No opt-in
+		DetectRunningApplications: detector,
+		Rules: []clean.Rule{
+			{
+				ID:             "test_rule",
+				DefaultEnabled: true,
+				CandidatePaths: []string{candidate},
+			},
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Verify detection was NOT called (default execute without opt-in should not run it)
+	if detectionCalled {
+		t.Fatalf("expected DetectRunningApplications to NOT be called without --opt-in")
+	}
+
+	// Verify default candidate still executes normally
+	if result.Totals.DeletedCount != 1 {
+		t.Fatalf("expected DeletedCount 1, got %d", result.Totals.DeletedCount)
+	}
+}
