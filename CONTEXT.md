@@ -41,16 +41,16 @@ The measured bytes represented by skipped-by-default discovery results. This val
 _Avoid_: reclaimable bytes, cleanable space, Potential space
 
 **Opportunity history summary**:
-The aggregate count and observed bytes of skipped-by-default discovery results persisted for a Clean dry-run session without retaining the discovered non-Foal paths. Clean execution history excludes these non-executable opportunities.
-_Avoid_: opportunity path history, execution item, deletion record
+The aggregate count and observed bytes of non-opted-in skipped-by-default discovery results persisted for a Clean dry-run session without retaining the discovered non-Foal paths. Clean execution history excludes these non-executable, non-opted-in opportunities; an opportunity that has been opted in becomes an opt-in candidate and its executed path is recorded in execution history like any deleted candidate.
+_Avoid_: opportunity path history (for non-opted-in), execution item, deletion record
 
 **Opportunity detail section**:
 The detailed candidate list section that records full skipped-by-default opportunity review data while remaining a non-authoritative companion artifact that Clean execution never consumes.
 _Avoid_: execution manifest, opt-in selection file, deletion input
 
 **Review-only opportunity scan**:
-The skipped-by-default discovery scan used by Clean dry-run and the Clean TUI, but omitted from Clean execution so non-executable observations cannot affect or delay the confirmed cleanup path.
-_Avoid_: execute-time opportunity scan, shared deletion input, implicit cleanup
+The skipped-by-default discovery scan used by Clean dry-run and the Clean TUI. For non-opted-in categories it is omitted from Clean execution so non-executable observations cannot affect or delay the confirmed cleanup path; an opted-in category is re-scanned at execute time because its results have become executable opt-in candidates, still subject to fresh-scan validation and protection suppression.
+_Avoid_: execute-time scan for non-opted-in categories, shared deletion input, implicit cleanup
 
 **Opportunity inspection limit**:
 The deterministic per-entry ceiling of 100,000 safely inspected descendants used by review-only opportunity scanning. Entries that exceed the ceiling, cannot be fully inspected, or are interrupted are reported as inspection incomplete and excluded from opportunity totals.
@@ -89,8 +89,8 @@ A human-readable companion file for clean preview reports that records candidate
 _Avoid_: execution manifest, deletion input
 
 **Review suggestions**:
-Structured, non-authoritative next steps that point at an external tool's own command (or manual investigation) which Foal surfaces but never executes or counts as a Foal cleanup action. They are part of the JSON clean contract so automation, human output, and the TUI all see the same suggestions; being structured does not make them executable.
-_Avoid_: cleanup actions, delegated execution, Foal-owned deletion of the referenced cache
+Structured, non-authoritative next steps that point at an external tool's own command (or manual investigation) which Foal surfaces but never executes by default and never counts as a Foal cleanup action by default. A developer-tool cache suggestion may become an opt-in candidate that Foal deletes through its own Recycle Bin action, but Foal never runs the tool's own cleanup command. They are part of the JSON clean contract so automation, human output, and the TUI all see the same suggestions; being structured does not make them executable by default.
+_Avoid_: cleanup actions, delegated execution, running the referenced tool's cleanup command, Foal-owned deletion of the referenced cache without opt-in
 
 **Tool cache query probe**:
 A bounded, read-only execution of an allowlisted developer tool's own query subcommand (for example `npm config get cache` or `go env GOCACHE`) that Clean uses only to resolve the displayed cache path for a Review suggestion. Each probe is restricted to a built-in tool allowlist, runs only non-mutating query subcommands, and is bounded by a per-call context timeout. A probe that is not allowlisted, fails, or times out yields no path and never blocks the preview. This is the one deliberate exception to Clean's otherwise execution-free preview, and it never runs a tool's cleanup command.
@@ -99,6 +99,14 @@ _Avoid_: running tool cleanup commands, executing arbitrary PATH binaries, unbou
 **Potential space**:
 The bytes represented by Foal default candidates in a clean preview, excluding skipped-by-default items, review clues, external tool suggestions, and permission-boundary skips.
 _Avoid_: total hinted space, external savings estimate
+
+**Opt-in candidate**:
+A cleanup item that is normally a skipped-by-default opportunity or a developer-tool Review suggestion, but that the user has explicitly opted in to clean through the Recycle Bin for the current run only. An opt-in candidate is never a default candidate: the default candidate set stays frozen, and opt-in never becomes default. Opt-in candidates still pass fresh-scan validation, protection-rule suppression, and running-application gating at execute time, and are never deleted by running an external tool's own cleanup command.
+_Avoid_: default candidate, default-enabled rule, permanent deletion, tool-command delegation
+
+**Opt-in reclaimable bytes**:
+The bytes represented by opt-in candidates in a clean preview or execution, reported as a total separate from `Potential space` and `Observed opportunity bytes`. Opt-in reclaimable bytes are never merged into `Potential space`, and `Observed opportunity bytes` excludes any opportunity that has become an opt-in candidate for the run.
+_Avoid_: Potential space, observed opportunity bytes, total hinted space
 
 **Project artifact clue**:
 A review clue for rebuildable project directories or build outputs that Foal may surface only through explicit analysis or future opt-in flows.
