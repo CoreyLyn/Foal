@@ -610,27 +610,72 @@ func TestExecuteOptInUserTempMovesToRecycleBinAndRecordsHistory(t *testing.T) {
 	}
 }
 
-func TestOptInAllResolvesToUserTemp(t *testing.T) {
+func TestOptInAllResolvesToAllCategories(t *testing.T) {
 	enabled, invalid, valid := clean.NormalizedOptInSet([]string{"all"})
 	if len(invalid) != 0 {
 		t.Fatalf("expected no invalid names, got %v", invalid)
 	}
-	if !enabled[clean.OpportunityCategoryUserTemp] {
-		t.Fatalf("expected user_temp to be enabled by \"all\"")
+	// All 8 categories should be enabled
+	expectedCategories := []string{
+		clean.OpportunityCategoryUserTemp,
+		clean.OpportunityCategoryCrashDumps,
+		clean.OpportunityCategoryWindowsErrorReporting,
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
+		clean.OpportunityCategoryD3DShaderCache,
+		clean.OpportunityCategoryNVIDIADXCache,
+		clean.OpportunityCategoryBrowserCache,
 	}
-	// Verify valid names list includes user_temp and all
-	foundUserTemp := false
-	foundAll := false
+	for _, cat := range expectedCategories {
+		if !enabled[cat] {
+			t.Fatalf("expected %q to be enabled by \"all\"", cat)
+		}
+	}
+	if len(enabled) != len(expectedCategories) {
+		t.Fatalf("expected %d enabled categories, got %d", len(expectedCategories), len(enabled))
+	}
+	// Verify valid names list includes all categories and "all"
+	found := make(map[string]bool)
 	for _, name := range valid {
-		if name == clean.OpportunityCategoryUserTemp {
-			foundUserTemp = true
-		}
-		if name == "all" {
-			foundAll = true
+		found[name] = true
+	}
+	for _, cat := range expectedCategories {
+		if !found[cat] {
+			t.Fatalf("valid names missing expected category %q, got %v", cat, valid)
 		}
 	}
-	if !foundUserTemp || !foundAll {
-		t.Fatalf("valid names missing expected entries, got %v", valid)
+	if !found["all"] {
+		t.Fatalf("valid names missing \"all\", got %v", valid)
+	}
+	if len(valid) != len(expectedCategories)+1 {
+		t.Fatalf("expected %d valid names, got %d", len(expectedCategories)+1, len(valid))
+	}
+}
+
+func TestOptInIndividualCategories(t *testing.T) {
+	categories := []string{
+		clean.OpportunityCategoryUserTemp,
+		clean.OpportunityCategoryCrashDumps,
+		clean.OpportunityCategoryWindowsErrorReporting,
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
+		clean.OpportunityCategoryD3DShaderCache,
+		clean.OpportunityCategoryNVIDIADXCache,
+		clean.OpportunityCategoryBrowserCache,
+	}
+	for _, cat := range categories {
+		t.Run(cat, func(t *testing.T) {
+			enabled, invalid, _ := clean.NormalizedOptInSet([]string{cat})
+			if len(invalid) != 0 {
+				t.Fatalf("expected no invalid names for %q, got %v", cat, invalid)
+			}
+			if len(enabled) != 1 {
+				t.Fatalf("expected exactly 1 enabled category for %q, got %d", cat, len(enabled))
+			}
+			if !enabled[cat] {
+				t.Fatalf("expected %q to be enabled", cat)
+			}
+		})
 	}
 }
 
@@ -642,8 +687,73 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	if len(valid) < 2 {
-		t.Fatalf("expected valid names list to include at least user_temp and all, got %v", valid)
+	// Should have 8 categories + "all"
+	if len(valid) != 9 {
+		t.Fatalf("expected 9 valid names, got %v", valid)
+	}
+}
+
+func TestDryRunOptInCategoriesShowOptInCandidatesNotOpportunities(t *testing.T) {
+	testCategories := []struct {
+		name     string
+		category string
+	}{
+		{name: "crash_dumps", category: clean.OpportunityCategoryCrashDumps},
+		{name: "windows_error_reporting", category: clean.OpportunityCategoryWindowsErrorReporting},
+		{name: "explorer_thumbnail_cache", category: clean.OpportunityCategoryExplorerThumbnailCache},
+		{name: "inet_cache", category: clean.OpportunityCategoryINetCache},
+		{name: "d3d_shader_cache", category: clean.OpportunityCategoryD3DShaderCache},
+		{name: "nvidia_dx_cache", category: clean.OpportunityCategoryNVIDIADXCache},
+	}
+	for _, tc := range testCategories {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			categoryPath := filepath.Join(root, tc.category)
+			if err := os.Mkdir(categoryPath, 0700); err != nil {
+				t.Fatal(err)
+			}
+			testFile := filepath.Join(categoryPath, "test.txt")
+			if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+				t.Fatal(err)
+			}
+
+			opts := clean.Options{
+				OptIn: []string{tc.category},
+				DiscoverOpportunities: func(ctx context.Context) clean.OpportunityDiscoveryResult {
+					return clean.OpportunityDiscoveryResult{
+						Opportunities: []clean.Opportunity{
+							{
+								Category: tc.category,
+								Path:     categoryPath,
+								Bytes:    4,
+								Status:   clean.OpportunityStatus,
+								Reason:   clean.OpportunityReason,
+							},
+						},
+					}
+				},
+			}
+
+			result := clean.DryRun(context.Background(), opts)
+			if len(result.Opportunities) != 0 {
+				t.Fatalf("expected no opportunities when opted in to %q, got %d", tc.category, len(result.Opportunities))
+			}
+			if len(result.OptInCandidates) != 1 {
+				t.Fatalf("expected 1 opt-in candidate for %q, got %d", tc.category, len(result.OptInCandidates))
+			}
+			if result.OptInCandidates[0].Path != categoryPath {
+				t.Fatalf("opt-in candidate path mismatch for %q, got %q want %q", tc.category, result.OptInCandidates[0].Path, categoryPath)
+			}
+			if result.OptInCandidates[0].Category != tc.category {
+				t.Fatalf("opt-in candidate category mismatch for %q, got %q want %q", tc.category, result.OptInCandidates[0].Category, tc.category)
+			}
+			if result.Totals.OptInCandidateCount != 1 {
+				t.Fatalf("expected opt-in candidate count 1 for %q, got %d", tc.category, result.Totals.OptInCandidateCount)
+			}
+			if result.Totals.OptInReclaimableBytes != 4 {
+				t.Fatalf("expected opt-in reclaimable bytes 4 for %q, got %d", tc.category, result.Totals.OptInReclaimableBytes)
+			}
+		})
 	}
 }
 
@@ -1080,5 +1190,294 @@ func TestExecuteOptInUsesDefaultProbeWhenNotInjected(t *testing.T) {
 	}
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("expected OptInDeletedCount 1 with default probe, got %d", result.Totals.OptInDeletedCount)
+	}
+}
+
+// TestExecuteOptInNonUserTempCategoryExecutes verifies a non-user_temp category executes via Recycle Bin
+func TestExecuteOptInNonUserTempCategoryExecutes(t *testing.T) {
+	root := t.TempDir()
+	crashDumpsPath := filepath.Join(root, "CrashDumps")
+	if err := os.Mkdir(crashDumpsPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(crashDumpsPath, "dump.dmp")
+	if err := os.WriteFile(testFile, []byte("dump data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+	recorder := &recordingHistoryRecorder{}
+
+	opts := clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false, // Disable default candidate
+		}},
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   recorder,
+		OptIn:             []string{"crash_dumps"},
+		DiscoverOpportunities: func(ctx context.Context) clean.OpportunityDiscoveryResult {
+			return clean.OpportunityDiscoveryResult{
+				Opportunities: []clean.Opportunity{
+					{
+						Category: clean.OpportunityCategoryCrashDumps,
+						Path:     crashDumpsPath,
+						Bytes:    9, // "dump data"
+						Status:   clean.OpportunityStatus,
+						Reason:   clean.OpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Verify the adapter received the path
+	found := false
+	for _, p := range adapter.paths {
+		if p == crashDumpsPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive crash_dumps path, got %v", adapter.paths)
+	}
+
+	// Verify deleted item is marked IsOptIn with correct category as rule
+	optInDeletedCount := 0
+	for _, d := range result.Deleted {
+		if d.IsOptIn {
+			optInDeletedCount++
+			if d.Rule != clean.OpportunityCategoryCrashDumps {
+				t.Fatalf("expected deleted item rule to be crash_dumps, got %q", d.Rule)
+			}
+		}
+	}
+	if optInDeletedCount != 1 {
+		t.Fatalf("expected 1 IsOptIn deleted item, got %d", optInDeletedCount)
+	}
+
+	// Verify history records the opt-in deletion
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("expected 1 history session, got %d", len(recorder.sessions))
+	}
+	if recorder.sessions[0].Aggregate.OptInDeletedCount != 1 {
+		t.Fatalf("history missing OptInDeletedCount = 1, got %d", recorder.sessions[0].Aggregate.OptInDeletedCount)
+	}
+	if recorder.sessions[0].Aggregate.OptInAffectedBytes != 9 {
+		t.Fatalf("history missing OptInAffectedBytes = 9, got %d", recorder.sessions[0].Aggregate.OptInAffectedBytes)
+	}
+}
+
+// TestExecuteOptInBrowserCacheSkipsWhenBrowserRunning verifies browser_cache skips when browser is running
+func TestExecuteOptInBrowserCacheSkipsWhenBrowserRunning(t *testing.T) {
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Create a detector that reports Chrome as running
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationGoogleChrome,
+				State:       clean.RunningApplicationStateRunning,
+			},
+		}
+	}
+
+	opts := clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false, // Disable default candidate
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"browser_cache"},
+		DetectRunningApplications: detector,
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Verify nothing was deleted as opt-in (browser was running)
+	for _, d := range result.Deleted {
+		if d.IsOptIn {
+			t.Fatalf("expected 0 IsOptIn deleted items when browser is running, got at least 1")
+		}
+	}
+	// Verify adapter was not called with browser cache paths (no opt-in deletions)
+	if len(adapter.paths) != 0 {
+		t.Fatalf("expected adapter to receive 0 paths when browser is running, got %d: %v", len(adapter.paths), adapter.paths)
+	}
+}
+
+// TestExecuteOptInBrowserCacheCleansWhenBrowserIdle verifies browser_cache cleans when browser is idle
+func TestExecuteOptInBrowserCacheCleansWhenBrowserIdle(t *testing.T) {
+	root := t.TempDir()
+	localAppData := filepath.Join(root, "AppData", "Local")
+	chromeUserData := filepath.Join(localAppData, "Google", "Chrome", "User Data")
+	defaultCache := filepath.Join(chromeUserData, "Default", "Cache")
+	if err := os.MkdirAll(defaultCache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(chromeUserData, "Local State"), []byte(`{"profile":{"info_cache":{"Default":{"name":"Person 1"}}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cacheFile := filepath.Join(defaultCache, "data.bin")
+	if err := os.WriteFile(cacheFile, []byte("cache data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Create a detector that reports Chrome as idle
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationGoogleChrome,
+				State:       clean.RunningApplicationStateIdle,
+			},
+			{
+				Application: clean.ApplicationMicrosoftEdge,
+				State:       clean.RunningApplicationStateIdle,
+			},
+		}
+	}
+
+	opts := clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false, // Disable default candidate
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"browser_cache"},
+		DetectRunningApplications: detector,
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: localAppData,
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Verify the cache path was deleted (browser was idle)
+	found := false
+	for _, p := range adapter.paths {
+		if p == defaultCache {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive browser cache path, got %v", adapter.paths)
+	}
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1 when browser is idle, got %d", result.Totals.OptInDeletedCount)
+	}
+}
+
+// TestExecuteOptInNonUserTempCategoryRespectsCapacityPreCheck verifies capacity pre-check applies to non-user_temp categories
+func TestExecuteOptInNonUserTempCategoryRespectsCapacityPreCheck(t *testing.T) {
+	root := t.TempDir()
+	crashDumpsPath := filepath.Join(root, "CrashDumps")
+	if err := os.Mkdir(crashDumpsPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(crashDumpsPath, "large_dump.dmp")
+	if err := os.WriteFile(testFile, []byte("large dump data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Fake probe that returns very small MaxCapacity
+	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
+		return clean.RecycleBinVolumeConfig{
+			NukeOnDelete: false,
+			MaxCapacity:  1, // Only 1 byte capacity
+		}, nil
+	}
+
+	opts := clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false, // Disable default candidate
+		}},
+		RecycleBinAdapter:       adapter,
+		OptIn:                   []string{"crash_dumps"},
+		RecycleBinCapacityProbe: fakeProbe,
+		DiscoverOpportunities: func(ctx context.Context) clean.OpportunityDiscoveryResult {
+			return clean.OpportunityDiscoveryResult{
+				Opportunities: []clean.Opportunity{
+					{
+						Category: clean.OpportunityCategoryCrashDumps,
+						Path:     crashDumpsPath,
+						Bytes:    16, // "large dump data"
+						Status:   clean.OpportunityStatus,
+						Reason:   clean.OpportunityReason,
+					},
+				},
+			}
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Verify adapter did NOT receive the path (capacity check failed)
+	for _, p := range adapter.paths {
+		if p == crashDumpsPath {
+			t.Fatalf("expected adapter to NOT receive crash_dumps path when over capacity")
+		}
+	}
+
+	// Verify item was skipped with recycle_bin_capacity reason
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped item when over capacity, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "recycle_bin_capacity" {
+		t.Fatalf("expected reason code recycle_bin_capacity, got %q", result.Skipped[0].Reason.Code)
+	}
+	if result.Skipped[0].Rule != clean.OpportunityCategoryCrashDumps {
+		t.Fatalf("expected skipped item rule to be crash_dumps, got %q", result.Skipped[0].Rule)
+	}
+}
+
+// TestExecuteWithoutOptInDoesNotRunDetection verifies default execute without opt-in does not run running-application detection
+func TestExecuteWithoutOptInDoesNotRunDetection(t *testing.T) {
+	adapter := &recordingRecycleBinAdapter{}
+	detectionCalled := false
+
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		detectionCalled = true
+		return nil
+	}
+
+	// Set up a default candidate to ensure Execute runs
+	root := t.TempDir()
+	candidate := filepath.Join(root, "foal-owned.tmp")
+	if err := os.WriteFile(candidate, []byte("temp data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := clean.Options{
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{}, // No opt-in
+		DetectRunningApplications: detector,
+		Rules: []clean.Rule{
+			{
+				ID:             "test_rule",
+				DefaultEnabled: true,
+				CandidatePaths: []string{candidate},
+			},
+		},
+	}
+
+	result := clean.Execute(context.Background(), opts)
+
+	// Verify detection was NOT called (default execute without opt-in should not run it)
+	if detectionCalled {
+		t.Fatalf("expected DetectRunningApplications to NOT be called without --opt-in")
+	}
+
+	// Verify default candidate still executes normally
+	if result.Totals.DeletedCount != 1 {
+		t.Fatalf("expected DeletedCount 1, got %d", result.Totals.DeletedCount)
 	}
 }
