@@ -932,7 +932,7 @@ func plannedActionLabel(action string) string {
 func DefaultRuleCatalog() []Rule {
 	return []Rule{
 		{
-			ID:             "foal_owned_temp_sandboxes",
+			ID:             DefaultCategoryFoalOwnedTempSandboxes,
 			Description:    "Foal-owned temporary sandbox entries in the current user's Windows temp directory",
 			DefaultEnabled: true,
 			Roots:          []string{os.TempDir()},
@@ -1056,33 +1056,16 @@ func issue(code, message string, recoverable bool, path, ruleID string) Structur
 // Returns the set, a list of invalid names (if any), and the list of valid
 // names for error reporting.
 func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []string, valid []string) {
-	opportunityCategories := []string{
-		OpportunityCategoryUserTemp,
-		OpportunityCategoryCrashDumps,
-		OpportunityCategoryWindowsErrorReporting,
-		OpportunityCategoryExplorerThumbnailCache,
-		OpportunityCategoryINetCache,
-		OpportunityCategoryD3DShaderCache,
-		OpportunityCategoryNVIDIADXCache,
-		OpportunityCategoryBrowserCache,
-	}
-	devCacheCategories := []string{
-		DevCacheCategoryNPM,
-		DevCacheCategoryGo,
-		DevCacheCategoryPip,
-		DevCacheCategoryCargo,
-		DevCacheCategoryNuGet,
-		DevCacheCategoryCorepack,
-	}
-	valid = make([]string, 0, len(opportunityCategories)+len(devCacheCategories)+2)
-	valid = append(valid, opportunityCategories...)
-	valid = append(valid, devCacheCategories...)
+	selectable := selectableCategoryIDs()
+	devCaches := developerCacheCategoryIDs()
+	valid = make([]string, 0, len(selectable)+2)
+	valid = append(valid, selectable...)
 	valid = append(valid, DevCacheCategoryAll, "all")
 
 	enabled = make(map[string]bool)
 	seen := make(map[string]bool)
 	all := false
-	devCaches := false
+	allDevCaches := false
 	for _, name := range optIn {
 		name = strings.ToLower(name)
 		if seen[name] {
@@ -1094,33 +1077,23 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 			continue
 		}
 		if name == DevCacheCategoryAll {
-			devCaches = true
+			allDevCaches = true
 			continue
 		}
-		// Check if name is any valid category
-		validName := false
-		for _, v := range valid {
-			if v == name && v != "all" && v != DevCacheCategoryAll {
-				enabled[name] = true
-				validName = true
-				break
-			}
-		}
-		if !validName {
+		summary, validName := canonicalCleanupCategoryCatalog.Summary(name)
+		validName = validName && strings.TrimSpace(name) == name
+		if !validName || summary.Eligibility != CategoryEligibilityOptIn {
 			invalid = append(invalid, name)
+			continue
 		}
+		enabled[summary.Identifier] = true
 	}
 	if all {
-		// Enable all opportunity categories and all dev caches
-		for _, v := range opportunityCategories {
+		for _, v := range selectable {
 			enabled[v] = true
 		}
-		for _, v := range devCacheCategories {
-			enabled[v] = true
-		}
-	} else if devCaches {
-		// Enable all dev caches
-		for _, v := range devCacheCategories {
+	} else if allDevCaches {
+		for _, v := range devCaches {
 			enabled[v] = true
 		}
 	}

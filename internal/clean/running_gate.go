@@ -34,29 +34,21 @@ const (
 
 // devCacheGateTier returns the gate tier for a developer-tool cache category.
 func devCacheGateTier(category string) runningGateTier {
-	switch category {
-	case DevCacheCategoryGo, DevCacheCategoryCargo, DevCacheCategoryNuGet:
+	entry, ok := canonicalCategoryEntry(category)
+	if ok && entry.definition.RunningApplicationPolicy == RunningApplicationPolicyDistinctiveProcessIdle {
 		return runningGateTierSingle
-	default:
-		return runningGateTierNone
 	}
+	return runningGateTierNone
 }
 
 // devCacheCategoryToApplications maps a dev-cache category to the application(s)
 // whose running state indicates the cache is in use.
 func devCacheCategoryToApplications(category string) []string {
-	switch category {
-	case DevCacheCategoryGo:
-		return []string{ApplicationGo}
-	case DevCacheCategoryCargo:
-		return []string{ApplicationCargo}
-	case DevCacheCategoryNuGet:
-		// Both dotnet.exe and nuget.exe can use the nuget cache.
-		return []string{ApplicationDotNet, ApplicationNuGet}
-	default:
-		// Runtime-hosted tools (npm, pip, corepack) don't need checks.
+	entry, ok := canonicalCategoryEntry(category)
+	if !ok {
 		return nil
 	}
+	return append([]string(nil), entry.runningApplications...)
 }
 
 // devCacheGateOutcome is the result of gating a dev-cache category.

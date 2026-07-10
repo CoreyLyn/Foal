@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	browserCacheRuleID = "browser_cache"
+	browserCacheRuleID = OpportunityCategoryBrowserCache
 )
 
 var browserCacheDirectoryKinds = []string{"Cache", "Code Cache", "GPUCache"}

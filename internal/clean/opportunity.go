@@ -28,22 +28,9 @@ const (
 )
 
 var (
-	errOpportunityInspectionLimit          = errors.New("opportunity inspection descendant limit exceeded")
-	errOpportunityReparsePoint             = errors.New("opportunity inspection encountered a reparse point")
-	existenceObservedOpportunityCategories = []existenceObservedOpportunityCategory{
-		{category: OpportunityCategoryCrashDumps, localAppDataPath: []string{"CrashDumps"}},
-		{category: OpportunityCategoryWindowsErrorReporting, localAppDataPath: []string{"Microsoft", "Windows", "WER"}},
-		{category: OpportunityCategoryExplorerThumbnailCache, localAppDataPath: []string{"Microsoft", "Windows", "Explorer"}},
-		{category: OpportunityCategoryINetCache, localAppDataPath: []string{"Microsoft", "Windows", "INetCache"}},
-		{category: OpportunityCategoryD3DShaderCache, localAppDataPath: []string{"D3DSCache"}},
-		{category: OpportunityCategoryNVIDIADXCache, localAppDataPath: []string{"NVIDIA", "DXCache"}},
-	}
+	errOpportunityInspectionLimit = errors.New("opportunity inspection descendant limit exceeded")
+	errOpportunityReparsePoint    = errors.New("opportunity inspection encountered a reparse point")
 )
-
-type existenceObservedOpportunityCategory struct {
-	category         string
-	localAppDataPath []string
-}
 
 type UserTempDiscoveryOptions struct {
 	TempDir string
@@ -148,12 +135,12 @@ func discoverOpportunities(ctx context.Context, opts OpportunityDiscoveryOptions
 		localAppDataDir = os.Getenv("LOCALAPPDATA")
 	}
 	if localAppDataDir != "" {
-		for _, definition := range existenceObservedOpportunityCategories {
-			if !opportunityCategoryEnabled(definition.category, opts.Categories) {
+		for _, entry := range canonicalCategoryEntries {
+			if len(entry.fixedLocalAppDataPath) == 0 || !opportunityCategoryEnabled(entry.definition.Identifier, opts.Categories) {
 				continue
 			}
-			pathParts := append([]string{localAppDataDir}, definition.localAppDataPath...)
-			appendExistenceObservedOpportunity(ctx, &result, definition.category, filepath.Join(pathParts...), deps)
+			pathParts := append([]string{localAppDataDir}, entry.fixedLocalAppDataPath...)
+			appendExistenceObservedOpportunity(ctx, &result, entry.definition.Identifier, filepath.Join(pathParts...), deps)
 		}
 	}
 	result.ElapsedMS = time.Since(startedAt).Milliseconds()

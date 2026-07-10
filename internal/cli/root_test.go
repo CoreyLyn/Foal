@@ -2014,11 +2014,6 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
 	}
-	// Verify all categories are enabled (order in slice isn't guaranteed)
-	enabled := make(map[string]bool)
-	for _, name := range capturedOpts.OptIn {
-		enabled[name] = true
-	}
 	expectedOpportunities := []string{
 		clean.OpportunityCategoryUserTemp,
 		clean.OpportunityCategoryCrashDumps,
@@ -2037,18 +2032,13 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.DevCacheCategoryNuGet,
 		clean.DevCacheCategoryCorepack,
 	}
-	expectedCount := len(expectedOpportunities) + len(expectedDevCaches)
-	if len(enabled) != expectedCount {
-		t.Fatalf("opts.OptIn has %d categories, want %d: %#v", len(enabled), expectedCount, capturedOpts.OptIn)
+	want := append(expectedOpportunities, expectedDevCaches...)
+	if len(capturedOpts.OptIn) != len(want) {
+		t.Fatalf("opts.OptIn has %d categories, want %d: %#v", len(capturedOpts.OptIn), len(want), capturedOpts.OptIn)
 	}
-	for _, cat := range expectedOpportunities {
-		if !enabled[cat] {
-			t.Fatalf("opts.OptIn missing opportunity category %q: %#v", cat, capturedOpts.OptIn)
-		}
-	}
-	for _, cat := range expectedDevCaches {
-		if !enabled[cat] {
-			t.Fatalf("opts.OptIn missing dev cache category %q: %#v", cat, capturedOpts.OptIn)
+	for index, category := range want {
+		if capturedOpts.OptIn[index] != category {
+			t.Fatalf("opts.OptIn[%d] = %q, want deterministic catalog order %q; all = %#v", index, capturedOpts.OptIn[index], category, capturedOpts.OptIn)
 		}
 	}
 }

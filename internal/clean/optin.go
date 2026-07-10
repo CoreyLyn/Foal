@@ -31,24 +31,11 @@ type optInResolution struct {
 	suppressedProtectionPaths []string
 }
 
-// nonBrowserOpportunityCategories is the fixed set of opportunity categories
-// discovered through DiscoverOpportunities (browser cache is discovered
-// separately through discoverBrowserCache).
-var nonBrowserOpportunityCategories = []string{
-	OpportunityCategoryUserTemp,
-	OpportunityCategoryCrashDumps,
-	OpportunityCategoryWindowsErrorReporting,
-	OpportunityCategoryExplorerThumbnailCache,
-	OpportunityCategoryINetCache,
-	OpportunityCategoryD3DShaderCache,
-	OpportunityCategoryNVIDIADXCache,
-}
-
 // optedInOpportunityCategories returns the non-browser opportunity categories
 // enabled by the plan.
 func optedInOpportunityCategories(plan map[string]bool) []string {
 	var enabled []string
-	for _, c := range nonBrowserOpportunityCategories {
+	for _, c := range opportunityCategoryIDs(false) {
 		if plan[c] {
 			enabled = append(enabled, c)
 		}
@@ -60,7 +47,7 @@ func optedInOpportunityCategories(plan map[string]bool) []string {
 // NOT enabled by the plan - the categories the dry-run review projection scans.
 func optedOutOpportunityCategories(plan map[string]bool) []string {
 	var disabled []string
-	for _, c := range nonBrowserOpportunityCategories {
+	for _, c := range opportunityCategoryIDs(false) {
 		if !plan[c] {
 			disabled = append(disabled, c)
 		}
@@ -93,8 +80,8 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 	}
 
 	// Developer-tool caches.
-	for category := range plan {
-		if !isDevCacheCategory(category) {
+	for _, category := range developerCacheCategoryIDs() {
+		if !plan[category] {
 			continue
 		}
 		path := resolveDevCache(category)
