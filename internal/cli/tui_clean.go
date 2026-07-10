@@ -222,8 +222,8 @@ func (m *cleanModel) moveSelection(delta int) {
 }
 
 func (m *cleanModel) toggleSelectedCategory() tea.Cmd {
-	if !m.previewReady || len(m.model.OptInCategories) == 0 {
-		m.notice = "Clean preview is loading; category selection is unavailable."
+	if len(m.model.OptInCategories) == 0 {
+		m.notice = "Category catalog is not available yet."
 		return nil
 	}
 	id := m.model.OptInCategories[m.selectionIndex].Identifier
@@ -236,8 +236,8 @@ func (m *cleanModel) toggleSelectedCategory() tea.Cmd {
 }
 
 func (m *cleanModel) setAllCategories(selected bool) tea.Cmd {
-	if !m.previewReady || len(m.model.OptInCategories) == 0 {
-		m.notice = "Clean preview is loading; category selection is unavailable."
+	if len(m.model.OptInCategories) == 0 {
+		m.notice = "Category catalog is not available yet."
 		return nil
 	}
 	clear(m.selected)
@@ -276,6 +276,9 @@ func (m cleanModel) content() string {
 	if m.loading {
 		return m.headerContent() + "\nLoading clean preview (dry-run)...\n" + cleanPreviewFooter
 	}
+	if !m.previewReady {
+		return m.headerContent() + "\nClean preview totals are not ready. Change the selection or refresh to retry.\n" + cleanPreviewFooter
+	}
 	return m.headerContent() + m.vp.View() + "\n" + cleanPreviewFooter
 }
 
@@ -284,7 +287,7 @@ func (m cleanModel) headerContent() string {
 	builder.WriteString("Foal Clean\n")
 	builder.WriteString("Preview only - no files changed.\n")
 	builder.WriteString(fmt.Sprintf("Filter: %s | Scroll: %d%% | Expanded: %t\n", m.filter, int(m.vp.ScrollPercent()*100), m.expanded))
-	if !m.loading && len(m.model.OptInCategories) > 0 {
+	if len(m.model.OptInCategories) > 0 {
 		builder.WriteString(fmt.Sprintf("Category focus: %s\n", m.model.OptInCategories[m.selectionIndex].Label))
 	}
 	if m.model.DetailedListPath != "" {

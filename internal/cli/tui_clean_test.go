@@ -221,16 +221,17 @@ func TestCleanCategorySelectAllClearAllAndStaleGeneration(t *testing.T) {
 	if got, want := len(model.selected), len(model.model.OptInCategories); got != want || got == 0 {
 		t.Fatalf("select all selected %d of %d categories", got, want)
 	}
+	clearWhileLoading := model.handleKey("x")
+	if clearWhileLoading == nil || len(model.selected) != 0 || model.loadGeneration != allMsg.generation+1 {
+		t.Fatal("selection change during loading must supersede the in-flight preview")
+	}
+	clearMsg := clearWhileLoading().(cleanPreviewLoadedMsg)
 
-	model.applyLoaded(cleanPreviewLoadedMsg{generation: allMsg.generation - 1, model: clean.PreviewReadModel{OptInReclaimableBytes: 999}})
+	model.applyLoaded(cleanPreviewLoadedMsg{generation: allMsg.generation, model: clean.PreviewReadModel{OptInReclaimableBytes: 999}})
 	if !model.loading || model.model.OptInReclaimableBytes == 999 {
 		t.Fatal("late superseded generation must be discarded")
 	}
-	model.applyLoaded(allMsg)
-	clearAll := model.handleKey("x")
-	if clearAll == nil || len(model.selected) != 0 || !model.loading {
-		t.Fatal("clear all must empty selection and refresh preview")
-	}
+	model.applyLoaded(clearMsg)
 }
 
 func TestCleanCanceledAndFailedSelectionPreviewRemainNotReady(t *testing.T) {
@@ -256,8 +257,8 @@ func TestCleanCanceledAndFailedSelectionPreviewRemainNotReady(t *testing.T) {
 	}
 
 	model.loadGeneration++
-	model.applyLoaded(cleanPreviewLoadedMsg{generation: model.loadGeneration, failed: true})
-	if model.previewReady || !strings.Contains(model.content(), "failed") {
+	model.applyLoaded(cleanPreviewLoadedMsg{generation: model.loadGeneration, failed: true, model: clean.PreviewReadModel{OptInReclaimableBytes: 999}})
+	if model.previewReady || !strings.Contains(model.content(), "failed") || strings.Contains(model.content(), "999 bytes") {
 		t.Fatalf("failed preview became ready:\n%s", model.content())
 	}
 }
