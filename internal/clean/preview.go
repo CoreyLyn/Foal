@@ -208,135 +208,14 @@ func dryRun(ctx context.Context, opts Options) Result {
 	}
 	result := scanDefaultCandidates(ctx, opts, start)
 
-	// Resolve opt-in set
-	optInEnabled, _, _ := NormalizedOptInSet(opts.OptIn)
+	// Resolve opt-in candidates once; both modes share this resolution.
+	plan, _, _ := NormalizedOptInSet(opts.OptIn)
+	resolution := resolveOptInCandidates(ctx, opts, plan)
+	applyOptInResolution(&result, resolution)
 
-	// Get dev cache path resolver
-	resolveDevCache := opts.DevCachePathResolver
-	if resolveDevCache == nil {
-		resolveDevCache = ResolveDevCachePath
-	}
-
-	// Get running application states if detector is available
-	var runningStates []RunningApplicationState
-	hasRunningDetector := opts.DetectRunningApplications != nil
-	if hasRunningDetector {
-		runningStates = opts.DetectRunningApplications(ctx)
-		// Note: applyBrowserCacheReview will add these states to result.RunningApplications later
-	}
-
-	// Process opted-in dev caches
-	optedInDevCachePaths := make(map[string]bool)
-	for category := range optInEnabled {
-		if !isDevCacheCategory(category) {
-			continue
-		}
-		path := resolveDevCache(category)
-		if path == "" {
-			continue
-		}
-		if opts.Validator.IsUserProtected(path) {
-			continue
-		}
-		// Check if this dev cache needs a running application check
-		if hasRunningDetector && devCacheCategoryRequiresRunningCheck(category) {
-			appsToCheck := devCacheCategoryToApplications(category)
-			if devToolIsRunningOrUnknown(runningStates, appsToCheck) {
-				// Skip adding as opt-in candidate - tool is running or state unknown
-				// We don't add to skipped in dry-run, just don't show as candidate
-				continue
-			}
-		}
-		// Measure the size
-		bytes, err := measureBytes(path)
-		if err != nil {
-			// Missing or unreadable - just skip, don't add as candidate
-			continue
-		}
-		result.OptInCandidates = append(result.OptInCandidates, OptInCandidate{
-			Path:          path,
-			Bytes:         bytes,
-			Category:      category,
-			PlannedAction: plannedRecycleBinAction,
-		})
-		optedInDevCachePaths[path] = true
-	}
-
-	discover := opts.DiscoverOpportunities
-	if discover == nil && opts.DiscoverUserTempOpportunities != nil {
-		discover = opts.DiscoverUserTempOpportunities
-	}
-	if discover == nil {
-		discover = func(ctx context.Context) OpportunityDiscoveryResult {
-			discoveryOptions := opts.OpportunityDiscoveryOptions
-			if discoveryOptions.TempDir == "" {
-				discoveryOptions.TempDir = opts.UserTempDiscoveryOptions.TempDir
-			}
-			if discoveryOptions.Now.IsZero() {
-				discoveryOptions.Now = opts.UserTempDiscoveryOptions.Now
-			}
-			return DiscoverOpportunities(ctx, discoveryOptions)
-		}
-	}
-	discovery := discover(ctx)
-	for _, opportunity := range discovery.Opportunities {
-		opportunity.Category = normalizedOpportunityCategory(opportunity.Category)
-		if opts.Validator.IsUserProtected(opportunity.Path) {
-			continue
-		}
-		if optInCategoryEnabled(optInEnabled, opportunity.Category) {
-			candidate := OptInCandidate{
-				Path:          opportunity.Path,
-				Bytes:         opportunity.Bytes,
-				Category:      opportunity.Category,
-				PlannedAction: plannedRecycleBinAction,
-			}
-			if opportunity.Category == OpportunityCategoryUserTemp {
-				candidate.IsUserTemp = true
-				candidate.LatestModified = opportunity.LatestModifiedAt.Unix()
-				candidate.IdleDays = opportunity.IdleDays
-			}
-			result.OptInCandidates = append(result.OptInCandidates, candidate)
-		} else {
-			result.Opportunities = append(result.Opportunities, opportunity)
-		}
-	}
-	for _, incomplete := range discovery.Incomplete {
-		incomplete.Category = normalizedOpportunityCategory(incomplete.Category)
-		if opts.Validator.IsUserProtected(incomplete.Path) {
-			continue
-		}
-		result.IncompleteOpportunityInspections = append(result.IncompleteOpportunityInspections, incomplete)
-		result.Errors = append(result.Errors, incomplete.Reason)
-	}
-	discoverSuggestions := opts.DiscoverReviewSuggestions
-	if discoverSuggestions == nil {
-		discoverSuggestions = DiscoverReviewSuggestions
-	}
-	for _, suggestion := range discoverSuggestions(ctx) {
-		if suggestion.CachePath != "" && opts.Validator.IsUserProtected(suggestion.CachePath) {
-			continue
-		}
-		// Skip review suggestions that are already opted-in as candidates
-		if suggestion.CachePath != "" && optedInDevCachePaths[suggestion.CachePath] {
-			continue
-		}
-		// Also skip if the suggestion category is opted-in
-		skip := false
-		for category := range optInEnabled {
-			if isDevCacheCategory(category) && devCacheCategoryMatchesSuggestion(category, suggestion) {
-				skip = true
-				break
-			}
-		}
-		if skip {
-			continue
-		}
-		result.ReviewSuggestions = append(result.ReviewSuggestions, suggestion)
-	}
-	if opts.DetectRunningApplications != nil {
-		applyBrowserCacheReview(ctx, opts, &result, optInEnabled)
-	}
+	// Review projection: non-opted-in opportunities, suggestions, and browser
+	// cache review. Opted-in categories are already resolved above.
+	applyOptInReviewProjection(ctx, opts, &result, plan, resolution)
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
@@ -353,7 +232,7 @@ func dryRun(ctx context.Context, opts Options) Result {
 	return result
 }
 
-func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result, optInEnabled map[string]bool) {
+func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result) {
 	preStates := opts.DetectRunningApplications(ctx)
 	result.RunningApplications = append(result.RunningApplications, preStates...)
 	for _, state := range preStates {
@@ -361,12 +240,18 @@ func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result, 
 			result.Errors = append(result.Errors, runningApplicationUnknownIssue(state))
 		}
 	}
+	gate := runningGate{detect: opts.DetectRunningApplications}
 	for _, config := range browserCacheConfigs {
-		applyOneBrowserCacheReview(ctx, opts, result, preStates, config, optInEnabled)
+		applyOneBrowserCacheReview(ctx, opts, result, gate, preStates, config)
 	}
 }
 
-func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Result, preStates []RunningApplicationState, config browserCacheConfig, optInEnabled map[string]bool) {
+// applyOneBrowserCacheReview is the dry-run review surface for a browser whose
+// cache was NOT opted in: it gates discovery on running-application state and,
+// when the browser stays idle, reports one Browser cache opportunity
+// (ADR-0007). Opted-in browser cache is resolved by the opt-in candidate
+// resolver, not here.
+func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Result, gate runningGate, preStates []RunningApplicationState, config browserCacheConfig) {
 	if localAppDataDir := browserCacheLocalAppDataDir(opts.BrowserCacheDiscoveryOptions); localAppDataDir != "" {
 		suppressed, protectedRulePaths := browserDiscoverySuppressed(browserUserDataRoot(localAppDataDir, config), opts.Validator)
 		if suppressed {
@@ -374,12 +259,13 @@ func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Resul
 			return
 		}
 	}
-	preState, ok := runningApplicationStateFor(preStates, config.application)
-	if !ok || preState.State != RunningApplicationStateIdle {
+	outcome := gate.gateBrowser(ctx, config.application, preStates, func() browserCacheDiscoveryResult {
+		return discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)
+	})
+	if !outcome.preIdle {
 		return
 	}
-
-	discovery := discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)
+	discovery := outcome.discovery
 	if discovery.suppressed {
 		suppressProtectionRules(result, discovery.suppressedProtectionPaths)
 		return
@@ -395,31 +281,90 @@ func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Resul
 		}
 		return
 	}
-
-	postStates := opts.DetectRunningApplications(ctx)
-	postState, ok := runningApplicationStateFor(postStates, config.application)
-	if !ok {
-		return
-	}
-	if postState.State != RunningApplicationStateIdle {
-		replaceRunningApplicationState(result, postState)
-		if postState.State == RunningApplicationStateUnknown {
-			result.Errors = append(result.Errors, runningApplicationUnknownIssue(postState))
+	if !outcome.postIdle {
+		if outcome.postState != nil {
+			replaceRunningApplicationState(result, *outcome.postState)
+		}
+		if outcome.postDiagnostic != nil {
+			result.Errors = append(result.Errors, *outcome.postDiagnostic)
 		}
 		return
 	}
 	if discovery.opportunity == nil || browserOpportunityProtected(opts.Validator, *discovery.opportunity) {
 		return
 	}
-	if optInCategoryEnabled(optInEnabled, OpportunityCategoryBrowserCache) {
-		result.OptInCandidates = append(result.OptInCandidates, OptInCandidate{
-			Path:          discovery.opportunity.Path,
-			Bytes:         discovery.opportunity.Bytes,
-			Category:      OpportunityCategoryBrowserCache,
-			PlannedAction: plannedRecycleBinAction,
-		})
-	} else {
-		result.Opportunities = append(result.Opportunities, *discovery.opportunity)
+	result.Opportunities = append(result.Opportunities, *discovery.opportunity)
+}
+
+// applyOptInResolution writes the resolved opt-in candidates and gating
+// artifacts onto the result. Both dry-run and execute call this so preview and
+// execute surface the same candidates, skips, running states, and diagnostics.
+func applyOptInResolution(result *Result, res optInResolution) {
+	result.OptInCandidates = append(result.OptInCandidates, res.candidates...)
+	result.Skipped = append(result.Skipped, res.skipped...)
+	result.RunningApplications = append(result.RunningApplications, res.runningStates...)
+	result.Errors = append(result.Errors, res.diagnostics...)
+	if len(res.suppressedProtectionPaths) > 0 {
+		suppressProtectionRules(result, res.suppressedProtectionPaths)
+	}
+}
+
+// applyOptInReviewProjection is the dry-run-only review surface for categories
+// the user did not opt in: non-opted-in opportunities (with incompletes),
+// review suggestions (minus opted-in dev caches), and browser cache review.
+func applyOptInReviewProjection(ctx context.Context, opts Options, result *Result, plan map[string]bool, resolution optInResolution) {
+	optedOutCats := optedOutOpportunityCategories(plan)
+	if len(optedOutCats) > 0 {
+		discovery := discoverOpportunitiesForCategories(ctx, opts, optedOutCats)
+		for _, opportunity := range discovery.Opportunities {
+			opportunity.Category = normalizedOpportunityCategory(opportunity.Category)
+			if opts.Validator.IsUserProtected(opportunity.Path) {
+				continue
+			}
+			result.Opportunities = append(result.Opportunities, opportunity)
+		}
+		for _, incomplete := range discovery.Incomplete {
+			incomplete.Category = normalizedOpportunityCategory(incomplete.Category)
+			if opts.Validator.IsUserProtected(incomplete.Path) {
+				continue
+			}
+			result.IncompleteOpportunityInspections = append(result.IncompleteOpportunityInspections, incomplete)
+			result.Errors = append(result.Errors, incomplete.Reason)
+		}
+	}
+
+	optedInDevCachePaths := make(map[string]bool)
+	for _, c := range resolution.candidates {
+		if isDevCacheCategory(c.Category) {
+			optedInDevCachePaths[c.Path] = true
+		}
+	}
+	discoverSuggestions := opts.DiscoverReviewSuggestions
+	if discoverSuggestions == nil {
+		discoverSuggestions = DiscoverReviewSuggestions
+	}
+	for _, suggestion := range discoverSuggestions(ctx) {
+		if suggestion.CachePath != "" && opts.Validator.IsUserProtected(suggestion.CachePath) {
+			continue
+		}
+		if suggestion.CachePath != "" && optedInDevCachePaths[suggestion.CachePath] {
+			continue
+		}
+		skip := false
+		for category := range plan {
+			if isDevCacheCategory(category) && devCacheCategoryMatchesSuggestion(category, suggestion) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		result.ReviewSuggestions = append(result.ReviewSuggestions, suggestion)
+	}
+
+	if !plan[OpportunityCategoryBrowserCache] && opts.DetectRunningApplications != nil {
+		applyBrowserCacheReview(ctx, opts, result)
 	}
 }
 
@@ -597,216 +542,65 @@ func Execute(ctx context.Context, opts Options) Result {
 		})
 	}
 
-	// Now, handle all opted-in categories
-	optInEnabled, _, _ := NormalizedOptInSet(opts.OptIn)
+	// Opt-in candidates: resolve fresh, then capacity-check and delete. The
+	// resolver scans only opted-in categories (ADR-0008) and runs gating; both
+	// modes share it, so execute now surfaces browser running states and
+	// diagnostics it previously dropped.
+	plan, _, _ := NormalizedOptInSet(opts.OptIn)
+	if len(plan) > 0 {
+		resolution := resolveOptInCandidates(ctx, opts, plan)
+		result.RunningApplications = append(result.RunningApplications, resolution.runningStates...)
+		result.Errors = append(result.Errors, resolution.diagnostics...)
+		result.Skipped = append(result.Skipped, resolution.skipped...)
 
-	if len(optInEnabled) > 0 {
-		// Get the capacity probe (use default if not injected)
 		probe := opts.RecycleBinCapacityProbe
 		if probe == nil {
 			probe = RecycleBinVolumeCapacity
 		}
-
-		// Get dev cache path resolver
-		resolveDevCache := opts.DevCachePathResolver
-		if resolveDevCache == nil {
-			resolveDevCache = ResolveDevCachePath
-		}
-
-		// Get running application states if detector is available
-		var runningStates []RunningApplicationState
-		hasRunningDetector := opts.DetectRunningApplications != nil
-		if hasRunningDetector {
-			runningStates = opts.DetectRunningApplications(ctx)
-		}
-
-		// Struct to track path with its category and byte size
-		type optInPath struct {
-			path     string
-			bytes    int64
-			category string
-		}
-		var pathsToProcess []optInPath
-
-		// Process dev caches first
-		for category := range optInEnabled {
-			if !isDevCacheCategory(category) {
-				continue
-			}
-			path := resolveDevCache(category)
-			if path == "" {
-				continue
-			}
-			// Check if this dev cache needs a running application check
-			if hasRunningDetector && devCacheCategoryRequiresRunningCheck(category) {
-				appsToCheck := devCacheCategoryToApplications(category)
-				if devToolIsRunningOrUnknown(runningStates, appsToCheck) {
-					// Fresh measure before skipping
-					bytes, err := measureBytes(path)
-					if err == nil {
-						// Get display names for the skipped apps
-						var appNames []string
-						for _, app := range appsToCheck {
-							appNames = append(appNames, applicationDisplayName(app))
-						}
-						var reasonMessage string
-						if len(appNames) == 1 {
-							reasonMessage = fmt.Sprintf("%s is running or its state could not be determined; skipping dev cache cleanup", appNames[0])
-						} else {
-							reasonMessage = fmt.Sprintf("%s or %s is running or their state could not be determined; skipping dev cache cleanup", appNames[0], appNames[1])
-						}
-						result.Skipped = append(result.Skipped, SkippedItem{
-							Path:   path,
-							Bytes:  bytes,
-							Rule:   category,
-							Reason: issue(devToolRunningIssueCode, reasonMessage, true, path, category),
-						})
-					}
-					continue
-				}
-			}
-			// Fresh measure before deletion
-			bytes, err := measureBytes(path)
-			if err != nil {
-				// Missing or unreadable - skip
-				continue
-			}
-			pathsToProcess = append(pathsToProcess, optInPath{
-				path:     path,
-				bytes:    bytes,
-				category: category,
-			})
-		}
-
-		// Process non-browser opportunity categories
-		if optInCategoryEnabled(optInEnabled, OpportunityCategoryUserTemp) ||
-			optInCategoryEnabled(optInEnabled, OpportunityCategoryCrashDumps) ||
-			optInCategoryEnabled(optInEnabled, OpportunityCategoryWindowsErrorReporting) ||
-			optInCategoryEnabled(optInEnabled, OpportunityCategoryExplorerThumbnailCache) ||
-			optInCategoryEnabled(optInEnabled, OpportunityCategoryINetCache) ||
-			optInCategoryEnabled(optInEnabled, OpportunityCategoryD3DShaderCache) ||
-			optInCategoryEnabled(optInEnabled, OpportunityCategoryNVIDIADXCache) {
-
-			discover := opts.DiscoverOpportunities
-			if discover == nil && opts.DiscoverUserTempOpportunities != nil {
-				discover = opts.DiscoverUserTempOpportunities
-			}
-			if discover == nil {
-				discover = func(ctx context.Context) OpportunityDiscoveryResult {
-					discoveryOptions := opts.OpportunityDiscoveryOptions
-					if discoveryOptions.TempDir == "" {
-						discoveryOptions.TempDir = opts.UserTempDiscoveryOptions.TempDir
-					}
-					if discoveryOptions.Now.IsZero() {
-						discoveryOptions.Now = opts.UserTempDiscoveryOptions.Now
-					}
-					return DiscoverOpportunities(ctx, discoveryOptions)
-				}
-			}
-			discovery := discover(ctx)
-			for _, opportunity := range discovery.Opportunities {
-				opportunity.Category = normalizedOpportunityCategory(opportunity.Category)
-				if optInCategoryEnabled(optInEnabled, opportunity.Category) {
-					pathsToProcess = append(pathsToProcess, optInPath{
-						path:     opportunity.Path,
-						bytes:    opportunity.Bytes,
-						category: opportunity.Category,
-					})
-				}
-			}
-		}
-
-		// Process browser cache separately - it needs running app detection and uses individual cache paths
-		if optInCategoryEnabled(optInEnabled, OpportunityCategoryBrowserCache) && opts.DetectRunningApplications != nil {
-			preStates := opts.DetectRunningApplications(ctx)
-			for _, config := range browserCacheConfigs {
-				// Check if browser is idle before discovery
-				preState, ok := runningApplicationStateFor(preStates, config.application)
-				if !ok || preState.State != RunningApplicationStateIdle {
-					continue
-				}
-				discovery := discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)
-				if discovery.suppressed || discovery.diagnostic != nil || discovery.incomplete != nil || discovery.opportunity == nil || browserOpportunityProtected(opts.Validator, *discovery.opportunity) {
-					continue
-				}
-				// Post-check that browser is still idle
-				postStates := opts.DetectRunningApplications(ctx)
-				postState, ok := runningApplicationStateFor(postStates, config.application)
-				if !ok || postState.State != RunningApplicationStateIdle {
-					continue
-				}
-				// Add each individual cache directory
-				if discovery.opportunity.BrowserCache != nil {
-					for _, profile := range discovery.opportunity.BrowserCache.Profiles {
-						for _, cache := range profile.Caches {
-							if cache.Bytes > 0 {
-								pathsToProcess = append(pathsToProcess, optInPath{
-									path:     cache.Path,
-									bytes:    cache.Bytes,
-									category: OpportunityCategoryBrowserCache,
-								})
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Now process all collected paths - check protection and capacity first
 		var optInCandidates []delete.Candidate
 		categoryByPath := make(map[string]string)
-		bytesByPath := make(map[string]int64)
-
-		for _, p := range pathsToProcess {
-			if opts.Validator.IsUserProtected(p.path) {
+		for _, c := range resolution.candidates {
+			if opts.Validator.IsUserProtected(c.Path) {
 				continue
 			}
-			// Check Recycle Bin capacity
-			cfg, err := probe(p.path)
+			cfg, err := probe(c.Path)
 			if err != nil {
 				result.Skipped = append(result.Skipped, SkippedItem{
-					Path:   p.path,
-					Bytes:  p.bytes,
-					Rule:   p.category,
-					Reason: issue(recycleBinCapacityProbeFailedIssueCode, "Recycle Bin capacity check failed; skipping rather than risking permanent deletion", true, p.path, p.category),
+					Path:   c.Path,
+					Bytes:  c.Bytes,
+					Rule:   c.Category,
+					Reason: issue(recycleBinCapacityProbeFailedIssueCode, "Recycle Bin capacity check failed; skipping rather than risking permanent deletion", true, c.Path, c.Category),
 				})
 				continue
 			}
 			if cfg.NukeOnDelete {
 				result.Skipped = append(result.Skipped, SkippedItem{
-					Path:   p.path,
-					Bytes:  p.bytes,
-					Rule:   p.category,
-					Reason: issue(recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted", true, p.path, p.category),
+					Path:   c.Path,
+					Bytes:  c.Bytes,
+					Rule:   c.Category,
+					Reason: issue(recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted", true, c.Path, c.Category),
 				})
 				continue
 			}
-			if p.bytes > cfg.MaxCapacity {
+			if c.Bytes > cfg.MaxCapacity {
 				result.Skipped = append(result.Skipped, SkippedItem{
-					Path:   p.path,
-					Bytes:  p.bytes,
-					Rule:   p.category,
-					Reason: issue(recycleBinCapacityIssueCode, "Item exceeds Recycle Bin capacity for this volume", true, p.path, p.category),
+					Path:   c.Path,
+					Bytes:  c.Bytes,
+					Rule:   c.Category,
+					Reason: issue(recycleBinCapacityIssueCode, "Item exceeds Recycle Bin capacity for this volume", true, c.Path, c.Category),
 				})
 				continue
 			}
-			optInCandidates = append(optInCandidates, delete.Candidate{
-				Path:  p.path,
-				Bytes: p.bytes,
-			})
-			categoryByPath[p.path] = p.category
-			bytesByPath[p.path] = p.bytes
+			optInCandidates = append(optInCandidates, delete.Candidate{Path: c.Path, Bytes: c.Bytes})
+			categoryByPath[c.Path] = c.Category
 		}
-
-		// Execute all opt-in candidates
 		if len(optInCandidates) > 0 {
 			optInDeleteResult := delete.ExecuteWithValidator(ctx, optInCandidates, adapter, opts.Validator)
 			for _, item := range optInDeleteResult.Deleted {
-				category := categoryByPath[item.Path]
 				result.Deleted = append(result.Deleted, DeletedItem{
 					Path:    item.Path,
 					Bytes:   item.Bytes,
-					Rule:    category,
+					Rule:    categoryByPath[item.Path],
 					IsOptIn: true,
 				})
 			}
@@ -1293,10 +1087,6 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 		}
 	}
 	return enabled, invalid, valid
-}
-
-func optInCategoryEnabled(enabled map[string]bool, category string) bool {
-	return enabled[category]
 }
 
 func classifyError(err error) string {

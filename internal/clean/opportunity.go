@@ -54,6 +54,11 @@ type OpportunityDiscoveryOptions struct {
 	TempDir         string
 	LocalAppDataDir string
 	Now             time.Time
+	// Categories restricts discovery to the listed categories. When empty,
+	// discovery scans every implemented category. Used to scan only opted-in
+	// categories at execute (ADR-0008: non-opted-in categories stay omitted)
+	// and only non-opted-in categories for the dry-run review projection.
+	Categories []string
 }
 
 type BrowserCacheDiscoveryOptions struct {
@@ -126,12 +131,17 @@ func DiscoverOpportunities(ctx context.Context, opts OpportunityDiscoveryOptions
 
 func discoverOpportunities(ctx context.Context, opts OpportunityDiscoveryOptions, deps opportunityDiscoveryDependencies) OpportunityDiscoveryResult {
 	startedAt := time.Now()
-	result := discoverUserTempOpportunities(ctx, UserTempDiscoveryOptions{
-		TempDir: opts.TempDir,
-		Now:     opts.Now,
-	}, deps)
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	result := OpportunityDiscoveryResult{
+		Opportunities: []Opportunity{},
+		Incomplete:    []IncompleteOpportunityInspection{},
+	}
+	if opportunityCategoryEnabled(OpportunityCategoryUserTemp, opts.Categories) {
+		userTemp := discoverUserTempOpportunities(ctx, UserTempDiscoveryOptions{TempDir: opts.TempDir, Now: opts.Now}, deps)
+		result.Opportunities = append(result.Opportunities, userTemp.Opportunities...)
+		result.Incomplete = append(result.Incomplete, userTemp.Incomplete...)
 	}
 	localAppDataDir := opts.LocalAppDataDir
 	if localAppDataDir == "" {
@@ -139,12 +149,30 @@ func discoverOpportunities(ctx context.Context, opts OpportunityDiscoveryOptions
 	}
 	if localAppDataDir != "" {
 		for _, definition := range existenceObservedOpportunityCategories {
+			if !opportunityCategoryEnabled(definition.category, opts.Categories) {
+				continue
+			}
 			pathParts := append([]string{localAppDataDir}, definition.localAppDataPath...)
 			appendExistenceObservedOpportunity(ctx, &result, definition.category, filepath.Join(pathParts...), deps)
 		}
 	}
 	result.ElapsedMS = time.Since(startedAt).Milliseconds()
 	return result
+}
+
+// opportunityCategoryEnabled reports whether a category should be scanned.
+// An empty filter means scan every category; otherwise only listed categories
+// are scanned.
+func opportunityCategoryEnabled(category string, filter []string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+	for _, c := range filter {
+		if c == category {
+			return true
+		}
+	}
+	return false
 }
 
 type opportunityDiscoveryDependencies struct {
