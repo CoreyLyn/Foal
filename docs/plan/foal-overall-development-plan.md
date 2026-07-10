@@ -110,12 +110,14 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 
 Implemented a read-only interactive TUI: running `foal` or `fo` with no arguments in an interactive terminal opens a main menu, a clean preview browser (filter/expand/scroll/cancellable reload), and read-only viewers for uninstall, status, and history. The Clean TUI includes capped, scrollable review data for all seven v1 Opportunity categories and the shared administrator-only permission-boundary notice, with count and observed bytes kept separate from `Potential space`; opportunity paths remain outside candidate-copy and execution surfaces. The TUI consumes shared read models, records no history sessions during browsing, writes no companion files, and contains no deletion, uninstall, or path-safety logic. Analyze and future extensions remain command navigation placeholders.
 
+The next Clean TUI phase adds category-level opt-in selection, explicit confirmation, shared Clean execution, and an execution result view. Selection carries category identifiers rather than previewed paths; execute resolves and validates candidates fresh. Aggregate per-volume Recycle Bin capacity protection is a blocker for enabling confirmed execution. Non-Clean TUI commands remain read-only.
+
 The following design principles continue to govern TUI work:
 
-- Build TUI as a review and navigation surface.
+- Build the Clean TUI as a review, category-selection, confirmation, and result surface; keep other command views read-only.
 - Consume shared read models.
 - Call shared command/core execution paths for confirmed actions.
-- Do not place deletion, uninstall, or path-safety decisions inside the TUI layer.
+- Do not place candidate resolution, deletion, uninstall, process-stopping, elevation, or path-safety decisions inside the TUI layer.
 
 ## Explicit Non-Goals For Current Work
 

@@ -133,8 +133,8 @@ A shared representation of clean preview sections, candidates, skipped-by-defaul
 _Avoid_: CLI string builder as model, TUI-owned cleanup model
 
 **TUI review surface**:
-The interactive Foal interface for browsing existing command read models, comparing preview sections, and navigating review evidence without owning cleanup, uninstall, path-safety, or execution decisions.
-_Avoid_: TUI-owned cleanup engine, TUI execution model, replacement command path, future-tense framing
+The interactive Foal interface for browsing existing command read models, comparing preview sections, navigating review evidence, and, for Clean only, orchestrating an explicitly confirmed action through the shared Clean execution path without owning cleanup or path-safety decisions.
+_Avoid_: TUI-owned cleanup engine, replacement command path, implicit execution, uninstall execution
 
 **Foal main menu**:
 The top-level interactive TUI entry that appears when a user explicitly starts Foal's interactive mode, offering command navigation for clean, uninstall, analyze, status, and future read-only views while preserving each command's existing CLI and JSON contract.
@@ -149,8 +149,8 @@ The no-argument `foal` and `fo` behavior in an interactive terminal, launching t
 _Avoid_: blocking non-TTY scripts, replacing help semantics everywhere, implicit command execution
 
 **Main menu command entries**:
-Top-level Foal main menu items that expose the implemented command map, where Clean, Uninstall, Status, and History open read-only TUI views over their existing read models, while Analyze and future extensions remain command navigation placeholders until their views are designed.
-_Avoid_: pretending every command has a completed TUI, launching destructive flows, hiding unavailable capability
+Top-level Foal main menu items that expose the implemented command map, where Clean opens its interactive preview and confirmed-action flow, Uninstall, Status, and History open read-only TUI views, and Analyze and future extensions remain command navigation placeholders until their views are designed.
+_Avoid_: pretending every command has a completed TUI, implicit execution, hiding unavailable capability
 
 **Command viewer**:
 A shared read-only TUI shell that renders one command's existing report or read model as scrollable text with reload, without per-command interaction logic or any execution affordance.
@@ -161,16 +161,28 @@ The visual shell for Foal's interactive surfaces, using Foal-owned ASCII brandin
 _Avoid_: Mole brand clone, Mac maintenance wording, decorative UI that obscures safety state
 
 **Clean TUI preview view**:
-The first TUI review surface slice, focused on browsing the existing clean preview read model for `foal clean --dry-run` sections, totals, candidates, skipped items, review clues, notices, and suggestions.
-_Avoid_: multi-command TUI platform, new scanner rules, TUI cleanup execution
+The Clean TUI state for browsing the Clean preview read model, category summaries, totals, candidates, skipped items, review clues, notices, and suggestions before any execution confirmation.
+_Avoid_: multi-command TUI platform, new scanner rules, execution without confirmation, preview path manifest
 
 **Clean TUI report presentation**:
-A scan-friendly presentation mode for the Clean TUI that renders the existing Clean preview read model as grouped report content, with compact visual status markers and summary-first review context while preserving read-only behavior and shared command semantics.
-_Avoid_: new discovery behavior, JSON status change, execution affordance, cleanup completion claim
+A scan-friendly presentation mode for the Clean TUI that renders the Clean preview read model as grouped report content, with compact visual status markers and summary-first review context while preserving preview semantics and shared command behavior.
+_Avoid_: new discovery behavior, JSON status change, preview treated as execution, cleanup completion claim
 
-**Read-only TUI action model**:
-A TUI interaction boundary where navigation, filtering, expansion, scrolling, reload, and clipboard-copy review affordances are allowed, while cleanup execution, uninstaller execution, process stopping, elevation prompts, and leftover deletion are absent, and where browsing itself records no history sessions and writes no companion files.
-_Avoid_: execute button, confirmation flow, destructive TUI action, browsing-as-operation history noise
+**Clean opt-in selection**:
+The per-run set of opt-in category identifiers chosen in the Clean TUI for preview and later confirmation. It never contains candidate paths, remains empty by default, and a select-all action is an explicit selection rather than a new cleanup default.
+_Avoid_: execution manifest, selected path list, persistent opt-in profile, implicit select all
+
+**Clean execution confirmation**:
+The deliberate TUI transition that confirms a Clean opt-in selection and authorizes the shared Clean execution path to resolve and validate fresh candidates for that selection.
+_Avoid_: executing preview paths, one-key accidental cleanup, browsing-as-confirmation
+
+**Aggregate Recycle Bin capacity pre-check**:
+A fail-closed Clean safety check that establishes Recycle Bin recoverability for all selected candidates together on each volume before confirmed execution begins.
+_Avoid_: per-item-only capacity assurance, assumed capacity, overflow to permanent deletion
+
+**Clean TUI action model**:
+A TUI interaction boundary where browsing and selection remain side-effect free, while Clean alone may transition through explicit confirmation to the shared Clean execution path; uninstaller execution, process stopping, elevation prompts, and leftover deletion remain absent.
+_Avoid_: TUI-owned execution engine, implicit cleanup, browsing-as-operation history noise, non-Clean execution
 
 **Uninstall preview report**:
 A human-readable presentation surface rendered directly over the uninstall preview read model, mirroring the Mole-inspired report style while keeping uninstall preview-only and read-only.

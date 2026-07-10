@@ -15,3 +15,5 @@ Note the module path: v2 lives under `charm.land/...`, not `github.com/charmbrac
 - Terminal restoration, raw mode, and the alternate screen are framework-owned; the TUI layer must not reintroduce manual console-mode handling.
 - Ctrl+C arrives as a `KeyPressMsg`, not a signal — the `"ctrl+c"` Update case is load-bearing for the interrupt exit path (exit code 130).
 - The TUI remains a read-only review surface over shared read models (see CONTEXT.md); the framework choice does not change that boundary.
+
+ADR 0009 supersedes the final consequence above for Clean only: Bubble Tea remains the shell framework, while the Clean TUI may orchestrate explicitly confirmed shared Clean execution. Other command views remain read-only.

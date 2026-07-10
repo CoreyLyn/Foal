@@ -24,4 +24,6 @@ New JSON contract surface appears: an `opt_in_candidates` array, an `opt_in_recl
 
 Default behavior is unchanged: `foal clean --execute` without `--opt-in` still cleans only the Foal-owned temp sandbox, and `foal clean --dry-run` without `--opt-in` still reports opportunities as non-executable review data. opt-in is purely additive and never becomes default. The TUI is out of scope for this decision: it stays read-only, and opt-in is a CLI flag concept; a future TUI opt-in preview would be a separate decision.
 
-Deferred and requiring their own decisions: gradual Recycle Bin overflow estimation across multiple items, persistent opt-in configuration, additional opt-in categories (for example more browsers or system caches), and any expansion of the default candidate set.
+ADR 0009 supersedes only the TUI-specific read-only consequence above and the deferral of aggregate multi-item Recycle Bin capacity protection. All other decisions in this ADR remain in force.
+
+Still deferred and requiring their own decisions: persistent opt-in configuration, additional opt-in categories (for example more browsers or system caches), and any expansion of the default candidate set.

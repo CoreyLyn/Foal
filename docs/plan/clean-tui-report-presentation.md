@@ -111,9 +111,11 @@ Do not use `Cleanup complete` for a Clean TUI preview view.
 ## References
 
 - `CONTEXT.md`: `Clean TUI report presentation`, `TUI status markers`, `TUI
-  compact item labels`, `Report category`, `Read-only TUI action model`.
+  compact item labels`, `Report category`, `Clean TUI action model`.
 - `docs/adr/0003-bubble-tea-v2-for-tui-shell.md`: Bubble Tea owns terminal
-  mechanics; the TUI remains read-only.
+  mechanics; this completed presentation slice remained read-only.
+- `docs/adr/0009-clean-tui-confirms-category-selections-through-shared-execution.md`:
+  future confirmed Clean execution uses the shared Clean path.
 - `docs/adr/0007-clean-browser-cache-discovery-requires-running-application-detection.md`:
   report categories are presentation groupings only; browser cache bytes remain
   skipped-by-default review data.
