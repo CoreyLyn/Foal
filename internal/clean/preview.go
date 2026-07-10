@@ -30,12 +30,17 @@ const (
 
 // RecycleBinVolumeConfig holds the Recycle Bin configuration for a volume.
 type RecycleBinVolumeConfig struct {
+	// Volume is the stable identity of the volume containing the candidate.
+	Volume string
 	// NukeOnDelete is true if the Recycle Bin is disabled for this volume
 	// (items are permanently deleted immediately).
 	NukeOnDelete bool
 	// MaxCapacity is the maximum size in bytes that can be stored in the
 	// Recycle Bin for this volume.
 	MaxCapacity int64
+	// CurrentUsage is the number of bytes already stored in the Recycle Bin
+	// for this volume.
+	CurrentUsage int64
 }
 
 // RecycleBinCapacityProbe returns the Recycle Bin configuration for the
@@ -513,32 +518,11 @@ func Execute(ctx context.Context, opts Options) Result {
 		adapter = delete.WindowsRecycleBinAdapter{}
 	}
 
-	// First, handle default candidates
-	candidates := make([]delete.Candidate, 0, len(result.Candidates))
-	rulesByPath := make(map[string]string, len(result.Candidates))
+	executionCandidates := make([]recycleBinExecutionCandidate, 0, len(result.Candidates))
 	for _, candidate := range result.Candidates {
-		candidates = append(candidates, delete.Candidate{
-			Path:  candidate.Path,
-			Bytes: candidate.Bytes,
-		})
-		rulesByPath[candidate.Path] = candidate.Rule
-	}
-
-	deleteResult := delete.ExecuteWithValidator(ctx, candidates, adapter, opts.Validator)
-	for _, item := range deleteResult.Deleted {
-		result.Deleted = append(result.Deleted, DeletedItem{
-			Path:  item.Path,
-			Bytes: item.Bytes,
-			Rule:  rulesByPath[item.Path],
-		})
-	}
-	for _, item := range deleteResult.Skipped {
-		ruleID := rulesByPath[item.Path]
-		result.Skipped = append(result.Skipped, SkippedItem{
-			Path:   item.Path,
-			Bytes:  item.Bytes,
-			Rule:   ruleID,
-			Reason: issue(item.Reason.Code, item.Reason.Message, true, item.Path, ruleID),
+		executionCandidates = append(executionCandidates, recycleBinExecutionCandidate{
+			candidate: delete.Candidate{Path: candidate.Path, Bytes: candidate.Bytes},
+			rule:      candidate.Rule,
 		})
 	}
 
@@ -553,73 +537,127 @@ func Execute(ctx context.Context, opts Options) Result {
 		result.Errors = append(result.Errors, resolution.diagnostics...)
 		result.Skipped = append(result.Skipped, resolution.skipped...)
 
-		probe := opts.RecycleBinCapacityProbe
-		if probe == nil {
-			probe = RecycleBinVolumeCapacity
-		}
-		var optInCandidates []delete.Candidate
-		categoryByPath := make(map[string]string)
 		for _, c := range resolution.candidates {
 			if opts.Validator.IsUserProtected(c.Path) {
 				continue
 			}
-			cfg, err := probe(c.Path)
-			if err != nil {
-				result.Skipped = append(result.Skipped, SkippedItem{
-					Path:   c.Path,
-					Bytes:  c.Bytes,
-					Rule:   c.Category,
-					Reason: issue(recycleBinCapacityProbeFailedIssueCode, "Recycle Bin capacity check failed; skipping rather than risking permanent deletion", true, c.Path, c.Category),
-				})
-				continue
-			}
-			if cfg.NukeOnDelete {
-				result.Skipped = append(result.Skipped, SkippedItem{
-					Path:   c.Path,
-					Bytes:  c.Bytes,
-					Rule:   c.Category,
-					Reason: issue(recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted", true, c.Path, c.Category),
-				})
-				continue
-			}
-			if c.Bytes > cfg.MaxCapacity {
-				result.Skipped = append(result.Skipped, SkippedItem{
-					Path:   c.Path,
-					Bytes:  c.Bytes,
-					Rule:   c.Category,
-					Reason: issue(recycleBinCapacityIssueCode, "Item exceeds Recycle Bin capacity for this volume", true, c.Path, c.Category),
-				})
-				continue
-			}
-			optInCandidates = append(optInCandidates, delete.Candidate{Path: c.Path, Bytes: c.Bytes})
-			categoryByPath[c.Path] = c.Category
-		}
-		if len(optInCandidates) > 0 {
-			optInDeleteResult := delete.ExecuteWithValidator(ctx, optInCandidates, adapter, opts.Validator)
-			for _, item := range optInDeleteResult.Deleted {
-				result.Deleted = append(result.Deleted, DeletedItem{
-					Path:    item.Path,
-					Bytes:   item.Bytes,
-					Rule:    categoryByPath[item.Path],
-					IsOptIn: true,
-				})
-			}
-			for _, item := range optInDeleteResult.Skipped {
-				category := categoryByPath[item.Path]
-				result.Skipped = append(result.Skipped, SkippedItem{
-					Path:   item.Path,
-					Bytes:  item.Bytes,
-					Rule:   category,
-					Reason: issue(item.Reason.Code, item.Reason.Message, true, item.Path, category),
-				})
-			}
+			executionCandidates = append(executionCandidates, recycleBinExecutionCandidate{
+				candidate: delete.Candidate{Path: c.Path, Bytes: c.Bytes},
+				rule:      c.Category,
+				isOptIn:   true,
+			})
 		}
 	}
+
+	executeRecycleBinCandidatesByVolume(ctx, opts, adapter, executionCandidates, &result)
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
 	recordHistorySession(ctx, opts, result, start, time.Now())
 	return result
+}
+
+type recycleBinExecutionCandidate struct {
+	candidate delete.Candidate
+	rule      string
+	isOptIn   bool
+}
+
+type recycleBinVolumeGroup struct {
+	config     RecycleBinVolumeConfig
+	candidates []recycleBinExecutionCandidate
+	totalBytes int64
+	unsafe     bool
+}
+
+type recycleBinVolumeIdentity struct {
+	key   string
+	known bool
+}
+
+func executeRecycleBinCandidatesByVolume(ctx context.Context, opts Options, adapter delete.Adapter, candidates []recycleBinExecutionCandidate, result *Result) {
+	probe := opts.RecycleBinCapacityProbe
+	if probe == nil {
+		probe = RecycleBinVolumeCapacity
+	}
+
+	groups := make(map[string]*recycleBinVolumeGroup)
+	volumeOrder := make([]string, 0)
+	for _, candidate := range candidates {
+		cfg, err := probe(candidate.candidate.Path)
+		identity := recycleBinIdentity(cfg)
+		groupKey := identity.key
+		if !identity.known {
+			groupKey = strings.ToLower(candidate.candidate.Path)
+		}
+		group, ok := groups[groupKey]
+		if !ok {
+			group = &recycleBinVolumeGroup{config: cfg}
+			groups[groupKey] = group
+			volumeOrder = append(volumeOrder, groupKey)
+		}
+		group.candidates = append(group.candidates, candidate)
+		if candidate.candidate.Bytes < 0 || group.totalBytes > int64(^uint64(0)>>1)-candidate.candidate.Bytes {
+			group.unsafe = true
+		} else {
+			group.totalBytes += candidate.candidate.Bytes
+		}
+		if err != nil || !identity.known || cfg.MaxCapacity < 0 || cfg.CurrentUsage < 0 {
+			group.unsafe = true
+			continue
+		}
+		if group.config.NukeOnDelete != cfg.NukeOnDelete || group.config.MaxCapacity != cfg.MaxCapacity || group.config.CurrentUsage != cfg.CurrentUsage {
+			group.unsafe = true
+		}
+	}
+
+	for _, volume := range volumeOrder {
+		group := groups[volume]
+		switch {
+		case group.unsafe:
+			skipRecycleBinVolume(result, group.candidates, recycleBinCapacityProbeFailedIssueCode, "Recycle Bin capacity state is unknown; skipping this volume rather than risking permanent deletion")
+			continue
+		case group.config.NukeOnDelete:
+			skipRecycleBinVolume(result, group.candidates, recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted")
+			continue
+		case group.config.CurrentUsage > group.config.MaxCapacity || group.totalBytes > group.config.MaxCapacity-group.config.CurrentUsage:
+			skipRecycleBinVolume(result, group.candidates, recycleBinCapacityIssueCode, "Selected candidates exceed the remaining Recycle Bin capacity for this volume")
+			continue
+		}
+
+		deleteCandidates := make([]delete.Candidate, 0, len(group.candidates))
+		byPath := make(map[string]recycleBinExecutionCandidate, len(group.candidates))
+		for _, candidate := range group.candidates {
+			deleteCandidates = append(deleteCandidates, candidate.candidate)
+			byPath[candidate.candidate.Path] = candidate
+		}
+		deleteResult := delete.ExecuteWithValidator(ctx, deleteCandidates, adapter, opts.Validator)
+		for _, item := range deleteResult.Deleted {
+			candidate := byPath[item.Path]
+			result.Deleted = append(result.Deleted, DeletedItem{Path: item.Path, Bytes: item.Bytes, Rule: candidate.rule, IsOptIn: candidate.isOptIn})
+		}
+		for _, item := range deleteResult.Skipped {
+			candidate := byPath[item.Path]
+			result.Skipped = append(result.Skipped, SkippedItem{
+				Path: item.Path, Bytes: item.Bytes, Rule: candidate.rule,
+				Reason: issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
+			})
+		}
+	}
+}
+
+func recycleBinIdentity(config RecycleBinVolumeConfig) recycleBinVolumeIdentity {
+	key := strings.ToLower(strings.TrimSpace(config.Volume))
+	return recycleBinVolumeIdentity{key: key, known: key != ""}
+}
+
+func skipRecycleBinVolume(result *Result, candidates []recycleBinExecutionCandidate, code, message string) {
+	for _, candidate := range candidates {
+		result.Skipped = append(result.Skipped, SkippedItem{
+			Path: candidate.candidate.Path, Bytes: candidate.candidate.Bytes, Rule: candidate.rule,
+			Reason: issue(code, message, true, candidate.candidate.Path, candidate.rule),
+		})
+	}
 }
 
 func protectionLoadFailure(mode string, opts Options, start time.Time) Result {
