@@ -17,6 +17,12 @@ import (
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
+type recordingHistoryRecorder struct{}
+
+func (*recordingHistoryRecorder) Record(context.Context, history.SessionRecord, []history.ItemRecord) error {
+	return nil
+}
+
 func stubCleanPreviewDryRun(t *testing.T) {
 	t.Helper()
 	disableHistoryRecording(t)
@@ -372,8 +378,6 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"Deleted:",
 		"Execute",
 		"execute cleanup",
-		"confirm",
-		"Confirmation",
 		"Potential space: 4108 bytes",
 		"Detailed candidate list:",
 		"Run as Administrator",
@@ -1059,6 +1063,135 @@ func TestCleanPreviewLoadAndReloadRenderBrowserRunningStateFromSharedReadModel(t
 		!strings.Contains(secondOutput, "process snapshot failed") {
 		t.Fatalf("reload missing unknown browser diagnostic:\n%s", secondOutput)
 	}
+}
+
+func TestCleanReadyPreviewRequiresSeparateConfirmationBeforeExecution(t *testing.T) {
+	stubCleanPreviewDryRun(t)
+	calls := 0
+	original := executeClean
+	executeClean = func(_ context.Context, opts clean.Options) clean.Result {
+		calls++
+		if got := strings.Join(opts.OptIn, ","); got != clean.OpportunityCategoryCrashDumps {
+			t.Fatalf("execute OptIn = %q, want canonical category identifier", got)
+		}
+		if opts.DetailedListDir != "" {
+			t.Fatal("TUI execute must not pass a detailed-list directory")
+		}
+		return clean.Result{Status: "ok", Mode: "execute", Totals: clean.Totals{DeletedCount: 2, OptInDeletedCount: 1, AffectedBytes: 30, OptInAffectedBytes: 20}}
+	}
+	t.Cleanup(func() { executeClean = original })
+
+	model := openCleanPreview(t)
+	model.clean.selected[clean.OpportunityCategoryCrashDumps] = true
+	model.clean.model = clean.NewPreviewReadModelForSelection(clean.Result{
+		Candidates:      []clean.CandidatePreview{{Bytes: 10}},
+		OptInCandidates: []clean.OptInCandidate{{Category: clean.OpportunityCategoryCrashDumps, Bytes: 20}},
+		Totals:          clean.Totals{CandidateCount: 1, CandidateBytes: 10, OptInCandidateCount: 1, OptInReclaimableBytes: 20},
+	}, []string{clean.OpportunityCategoryCrashDumps})
+	model.clean.previewReady = true
+
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
+	if cmd != nil || calls != 0 || !strings.Contains(model.content(), "Confirm Clean execution") || !strings.Contains(model.content(), "Crash dumps") || !strings.Contains(model.content(), "rescans") {
+		t.Fatalf("enter must open confirmation without executing:\n%s", model.content())
+	}
+	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
+	if cmd == nil || calls != 0 || !strings.Contains(model.content(), "Executing Clean") {
+		t.Fatalf("confirmation must enter visible executing state:\n%s", model.content())
+	}
+	// A second Enter while in flight cannot start another execution.
+	next, second := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
+	if second != nil || calls != 0 {
+		t.Fatal("executing state accepted a second confirmation")
+	}
+	next, _ = model.Update(cmd())
+	model = next.(rootModel)
+	if calls != 1 || !strings.Contains(model.content(), "Clean execution result") || !strings.Contains(model.content(), "Deleted: 2") || !strings.Contains(model.content(), "Opt-in deleted: 1") || !strings.Contains(model.content(), "Affected bytes: 30 bytes") {
+		t.Fatalf("shared result was not rendered directly:\n%s", model.content())
+	}
+}
+
+func TestCleanConfirmationBackAndEscapeCancelWithoutExecution(t *testing.T) {
+	stubCleanPreviewDryRun(t)
+	model := openCleanPreview(t)
+	model.clean.previewReady = true
+	model, _ = updateRootKeyWithCmd(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'b', Text: "b"})
+	if model.screen != screenCleanPreview || !model.clean.previewReady || strings.Contains(model.content(), "Confirm Clean execution") {
+		t.Fatal("back must return to ready preview")
+	}
+	model, _ = updateRootKeyWithCmd(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if model.screen != screenCleanPreview || !model.clean.previewReady {
+		t.Fatal("escape must cancel confirmation without quitting")
+	}
+}
+
+func TestCleanExecutionHandoffLoadsFreshBoundariesAndPassesNoPreviewPaths(t *testing.T) {
+	originalExecute := executeClean
+	originalLoader := loadProtectionConfiguration
+	originalRecorder := newHistoryRecorder
+	validator := pathsafe.NewValidator([]string{`C:\Protected`})
+	recorder := &recordingHistoryRecorder{}
+	loadProtectionConfiguration = func() clean.ProtectionConfiguration {
+		return clean.ProtectionConfiguration{Validator: validator, Diagnostics: []clean.ProtectionDiagnostic{{Line: 2, Code: "invalid_path"}}}
+	}
+	newHistoryRecorder = func() (history.Recorder, error) { return recorder, nil }
+	executeClean = func(_ context.Context, opts clean.Options) clean.Result {
+		if got := opts.Validator.UserProtectionPaths(); len(got) != 1 || got[0] != `C:\Protected` {
+			t.Fatalf("fresh protection rules = %#v", got)
+		}
+		if opts.HistoryRecorder != recorder || opts.DetectRunningApplications == nil {
+			t.Fatal("production history or running detector missing")
+		}
+		if opts.RecycleBinAdapter != nil || opts.RecycleBinCapacityProbe != nil || opts.DetailedListDir != "" {
+			t.Fatalf("production defaults or no-detailed-list boundary violated: %#v", opts)
+		}
+		if len(opts.OptIn) != 1 || opts.OptIn[0] != clean.DevCacheCategoryGo {
+			t.Fatalf("OptIn = %#v, want canonical identifier only", opts.OptIn)
+		}
+		return clean.Result{Status: "ok"}
+	}
+	t.Cleanup(func() {
+		executeClean = originalExecute
+		loadProtectionConfiguration = originalLoader
+		newHistoryRecorder = originalRecorder
+	})
+
+	msg := executeCleanSelectionCmd([]string{clean.DevCacheCategoryGo})().(cleanExecutedMsg)
+	if msg.result.Status != "ok" {
+		t.Fatalf("result = %#v", msg.result)
+	}
+}
+
+func TestCleanExecutionResultRendersAllSkippedMixedAndErrorOutcomes(t *testing.T) {
+	tests := []struct {
+		name   string
+		result clean.Result
+		wants  []string
+	}{
+		{name: "all skipped", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\cache`, Reason: clean.StructuredIssue{Code: "recycle_bin_capacity", Message: "capacity unavailable"}}}, Totals: clean.Totals{SkippedCount: 1}}, wants: []string{"Deleted: 0", "Skipped: 1", "recycle_bin_capacity", "capacity unavailable"}},
+		{name: "mixed", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\protected`, Reason: clean.StructuredIssue{Code: "protected_path", Message: "protected"}}}, Totals: clean.Totals{DeletedCount: 1, SkippedCount: 1, AffectedBytes: 8}}, wants: []string{"Deleted: 1", "Skipped: 1", "protected_path", "Affected bytes: 8 bytes"}},
+		{name: "error", result: clean.Result{Status: "error", Errors: []clean.StructuredIssue{{Code: "permission_denied", Message: "access denied"}}}, wants: []string{"Status: error", "Errors: 1", "permission_denied", "access denied"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderCleanExecutionResult(tt.result)
+			for _, want := range tt.wants {
+				if !strings.Contains(got, want) {
+					t.Fatalf("result missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+func updateRootKeyWithCmd(t *testing.T, model rootModel, key tea.KeyPressMsg) (rootModel, tea.Cmd) {
+	t.Helper()
+	next, cmd := model.Update(key)
+	return next.(rootModel), cmd
 }
 
 func TestCleanPreviewRendersChromeBrowserCacheOpportunityAsSummary(t *testing.T) {
