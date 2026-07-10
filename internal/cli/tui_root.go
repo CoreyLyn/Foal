@@ -156,8 +156,7 @@ func (m rootModel) updateCleanPreviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 	case "r":
 		return m, m.clean.startLoad(true)
 	}
-	m.clean.handleKey(msg.String())
-	return m, nil
+	return m, m.clean.handleKey(msg.String())
 }
 
 func (m rootModel) updateViewerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

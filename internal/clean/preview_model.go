@@ -26,8 +26,23 @@ type PreviewReadModel struct {
 	SkippedCount                     int
 	OpportunityCount                 int
 	OpportunityObservedBytes         int64
+	OptInReclaimableBytes            int64
+	OptInCategories                  []PreviewOptInCategory
 	DetailedListPath                 string
 	Summary                          string
+}
+
+// PreviewOptInCategory is the path-free selection projection consumed by the
+// Clean TUI. Candidate paths remain in the existing preview collections and
+// are never part of selection state.
+type PreviewOptInCategory struct {
+	Identifier       string
+	Label            string
+	ReportCategory   ReportCategory
+	Selected         bool
+	CandidateCount   int
+	ReclaimableBytes int64
+	ObservedBytes    int64
 }
 
 type PreviewProtectionRule struct {
@@ -121,6 +136,10 @@ type PreviewReportCategoryOptions struct {
 }
 
 func NewPreviewReadModel(result Result) PreviewReadModel {
+	return NewPreviewReadModelForSelection(result, nil)
+}
+
+func NewPreviewReadModelForSelection(result Result, selected []string) PreviewReadModel {
 	candidates := make([]PreviewCandidate, 0, len(result.Candidates))
 	var potentialSpace int64
 	for _, candidate := range result.Candidates {
@@ -209,6 +228,8 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		Name:    "Rebuildable project artifacts",
 		Details: "Use foal analyze <path> to inspect rebuildable project directories explicitly.",
 	}}
+	selectedSet, _, _ := NormalizedOptInSet(selected)
+	categorySummaries := previewOptInCategories(result, selectedSet)
 
 	return PreviewReadModel{
 		Title:                            "Foal clean",
@@ -229,9 +250,41 @@ func NewPreviewReadModel(result Result) PreviewReadModel {
 		SkippedCount:                     len(result.Skipped),
 		OpportunityCount:                 result.Totals.OpportunityCount,
 		OpportunityObservedBytes:         result.Totals.OpportunityObservedBytes,
+		OptInReclaimableBytes:            result.Totals.OptInReclaimableBytes,
+		OptInCategories:                  categorySummaries,
 		DetailedListPath:                 result.DetailedListPath,
 		Summary:                          "Dry-run summary: No changes were made. Re-run with foal clean --execute to move these default candidates to the Recycle Bin.",
 	}
+}
+
+func previewOptInCategories(result Result, selected map[string]bool) []PreviewOptInCategory {
+	summaries := make([]PreviewOptInCategory, 0)
+	for _, group := range []ReportCategory{ReportCategorySystem, ReportCategoryUserEssentials, ReportCategoryBrowsers, ReportCategoryDeveloperTools} {
+		for _, category := range canonicalCleanupCategoryCatalog.Summaries() {
+			if category.Eligibility != CategoryEligibilityOptIn || category.ReportCategory != group {
+				continue
+			}
+			summary := PreviewOptInCategory{
+				Identifier:     category.Identifier,
+				Label:          category.Label,
+				ReportCategory: category.ReportCategory,
+				Selected:       selected[category.Identifier],
+			}
+			for _, candidate := range result.OptInCandidates {
+				if candidate.Category == category.Identifier {
+					summary.CandidateCount++
+					summary.ReclaimableBytes += candidate.Bytes
+				}
+			}
+			for _, opportunity := range result.Opportunities {
+				if normalizedOpportunityCategory(opportunity.Category) == category.Identifier {
+					summary.ObservedBytes += opportunity.Bytes
+				}
+			}
+			summaries = append(summaries, summary)
+		}
+	}
+	return summaries
 }
 
 func applicationDisplayName(application string) string {

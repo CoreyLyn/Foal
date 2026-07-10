@@ -41,24 +41,33 @@ func cleanFormatBytes(bytes int64) string {
 type cleanPreviewLoadedMsg struct {
 	generation uint64
 	model      clean.PreviewReadModel
+	canceled   bool
+	failed     bool
 }
 
 // loadCleanPreviewCmd runs the existing dry-run command path off the UI loop
 // and delivers the shared read model; the TUI never owns cleanup logic.
 // Browsing stays free of side effects: no history session is recorded and no
 // detailed-list file is written, unlike the `foal clean --dry-run` command.
-func loadCleanPreviewCmd(ctx context.Context, generation uint64) tea.Cmd {
+func loadCleanPreviewCmd(ctx context.Context, generation uint64, selections ...[]string) tea.Cmd {
 	return func() tea.Msg {
+		var selected []string
+		if len(selections) > 0 {
+			selected = append([]string(nil), selections[0]...)
+		}
 		config := loadProtectionConfiguration()
 		result := dryRunClean(ctx, clean.Options{
 			Validator:                 config.Validator,
 			ProtectionDiagnostics:     config.Diagnostics,
 			ProtectionLoadError:       config.LoadError,
 			DetectRunningApplications: clean.DetectSupportedApplications,
+			OptIn:                     selected,
 		})
 		return cleanPreviewLoadedMsg{
 			generation: generation,
-			model:      clean.NewPreviewReadModel(result),
+			model:      clean.NewPreviewReadModelForSelection(result, selected),
+			canceled:   ctx.Err() != nil,
+			failed:     result.Status == "error",
 		}
 	}
 }
@@ -74,14 +83,18 @@ type cleanModel struct {
 	vp             viewport.Model
 	width          int
 	height         int
+	selected       map[string]bool
+	selectionIndex int
+	previewReady   bool
 }
 
 func newCleanModel(width, height int) cleanModel {
 	model := cleanModel{
-		loading: true,
-		filter:  cleanPreviewFilterAll,
-		notice:  "Press c to copy candidate paths to the clipboard.",
-		vp:      viewport.New(),
+		loading:  true,
+		filter:   cleanPreviewFilterAll,
+		notice:   "Press c to copy candidate paths to the clipboard.",
+		vp:       viewport.New(),
+		selected: make(map[string]bool),
 	}
 	model.setSize(width, height)
 	return model
@@ -111,6 +124,21 @@ func (m *cleanModel) applyLoaded(msg cleanPreviewLoadedMsg) {
 	}
 	m.loading = false
 	m.cancelLoad = nil
+	if msg.canceled {
+		m.previewReady = false
+		m.notice = "Clean preview refresh canceled; selection totals are not ready."
+		m.setSize(m.width, m.height)
+		return
+	}
+	if msg.failed {
+		m.previewReady = false
+		m.notice = "Clean preview refresh failed; selection totals are not ready."
+		m.model = msg.model
+		m.refreshViewportContent()
+		m.setSize(m.width, m.height)
+		return
+	}
+	m.previewReady = true
 	m.model = msg.model
 	m.refreshViewportContent()
 	m.setSize(m.width, m.height)
@@ -122,12 +150,13 @@ func (m *cleanModel) startLoad(reload bool) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelLoad = cancel
 	m.loading = true
+	m.previewReady = false
 	if reload {
 		m.notice = "Reloading clean preview (dry-run)..."
 	}
 	m.vp.GotoTop()
 	m.setSize(m.width, m.height)
-	return loadCleanPreviewCmd(ctx, m.loadGeneration)
+	return loadCleanPreviewCmd(ctx, m.loadGeneration, m.selectedCategoryIDs())
 }
 
 func (m *cleanModel) cancelPendingLoad() {
@@ -142,7 +171,7 @@ func (m *cleanModel) refreshViewportContent() {
 	m.vp.SetContent(renderCleanPreviewSections(m.model, m.filter, m.expanded))
 }
 
-func (m *cleanModel) handleKey(key string) {
+func (m *cleanModel) handleKey(key string) tea.Cmd {
 	switch key {
 	case "j", "down":
 		m.vp.ScrollDown(1)
@@ -157,10 +186,68 @@ func (m *cleanModel) handleKey(key string) {
 		m.refreshViewportContent()
 	case "c":
 		m.notice = m.copyCandidatePathsNotice()
+	case "tab":
+		m.moveSelection(1)
+	case "shift+tab":
+		m.moveSelection(-1)
+	case " ":
+		return m.toggleSelectedCategory()
+	case "a":
+		return m.setAllCategories(true)
+	case "x":
+		return m.setAllCategories(false)
 	default:
-		m.notice = "Unknown key. Use j/k, f, e, c, r, b, or q."
+		m.notice = "Unknown key. Use tab/space, a/x, j/k, f, e, c, r, b, or q."
 	}
 	m.setSize(m.width, m.height)
+	return nil
+}
+
+func (m *cleanModel) selectedCategoryIDs() []string {
+	ids := make([]string, 0, len(m.selected))
+	for _, category := range m.model.OptInCategories {
+		if m.selected[category.Identifier] {
+			ids = append(ids, category.Identifier)
+		}
+	}
+	return ids
+}
+
+func (m *cleanModel) moveSelection(delta int) {
+	if len(m.model.OptInCategories) == 0 {
+		return
+	}
+	m.selectionIndex = (m.selectionIndex + delta + len(m.model.OptInCategories)) % len(m.model.OptInCategories)
+	m.refreshViewportContent()
+}
+
+func (m *cleanModel) toggleSelectedCategory() tea.Cmd {
+	if len(m.model.OptInCategories) == 0 {
+		m.notice = "Category catalog is not available yet."
+		return nil
+	}
+	id := m.model.OptInCategories[m.selectionIndex].Identifier
+	m.selected[id] = !m.selected[id]
+	if !m.selected[id] {
+		delete(m.selected, id)
+	}
+	m.notice = "Selection changed; refreshing shared clean preview..."
+	return m.startLoad(false)
+}
+
+func (m *cleanModel) setAllCategories(selected bool) tea.Cmd {
+	if len(m.model.OptInCategories) == 0 {
+		m.notice = "Category catalog is not available yet."
+		return nil
+	}
+	clear(m.selected)
+	if selected {
+		for _, category := range m.model.OptInCategories {
+			m.selected[category.Identifier] = true
+		}
+	}
+	m.notice = "Selection changed; refreshing shared clean preview..."
+	return m.startLoad(false)
 }
 
 // copyCandidatePathsNotice copies the default candidate paths to the system
@@ -182,12 +269,15 @@ func (m *cleanModel) copyCandidatePathsNotice() string {
 	return fmt.Sprintf("Copied %d candidate path(s) to the clipboard.", len(paths))
 }
 
-const cleanPreviewFooter = "\nHints: j/k scroll | f filter | e expand | c copy | r refresh | b back | q quit\n" +
-	"No cleanup actions are available in this TUI view.\n"
+const cleanPreviewFooter = "\nHints: tab category | space toggle | a select all | x clear all | j/k scroll | f filter | e expand | c copy | r refresh | b back | q quit\n" +
+	"Selection only refreshes preview; no cleanup action is available in this view.\n"
 
 func (m cleanModel) content() string {
 	if m.loading {
 		return m.headerContent() + "\nLoading clean preview (dry-run)...\n" + cleanPreviewFooter
+	}
+	if !m.previewReady {
+		return m.headerContent() + "\nClean preview totals are not ready. Change the selection or refresh to retry.\n" + cleanPreviewFooter
 	}
 	return m.headerContent() + m.vp.View() + "\n" + cleanPreviewFooter
 }
@@ -197,6 +287,9 @@ func (m cleanModel) headerContent() string {
 	builder.WriteString("Foal Clean\n")
 	builder.WriteString("Preview only - no files changed.\n")
 	builder.WriteString(fmt.Sprintf("Filter: %s | Scroll: %d%% | Expanded: %t\n", m.filter, int(m.vp.ScrollPercent()*100), m.expanded))
+	if len(m.model.OptInCategories) > 0 {
+		builder.WriteString(fmt.Sprintf("Category focus: %s\n", m.model.OptInCategories[m.selectionIndex].Label))
+	}
 	if m.model.DetailedListPath != "" {
 		builder.WriteString(fmt.Sprintf("Detailed candidate list: %s\n", m.model.DetailedListPath))
 	}
@@ -209,6 +302,23 @@ func (m cleanModel) headerContent() string {
 
 func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPreviewFilter, expanded bool) string {
 	var builder strings.Builder
+	if len(model.OptInCategories) > 0 {
+		builder.WriteString("\nOpt-in categories\n")
+		currentGroup := clean.ReportCategory("")
+		for _, category := range model.OptInCategories {
+			if category.ReportCategory != currentGroup {
+				currentGroup = category.ReportCategory
+				builder.WriteString(fmt.Sprintf("  %s\n", currentGroup))
+			}
+			marker := "[ ]"
+			state := fmt.Sprintf("review-only, observed %s", cleanFormatBytes(category.ObservedBytes))
+			if category.Selected {
+				marker = "[x]"
+				state = fmt.Sprintf("selected preview, %d candidate(s), %s opt-in reclaimable", category.CandidateCount, cleanFormatBytes(category.ReclaimableBytes))
+			}
+			builder.WriteString(fmt.Sprintf("    %s %s (%s)\n", marker, category.Label, state))
+		}
+	}
 	for _, category := range clean.PreviewReportCategories(model, clean.PreviewReportCategoryOptions{
 		EntryLimit:                   cleanPreviewSectionEntryLimit,
 		Expanded:                     expanded,
