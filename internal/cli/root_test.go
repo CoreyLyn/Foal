@@ -2019,7 +2019,7 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 	for _, name := range capturedOpts.OptIn {
 		enabled[name] = true
 	}
-	expectedCategories := []string{
+	expectedOpportunities := []string{
 		clean.OpportunityCategoryUserTemp,
 		clean.OpportunityCategoryCrashDumps,
 		clean.OpportunityCategoryWindowsErrorReporting,
@@ -2029,12 +2029,26 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.OpportunityCategoryNVIDIADXCache,
 		clean.OpportunityCategoryBrowserCache,
 	}
-	if len(enabled) != len(expectedCategories) {
-		t.Fatalf("opts.OptIn has %d categories, want %d: %#v", len(enabled), len(expectedCategories), capturedOpts.OptIn)
+	expectedDevCaches := []string{
+		clean.DevCacheCategoryNPM,
+		clean.DevCacheCategoryGo,
+		clean.DevCacheCategoryPip,
+		clean.DevCacheCategoryCargo,
+		clean.DevCacheCategoryNuGet,
+		clean.DevCacheCategoryCorepack,
 	}
-	for _, cat := range expectedCategories {
+	expectedCount := len(expectedOpportunities) + len(expectedDevCaches)
+	if len(enabled) != expectedCount {
+		t.Fatalf("opts.OptIn has %d categories, want %d: %#v", len(enabled), expectedCount, capturedOpts.OptIn)
+	}
+	for _, cat := range expectedOpportunities {
 		if !enabled[cat] {
-			t.Fatalf("opts.OptIn missing category %q: %#v", cat, capturedOpts.OptIn)
+			t.Fatalf("opts.OptIn missing opportunity category %q: %#v", cat, capturedOpts.OptIn)
+		}
+	}
+	for _, cat := range expectedDevCaches {
+		if !enabled[cat] {
+			t.Fatalf("opts.OptIn missing dev cache category %q: %#v", cat, capturedOpts.OptIn)
 		}
 	}
 }
@@ -2066,6 +2080,13 @@ func TestCleanOptInInvalidName(t *testing.T) {
 		"d3d_shader_cache",
 		"nvidia_dx_cache",
 		"browser_cache",
+		"npm-cache",
+		"go-cache",
+		"pip-cache",
+		"cargo-cache",
+		"nuget-cache",
+		"corepack-cache",
+		"dev-caches",
 		"all",
 	}
 	for _, name := range validNames {

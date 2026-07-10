@@ -17,6 +17,17 @@ import (
 
 const plannedRecycleBinAction = "move_to_recycle_bin"
 
+// Dev cache categories - these are Review suggestions that become opt-in candidates
+const (
+	DevCacheCategoryNPM      = "npm-cache"
+	DevCacheCategoryGo       = "go-cache"
+	DevCacheCategoryPip      = "pip-cache"
+	DevCacheCategoryCargo    = "cargo-cache"
+	DevCacheCategoryNuGet    = "nuget-cache"
+	DevCacheCategoryCorepack = "corepack-cache"
+	DevCacheCategoryAll      = "dev-caches"
+)
+
 // RecycleBinVolumeConfig holds the Recycle Bin configuration for a volume.
 type RecycleBinVolumeConfig struct {
 	// NukeOnDelete is true if the Recycle Bin is disabled for this volume
@@ -30,6 +41,11 @@ type RecycleBinVolumeConfig struct {
 // RecycleBinCapacityProbe returns the Recycle Bin configuration for the
 // volume containing the given path.
 type RecycleBinCapacityProbe func(path string) (RecycleBinVolumeConfig, error)
+
+// DevCachePathResolver resolves the path for a developer tool cache.
+// The category is one of the DevCacheCategory* constants.
+// Returns empty string if the path cannot be resolved from env vars/defaults.
+type DevCachePathResolver func(category string) string
 
 type Options struct {
 	Rules                         []Rule
@@ -49,6 +65,7 @@ type Options struct {
 	DetectRunningApplications     func(context.Context) []RunningApplicationState
 	OptIn                         []string
 	RecycleBinCapacityProbe       RecycleBinCapacityProbe
+	DevCachePathResolver          DevCachePathResolver
 }
 
 type Rule struct {
@@ -187,6 +204,40 @@ func dryRun(ctx context.Context, opts Options) Result {
 	// Resolve opt-in set
 	optInEnabled, _, _ := NormalizedOptInSet(opts.OptIn)
 
+	// Get dev cache path resolver
+	resolveDevCache := opts.DevCachePathResolver
+	if resolveDevCache == nil {
+		resolveDevCache = ResolveDevCachePath
+	}
+
+	// Process opted-in dev caches
+	optedInDevCachePaths := make(map[string]bool)
+	for category := range optInEnabled {
+		if !isDevCacheCategory(category) {
+			continue
+		}
+		path := resolveDevCache(category)
+		if path == "" {
+			continue
+		}
+		if opts.Validator.IsUserProtected(path) {
+			continue
+		}
+		// Measure the size
+		bytes, err := measureBytes(path)
+		if err != nil {
+			// Missing or unreadable - just skip, don't add as candidate
+			continue
+		}
+		result.OptInCandidates = append(result.OptInCandidates, OptInCandidate{
+			Path:          path,
+			Bytes:         bytes,
+			Category:      category,
+			PlannedAction: plannedRecycleBinAction,
+		})
+		optedInDevCachePaths[path] = true
+	}
+
 	discover := opts.DiscoverOpportunities
 	if discover == nil && opts.DiscoverUserTempOpportunities != nil {
 		discover = opts.DiscoverUserTempOpportunities
@@ -240,6 +291,21 @@ func dryRun(ctx context.Context, opts Options) Result {
 	}
 	for _, suggestion := range discoverSuggestions(ctx) {
 		if suggestion.CachePath != "" && opts.Validator.IsUserProtected(suggestion.CachePath) {
+			continue
+		}
+		// Skip review suggestions that are already opted-in as candidates
+		if suggestion.CachePath != "" && optedInDevCachePaths[suggestion.CachePath] {
+			continue
+		}
+		// Also skip if the suggestion category is opted-in
+		skip := false
+		for category := range optInEnabled {
+			if isDevCacheCategory(category) && devCacheCategoryMatchesSuggestion(category, suggestion) {
+				skip = true
+				break
+			}
+		}
+		if skip {
 			continue
 		}
 		result.ReviewSuggestions = append(result.ReviewSuggestions, suggestion)
@@ -517,6 +583,12 @@ func Execute(ctx context.Context, opts Options) Result {
 			probe = RecycleBinVolumeCapacity
 		}
 
+		// Get dev cache path resolver
+		resolveDevCache := opts.DevCachePathResolver
+		if resolveDevCache == nil {
+			resolveDevCache = ResolveDevCachePath
+		}
+
 		// Struct to track path with its category and byte size
 		type optInPath struct {
 			path     string
@@ -525,7 +597,29 @@ func Execute(ctx context.Context, opts Options) Result {
 		}
 		var pathsToProcess []optInPath
 
-		// Process non-browser categories first
+		// Process dev caches first
+		for category := range optInEnabled {
+			if !isDevCacheCategory(category) {
+				continue
+			}
+			path := resolveDevCache(category)
+			if path == "" {
+				continue
+			}
+			// Fresh measure before deletion
+			bytes, err := measureBytes(path)
+			if err != nil {
+				// Missing or unreadable - skip
+				continue
+			}
+			pathsToProcess = append(pathsToProcess, optInPath{
+				path:     path,
+				bytes:    bytes,
+				category: category,
+			})
+		}
+
+		// Process non-browser opportunity categories
 		if optInCategoryEnabled(optInEnabled, OpportunityCategoryUserTemp) ||
 			optInCategoryEnabled(optInEnabled, OpportunityCategoryCrashDumps) ||
 			optInCategoryEnabled(optInEnabled, OpportunityCategoryWindowsErrorReporting) ||
@@ -1067,10 +1161,11 @@ func issue(code, message string, recoverable bool, path, ruleID string) Structur
 }
 
 // NormalizedOptInSet returns the set of opt-in categories enabled, resolving
-// "all" to all implemented categories. Returns the set, a list of invalid
-// names (if any), and the list of valid names for error reporting.
+// "all" to all implemented categories and "dev-caches" to all dev caches.
+// Returns the set, a list of invalid names (if any), and the list of valid
+// names for error reporting.
 func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []string, valid []string) {
-	valid = []string{
+	opportunityCategories := []string{
 		OpportunityCategoryUserTemp,
 		OpportunityCategoryCrashDumps,
 		OpportunityCategoryWindowsErrorReporting,
@@ -1079,11 +1174,24 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 		OpportunityCategoryD3DShaderCache,
 		OpportunityCategoryNVIDIADXCache,
 		OpportunityCategoryBrowserCache,
-		"all",
 	}
+	devCacheCategories := []string{
+		DevCacheCategoryNPM,
+		DevCacheCategoryGo,
+		DevCacheCategoryPip,
+		DevCacheCategoryCargo,
+		DevCacheCategoryNuGet,
+		DevCacheCategoryCorepack,
+	}
+	valid = make([]string, 0, len(opportunityCategories)+len(devCacheCategories)+2)
+	valid = append(valid, opportunityCategories...)
+	valid = append(valid, devCacheCategories...)
+	valid = append(valid, DevCacheCategoryAll, "all")
+
 	enabled = make(map[string]bool)
 	seen := make(map[string]bool)
 	all := false
+	devCaches := false
 	for _, name := range optIn {
 		name = strings.ToLower(name)
 		if seen[name] {
@@ -1094,10 +1202,14 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 			all = true
 			continue
 		}
+		if name == DevCacheCategoryAll {
+			devCaches = true
+			continue
+		}
 		// Check if name is any valid category
 		validName := false
 		for _, v := range valid {
-			if v == name && v != "all" {
+			if v == name && v != "all" && v != DevCacheCategoryAll {
 				enabled[name] = true
 				validName = true
 				break
@@ -1108,11 +1220,17 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 		}
 	}
 	if all {
-		// Enable all categories except "all" itself
-		for _, v := range valid {
-			if v != "all" {
-				enabled[v] = true
-			}
+		// Enable all opportunity categories and all dev caches
+		for _, v := range opportunityCategories {
+			enabled[v] = true
+		}
+		for _, v := range devCacheCategories {
+			enabled[v] = true
+		}
+	} else if devCaches {
+		// Enable all dev caches
+		for _, v := range devCacheCategories {
+			enabled[v] = true
 		}
 	}
 	return enabled, invalid, valid
