@@ -104,6 +104,10 @@ _Avoid_: total hinted space, external savings estimate
 A cleanup item that is normally a skipped-by-default opportunity or a developer-tool Review suggestion, but that the user has explicitly opted in to clean through the Recycle Bin for the current run only. An opt-in candidate is never a default candidate: the default candidate set stays frozen, and opt-in never becomes default. Opt-in candidates still pass fresh-scan validation, protection-rule suppression, and running-application gating at execute time, and are never deleted by running an external tool's own cleanup command.
 _Avoid_: default candidate, default-enabled rule, permanent deletion, tool-command delegation
 
+**Opt-in candidate resolution**:
+The step that turns an opt-in plan into the concrete Opt-in candidate paths for a run, performed fresh for both dry-run preview and execute so preview and execute resolve the same candidate set rather than execute trusting dry-run's resolved paths. Only opted-in categories are scanned; non-opted-in categories stay omitted from execute. A Browser cache opt-in candidate resolves to individual regenerating cache directories (`Cache`, `Code Cache`, `GPUCache`) per profile, not the browser `User Data` root, because only those directories are deletable.
+_Avoid_: execute trusting dry-run resolved paths, scanning non-opted-in categories at execute, browser User Data root as an opt-in candidate, mode-specific candidate resolution
+
 **Opt-in reclaimable bytes**:
 The bytes represented by opt-in candidates in a clean preview or execution, reported as a total separate from `Potential space` and `Observed opportunity bytes`. Opt-in reclaimable bytes are never merged into `Potential space`, and `Observed opportunity bytes` excludes any opportunity that has become an opt-in candidate for the run.
 _Avoid_: Potential space, observed opportunity bytes, total hinted space
