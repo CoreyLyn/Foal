@@ -1499,3 +1499,691 @@ func TestExecuteWithoutOptInDoesNotRunDetection(t *testing.T) {
 		t.Fatalf("expected DeletedCount 1, got %d", result.Totals.DeletedCount)
 	}
 }
+
+// TestExecuteOptInGoCacheSkipsWhenGoRunning verifies go-cache skips when go is running
+func TestExecuteOptInGoCacheSkipsWhenGoRunning(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "go-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryGo {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports Go as running
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationGo,
+				State:       clean.RunningApplicationStateRunning,
+			},
+		}
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"go-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	// Verify nothing was deleted
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("expected OptInDeletedCount 0 when Go is running, got %d", result.Totals.OptInDeletedCount)
+	}
+
+	// Verify adapter got no paths
+	if len(adapter.paths) != 0 {
+		t.Fatalf("expected adapter to receive 0 paths when Go is running, got %d: %v", len(adapter.paths), adapter.paths)
+	}
+
+	// Verify it's in skipped with dev_tool_running reason
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped item when Go is running, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "dev_tool_running" {
+		t.Fatalf("expected reason code dev_tool_running, got %q", result.Skipped[0].Reason.Code)
+	}
+}
+
+// TestExecuteOptInGoCacheCleansWhenGoIdle verifies go-cache cleans when go is idle
+func TestExecuteOptInGoCacheCleansWhenGoIdle(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "go-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryGo {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports Go as idle
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationGo,
+				State:       clean.RunningApplicationStateIdle,
+			},
+		}
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"go-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	// Verify the cache path was deleted
+	found := false
+	for _, p := range adapter.paths {
+		if p == cachePath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive go-cache path, got %v", adapter.paths)
+	}
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1 when Go is idle, got %d", result.Totals.OptInDeletedCount)
+	}
+}
+
+// TestExecuteOptInCargoCacheSkipsWhenCargoRunning verifies cargo-cache skips when cargo is running
+func TestExecuteOptInCargoCacheSkipsWhenCargoRunning(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "cargo-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryCargo {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports Cargo as running
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationCargo,
+				State:       clean.RunningApplicationStateRunning,
+			},
+		}
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"cargo-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("expected OptInDeletedCount 0 when Cargo is running, got %d", result.Totals.OptInDeletedCount)
+	}
+	if len(adapter.paths) != 0 {
+		t.Fatalf("expected adapter to receive 0 paths when Cargo is running, got %d: %v", len(adapter.paths), adapter.paths)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped item when Cargo is running, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "dev_tool_running" {
+		t.Fatalf("expected reason code dev_tool_running, got %q", result.Skipped[0].Reason.Code)
+	}
+}
+
+// TestExecuteOptInNuGetCacheSkipsWhenDotNetRunning verifies nuget-cache skips when dotnet is running
+func TestExecuteOptInNuGetCacheSkipsWhenDotNetRunning(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "nuget-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryNuGet {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports dotnet as running
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationDotNet,
+				State:       clean.RunningApplicationStateRunning,
+			},
+		}
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"nuget-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("expected OptInDeletedCount 0 when dotnet is running, got %d", result.Totals.OptInDeletedCount)
+	}
+	if len(adapter.paths) != 0 {
+		t.Fatalf("expected adapter to receive 0 paths when dotnet is running, got %d: %v", len(adapter.paths), adapter.paths)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped item when dotnet is running, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "dev_tool_running" {
+		t.Fatalf("expected reason code dev_tool_running, got %q", result.Skipped[0].Reason.Code)
+	}
+}
+
+// TestExecuteOptInNuGetCacheSkipsWhenNuGetRunning verifies nuget-cache skips when nuget is running
+func TestExecuteOptInNuGetCacheSkipsWhenNuGetRunning(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "nuget-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryNuGet {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports NuGet as running
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationNuGet,
+				State:       clean.RunningApplicationStateRunning,
+			},
+		}
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"nuget-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("expected OptInDeletedCount 0 when nuget is running, got %d", result.Totals.OptInDeletedCount)
+	}
+	if len(adapter.paths) != 0 {
+		t.Fatalf("expected adapter to receive 0 paths when nuget is running, got %d: %v", len(adapter.paths), adapter.paths)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped item when nuget is running, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "dev_tool_running" {
+		t.Fatalf("expected reason code dev_tool_running, got %q", result.Skipped[0].Reason.Code)
+	}
+}
+
+// TestExecuteOptInDevCacheSkipsWhenStateUnknown verifies dev cache skips when tool state is unknown (fail-closed)
+func TestExecuteOptInDevCacheSkipsWhenStateUnknown(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "go-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryGo {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports unknown state
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationGo,
+				State:       clean.RunningApplicationStateUnknown,
+				Message:     "could not determine process state",
+			},
+		}
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"go-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("expected OptInDeletedCount 0 when state is unknown, got %d", result.Totals.OptInDeletedCount)
+	}
+	if len(adapter.paths) != 0 {
+		t.Fatalf("expected adapter to receive 0 paths when state is unknown, got %d: %v", len(adapter.paths), adapter.paths)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("expected 1 skipped item when state is unknown, got %d", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "dev_tool_running" {
+		t.Fatalf("expected reason code dev_tool_running, got %q", result.Skipped[0].Reason.Code)
+	}
+}
+
+// TestExecuteOptInNPMCacheStillCleansWhenNodeRunning verifies npm-cache still cleans when node is running (runtime-hosted)
+func TestExecuteOptInNPMCacheStillCleansWhenNodeRunning(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "npm-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryNPM {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports Node as running
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationNode,
+				State:       clean.RunningApplicationStateRunning,
+			},
+		}
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"npm-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	// npm-cache should still be cleaned even though node is running
+	found := false
+	for _, p := range adapter.paths {
+		if p == cachePath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive npm-cache path even when node is running, got %v", adapter.paths)
+	}
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1 for npm-cache when node is running, got %d", result.Totals.OptInDeletedCount)
+	}
+}
+
+// TestExecuteOptInPipCacheStillCleansWhenPythonRunning verifies pip-cache still cleans when python is running (runtime-hosted)
+func TestExecuteOptInPipCacheStillCleansWhenPythonRunning(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "pip-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryPip {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports Python as running
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationPython,
+				State:       clean.RunningApplicationStateRunning,
+			},
+		}
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"pip-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	// pip-cache should still be cleaned even though python is running
+	found := false
+	for _, p := range adapter.paths {
+		if p == cachePath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive pip-cache path even when python is running, got %v", adapter.paths)
+	}
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1 for pip-cache when python is running, got %d", result.Totals.OptInDeletedCount)
+	}
+}
+
+// TestExecuteOptInCorepackCacheStillCleansWhenNodeRunning verifies corepack-cache still cleans when node is running (runtime-hosted)
+func TestExecuteOptInCorepackCacheStillCleansWhenNodeRunning(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "corepack-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryCorepack {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports Node as running
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationNode,
+				State:       clean.RunningApplicationStateRunning,
+			},
+		}
+	}
+
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{"corepack-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	// corepack-cache should still be cleaned even though node is running
+	found := false
+	for _, p := range adapter.paths {
+		if p == cachePath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected adapter to receive corepack-cache path even when node is running, got %v", adapter.paths)
+	}
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1 for corepack-cache when node is running, got %d", result.Totals.OptInDeletedCount)
+	}
+}
+
+// TestDryRunOptInDevCacheHidesWhenToolRunning verifies dev cache doesn't appear as opt-in candidate when tool is running
+func TestDryRunOptInDevCacheHidesWhenToolRunning(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "go-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryGo {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports Go as running
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationGo,
+				State:       clean.RunningApplicationStateRunning,
+			},
+		}
+	}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		OptIn:                     []string{"go-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	// Should not appear as an opt-in candidate when tool is running
+	if len(result.OptInCandidates) != 0 {
+		t.Fatalf("expected 0 opt-in candidates when Go is running, got %d", len(result.OptInCandidates))
+	}
+}
+
+// TestDryRunOptInDevCacheShowsWhenToolIdle verifies dev cache appears as opt-in candidate when tool is idle
+func TestDryRunOptInDevCacheShowsWhenToolIdle(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "go-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(cachePath, "data.bin")
+	if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) string {
+		if category == clean.DevCacheCategoryGo {
+			return cachePath
+		}
+		return ""
+	}
+
+	// Create a detector that reports Go as idle
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{
+				Application: clean.ApplicationGo,
+				State:       clean.RunningApplicationStateIdle,
+			},
+		}
+	}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		OptIn:                     []string{"go-cache"},
+		DevCachePathResolver:      fakeResolver,
+		DetectRunningApplications: detector,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	// Should appear as an opt-in candidate when tool is idle
+	if len(result.OptInCandidates) != 1 {
+		t.Fatalf("expected 1 opt-in candidate when Go is idle, got %d", len(result.OptInCandidates))
+	}
+	if result.OptInCandidates[0].Path != cachePath {
+		t.Fatalf("expected candidate path %q, got %q", cachePath, result.OptInCandidates[0].Path)
+	}
+}
+
+// TestExecuteWithoutOptInDoesNotRunDevToolDetection verifies default execute without opt-in doesn't run detection
+func TestExecuteWithoutOptInDoesNotRunDevToolDetection(t *testing.T) {
+	adapter := &recordingRecycleBinAdapter{}
+	detectionCalled := false
+
+	detector := func(ctx context.Context) []clean.RunningApplicationState {
+		detectionCalled = true
+		return nil
+	}
+
+	// Set up a default candidate to ensure Execute runs
+	root := t.TempDir()
+	candidate := filepath.Join(root, "foal-owned.tmp")
+	if err := os.WriteFile(candidate, []byte("temp data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := clean.Execute(context.Background(), clean.Options{
+		RecycleBinAdapter:         adapter,
+		OptIn:                     []string{}, // No opt-in
+		DetectRunningApplications: detector,
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+
+	// Verify detection was NOT called (execute without opt-in shouldn't need it)
+	if detectionCalled {
+		t.Fatalf("expected DetectRunningApplications to NOT be called without --opt-in")
+	}
+
+	// Verify default candidate still executes normally
+	if result.Totals.DeletedCount != 1 {
+		t.Fatalf("expected DeletedCount 1, got %d", result.Totals.DeletedCount)
+	}
+}
+
+// TestDetectSupportedApplicationsIncludesDevTools verifies DetectSupportedApplications detects dev tools
+func TestDetectSupportedApplicationsIncludesDevTools(t *testing.T) {
+	// We can't easily test the real process snapshot, but we can verify
+	// the new Application constants exist and are used correctly
+	if clean.ApplicationGo == "" {
+		t.Fatalf("ApplicationGo should not be empty")
+	}
+	if clean.ApplicationCargo == "" {
+		t.Fatalf("ApplicationCargo should not be empty")
+	}
+	if clean.ApplicationDotNet == "" {
+		t.Fatalf("ApplicationDotNet should not be empty")
+	}
+	if clean.ApplicationNuGet == "" {
+		t.Fatalf("ApplicationNuGet should not be empty")
+	}
+	if clean.ApplicationNode == "" {
+		t.Fatalf("ApplicationNode should not be empty")
+	}
+	if clean.ApplicationPython == "" {
+		t.Fatalf("ApplicationPython should not be empty")
+	}
+}

@@ -150,6 +150,12 @@ type RunningApplicationStatus string
 const (
 	ApplicationGoogleChrome                = "google_chrome"
 	ApplicationMicrosoftEdge               = "microsoft_edge"
+	ApplicationGo                          = "go"
+	ApplicationCargo                       = "cargo"
+	ApplicationDotNet                      = "dotnet"
+	ApplicationNuGet                       = "nuget"
+	ApplicationNode                        = "node"
+	ApplicationPython                      = "python"
 	RunningApplicationStateRunning         = RunningApplicationStatus("running")
 	RunningApplicationStateIdle            = RunningApplicationStatus("idle")
 	RunningApplicationStateUnknown         = RunningApplicationStatus("unknown")
@@ -157,6 +163,7 @@ const (
 	recycleBinDisabledIssueCode            = "recycle_bin_disabled"
 	recycleBinCapacityIssueCode            = "recycle_bin_capacity"
 	recycleBinCapacityProbeFailedIssueCode = "recycle_bin_capacity_probe_failed"
+	devToolRunningIssueCode                = "dev_tool_running"
 )
 
 type RunningApplicationState struct {
@@ -210,6 +217,14 @@ func dryRun(ctx context.Context, opts Options) Result {
 		resolveDevCache = ResolveDevCachePath
 	}
 
+	// Get running application states if detector is available
+	var runningStates []RunningApplicationState
+	hasRunningDetector := opts.DetectRunningApplications != nil
+	if hasRunningDetector {
+		runningStates = opts.DetectRunningApplications(ctx)
+		// Note: applyBrowserCacheReview will add these states to result.RunningApplications later
+	}
+
 	// Process opted-in dev caches
 	optedInDevCachePaths := make(map[string]bool)
 	for category := range optInEnabled {
@@ -222,6 +237,15 @@ func dryRun(ctx context.Context, opts Options) Result {
 		}
 		if opts.Validator.IsUserProtected(path) {
 			continue
+		}
+		// Check if this dev cache needs a running application check
+		if hasRunningDetector && devCacheCategoryRequiresRunningCheck(category) {
+			appsToCheck := devCacheCategoryToApplications(category)
+			if devToolIsRunningOrUnknown(runningStates, appsToCheck) {
+				// Skip adding as opt-in candidate - tool is running or state unknown
+				// We don't add to skipped in dry-run, just don't show as candidate
+				continue
+			}
 		}
 		// Measure the size
 		bytes, err := measureBytes(path)
@@ -589,6 +613,13 @@ func Execute(ctx context.Context, opts Options) Result {
 			resolveDevCache = ResolveDevCachePath
 		}
 
+		// Get running application states if detector is available
+		var runningStates []RunningApplicationState
+		hasRunningDetector := opts.DetectRunningApplications != nil
+		if hasRunningDetector {
+			runningStates = opts.DetectRunningApplications(ctx)
+		}
+
 		// Struct to track path with its category and byte size
 		type optInPath struct {
 			path     string
@@ -605,6 +636,34 @@ func Execute(ctx context.Context, opts Options) Result {
 			path := resolveDevCache(category)
 			if path == "" {
 				continue
+			}
+			// Check if this dev cache needs a running application check
+			if hasRunningDetector && devCacheCategoryRequiresRunningCheck(category) {
+				appsToCheck := devCacheCategoryToApplications(category)
+				if devToolIsRunningOrUnknown(runningStates, appsToCheck) {
+					// Fresh measure before skipping
+					bytes, err := measureBytes(path)
+					if err == nil {
+						// Get display names for the skipped apps
+						var appNames []string
+						for _, app := range appsToCheck {
+							appNames = append(appNames, applicationDisplayName(app))
+						}
+						var reasonMessage string
+						if len(appNames) == 1 {
+							reasonMessage = fmt.Sprintf("%s is running or its state could not be determined; skipping dev cache cleanup", appNames[0])
+						} else {
+							reasonMessage = fmt.Sprintf("%s or %s is running or their state could not be determined; skipping dev cache cleanup", appNames[0], appNames[1])
+						}
+						result.Skipped = append(result.Skipped, SkippedItem{
+							Path:   path,
+							Bytes:  bytes,
+							Rule:   category,
+							Reason: issue(devToolRunningIssueCode, reasonMessage, true, path, category),
+						})
+					}
+					continue
+				}
 			}
 			// Fresh measure before deletion
 			bytes, err := measureBytes(path)

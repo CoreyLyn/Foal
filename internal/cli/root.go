@@ -248,12 +248,12 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			// For execute, only set up running-application detection if we have opted-in categories.
 			// Default execute behavior is preserved (no detection).
 			if len(optInSlice) > 0 {
-				cleanOptions.DetectRunningApplications = clean.DetectSupportedBrowserApplications
+				cleanOptions.DetectRunningApplications = clean.DetectSupportedApplications
 			}
 			result = executeClean(context.Background(), cleanOptions)
 		} else {
-			// For dry-run, always enable running-application detection for browser_cache review.
-			cleanOptions.DetectRunningApplications = clean.DetectSupportedBrowserApplications
+			// For dry-run, always enable running-application detection for browser_cache review and dev cache gating.
+			cleanOptions.DetectRunningApplications = clean.DetectSupportedApplications
 			result = dryRunClean(context.Background(), cleanOptions)
 		}
 		if opts.json {
