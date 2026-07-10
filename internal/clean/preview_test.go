@@ -2665,3 +2665,38 @@ func sequenceBrowserDetector(states ...clean.RunningApplicationStatus) func(cont
 		}
 	}
 }
+
+func TestPreviewReadModelProjectsCanonicalOptInCategorySelection(t *testing.T) {
+	result := clean.Result{
+		Candidates:    []clean.CandidatePreview{{Path: `C:\default`, Bytes: 11}},
+		Opportunities: []clean.Opportunity{{Category: clean.OpportunityCategoryUserTemp, Bytes: 7}},
+		OptInCandidates: []clean.OptInCandidate{
+			{Path: `C:\CrashDumps\a.dmp`, Category: clean.OpportunityCategoryCrashDumps, Bytes: 13},
+			{Path: `C:\CrashDumps\b.dmp`, Category: clean.OpportunityCategoryCrashDumps, Bytes: 17},
+		},
+		Totals: clean.Totals{OpportunityObservedBytes: 7, OptInReclaimableBytes: 30},
+	}
+
+	model := clean.NewPreviewReadModelForSelection(result, []string{clean.OpportunityCategoryCrashDumps})
+	if model.PotentialSpaceBytes != 11 || model.OptInReclaimableBytes != 30 || model.OpportunityObservedBytes != 7 {
+		t.Fatalf("separate totals = potential %d, opt-in %d, observed %d", model.PotentialSpaceBytes, model.OptInReclaimableBytes, model.OpportunityObservedBytes)
+	}
+	var crash, userTemp clean.PreviewOptInCategory
+	for _, category := range model.OptInCategories {
+		switch category.Identifier {
+		case clean.OpportunityCategoryCrashDumps:
+			crash = category
+		case clean.OpportunityCategoryUserTemp:
+			userTemp = category
+		}
+		if strings.Contains(category.Identifier, `\`) {
+			t.Fatalf("category selection leaked a path: %#v", category)
+		}
+	}
+	if !crash.Selected || crash.CandidateCount != 2 || crash.ReclaimableBytes != 30 || crash.ReportCategory != clean.ReportCategorySystem {
+		t.Fatalf("crash summary = %#v", crash)
+	}
+	if userTemp.Selected || userTemp.CandidateCount != 0 || userTemp.ObservedBytes != 7 {
+		t.Fatalf("user temp summary = %#v", userTemp)
+	}
+}

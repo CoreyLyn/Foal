@@ -163,6 +163,128 @@ func stubCleanPreviewDryRun(t *testing.T) {
 	})
 }
 
+func TestCleanCategorySelectionRefreshesPreviewWithCanonicalIDs(t *testing.T) {
+	originalDryRun := dryRunClean
+	var received [][]string
+	dryRunClean = func(_ context.Context, opts clean.Options) clean.Result {
+		received = append(received, append([]string(nil), opts.OptIn...))
+		result := clean.Result{}
+		if len(opts.OptIn) == 1 {
+			result.OptInCandidates = []clean.OptInCandidate{{Category: opts.OptIn[0], Path: `C:\private\candidate`, Bytes: 42}}
+			result.Totals.OptInReclaimableBytes = 42
+		}
+		return result
+	}
+	t.Cleanup(func() { dryRunClean = originalDryRun })
+
+	model := newCleanModel(120, 40)
+	model.loadGeneration = 1
+	model.applyLoaded(cleanPreviewLoadedMsg{generation: 1, model: clean.NewPreviewReadModelForSelection(clean.Result{}, nil)})
+	if len(model.selectedCategoryIDs()) != 0 {
+		t.Fatal("new Clean TUI session must start with empty opt-in selection")
+	}
+
+	cmd := model.handleKey(" ")
+	if cmd == nil || !model.loading {
+		t.Fatal("toggle must immediately stale the prior preview and start loading")
+	}
+	msg := cmd().(cleanPreviewLoadedMsg)
+	if len(received) != 1 || len(received[0]) != 1 || received[0][0] != clean.OpportunityCategoryCrashDumps {
+		t.Fatalf("DryRun OptIn = %#v; want canonical crash_dumps only", received)
+	}
+	model.applyLoaded(msg)
+	if model.loading || model.model.OptInReclaimableBytes != 42 || !model.model.OptInCategories[0].Selected {
+		t.Fatalf("selected preview was not applied: %#v", model.model)
+	}
+	if strings.Contains(strings.Join(model.selectedCategoryIDs(), "\n"), `C:\private`) {
+		t.Fatal("selection state must never contain candidate paths")
+	}
+
+	cmd = model.handleKey(" ")
+	msg = cmd().(cleanPreviewLoadedMsg)
+	if len(received[1]) != 0 {
+		t.Fatalf("deselect DryRun OptIn = %#v; want empty", received[1])
+	}
+	model.applyLoaded(msg)
+}
+
+func TestCleanCategorySelectAllClearAllAndStaleGeneration(t *testing.T) {
+	originalDryRun := dryRunClean
+	dryRunClean = func(_ context.Context, opts clean.Options) clean.Result { return clean.Result{} }
+	t.Cleanup(func() { dryRunClean = originalDryRun })
+
+	model := newCleanModel(120, 40)
+	model.loadGeneration = 1
+	model.applyLoaded(cleanPreviewLoadedMsg{generation: 1, model: clean.NewPreviewReadModelForSelection(clean.Result{}, nil)})
+	selectAll := model.handleKey("a")
+	allMsg := selectAll().(cleanPreviewLoadedMsg)
+	if got, want := len(model.selected), len(model.model.OptInCategories); got != want || got == 0 {
+		t.Fatalf("select all selected %d of %d categories", got, want)
+	}
+
+	model.applyLoaded(cleanPreviewLoadedMsg{generation: allMsg.generation - 1, model: clean.PreviewReadModel{OptInReclaimableBytes: 999}})
+	if !model.loading || model.model.OptInReclaimableBytes == 999 {
+		t.Fatal("late superseded generation must be discarded")
+	}
+	model.applyLoaded(allMsg)
+	clearAll := model.handleKey("x")
+	if clearAll == nil || len(model.selected) != 0 || !model.loading {
+		t.Fatal("clear all must empty selection and refresh preview")
+	}
+}
+
+func TestCleanCanceledAndFailedSelectionPreviewRemainNotReady(t *testing.T) {
+	originalDryRun := dryRunClean
+	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+		if opts.DetailedListDir != "" || opts.HistoryRecorder != nil {
+			t.Fatal("TUI selection preview must not write detailed lists or history")
+		}
+		<-ctx.Done()
+		return clean.Result{Status: "error"}
+	}
+	t.Cleanup(func() { dryRunClean = originalDryRun })
+
+	model := newCleanModel(120, 40)
+	model.loadGeneration = 1
+	model.applyLoaded(cleanPreviewLoadedMsg{generation: 1, model: clean.NewPreviewReadModelForSelection(clean.Result{}, nil)})
+	cmd := model.handleKey("a")
+	model.cancelPendingLoad()
+	msg := cmd().(cleanPreviewLoadedMsg)
+	model.applyLoaded(msg)
+	if model.previewReady || model.loading || !strings.Contains(model.content(), "not ready") {
+		t.Fatalf("canceled preview became ready:\n%s", model.content())
+	}
+
+	model.loadGeneration++
+	model.applyLoaded(cleanPreviewLoadedMsg{generation: model.loadGeneration, failed: true})
+	if model.previewReady || !strings.Contains(model.content(), "failed") {
+		t.Fatalf("failed preview became ready:\n%s", model.content())
+	}
+}
+
+func TestCleanCategoryKeyboardActionsRenderPreviewOnlySelection(t *testing.T) {
+	model := newCleanModel(180, 60)
+	model.loadGeneration = 1
+	model.applyLoaded(cleanPreviewLoadedMsg{generation: 1, model: clean.NewPreviewReadModelForSelection(clean.Result{}, nil)})
+	content := model.content()
+	if !strings.Contains(content, "[ ] Crash dumps (review-only") || !strings.Contains(content, "tab category | space toggle | a select all | x clear all") {
+		t.Fatalf("empty selection actions or review-only wording missing:\n%s", content)
+	}
+	model.handleKey("tab")
+	if !strings.Contains(model.content(), "Category focus: Windows Error Reporting") {
+		t.Fatalf("tab did not move category focus:\n%s", model.content())
+	}
+	model.model = clean.NewPreviewReadModelForSelection(clean.Result{
+		OptInCandidates: []clean.OptInCandidate{{Category: clean.OpportunityCategoryWindowsErrorReporting, Bytes: 21}},
+		Totals:          clean.Totals{OptInReclaimableBytes: 21},
+	}, []string{clean.OpportunityCategoryWindowsErrorReporting})
+	model.refreshViewportContent()
+	if !strings.Contains(model.content(), "[x] Windows Error Reporting (selected preview, 1 candidate(s), 21 bytes opt-in reclaimable)") ||
+		strings.Contains(model.content(), "confirmation") {
+		t.Fatalf("selected preview wording crossed the confirmation boundary:\n%s", model.content())
+	}
+}
+
 func openCleanPreview(t *testing.T) rootModel {
 	t.Helper()
 	model := newRootModel()
