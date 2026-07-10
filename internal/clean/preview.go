@@ -238,14 +238,10 @@ func dryRun(ctx context.Context, opts Options) Result {
 		if opts.Validator.IsUserProtected(path) {
 			continue
 		}
-		// Check if this dev cache needs a running application check
-		if hasRunningDetector && devCacheCategoryRequiresRunningCheck(category) {
-			appsToCheck := devCacheCategoryToApplications(category)
-			if devToolIsRunningOrUnknown(runningStates, appsToCheck) {
-				// Skip adding as opt-in candidate - tool is running or state unknown
-				// We don't add to skipped in dry-run, just don't show as candidate
-				continue
-			}
+		// Gate on running-application state (distinctive-process tools only).
+		// dry-run drops the skip reason; execute records it. Unifying is #1.
+		if hasRunningDetector && !(runningGate{}).gateDevCache(category, path, runningStates).proceed {
+			continue
 		}
 		// Measure the size
 		bytes, err := measureBytes(path)
@@ -361,12 +357,13 @@ func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result, 
 			result.Errors = append(result.Errors, runningApplicationUnknownIssue(state))
 		}
 	}
+	gate := runningGate{detect: opts.DetectRunningApplications}
 	for _, config := range browserCacheConfigs {
-		applyOneBrowserCacheReview(ctx, opts, result, preStates, config, optInEnabled)
+		applyOneBrowserCacheReview(ctx, opts, result, gate, preStates, config, optInEnabled)
 	}
 }
 
-func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Result, preStates []RunningApplicationState, config browserCacheConfig, optInEnabled map[string]bool) {
+func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Result, gate runningGate, preStates []RunningApplicationState, config browserCacheConfig, optInEnabled map[string]bool) {
 	if localAppDataDir := browserCacheLocalAppDataDir(opts.BrowserCacheDiscoveryOptions); localAppDataDir != "" {
 		suppressed, protectedRulePaths := browserDiscoverySuppressed(browserUserDataRoot(localAppDataDir, config), opts.Validator)
 		if suppressed {
@@ -374,12 +371,13 @@ func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Resul
 			return
 		}
 	}
-	preState, ok := runningApplicationStateFor(preStates, config.application)
-	if !ok || preState.State != RunningApplicationStateIdle {
+	outcome := gate.gateBrowser(ctx, config.application, preStates, func() browserCacheDiscoveryResult {
+		return discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)
+	})
+	if !outcome.preIdle {
 		return
 	}
-
-	discovery := discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)
+	discovery := outcome.discovery
 	if discovery.suppressed {
 		suppressProtectionRules(result, discovery.suppressedProtectionPaths)
 		return
@@ -395,16 +393,12 @@ func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Resul
 		}
 		return
 	}
-
-	postStates := opts.DetectRunningApplications(ctx)
-	postState, ok := runningApplicationStateFor(postStates, config.application)
-	if !ok {
-		return
-	}
-	if postState.State != RunningApplicationStateIdle {
-		replaceRunningApplicationState(result, postState)
-		if postState.State == RunningApplicationStateUnknown {
-			result.Errors = append(result.Errors, runningApplicationUnknownIssue(postState))
+	if !outcome.postIdle {
+		if outcome.postState != nil {
+			replaceRunningApplicationState(result, *outcome.postState)
+		}
+		if outcome.postDiagnostic != nil {
+			result.Errors = append(result.Errors, *outcome.postDiagnostic)
 		}
 		return
 	}
@@ -637,29 +631,17 @@ func Execute(ctx context.Context, opts Options) Result {
 			if path == "" {
 				continue
 			}
-			// Check if this dev cache needs a running application check
-			if hasRunningDetector && devCacheCategoryRequiresRunningCheck(category) {
-				appsToCheck := devCacheCategoryToApplications(category)
-				if devToolIsRunningOrUnknown(runningStates, appsToCheck) {
+			// Gate on running-application state (distinctive-process tools).
+			if hasRunningDetector {
+				if outcome := (runningGate{}).gateDevCache(category, path, runningStates); !outcome.proceed {
 					// Fresh measure before skipping
 					bytes, err := measureBytes(path)
 					if err == nil {
-						// Get display names for the skipped apps
-						var appNames []string
-						for _, app := range appsToCheck {
-							appNames = append(appNames, applicationDisplayName(app))
-						}
-						var reasonMessage string
-						if len(appNames) == 1 {
-							reasonMessage = fmt.Sprintf("%s is running or its state could not be determined; skipping dev cache cleanup", appNames[0])
-						} else {
-							reasonMessage = fmt.Sprintf("%s or %s is running or their state could not be determined; skipping dev cache cleanup", appNames[0], appNames[1])
-						}
 						result.Skipped = append(result.Skipped, SkippedItem{
 							Path:   path,
 							Bytes:  bytes,
 							Rule:   category,
-							Reason: issue(devToolRunningIssueCode, reasonMessage, true, path, category),
+							Reason: *outcome.skipReason,
 						})
 					}
 					continue
@@ -716,23 +698,25 @@ func Execute(ctx context.Context, opts Options) Result {
 			}
 		}
 
-		// Process browser cache separately - it needs running app detection and uses individual cache paths
+		// Process browser cache separately - it needs running app detection and uses individual cache paths.
+		// Execute currently drops post-state and diagnostics (a divergence #1 will fix); the gate still
+		// owns the pre/discover/post sequence so the gating rule is centralized.
 		if optInCategoryEnabled(optInEnabled, OpportunityCategoryBrowserCache) && opts.DetectRunningApplications != nil {
 			preStates := opts.DetectRunningApplications(ctx)
+			gate := runningGate{detect: opts.DetectRunningApplications}
 			for _, config := range browserCacheConfigs {
-				// Check if browser is idle before discovery
-				preState, ok := runningApplicationStateFor(preStates, config.application)
-				if !ok || preState.State != RunningApplicationStateIdle {
+				outcome := gate.gateBrowser(ctx, config.application, preStates, func() browserCacheDiscoveryResult {
+					return discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)
+				})
+				if !outcome.preIdle {
 					continue
 				}
-				discovery := discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)
+				discovery := outcome.discovery
 				if discovery.suppressed || discovery.diagnostic != nil || discovery.incomplete != nil || discovery.opportunity == nil || browserOpportunityProtected(opts.Validator, *discovery.opportunity) {
 					continue
 				}
 				// Post-check that browser is still idle
-				postStates := opts.DetectRunningApplications(ctx)
-				postState, ok := runningApplicationStateFor(postStates, config.application)
-				if !ok || postState.State != RunningApplicationStateIdle {
+				if !outcome.postIdle {
 					continue
 				}
 				// Add each individual cache directory
