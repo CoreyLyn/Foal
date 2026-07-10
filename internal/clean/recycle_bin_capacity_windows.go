@@ -3,92 +3,171 @@
 package clean
 
 import (
+	"errors"
+	"fmt"
+	"math"
 	"path/filepath"
+	"strings"
+	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
-// DefaultRecycleBinMaxCapacity is the default maximum Recycle Bin capacity
-// in bytes when no explicit configuration is found.
-const DefaultRecycleBinMaxCapacity = 100 * 1024 * 1024 * 1024 // 100 GB
+var (
+	kernel32                        = windows.NewLazySystemDLL("kernel32.dll")
+	shell32                         = windows.NewLazySystemDLL("shell32.dll")
+	procGetVolumePathNameW          = kernel32.NewProc("GetVolumePathNameW")
+	procGetVolumeNameForMountPointW = kernel32.NewProc("GetVolumeNameForVolumeMountPointW")
+	procSHQueryRecycleBinW          = shell32.NewProc("SHQueryRecycleBinW")
+)
 
-// volumeSizeFunc is the type for looking up a volume's total size in bytes.
-type volumeSizeFunc func(path string) (int64, error)
-
-// getVolumeSize is the real implementation that calls Windows GetDiskFreeSpaceExW.
-func getVolumeSize(path string) (int64, error) {
-	// Get the volume root (e.g., "C:\") from the path.
-	volumeRoot := filepath.VolumeName(path) + "\\"
-
-	var freeBytesAvailable, totalNumberOfBytes, totalNumberOfFreeBytes uint64
-	volumeRootUTF16, err := windows.UTF16PtrFromString(volumeRoot)
-	if err != nil {
-		return DefaultRecycleBinMaxCapacity, err
-	}
-
-	err = windows.GetDiskFreeSpaceEx(volumeRootUTF16, &freeBytesAvailable, &totalNumberOfBytes, &totalNumberOfFreeBytes)
-	if err != nil {
-		return DefaultRecycleBinMaxCapacity, err
-	}
-
-	return int64(totalNumberOfBytes), nil
+type recycleBinVolumeProbeDependencies struct {
+	volumeIdentity func(path string) (root string, volume string, err error)
+	readConfig     func(volume string) (nukeOnDelete bool, maxCapacityValue uint64, err error)
+	currentUsage   func(root string) (int64, error)
 }
 
 func recycleBinVolumeCapacity(path string) (RecycleBinVolumeConfig, error) {
-	return recycleBinVolumeCapacityWithVolumeSize(path, getVolumeSize)
+	return recycleBinVolumeCapacityWithDependencies(path, recycleBinVolumeProbeDependencies{
+		volumeIdentity: windowsVolumeIdentity,
+		readConfig:     readRecycleBinVolumeConfig,
+		currentUsage:   queryRecycleBinUsage,
+	})
 }
 
-// recycleBinVolumeCapacityWithVolumeSize implements the probe logic with injectable volume size lookup for testing.
-func recycleBinVolumeCapacityWithVolumeSize(path string, getVolumeSize volumeSizeFunc) (RecycleBinVolumeConfig, error) {
-	config := RecycleBinVolumeConfig{
-		NukeOnDelete: false,
-		MaxCapacity:  DefaultRecycleBinMaxCapacity,
-	}
-
-	// Check global BitBucket configuration
-	return checkGlobalBitBucketConfig(path, config, getVolumeSize)
-}
-
-func checkGlobalBitBucketConfig(path string, defaultConfig RecycleBinVolumeConfig, getVolumeSize volumeSizeFunc) (RecycleBinVolumeConfig, error) {
-	config := defaultConfig
-
-	// Open HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket
-	key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket`, registry.READ)
+func recycleBinVolumeCapacityWithDependencies(path string, deps recycleBinVolumeProbeDependencies) (RecycleBinVolumeConfig, error) {
+	root, volume, err := deps.volumeIdentity(path)
+	config := RecycleBinVolumeConfig{Volume: volume}
 	if err != nil {
-		// If key doesn't exist, use defaults
-		return config, nil
+		return config, fmt.Errorf("resolve Recycle Bin volume: %w", err)
 	}
-	defer key.Close()
-
-	// Read NukeOnDelete (DWORD: 1 = disabled)
-	nukeOnDelete, _, err := key.GetIntegerValue("NukeOnDelete")
-	if err == nil {
-		config.NukeOnDelete = nukeOnDelete != 0
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(volume) == "" {
+		return config, errors.New("resolve Recycle Bin volume: empty volume identity")
 	}
 
-	// Read MaxCapacity (DWORD: percentage 0-100 if <=100, MB if >100)
-	maxCapacityVal, _, err := key.GetIntegerValue("MaxCapacity")
-	if err == nil {
-		config.MaxCapacity = interpretMaxCapacity(maxCapacityVal, path, getVolumeSize)
+	nukeOnDelete, maxCapacityValue, err := deps.readConfig(volume)
+	if err != nil {
+		return config, fmt.Errorf("read Recycle Bin configuration: %w", err)
 	}
-
+	config.NukeOnDelete = nukeOnDelete
+	config.MaxCapacity, err = interpretMaxCapacity(maxCapacityValue)
+	if err != nil {
+		return config, fmt.Errorf("interpret Recycle Bin capacity: %w", err)
+	}
+	config.CurrentUsage, err = deps.currentUsage(root)
+	if err != nil {
+		return config, fmt.Errorf("query Recycle Bin usage: %w", err)
+	}
+	if config.CurrentUsage < 0 {
+		return config, errors.New("query Recycle Bin usage: negative usage")
+	}
 	return config, nil
 }
 
-func interpretMaxCapacity(val uint64, path string, getVolumeSize volumeSizeFunc) int64 {
-	if val == 0 {
-		return DefaultRecycleBinMaxCapacity
+func windowsVolumeIdentity(path string) (string, string, error) {
+	pathPtr, err := windows.UTF16PtrFromString(filepath.Clean(path))
+	if err != nil {
+		return "", "", err
 	}
-	if val <= 100 {
-		// It's a percentage - calculate actual capacity from volume size
-		volumeSize, err := getVolumeSize(path)
-		if err != nil {
-			return DefaultRecycleBinMaxCapacity
-		}
-		// Calculate percentage: (val / 100) * volumeSize
-		return int64((uint64(volumeSize) * val) / 100)
+	rootBuffer := make([]uint16, windows.MAX_PATH+1)
+	result, _, callErr := procGetVolumePathNameW.Call(
+		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(unsafe.Pointer(&rootBuffer[0])),
+		uintptr(len(rootBuffer)),
+	)
+	if result == 0 {
+		return "", "", windowsCallError("GetVolumePathNameW", callErr)
 	}
-	// It's megabytes
-	return int64(val) * 1024 * 1024
+	root := windows.UTF16ToString(rootBuffer)
+	rootPtr, err := windows.UTF16PtrFromString(root)
+	if err != nil {
+		return "", "", err
+	}
+	volumeBuffer := make([]uint16, windows.MAX_PATH+1)
+	result, _, callErr = procGetVolumeNameForMountPointW.Call(
+		uintptr(unsafe.Pointer(rootPtr)),
+		uintptr(unsafe.Pointer(&volumeBuffer[0])),
+		uintptr(len(volumeBuffer)),
+	)
+	if result == 0 {
+		return root, "", windowsCallError("GetVolumeNameForVolumeMountPointW", callErr)
+	}
+	return root, windows.UTF16ToString(volumeBuffer), nil
+}
+
+func windowsCallError(name string, err error) error {
+	if err == nil || errors.Is(err, syscall.Errno(0)) {
+		return errors.New(name + " failed")
+	}
+	return fmt.Errorf("%s: %w", name, err)
+}
+
+func readRecycleBinVolumeConfig(volume string) (bool, uint64, error) {
+	volumeKey, err := recycleBinRegistryVolumeKey(volume)
+	if err != nil {
+		return false, 0, err
+	}
+	key, err := registry.OpenKey(
+		registry.CURRENT_USER,
+		`Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket\Volume\`+volumeKey,
+		registry.READ,
+	)
+	if err != nil {
+		return false, 0, err
+	}
+	defer key.Close()
+
+	nukeOnDelete, _, err := key.GetIntegerValue("NukeOnDelete")
+	if err != nil {
+		return false, 0, err
+	}
+	maxCapacity, _, err := key.GetIntegerValue("MaxCapacity")
+	if err != nil {
+		return false, 0, err
+	}
+	return nukeOnDelete != 0, maxCapacity, nil
+}
+
+func recycleBinRegistryVolumeKey(volume string) (string, error) {
+	trimmed := strings.TrimSuffix(strings.TrimSpace(volume), `\`)
+	const prefix = `\\?\Volume`
+	if !strings.HasPrefix(strings.ToLower(trimmed), strings.ToLower(prefix)) {
+		return "", fmt.Errorf("unsupported volume identity %q", volume)
+	}
+	key := trimmed[len(prefix):]
+	if key == "" {
+		return "", fmt.Errorf("unsupported volume identity %q", volume)
+	}
+	return key, nil
+}
+
+func interpretMaxCapacity(value uint64) (int64, error) {
+	if value > math.MaxInt64/(1024*1024) {
+		return 0, errors.New("Recycle Bin capacity exceeds supported range")
+	}
+	return int64(value) * 1024 * 1024, nil
+}
+
+type shQueryRecycleBinInfo struct {
+	CBSize      uint32
+	I64Size     int64
+	I64NumItems int64
+}
+
+func queryRecycleBinUsage(root string) (int64, error) {
+	rootPtr, err := windows.UTF16PtrFromString(root)
+	if err != nil {
+		return 0, err
+	}
+	info := shQueryRecycleBinInfo{CBSize: uint32(unsafe.Sizeof(shQueryRecycleBinInfo{}))}
+	hResult, _, _ := procSHQueryRecycleBinW.Call(
+		uintptr(unsafe.Pointer(rootPtr)),
+		uintptr(unsafe.Pointer(&info)),
+	)
+	if hResult != 0 {
+		return 0, fmt.Errorf("SHQueryRecycleBinW failed with HRESULT 0x%08x", uint32(hResult))
+	}
+	return info.I64Size, nil
 }

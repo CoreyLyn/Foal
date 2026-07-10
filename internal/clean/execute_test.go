@@ -25,6 +25,18 @@ func (a *recordingRecycleBinAdapter) MoveToRecycleBin(path string) error {
 	return nil
 }
 
+func executeCleanWithSafeCapacity(ctx context.Context, opts clean.Options) clean.Result {
+	if opts.RecycleBinCapacityProbe == nil {
+		opts.RecycleBinCapacityProbe = func(path string) (clean.RecycleBinVolumeConfig, error) {
+			return clean.RecycleBinVolumeConfig{
+				Volume:      filepath.VolumeName(path),
+				MaxCapacity: 1 << 60,
+			}, nil
+		}
+	}
+	return clean.Execute(ctx, opts)
+}
+
 func TestExecuteMovesEligibleCandidatesThroughRecycleBin(t *testing.T) {
 	root := t.TempDir()
 	candidate := filepath.Join(root, "cache.tmp")
@@ -33,7 +45,7 @@ func TestExecuteMovesEligibleCandidatesThroughRecycleBin(t *testing.T) {
 	}
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		RecycleBinAdapter: adapter,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
@@ -80,7 +92,7 @@ func TestExecuteDoesNotDiscoverOrReturnCategorizedOpportunities(t *testing.T) {
 	discoveryCalled := false
 	recorder := &recordingHistoryRecorder{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		RecycleBinAdapter: &recordingRecycleBinAdapter{},
 		HistoryRecorder:   recorder,
 		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
@@ -134,7 +146,7 @@ func TestExecuteDoesNotDiscoverOrReturnCategorizedOpportunities(t *testing.T) {
 }
 
 func TestExecuteDoesNotPerformRunningApplicationDetection(t *testing.T) {
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		RecycleBinAdapter: &recordingRecycleBinAdapter{},
 		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
 			t.Fatal("execute invoked browser running application detection")
@@ -180,7 +192,7 @@ func TestDryRunOpportunityNeverReachesExecuteAdapterOrHistory(t *testing.T) {
 	}
 
 	preview := clean.DryRun(context.Background(), options)
-	result := clean.Execute(context.Background(), options)
+	result := executeCleanWithSafeCapacity(context.Background(), options)
 
 	if len(preview.Opportunities) != 1 || preview.Opportunities[0].Path != opportunity {
 		t.Fatalf("dry-run opportunities = %#v, want review-only path %q", preview.Opportunities, opportunity)
@@ -206,7 +218,7 @@ func TestExecuteRecordsHistorySessionAndDeletedItem(t *testing.T) {
 	}
 	recorder := &recordingHistoryRecorder{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		RecycleBinAdapter: &recordingRecycleBinAdapter{},
 		HistoryRecorder:   recorder,
 		CommandParameters: history.CommandParameters{
@@ -246,7 +258,7 @@ func TestExecuteRecordsHistorySessionAndDeletedItem(t *testing.T) {
 func TestExecuteSkipsUnsafePathsBeforeRecycleBinAdapter(t *testing.T) {
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		RecycleBinAdapter: adapter,
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
@@ -279,7 +291,7 @@ func TestExecuteRecordsUserProtectedCandidateAsSkippedWithoutCallingRecycleBin(t
 	adapter := &recordingRecycleBinAdapter{}
 	recorder := &recordingHistoryRecorder{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Validator:         pathsafe.NewValidator([]string{root}),
 		RecycleBinAdapter: adapter,
 		HistoryRecorder:   recorder,
@@ -318,7 +330,7 @@ func TestExecuteFailsClosedBeforeRecycleBinWhenProtectionFileCannotLoad(t *testi
 	}
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		RecycleBinAdapter: adapter,
 		ProtectionLoadError: &clean.StructuredIssue{
 			Code:        "protection_file_load_failed",
@@ -351,7 +363,7 @@ func TestExecuteReportsRecycleBinPermissionFailureAsSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		RecycleBinAdapter: failingRecycleBinAdapter{err: fs.ErrPermission},
 		Rules: []clean.Rule{{
 			ID:             "test_default_rule",
@@ -384,7 +396,7 @@ func TestExecuteRecordsSkippedHistoryItemForRecycleBinFailure(t *testing.T) {
 	}
 	recorder := &recordingHistoryRecorder{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		RecycleBinAdapter: failingRecycleBinAdapter{err: fs.ErrPermission},
 		HistoryRecorder:   recorder,
 		CommandParameters: history.CommandParameters{
@@ -445,7 +457,7 @@ func TestExecuteIgnoresDryRunDetailedListAndUsesFreshCandidates(t *testing.T) {
 	}
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		RecycleBinAdapter: adapter,
 		DetailedListDir:   detailedListDir,
 		Rules: []clean.Rule{{
@@ -547,7 +559,7 @@ func TestExecuteOptInUserTempMovesToRecycleBinAndRecordsHistory(t *testing.T) {
 	recorder := &recordingHistoryRecorder{}
 
 	opts := clean.Options{
-		Rules:             []clean.Rule{},
+		Rules:             []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter: adapter,
 		HistoryRecorder:   recorder,
 		OptIn:             []string{"user_temp"},
@@ -568,7 +580,7 @@ func TestExecuteOptInUserTempMovesToRecycleBinAndRecordsHistory(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 	// Check only that our user temp was deleted, ignore others
 	found := false
 	for _, p := range adapter.paths {
@@ -797,7 +809,7 @@ func TestOptInUserTempRespectsProtectionRules(t *testing.T) {
 	validator := pathsafe.NewValidator([]string{userTempPath})
 
 	opts := clean.Options{
-		Rules:             []clean.Rule{},
+		Rules:             []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter: adapter,
 		Validator:         validator,
 		OptIn:             []string{"user_temp"},
@@ -824,7 +836,7 @@ func TestOptInUserTempRespectsProtectionRules(t *testing.T) {
 		t.Fatalf("expected no opt-in candidates for protected path, got %d", len(dryRunResult.OptInCandidates))
 	}
 	// Execute should not delete it
-	executeResult := clean.Execute(context.Background(), opts)
+	executeResult := executeCleanWithSafeCapacity(context.Background(), opts)
 	// Check only our user temp wasn't deleted
 	for _, p := range adapter.paths {
 		if p == userTempPath {
@@ -854,7 +866,7 @@ func TestExecuteWithoutOptInDoesNotTouchUserTemp(t *testing.T) {
 	discoveryCalled := false
 
 	opts := clean.Options{
-		Rules:             []clean.Rule{},
+		Rules:             []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter: adapter,
 		HistoryRecorder:   recorder,
 		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
@@ -863,7 +875,7 @@ func TestExecuteWithoutOptInDoesNotTouchUserTemp(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 	if discoveryCalled {
 		t.Fatalf("execute should not call user temp discovery without opt-in")
 	}
@@ -905,13 +917,14 @@ func TestExecuteOptInSkipsWhenRecycleBinDisabled(t *testing.T) {
 	// Fake probe that returns Recycle Bin disabled
 	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
 		return clean.RecycleBinVolumeConfig{
+			Volume:       filepath.VolumeName(path),
 			NukeOnDelete: true,
 			MaxCapacity:  100 * 1024 * 1024,
 		}, nil
 	}
 
 	opts := clean.Options{
-		Rules:                   []clean.Rule{},
+		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter:       adapter,
 		OptIn:                   []string{"user_temp"},
 		RecycleBinCapacityProbe: fakeProbe,
@@ -932,7 +945,7 @@ func TestExecuteOptInSkipsWhenRecycleBinDisabled(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
 	// Adapter should NOT receive the path
 	for _, p := range adapter.paths {
@@ -974,13 +987,14 @@ func TestExecuteOptInSkipsWhenItemExceedsRecycleBinCapacity(t *testing.T) {
 	// Fake probe that returns small MaxCapacity (1 byte)
 	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
 		return clean.RecycleBinVolumeConfig{
+			Volume:       filepath.VolumeName(path),
 			NukeOnDelete: false,
 			MaxCapacity:  1, // Only 1 byte capacity
 		}, nil
 	}
 
 	opts := clean.Options{
-		Rules:                   []clean.Rule{},
+		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter:       adapter,
 		OptIn:                   []string{"user_temp"},
 		RecycleBinCapacityProbe: fakeProbe,
@@ -1001,7 +1015,7 @@ func TestExecuteOptInSkipsWhenItemExceedsRecycleBinCapacity(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
 	// Adapter should NOT receive the path
 	for _, p := range adapter.paths {
@@ -1040,13 +1054,14 @@ func TestExecuteOptInAllowsItemWhenWithinRecycleBinCapacity(t *testing.T) {
 	// Fake probe that returns large enough capacity
 	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
 		return clean.RecycleBinVolumeConfig{
+			Volume:       filepath.VolumeName(path),
 			NukeOnDelete: false,
 			MaxCapacity:  100 * 1024, // 100 KB
 		}, nil
 	}
 
 	opts := clean.Options{
-		Rules:                   []clean.Rule{},
+		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter:       adapter,
 		OptIn:                   []string{"user_temp"},
 		RecycleBinCapacityProbe: fakeProbe,
@@ -1067,7 +1082,7 @@ func TestExecuteOptInAllowsItemWhenWithinRecycleBinCapacity(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
 	// Adapter should receive the path
 	found := false
@@ -1110,11 +1125,11 @@ func TestExecuteOptInSkipsWhenProbeFails(t *testing.T) {
 
 	// Fake probe that returns an error
 	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
-		return clean.RecycleBinVolumeConfig{}, errors.New("probe failed")
+		return clean.RecycleBinVolumeConfig{Volume: filepath.VolumeName(path)}, errors.New("probe failed")
 	}
 
 	opts := clean.Options{
-		Rules:                   []clean.Rule{},
+		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter:       adapter,
 		OptIn:                   []string{"user_temp"},
 		RecycleBinCapacityProbe: fakeProbe,
@@ -1135,7 +1150,7 @@ func TestExecuteOptInSkipsWhenProbeFails(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
 	// Probe failure should be fail-closed - adapter should NOT receive the path
 	for _, p := range adapter.paths {
@@ -1153,7 +1168,7 @@ func TestExecuteOptInSkipsWhenProbeFails(t *testing.T) {
 	}
 }
 
-func TestExecuteOptInUsesDefaultProbeWhenNotInjected(t *testing.T) {
+func TestExecuteOptInUsesSafeInjectedCapacityProbe(t *testing.T) {
 	root := t.TempDir()
 	userTempPath := root + string(filepath.Separator) + "old_temp_dir"
 	if err := os.Mkdir(userTempPath, 0700); err != nil {
@@ -1171,9 +1186,9 @@ func TestExecuteOptInUsesDefaultProbeWhenNotInjected(t *testing.T) {
 
 	adapter := &recordingRecycleBinAdapter{}
 
-	// Don't inject a probe - should use the default
+	// The shared test execute seam injects deterministic safe capacity.
 	opts := clean.Options{
-		Rules:             []clean.Rule{},
+		Rules:             []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter: adapter,
 		OptIn:             []string{"user_temp"},
 		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
@@ -1193,9 +1208,9 @@ func TestExecuteOptInUsesDefaultProbeWhenNotInjected(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
-	// Default probe should allow deletion
+	// The safe probe should allow deletion.
 	found := false
 	for _, p := range adapter.paths {
 		if p == userTempPath {
@@ -1204,10 +1219,10 @@ func TestExecuteOptInUsesDefaultProbeWhenNotInjected(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("expected adapter to receive path with default probe")
+		t.Fatalf("expected adapter to receive path with safe probe")
 	}
 	if result.Totals.OptInDeletedCount != 1 {
-		t.Fatalf("expected OptInDeletedCount 1 with default probe, got %d", result.Totals.OptInDeletedCount)
+		t.Fatalf("expected OptInDeletedCount 1 with safe probe, got %d", result.Totals.OptInDeletedCount)
 	}
 }
 
@@ -1249,7 +1264,7 @@ func TestExecuteOptInNonUserTempCategoryExecutes(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
 	// Verify the adapter received the path
 	found := false
@@ -1313,7 +1328,7 @@ func TestExecuteOptInBrowserCacheSkipsWhenBrowserRunning(t *testing.T) {
 		DetectRunningApplications: detector,
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
 	// Verify nothing was deleted as opt-in (browser was running)
 	for _, d := range result.Deleted {
@@ -1373,7 +1388,7 @@ func TestExecuteOptInBrowserCacheCleansWhenBrowserIdle(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
 	// Verify the cache path was deleted (browser was idle)
 	found := false
@@ -1408,6 +1423,7 @@ func TestExecuteOptInNonUserTempCategoryRespectsCapacityPreCheck(t *testing.T) {
 	// Fake probe that returns very small MaxCapacity
 	fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
 		return clean.RecycleBinVolumeConfig{
+			Volume:       filepath.VolumeName(path),
 			NukeOnDelete: false,
 			MaxCapacity:  1, // Only 1 byte capacity
 		}, nil
@@ -1436,7 +1452,7 @@ func TestExecuteOptInNonUserTempCategoryRespectsCapacityPreCheck(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
 	// Verify adapter did NOT receive the path (capacity check failed)
 	for _, p := range adapter.paths {
@@ -1487,7 +1503,7 @@ func TestExecuteWithoutOptInDoesNotRunDetection(t *testing.T) {
 		},
 	}
 
-	result := clean.Execute(context.Background(), opts)
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
 	// Verify detection was NOT called (default execute without opt-in should not run it)
 	if detectionCalled {
@@ -1531,7 +1547,7 @@ func TestExecuteOptInGoCacheSkipsWhenGoRunning(t *testing.T) {
 
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
@@ -1594,7 +1610,7 @@ func TestExecuteOptInGoCacheCleansWhenGoIdle(t *testing.T) {
 
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
@@ -1654,7 +1670,7 @@ func TestExecuteOptInCargoCacheSkipsWhenCargoRunning(t *testing.T) {
 
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
@@ -1712,7 +1728,7 @@ func TestExecuteOptInNuGetCacheSkipsWhenDotNetRunning(t *testing.T) {
 
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
@@ -1770,7 +1786,7 @@ func TestExecuteOptInNuGetCacheSkipsWhenNuGetRunning(t *testing.T) {
 
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
@@ -1829,7 +1845,7 @@ func TestExecuteOptInDevCacheSkipsWhenStateUnknown(t *testing.T) {
 
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
@@ -1887,7 +1903,7 @@ func TestExecuteOptInNPMCacheStillCleansWhenNodeRunning(t *testing.T) {
 
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
@@ -1947,7 +1963,7 @@ func TestExecuteOptInPipCacheStillCleansWhenPythonRunning(t *testing.T) {
 
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
@@ -2007,7 +2023,7 @@ func TestExecuteOptInCorepackCacheStillCleansWhenNodeRunning(t *testing.T) {
 
 	adapter := &recordingRecycleBinAdapter{}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
@@ -2142,7 +2158,7 @@ func TestExecuteWithoutOptInDoesNotRunDevToolDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := clean.Execute(context.Background(), clean.Options{
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		RecycleBinAdapter:         adapter,
 		OptIn:                     []string{}, // No opt-in
 		DetectRunningApplications: detector,

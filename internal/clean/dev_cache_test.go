@@ -270,7 +270,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 
 		adapter := &recordingRecycleBinAdapter{}
 
-		result := clean.Execute(context.Background(), clean.Options{
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 			OptIn:                 []string{"npm-cache"},
 			DevCachePathResolver:  fakeResolver,
 			RecycleBinAdapter:     adapter,
@@ -346,7 +346,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 
 		adapter := &recordingRecycleBinAdapter{}
 
-		result := clean.Execute(context.Background(), clean.Options{
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 			OptIn:                     []string{"dev-caches"},
 			DevCachePathResolver:      fakeResolver,
 			RecycleBinAdapter:         adapter,
@@ -388,6 +388,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 		// Fake probe that returns very low capacity
 		fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
 			return clean.RecycleBinVolumeConfig{
+				Volume:       filepath.VolumeName(path),
 				NukeOnDelete: false,
 				MaxCapacity:  50, // Too small for our 100-byte file
 			}, nil
@@ -395,7 +396,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 
 		adapter := &recordingRecycleBinAdapter{}
 
-		result := clean.Execute(context.Background(), clean.Options{
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 			OptIn:                     []string{"npm-cache"},
 			DevCachePathResolver:      fakeResolver,
 			RecycleBinCapacityProbe:   fakeProbe,
@@ -441,12 +442,12 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 
 		// Fake probe that returns error
 		fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
-			return clean.RecycleBinVolumeConfig{}, os.ErrNotExist
+			return clean.RecycleBinVolumeConfig{Volume: filepath.VolumeName(path)}, os.ErrNotExist
 		}
 
 		adapter := &recordingRecycleBinAdapter{}
 
-		result := clean.Execute(context.Background(), clean.Options{
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 			OptIn:                     []string{"npm-cache"},
 			DevCachePathResolver:      fakeResolver,
 			RecycleBinCapacityProbe:   fakeProbe,
@@ -493,6 +494,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 		// Fake probe that returns NukeOnDelete true
 		fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
 			return clean.RecycleBinVolumeConfig{
+				Volume:       filepath.VolumeName(path),
 				NukeOnDelete: true,
 				MaxCapacity:  1000,
 			}, nil
@@ -500,7 +502,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 
 		adapter := &recordingRecycleBinAdapter{}
 
-		result := clean.Execute(context.Background(), clean.Options{
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 			OptIn:                     []string{"npm-cache"},
 			DevCachePathResolver:      fakeResolver,
 			RecycleBinCapacityProbe:   fakeProbe,
@@ -533,7 +535,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 
 		adapter := &recordingRecycleBinAdapter{}
 
-		result := clean.Execute(context.Background(), clean.Options{
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 			OptIn:                     []string{"dev-caches"},
 			DevCachePathResolver:      fakeResolver,
 			RecycleBinAdapter:         adapter,
@@ -569,7 +571,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 
 		adapter := &recordingRecycleBinAdapter{}
 
-		result := clean.Execute(context.Background(), clean.Options{
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 			OptIn:                     []string{}, // No opt-in
 			DevCachePathResolver:      fakeResolver,
 			RecycleBinAdapter:         adapter,
