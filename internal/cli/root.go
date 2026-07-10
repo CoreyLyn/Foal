@@ -220,8 +220,10 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 		}
 		// Build opt-in slice for clean.Options
 		var optInSlice []string
-		for name := range optInEnabled {
-			optInSlice = append(optInSlice, name)
+		for _, category := range clean.CanonicalCleanupCategoryCatalog().Summaries() {
+			if optInEnabled[category.Identifier] {
+				optInSlice = append(optInSlice, category.Identifier)
+			}
 		}
 
 		recorder, _ := newHistoryRecorder()

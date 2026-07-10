@@ -366,8 +366,7 @@ func systemReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions
 		}
 	}
 	systemOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
-		category := normalizedOpportunityCategory(opportunity.Category)
-		return category != OpportunityCategoryUserTemp && category != OpportunityCategoryBrowserCache
+		return categoryReportGroup(normalizedOpportunityCategory(opportunity.Category)) == ReportCategorySystem
 	})
 	if len(systemOpportunities) > 0 {
 		lines = append(lines, fmt.Sprintf("  Skipped by default: %d system opportunity item(s)", len(systemOpportunities)+omitted))
@@ -378,8 +377,7 @@ func systemReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions
 	}
 	if opts.IncludeIncompleteInspections {
 		for _, incomplete := range model.IncompleteOpportunityInspections {
-			category := normalizedOpportunityCategory(incomplete.Category)
-			if category == OpportunityCategoryUserTemp || category == OpportunityCategoryBrowserCache {
+			if categoryReportGroup(normalizedOpportunityCategory(incomplete.Category)) != ReportCategorySystem {
 				continue
 			}
 			lines = append(lines, incompleteInspectionLine(incomplete, opts))
@@ -454,7 +452,7 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 	}
 	if opts.IncludeReview {
 		userOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
-			return normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryUserTemp
+			return categoryReportGroup(normalizedOpportunityCategory(opportunity.Category)) == ReportCategoryUserEssentials
 		})
 		if len(userOpportunities) > 0 {
 			lines = append(lines, fmt.Sprintf("  Skipped by default: %d user-temp opportunity item(s)", len(userOpportunities)+omitted))
@@ -485,7 +483,7 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 	}
 	if opts.IncludeIncompleteInspections {
 		for _, incomplete := range model.IncompleteOpportunityInspections {
-			if normalizedOpportunityCategory(incomplete.Category) == OpportunityCategoryUserTemp {
+			if categoryReportGroup(normalizedOpportunityCategory(incomplete.Category)) == ReportCategoryUserEssentials {
 				lines = append(lines, incompleteInspectionLine(incomplete, opts))
 			}
 		}
@@ -497,7 +495,7 @@ func browserReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 	var lines []string
 	if opts.IncludeReview {
 		browserOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
-			return normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryBrowserCache
+			return categoryReportGroup(normalizedOpportunityCategory(opportunity.Category)) == ReportCategoryBrowsers
 		})
 		if len(browserOpportunities) > 0 {
 			lines = append(lines, fmt.Sprintf("  Skipped by default: %d browser opportunity item(s)", len(browserOpportunities)+omitted))
@@ -534,7 +532,7 @@ func browserReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 	}
 	if opts.IncludeIncompleteInspections {
 		for _, incomplete := range model.IncompleteOpportunityInspections {
-			if normalizedOpportunityCategory(incomplete.Category) == OpportunityCategoryBrowserCache {
+			if categoryReportGroup(normalizedOpportunityCategory(incomplete.Category)) == ReportCategoryBrowsers {
 				lines = append(lines, incompleteInspectionLine(incomplete, opts))
 			}
 		}

@@ -133,24 +133,13 @@ func resolveCorepackOptInCachePath(deps devCachePathDependencies) string {
 
 // devCacheCategories returns the list of all dev cache categories.
 func devCacheCategories() []string {
-	return []string{
-		DevCacheCategoryNPM,
-		DevCacheCategoryGo,
-		DevCacheCategoryPip,
-		DevCacheCategoryCargo,
-		DevCacheCategoryNuGet,
-		DevCacheCategoryCorepack,
-	}
+	return developerCacheCategoryIDs()
 }
 
 // isDevCacheCategory checks if a category is a dev cache category.
 func isDevCacheCategory(category string) bool {
-	for _, c := range devCacheCategories() {
-		if c == category {
-			return true
-		}
-	}
-	return false
+	entry, ok := canonicalCategoryEntry(category)
+	return ok && entry.developerCache
 }
 
 // devCacheCategoryMatchesSuggestion checks if a dev cache category matches

@@ -11,9 +11,13 @@ import (
 )
 
 func TestBuiltInOpportunityCatalogContainsOnlyApprovedV1Categories(t *testing.T) {
-	got := []string{OpportunityCategoryUserTemp}
-	for _, definition := range existenceObservedOpportunityCategories {
-		got = append(got, definition.category)
+	var got []string
+	for _, summary := range CanonicalCleanupCategoryCatalog().Summaries() {
+		if summary.Eligibility == CategoryEligibilityOptIn &&
+			summary.ReportCategory != ReportCategoryBrowsers &&
+			summary.ReportCategory != ReportCategoryDeveloperTools {
+			got = append(got, summary.Identifier)
+		}
 	}
 	want := []string{
 		OpportunityCategoryUserTemp,
