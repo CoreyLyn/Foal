@@ -173,6 +173,36 @@ func TestExecuteCancellationRetainsCompletedAndSkippedOutcomesInHistory(t *testi
 	}
 }
 
+func TestExecutePartialAdapterFailureRetainsSuccessAndFailureHistory(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first.tmp")
+	second := filepath.Join(root, "second.tmp")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := 0
+	adapter := recycleBinAdapterFunc(func(string) error {
+		calls++
+		if calls == 2 {
+			return errors.New("adapter failed")
+		}
+		return nil
+	})
+	recorder := &recordingHistoryRecorder{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{RecycleBinAdapter: adapter, HistoryRecorder: recorder, Rules: []clean.Rule{{ID: "test", DefaultEnabled: true, CandidatePaths: []string{first, second}}}})
+	if result.Totals.DeletedCount != 1 || result.Totals.SkippedCount != 1 || result.Totals.AffectedBytes != 4 || result.Skipped[0].Reason.Code != "delete_failed" {
+		t.Fatalf("partial result = %#v", result)
+	}
+	if len(recorder.sessions) != 1 || recorder.sessions[0].Aggregate.DeletedCount != 1 || recorder.sessions[0].Aggregate.SkippedCount != 1 || recorder.sessions[0].Aggregate.AffectedBytes != 4 {
+		t.Fatalf("partial history aggregate = %#v", recorder.sessions)
+	}
+	if len(recorder.items) != 2 || recorder.items[0].Result != "deleted" || recorder.items[1].Result != "skipped" || recorder.items[1].SkippedReason.Code != "delete_failed" {
+		t.Fatalf("partial history items = %#v", recorder.items)
+	}
+}
+
 func TestExecuteFreshOptInResolutionCanTurnPreviewIntoNoOp(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "old-cache")
@@ -197,6 +227,86 @@ func TestExecuteFreshOptInResolutionCanTurnPreviewIntoNoOp(t *testing.T) {
 	result := executeCleanWithSafeCapacity(context.Background(), opts)
 	if len(preview.OptInCandidates) != 1 || result.Totals.DeletedCount != 0 || len(adapter.paths) != 0 {
 		t.Fatalf("execute consumed stale preview: preview=%#v result=%#v paths=%v", preview.OptInCandidates, result, adapter.paths)
+	}
+}
+
+func TestExecuteFreshResolutionDropsTempTouchedAfterPreview(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "old-temp")
+	if err := os.WriteFile(path, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	discover := func(context.Context) clean.UserTempDiscoveryResult {
+		calls++
+		if calls == 1 {
+			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{{Path: path, Bytes: 3, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason}}}
+		}
+		return clean.UserTempDiscoveryResult{}
+	}
+	opts := clean.Options{Rules: []clean.Rule{{ID: "disabled", DefaultEnabled: false}}, OptIn: []string{clean.OpportunityCategoryUserTemp}, DiscoverUserTempOpportunities: discover}
+	if preview := clean.DryRun(context.Background(), opts); len(preview.OptInCandidates) != 1 {
+		t.Fatalf("preview = %#v", preview.OptInCandidates)
+	}
+	adapter := &recordingRecycleBinAdapter{}
+	opts.RecycleBinAdapter = adapter
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
+	if result.Totals.DeletedCount != 0 || len(adapter.paths) != 0 {
+		t.Fatalf("touched temp survived fresh resolution: %#v %v", result, adapter.paths)
+	}
+}
+
+func TestExecuteFreshProtectionSuppressesPreviewedCandidate(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "candidate.tmp")
+	if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	opts := clean.Options{Rules: []clean.Rule{{ID: "test", DefaultEnabled: true, CandidatePaths: []string{path}}}}
+	if preview := clean.DryRun(context.Background(), opts); len(preview.Candidates) != 1 {
+		t.Fatalf("preview = %#v", preview.Candidates)
+	}
+	adapter := &recordingRecycleBinAdapter{}
+	opts.Validator = pathsafe.NewValidator([]string{root})
+	opts.RecycleBinAdapter = adapter
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
+	if result.Totals.DeletedCount != 0 || len(adapter.paths) != 0 || len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "protected_path" {
+		t.Fatalf("fresh Protection not enforced: result=%#v paths=%v", result, adapter.paths)
+	}
+}
+
+func TestExecuteFreshRunningGateSkipsBrowserPreview(t *testing.T) {
+	root := t.TempDir()
+	localAppData := filepath.Join(root, "AppData", "Local")
+	userData := filepath.Join(localAppData, "Google", "Chrome", "User Data")
+	cachePath := filepath.Join(userData, "Default", "Cache")
+	if err := os.MkdirAll(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(userData, "Local State"), []byte(`{"profile":{"info_cache":{"Default":{"name":"Person 1"}}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachePath, "data.bin"), []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	running := false
+	detector := func(context.Context) []clean.RunningApplicationState {
+		state := clean.RunningApplicationStateIdle
+		if running {
+			state = clean.RunningApplicationStateRunning
+		}
+		return []clean.RunningApplicationState{{Application: clean.ApplicationGoogleChrome, State: state}, {Application: clean.ApplicationMicrosoftEdge, State: clean.RunningApplicationStateIdle}}
+	}
+	opts := clean.Options{Rules: []clean.Rule{{ID: "disabled", DefaultEnabled: false}}, OptIn: []string{clean.OpportunityCategoryBrowserCache}, DetectRunningApplications: detector, BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: localAppData}}
+	if preview := clean.DryRun(context.Background(), opts); len(preview.OptInCandidates) != 1 {
+		t.Fatalf("preview = %#v", preview.OptInCandidates)
+	}
+	running = true
+	adapter := &recordingRecycleBinAdapter{}
+	opts.RecycleBinAdapter = adapter
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
+	if result.Totals.DeletedCount != 0 || len(adapter.paths) != 0 {
+		t.Fatalf("started browser was not skipped: %#v %v", result, adapter.paths)
 	}
 }
 
