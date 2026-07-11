@@ -233,20 +233,28 @@ func TestExecuteFreshOptInResolutionCanTurnPreviewIntoNoOp(t *testing.T) {
 func TestExecuteFreshResolutionDropsTempTouchedAfterPreview(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "old-temp")
-	if err := os.WriteFile(path, []byte("old"), 0600); err != nil {
+	if err := os.Mkdir(path, 0700); err != nil {
 		t.Fatal(err)
 	}
-	calls := 0
-	discover := func(context.Context) clean.UserTempDiscoveryResult {
-		calls++
-		if calls == 1 {
-			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{{Path: path, Bytes: 3, Status: clean.UserTempOpportunityStatus, Reason: clean.UserTempOpportunityReason}}}
-		}
-		return clean.UserTempDiscoveryResult{}
+	file := filepath.Join(path, "data.bin")
+	if err := os.WriteFile(file, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	opts := clean.Options{Rules: []clean.Rule{{ID: "disabled", DefaultEnabled: false}}, OptIn: []string{clean.OpportunityCategoryUserTemp}, DiscoverUserTempOpportunities: discover}
+	now := time.Now().Truncate(time.Second)
+	old := now.Add(-8 * 24 * time.Hour)
+	for _, target := range []string{file, path} {
+		if err := os.Chtimes(target, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := clean.Options{Rules: []clean.Rule{{ID: "disabled", DefaultEnabled: false}}, OptIn: []string{clean.OpportunityCategoryUserTemp}, UserTempDiscoveryOptions: clean.UserTempDiscoveryOptions{TempDir: root, Now: now}}
 	if preview := clean.DryRun(context.Background(), opts); len(preview.OptInCandidates) != 1 {
 		t.Fatalf("preview = %#v", preview.OptInCandidates)
+	}
+	for _, target := range []string{file, path} {
+		if err := os.Chtimes(target, now, now); err != nil {
+			t.Fatal(err)
+		}
 	}
 	adapter := &recordingRecycleBinAdapter{}
 	opts.RecycleBinAdapter = adapter
