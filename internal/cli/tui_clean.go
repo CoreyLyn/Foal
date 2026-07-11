@@ -56,26 +56,57 @@ const (
 )
 
 type cleanExecutedMsg struct{ result clean.Result }
+type cleanExecutionProgressMsg struct {
+	progress clean.ExecutionProgress
+	stream   *cleanExecutionStream
+}
+type cleanExecutionStartedMsg struct{ stream *cleanExecutionStream }
+type cleanExecutionStream struct {
+	progress <-chan clean.ExecutionProgress
+	result   <-chan clean.Result
+}
 
-func executeCleanSelectionCmd(selected []string) tea.Cmd {
+func executeCleanSelectionCmd(ctx context.Context, selected []string) tea.Cmd {
 	selected = append([]string(nil), selected...)
 	return func() tea.Msg {
-		config := loadProtectionConfiguration()
-		recorder, _ := newHistoryRecorder()
-		args := []string{"clean", "--execute"}
-		for _, id := range selected {
-			args = append(args, "--opt-in", id)
-		}
-		return cleanExecutedMsg{result: executeClean(context.Background(), clean.Options{
-			Validator:                 config.Validator,
-			ProtectionDiagnostics:     config.Diagnostics,
-			ProtectionLoadError:       config.LoadError,
-			HistoryRecorder:           recorder,
-			CommandParameters:         history.CommandParameters{Command: "clean", Args: args},
-			DetectRunningApplications: clean.DetectSupportedApplications,
-			OptIn:                     selected,
-		})}
+		progress := make(chan clean.ExecutionProgress, 4)
+		result := make(chan clean.Result, 1)
+		stream := &cleanExecutionStream{progress: progress, result: result}
+		go func() {
+			defer close(progress)
+			result <- runCleanSelection(ctx, selected, func(event clean.ExecutionProgress) { progress <- event })
+			close(result)
+		}()
+		return cleanExecutionStartedMsg{stream: stream}
 	}
+}
+
+func waitCleanExecutionCmd(stream *cleanExecutionStream) tea.Cmd {
+	return func() tea.Msg {
+		if progress, ok := <-stream.progress; ok {
+			return cleanExecutionProgressMsg{progress: progress, stream: stream}
+		}
+		return cleanExecutedMsg{result: <-stream.result}
+	}
+}
+
+var runCleanSelection = func(ctx context.Context, selected []string, reporter clean.ProgressReporter) clean.Result {
+	config := loadProtectionConfiguration()
+	recorder, _ := newHistoryRecorder()
+	args := []string{"clean", "--execute"}
+	for _, id := range selected {
+		args = append(args, "--opt-in", id)
+	}
+	return executeClean(ctx, clean.Options{
+		Validator:                 config.Validator,
+		ProtectionDiagnostics:     config.Diagnostics,
+		ProtectionLoadError:       config.LoadError,
+		HistoryRecorder:           recorder,
+		CommandParameters:         history.CommandParameters{Command: "clean", Args: args},
+		DetectRunningApplications: clean.DetectSupportedApplications,
+		OptIn:                     selected,
+		ProgressReporter:          reporter,
+	})
 }
 
 // loadCleanPreviewCmd runs the existing dry-run command path off the UI loop
@@ -106,21 +137,23 @@ func loadCleanPreviewCmd(ctx context.Context, generation uint64, selections ...[
 }
 
 type cleanModel struct {
-	loading         bool
-	loadGeneration  uint64
-	cancelLoad      context.CancelFunc
-	model           clean.PreviewReadModel
-	filter          cleanPreviewFilter
-	expanded        bool
-	notice          string
-	vp              viewport.Model
-	width           int
-	height          int
-	selected        map[string]bool
-	selectionIndex  int
-	previewReady    bool
-	executionState  cleanExecutionState
-	executionResult clean.Result
+	loading           bool
+	loadGeneration    uint64
+	cancelLoad        context.CancelFunc
+	model             clean.PreviewReadModel
+	filter            cleanPreviewFilter
+	expanded          bool
+	notice            string
+	vp                viewport.Model
+	width             int
+	height            int
+	selected          map[string]bool
+	selectionIndex    int
+	previewReady      bool
+	executionState    cleanExecutionState
+	executionResult   clean.Result
+	executionProgress clean.ExecutionProgress
+	cancelExecution   context.CancelFunc
 }
 
 func newCleanModel(width, height int) cleanModel {
@@ -315,7 +348,7 @@ func (m cleanModel) content() string {
 	case cleanExecutionConfirmation:
 		return m.confirmationContent()
 	case cleanExecutionRunning:
-		return "Foal Clean\nExecuting Clean through the shared Recycle Bin path...\nA fresh scan and safety validation are in progress.\n"
+		return renderCleanExecutionProgress(m.executionProgress)
 	case cleanExecutionResult:
 		return renderCleanExecutionResult(m.executionResult)
 	}
@@ -326,6 +359,19 @@ func (m cleanModel) content() string {
 		return m.headerContent() + "\nClean preview totals are not ready. Change the selection or refresh to retry.\n" + cleanPreviewFooter
 	}
 	return m.headerContent() + m.vp.View() + "\n" + cleanPreviewFooter
+}
+
+func renderCleanExecutionProgress(progress clean.ExecutionProgress) string {
+	label := map[clean.ExecutionPhase]string{
+		clean.ExecutionPhaseScanning:             "Fresh candidate scanning",
+		clean.ExecutionPhaseRecycleBinSafety:     "Aggregate Recycle Bin safety checks",
+		clean.ExecutionPhaseRecycleBinOperations: "Recycle Bin operations",
+		clean.ExecutionPhaseComplete:             "Completion",
+	}[progress.Phase]
+	if label == "" {
+		label = "Starting shared Clean execution"
+	}
+	return "Foal Clean\nExecuting Clean through the shared Recycle Bin path...\nProgress: " + label + "\nCancellation does not roll back completed Recycle Bin operations.\n"
 }
 
 func (m cleanModel) confirmationContent() string {

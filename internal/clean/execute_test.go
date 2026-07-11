@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,10 @@ import (
 type recordingRecycleBinAdapter struct {
 	paths []string
 }
+
+type recycleBinAdapterFunc func(string) error
+
+func (f recycleBinAdapterFunc) MoveToRecycleBin(path string) error { return f(path) }
 
 func (a *recordingRecycleBinAdapter) MoveToRecycleBin(path string) error {
 	a.paths = append(a.paths, path)
@@ -80,6 +85,118 @@ func TestExecuteMovesEligibleCandidatesThroughRecycleBin(t *testing.T) {
 	if strings.Contains(string(encoded), "Rebuildable project artifacts") ||
 		strings.Contains(string(encoded), "foal analyze <path>") {
 		t.Fatalf("execute result contains presentation-only project artifact clue: %s", encoded)
+	}
+}
+
+func TestExecuteReportsSharedProgressWithoutChangingOutcome(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "cache.tmp")
+	if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var phases []clean.ExecutionPhase
+	adapter := &recordingRecycleBinAdapter{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		ProgressReporter: func(progress clean.ExecutionProgress) {
+			phases = append(phases, progress.Phase)
+		},
+		RecycleBinAdapter: adapter,
+		Rules:             []clean.Rule{{ID: "test_default_rule", DefaultEnabled: true, CandidatePaths: []string{candidate}}},
+	})
+
+	want := []clean.ExecutionPhase{
+		clean.ExecutionPhaseScanning,
+		clean.ExecutionPhaseRecycleBinSafety,
+		clean.ExecutionPhaseRecycleBinOperations,
+		clean.ExecutionPhaseComplete,
+	}
+	if !reflect.DeepEqual(phases, want) {
+		t.Fatalf("progress phases = %v, want %v", phases, want)
+	}
+	if result.Totals.DeletedCount != 1 || len(adapter.paths) != 1 || adapter.paths[0] != candidate {
+		t.Fatalf("observer changed execution outcome: result=%#v paths=%v", result, adapter.paths)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "progress") || strings.Contains(string(encoded), "scanning") {
+		t.Fatalf("progress leaked into JSON contract: %s", encoded)
+	}
+}
+
+func TestExecuteProgressReporterCannotInterruptExecution(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "cache.tmp")
+	if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &recordingRecycleBinAdapter{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		ProgressReporter:  func(clean.ExecutionProgress) { panic("observer failure") },
+		RecycleBinAdapter: adapter,
+		Rules:             []clean.Rule{{ID: "test_default_rule", DefaultEnabled: true, CandidatePaths: []string{candidate}}},
+	})
+	if result.Totals.DeletedCount != 1 || len(adapter.paths) != 1 {
+		t.Fatalf("panicking observer altered execution: result=%#v paths=%v", result, adapter.paths)
+	}
+}
+
+func TestExecuteCancellationRetainsCompletedAndSkippedOutcomesInHistory(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "foal-first.tmp")
+	second := filepath.Join(root, "foal-second.tmp")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	recorder := &recordingHistoryRecorder{}
+	adapter := recycleBinAdapterFunc(func(path string) error { cancel(); return nil })
+	result := executeCleanWithSafeCapacity(ctx, clean.Options{
+		RecycleBinAdapter: adapter, HistoryRecorder: recorder,
+		Rules: []clean.Rule{{ID: "test_default_rule", DefaultEnabled: true, CandidatePaths: []string{first, second}}},
+	})
+
+	if result.Totals.DeletedCount != 1 || result.Totals.SkippedCount != 1 || result.Totals.AffectedBytes != 4 {
+		t.Fatalf("interrupted totals overclaimed outcomes: %#v", result.Totals)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "context_canceled" {
+		t.Fatalf("interrupted skipped outcome = %#v", result.Skipped)
+	}
+	if len(recorder.sessions) != 1 || recorder.sessions[0].Aggregate.DeletedCount != 1 || recorder.sessions[0].Aggregate.SkippedCount != 1 {
+		t.Fatalf("history lost interrupted outcomes: %#v", recorder.sessions)
+	}
+	if len(recorder.items) != 2 {
+		t.Fatalf("history items = %#v, want completed and canceled items", recorder.items)
+	}
+}
+
+func TestExecuteFreshOptInResolutionCanTurnPreviewIntoNoOp(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "old-cache")
+	if err := os.WriteFile(path, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	discoveryCalls := 0
+	discover := func(context.Context) clean.OpportunityDiscoveryResult {
+		discoveryCalls++
+		if discoveryCalls == 1 {
+			return clean.OpportunityDiscoveryResult{Opportunities: []clean.Opportunity{{Category: clean.OpportunityCategoryCrashDumps, Path: path, Bytes: 5}}}
+		}
+		return clean.OpportunityDiscoveryResult{}
+	}
+	opts := clean.Options{
+		OptIn: []string{clean.OpportunityCategoryCrashDumps}, DiscoverOpportunities: discover,
+		Rules: []clean.Rule{{ID: "disabled_default", DefaultEnabled: false}},
+	}
+	preview := clean.DryRun(context.Background(), opts)
+	adapter := &recordingRecycleBinAdapter{}
+	opts.RecycleBinAdapter = adapter
+	result := executeCleanWithSafeCapacity(context.Background(), opts)
+	if len(preview.OptInCandidates) != 1 || result.Totals.DeletedCount != 0 || len(adapter.paths) != 0 {
+		t.Fatalf("execute consumed stale preview: preview=%#v result=%#v paths=%v", preview.OptInCandidates, result, adapter.paths)
 	}
 }
 

@@ -52,6 +52,24 @@ type RecycleBinCapacityProbe func(path string) (RecycleBinVolumeConfig, error)
 // Returns empty string if the path cannot be resolved from env vars/defaults.
 type DevCachePathResolver func(category string) string
 
+// ExecutionPhase identifies an observation-only stage of shared Clean execution.
+type ExecutionPhase string
+
+const (
+	ExecutionPhaseScanning             ExecutionPhase = "fresh_candidate_scanning"
+	ExecutionPhaseRecycleBinSafety     ExecutionPhase = "aggregate_recycle_bin_safety_checks"
+	ExecutionPhaseRecycleBinOperations ExecutionPhase = "recycle_bin_operations"
+	ExecutionPhaseComplete             ExecutionPhase = "completion"
+)
+
+// ExecutionProgress is deliberately absent from Result and its JSON contract.
+// A reporter observes execution; it never supplies candidates or safety input.
+type ExecutionProgress struct {
+	Phase ExecutionPhase
+}
+
+type ProgressReporter func(ExecutionProgress)
+
 type Options struct {
 	Rules                         []Rule
 	Validator                     pathsafe.Validator
@@ -71,6 +89,7 @@ type Options struct {
 	OptIn                         []string
 	RecycleBinCapacityProbe       RecycleBinCapacityProbe
 	DevCachePathResolver          DevCachePathResolver
+	ProgressReporter              ProgressReporter
 }
 
 type Rule struct {
@@ -505,8 +524,11 @@ func Execute(ctx context.Context, opts Options) Result {
 		ctx = context.Background()
 	}
 	start := time.Now()
+	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseScanning)
 	if opts.ProtectionLoadError != nil {
-		return protectionLoadFailure("execute", opts, start)
+		result := protectionLoadFailure("execute", opts, start)
+		reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseComplete)
+		return result
 	}
 	result := scanDefaultCandidates(ctx, opts, start)
 	result.Status = "ok"
@@ -549,12 +571,24 @@ func Execute(ctx context.Context, opts Options) Result {
 		}
 	}
 
-	executeRecycleBinCandidatesByVolume(ctx, opts, adapter, executionCandidates, &result)
+	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseRecycleBinSafety)
+	executionGroups := prepareRecycleBinCandidateGroups(opts, executionCandidates)
+	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseRecycleBinOperations)
+	executeRecycleBinCandidateGroups(ctx, opts, adapter, executionGroups, &result)
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
 	recordHistorySession(ctx, opts, result, start, time.Now())
+	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseComplete)
 	return result
+}
+
+func reportExecutionProgress(reporter ProgressReporter, phase ExecutionPhase) {
+	if reporter == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	reporter(ExecutionProgress{Phase: phase})
 }
 
 type recycleBinExecutionCandidate struct {
@@ -576,6 +610,16 @@ type recycleBinVolumeIdentity struct {
 }
 
 func executeRecycleBinCandidatesByVolume(ctx context.Context, opts Options, adapter delete.Adapter, candidates []recycleBinExecutionCandidate, result *Result) {
+	groups := prepareRecycleBinCandidateGroups(opts, candidates)
+	executeRecycleBinCandidateGroups(ctx, opts, adapter, groups, result)
+}
+
+type recycleBinCandidateGroups struct {
+	byVolume map[string]*recycleBinVolumeGroup
+	order    []string
+}
+
+func prepareRecycleBinCandidateGroups(opts Options, candidates []recycleBinExecutionCandidate) recycleBinCandidateGroups {
 	probe := opts.RecycleBinCapacityProbe
 	if probe == nil {
 		probe = RecycleBinVolumeCapacity
@@ -611,8 +655,12 @@ func executeRecycleBinCandidatesByVolume(ctx context.Context, opts Options, adap
 		}
 	}
 
-	for _, volume := range volumeOrder {
-		group := groups[volume]
+	return recycleBinCandidateGroups{byVolume: groups, order: volumeOrder}
+}
+
+func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter delete.Adapter, groups recycleBinCandidateGroups, result *Result) {
+	for _, volume := range groups.order {
+		group := groups.byVolume[volume]
 		switch {
 		case group.unsafe:
 			skipRecycleBinVolume(result, group.candidates, recycleBinCapacityProbeFailedIssueCode, "Recycle Bin capacity state is unknown; skipping this volume rather than risking permanent deletion")
@@ -709,7 +757,10 @@ func recordHistorySession(ctx context.Context, opts Options, result Result, star
 			AffectedBytes:            result.Totals.AffectedBytes,
 		},
 	}
-	_ = opts.HistoryRecorder.Record(ctx, session, historyItems(session.ID, result))
+	// Cancellation stops remaining cleanup work, but must not erase the outcomes
+	// already produced. Persist those outcomes without extending cancellation to
+	// the bounded history write.
+	_ = opts.HistoryRecorder.Record(context.WithoutCancel(ctx), session, historyItems(session.ID, result))
 }
 
 func withoutOpportunityReviewData(result Result) Result {

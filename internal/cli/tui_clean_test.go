@@ -1106,8 +1106,12 @@ func TestCleanReadyPreviewRequiresSeparateConfirmationBeforeExecution(t *testing
 	if second != nil || calls != 0 {
 		t.Fatal("executing state accepted a second confirmation")
 	}
-	next, _ = model.Update(cmd())
+	next, cmd = model.Update(cmd())
 	model = next.(rootModel)
+	for cmd != nil && model.clean.executionState == cleanExecutionRunning {
+		next, cmd = model.Update(cmd())
+		model = next.(rootModel)
+	}
 	if calls != 1 || !strings.Contains(model.content(), "Clean execution result") || !strings.Contains(model.content(), "Deleted: 2") || !strings.Contains(model.content(), "Opt-in deleted: 1") || !strings.Contains(model.content(), "Affected bytes: 30 bytes") {
 		t.Fatalf("shared result was not rendered directly:\n%s", model.content())
 	}
@@ -1160,9 +1164,27 @@ func TestCleanExecutionHandoffLoadsFreshBoundariesAndPassesNoPreviewPaths(t *tes
 		newHistoryRecorder = originalRecorder
 	})
 
-	msg := executeCleanSelectionCmd([]string{clean.DevCacheCategoryGo})().(cleanExecutedMsg)
-	if msg.result.Status != "ok" {
-		t.Fatalf("result = %#v", msg.result)
+	result := runCleanSelection(context.Background(), []string{clean.DevCacheCategoryGo}, nil)
+	if result.Status != "ok" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestCleanExecutingViewRendersOnlySharedProgressAndCancellationBoundary(t *testing.T) {
+	model := newCleanModel(80, 24)
+	model.executionState = cleanExecutionRunning
+	model.executionProgress = clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinSafety}
+
+	content := model.content()
+	for _, want := range []string{"Aggregate Recycle Bin safety checks", "does not roll back"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("executing content missing %q:\n%s", want, content)
+		}
+	}
+	for _, forbidden := range []string{"Deleted:", "candidate 1 of", "will be restored"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("executing content inferred outcome %q:\n%s", forbidden, content)
+		}
 	}
 }
 

@@ -176,6 +176,10 @@ _Avoid_: execution manifest, selected path list, persistent opt-in profile, impl
 The deliberate TUI transition that confirms a Clean opt-in selection and authorizes the shared Clean execution path to resolve and validate fresh candidates for that selection.
 _Avoid_: executing preview paths, one-key accidental cleanup, browsing-as-confirmation
 
+**Clean execution progress**:
+Observation-only stages emitted by shared Clean execution for fresh candidate scanning, aggregate Recycle Bin safety checks, Recycle Bin operations, and completion. Progress is not part of the JSON result and never authorizes candidates or drives safety decisions.
+_Avoid_: TUI-inferred progress, execution manifest, progress as cleanup authorization, rollback promise
+
 **Aggregate Recycle Bin capacity pre-check**:
 A fail-closed Clean safety check that establishes Recycle Bin recoverability for all selected candidates together on each volume before confirmed execution begins.
 _Avoid_: per-item-only capacity assurance, assumed capacity, overflow to permanent deletion

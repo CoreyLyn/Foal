@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -100,6 +101,17 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clean.executionState = cleanExecutionResult
 		}
 		return m, nil
+	case cleanExecutionStartedMsg:
+		if m.screen == screenCleanPreview && m.clean.executionState == cleanExecutionRunning {
+			return m, waitCleanExecutionCmd(msg.stream)
+		}
+		return m, nil
+	case cleanExecutionProgressMsg:
+		if m.screen == screenCleanPreview && m.clean.executionState == cleanExecutionRunning {
+			m.clean.executionProgress = msg.progress
+			return m, waitCleanExecutionCmd(msg.stream)
+		}
+		return m, nil
 	case viewerLoadedMsg:
 		m.viewer.applyLoaded(msg)
 		return m, nil
@@ -154,12 +166,20 @@ func (m rootModel) updateCleanPreviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 			return m, nil
 		case "enter":
 			m.clean.executionState = cleanExecutionRunning
-			return m, executeCleanSelectionCmd(m.clean.selectedCategoryIDs())
+			ctx, cancel := context.WithCancel(context.Background())
+			m.clean.cancelExecution = cancel
+			return m, executeCleanSelectionCmd(ctx, m.clean.selectedCategoryIDs())
 		default:
 			return m, nil
 		}
 	}
 	if m.clean.executionState == cleanExecutionRunning {
+		if msg.String() == "ctrl+c" {
+			if m.clean.cancelExecution != nil {
+				m.clean.cancelExecution()
+			}
+			return m, nil
+		}
 		return m, nil
 	}
 	if m.clean.executionState == cleanExecutionResult {
