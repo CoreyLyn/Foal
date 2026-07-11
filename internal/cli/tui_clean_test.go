@@ -1194,8 +1194,12 @@ func TestCleanExecutionResultRendersAllSkippedMixedAndErrorOutcomes(t *testing.T
 		result clean.Result
 		wants  []string
 	}{
+		{name: "success", result: clean.Result{Status: "ok", Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 5}}, wants: []string{"Status: ok", "Deleted: 1", "Affected bytes: 5 bytes"}},
+		{name: "no-op", result: clean.Result{Status: "ok"}, wants: []string{"Deleted: 0", "Skipped: 0", "Affected bytes: 0 bytes"}},
 		{name: "all skipped", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\cache`, Reason: clean.StructuredIssue{Code: "recycle_bin_capacity", Message: "capacity unavailable"}}}, Totals: clean.Totals{SkippedCount: 1}}, wants: []string{"Deleted: 0", "Skipped: 1", "recycle_bin_capacity", "capacity unavailable"}},
 		{name: "mixed", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\protected`, Reason: clean.StructuredIssue{Code: "protected_path", Message: "protected"}}}, Totals: clean.Totals{DeletedCount: 1, SkippedCount: 1, AffectedBytes: 8}}, wants: []string{"Deleted: 1", "Skipped: 1", "protected_path", "Affected bytes: 8 bytes"}},
+		{name: "interrupted partial", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\remaining`, Reason: clean.StructuredIssue{Code: "context_canceled", Message: "context canceled"}}}, Totals: clean.Totals{DeletedCount: 1, SkippedCount: 1, AffectedBytes: 4}}, wants: []string{"Deleted: 1", "Skipped: 1", "context_canceled", "Affected bytes: 4 bytes"}},
+		{name: "recoverable diagnostic", result: clean.Result{Status: "ok", Errors: []clean.StructuredIssue{{Code: "running_application_detection_unknown", Message: "snapshot unavailable", Recoverable: true}}}, wants: []string{"Errors: 1", "running_application_detection_unknown", "snapshot unavailable", "Affected bytes: 0 bytes"}},
 		{name: "error", result: clean.Result{Status: "error", Errors: []clean.StructuredIssue{{Code: "permission_denied", Message: "access denied"}}}, wants: []string{"Status: error", "Errors: 1", "permission_denied", "access denied"}},
 	}
 	for _, tt := range tests {
