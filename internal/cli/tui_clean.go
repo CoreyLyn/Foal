@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/history"
 )
 
 type cleanPreviewFilter string
@@ -45,6 +46,38 @@ type cleanPreviewLoadedMsg struct {
 	failed     bool
 }
 
+type cleanExecutionState uint8
+
+const (
+	cleanExecutionPreview cleanExecutionState = iota
+	cleanExecutionConfirmation
+	cleanExecutionRunning
+	cleanExecutionResult
+)
+
+type cleanExecutedMsg struct{ result clean.Result }
+
+func executeCleanSelectionCmd(selected []string) tea.Cmd {
+	selected = append([]string(nil), selected...)
+	return func() tea.Msg {
+		config := loadProtectionConfiguration()
+		recorder, _ := newHistoryRecorder()
+		args := []string{"clean", "--execute"}
+		for _, id := range selected {
+			args = append(args, "--opt-in", id)
+		}
+		return cleanExecutedMsg{result: executeClean(context.Background(), clean.Options{
+			Validator:                 config.Validator,
+			ProtectionDiagnostics:     config.Diagnostics,
+			ProtectionLoadError:       config.LoadError,
+			HistoryRecorder:           recorder,
+			CommandParameters:         history.CommandParameters{Command: "clean", Args: args},
+			DetectRunningApplications: clean.DetectSupportedApplications,
+			OptIn:                     selected,
+		})}
+	}
+}
+
 // loadCleanPreviewCmd runs the existing dry-run command path off the UI loop
 // and delivers the shared read model; the TUI never owns cleanup logic.
 // Browsing stays free of side effects: no history session is recorded and no
@@ -73,19 +106,21 @@ func loadCleanPreviewCmd(ctx context.Context, generation uint64, selections ...[
 }
 
 type cleanModel struct {
-	loading        bool
-	loadGeneration uint64
-	cancelLoad     context.CancelFunc
-	model          clean.PreviewReadModel
-	filter         cleanPreviewFilter
-	expanded       bool
-	notice         string
-	vp             viewport.Model
-	width          int
-	height         int
-	selected       map[string]bool
-	selectionIndex int
-	previewReady   bool
+	loading         bool
+	loadGeneration  uint64
+	cancelLoad      context.CancelFunc
+	model           clean.PreviewReadModel
+	filter          cleanPreviewFilter
+	expanded        bool
+	notice          string
+	vp              viewport.Model
+	width           int
+	height          int
+	selected        map[string]bool
+	selectionIndex  int
+	previewReady    bool
+	executionState  cleanExecutionState
+	executionResult clean.Result
 }
 
 func newCleanModel(width, height int) cleanModel {
@@ -173,6 +208,10 @@ func (m *cleanModel) refreshViewportContent() {
 
 func (m *cleanModel) handleKey(key string) tea.Cmd {
 	switch key {
+	case "enter":
+		if m.previewReady && !m.loading {
+			m.executionState = cleanExecutionConfirmation
+		}
 	case "j", "down":
 		m.vp.ScrollDown(1)
 	case "k", "up":
@@ -269,10 +308,17 @@ func (m *cleanModel) copyCandidatePathsNotice() string {
 	return fmt.Sprintf("Copied %d candidate path(s) to the clipboard.", len(paths))
 }
 
-const cleanPreviewFooter = "\nHints: tab category | space toggle | a select all | x clear all | j/k scroll | f filter | e expand | c copy | r refresh | b back | q quit\n" +
-	"Selection only refreshes preview; no cleanup action is available in this view.\n"
+const cleanPreviewFooter = "\nHints: enter confirm | tab category | space toggle | a select all | x clear all | j/k scroll | f filter | e expand | c copy | r refresh | b back | q quit\n"
 
 func (m cleanModel) content() string {
+	switch m.executionState {
+	case cleanExecutionConfirmation:
+		return m.confirmationContent()
+	case cleanExecutionRunning:
+		return "Foal Clean\nExecuting Clean through the shared Recycle Bin path...\nA fresh scan and safety validation are in progress.\n"
+	case cleanExecutionResult:
+		return renderCleanExecutionResult(m.executionResult)
+	}
 	if m.loading {
 		return m.headerContent() + "\nLoading clean preview (dry-run)...\n" + cleanPreviewFooter
 	}
@@ -280,6 +326,43 @@ func (m cleanModel) content() string {
 		return m.headerContent() + "\nClean preview totals are not ready. Change the selection or refresh to retry.\n" + cleanPreviewFooter
 	}
 	return m.headerContent() + m.vp.View() + "\n" + cleanPreviewFooter
+}
+
+func (m cleanModel) confirmationContent() string {
+	var builder strings.Builder
+	optInCount := 0
+	builder.WriteString("Foal Clean\nConfirm Clean execution\n")
+	builder.WriteString("This confirmation authorizes selected categories, not previewed paths. Execution rescans and validates fresh candidates.\n")
+	builder.WriteString("Selected categories:\n")
+	for _, category := range m.model.OptInCategories {
+		if m.selected[category.Identifier] {
+			optInCount += category.CandidateCount
+			builder.WriteString("  - " + category.Label + "\n")
+		}
+	}
+	builder.WriteString(fmt.Sprintf("Latest preview: default %d candidate(s), %s; opt-in %d candidate(s), %s.\n",
+		m.model.CandidateCount, cleanFormatBytes(m.model.PotentialSpaceBytes),
+		optInCount, cleanFormatBytes(m.model.OptInReclaimableBytes)))
+	builder.WriteString("Enter: execute | b/Esc: cancel and return to preview\n")
+	return builder.String()
+}
+
+func renderCleanExecutionResult(result clean.Result) string {
+	var builder strings.Builder
+	builder.WriteString("Foal Clean\nClean execution result\n")
+	builder.WriteString(fmt.Sprintf("Status: %s\nDeleted: %d\nSkipped: %d\nErrors: %d\nDefault deleted: %d\nOpt-in deleted: %d\nAffected bytes: %s\nOpt-in affected bytes: %s\n",
+		result.Status, result.Totals.DeletedCount, result.Totals.SkippedCount, len(result.Errors),
+		result.Totals.DeletedCount-result.Totals.OptInDeletedCount, result.Totals.OptInDeletedCount,
+		cleanFormatBytes(result.Totals.AffectedBytes), cleanFormatBytes(result.Totals.OptInAffectedBytes)))
+	for _, skipped := range result.Skipped {
+		builder.WriteString(fmt.Sprintf("Skipped boundary: %s (%s: %s)\n", skipped.Path, skipped.Reason.Code, skipped.Reason.Message))
+	}
+	for _, issue := range result.Errors {
+		builder.WriteString(fmt.Sprintf("Error: %s: %s\n", issue.Code, issue.Message))
+	}
+	builder.WriteString("The fresh execution set may differ from the preview.\n")
+	builder.WriteString("b: return to preview | q/Esc: quit\n")
+	return builder.String()
 }
 
 func (m cleanModel) headerContent() string {

@@ -94,6 +94,12 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clean.applyLoaded(msg)
 		}
 		return m, nil
+	case cleanExecutedMsg:
+		if m.screen == screenCleanPreview && m.clean.executionState == cleanExecutionRunning {
+			m.clean.executionResult = msg.result
+			m.clean.executionState = cleanExecutionResult
+		}
+		return m, nil
 	case viewerLoadedMsg:
 		m.viewer.applyLoaded(msg)
 		return m, nil
@@ -141,6 +147,32 @@ func (m rootModel) updateMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m rootModel) updateCleanPreviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.clean.executionState == cleanExecutionConfirmation {
+		switch msg.String() {
+		case "b", "esc":
+			m.clean.executionState = cleanExecutionPreview
+			return m, nil
+		case "enter":
+			m.clean.executionState = cleanExecutionRunning
+			return m, executeCleanSelectionCmd(m.clean.selectedCategoryIDs())
+		default:
+			return m, nil
+		}
+	}
+	if m.clean.executionState == cleanExecutionRunning {
+		return m, nil
+	}
+	if m.clean.executionState == cleanExecutionResult {
+		switch msg.String() {
+		case "b":
+			m.clean.executionState = cleanExecutionPreview
+			return m, nil
+		case "q", "esc":
+			return m, tea.Quit
+		default:
+			return m, nil
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		m.clean.cancelPendingLoad()
