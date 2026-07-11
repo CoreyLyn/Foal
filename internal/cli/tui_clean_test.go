@@ -1106,8 +1106,12 @@ func TestCleanReadyPreviewRequiresSeparateConfirmationBeforeExecution(t *testing
 	if second != nil || calls != 0 {
 		t.Fatal("executing state accepted a second confirmation")
 	}
-	next, _ = model.Update(cmd())
+	next, cmd = model.Update(cmd())
 	model = next.(rootModel)
+	for cmd != nil && model.clean.executionState == cleanExecutionRunning {
+		next, cmd = model.Update(cmd())
+		model = next.(rootModel)
+	}
 	if calls != 1 || !strings.Contains(model.content(), "Clean execution result") || !strings.Contains(model.content(), "Deleted: 2") || !strings.Contains(model.content(), "Opt-in deleted: 1") || !strings.Contains(model.content(), "Affected bytes: 30 bytes") {
 		t.Fatalf("shared result was not rendered directly:\n%s", model.content())
 	}
@@ -1160,9 +1164,27 @@ func TestCleanExecutionHandoffLoadsFreshBoundariesAndPassesNoPreviewPaths(t *tes
 		newHistoryRecorder = originalRecorder
 	})
 
-	msg := executeCleanSelectionCmd([]string{clean.DevCacheCategoryGo})().(cleanExecutedMsg)
-	if msg.result.Status != "ok" {
-		t.Fatalf("result = %#v", msg.result)
+	result := runCleanSelection(context.Background(), []string{clean.DevCacheCategoryGo}, nil)
+	if result.Status != "ok" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestCleanExecutingViewRendersOnlySharedProgressAndCancellationBoundary(t *testing.T) {
+	model := newCleanModel(80, 24)
+	model.executionState = cleanExecutionRunning
+	model.executionProgress = clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinSafety}
+
+	content := model.content()
+	for _, want := range []string{"Aggregate Recycle Bin safety checks", "does not roll back"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("executing content missing %q:\n%s", want, content)
+		}
+	}
+	for _, forbidden := range []string{"Deleted:", "candidate 1 of", "will be restored"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("executing content inferred outcome %q:\n%s", forbidden, content)
+		}
 	}
 }
 
@@ -1172,8 +1194,13 @@ func TestCleanExecutionResultRendersAllSkippedMixedAndErrorOutcomes(t *testing.T
 		result clean.Result
 		wants  []string
 	}{
+		{name: "success", result: clean.Result{Status: "ok", Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 5}}, wants: []string{"Status: ok", "Deleted: 1", "Affected bytes: 5 bytes"}},
+		{name: "no-op", result: clean.Result{Status: "ok"}, wants: []string{"Deleted: 0", "Skipped: 0", "Affected bytes: 0 bytes"}},
 		{name: "all skipped", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\cache`, Reason: clean.StructuredIssue{Code: "recycle_bin_capacity", Message: "capacity unavailable"}}}, Totals: clean.Totals{SkippedCount: 1}}, wants: []string{"Deleted: 0", "Skipped: 1", "recycle_bin_capacity", "capacity unavailable"}},
 		{name: "mixed", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\protected`, Reason: clean.StructuredIssue{Code: "protected_path", Message: "protected"}}}, Totals: clean.Totals{DeletedCount: 1, SkippedCount: 1, AffectedBytes: 8}}, wants: []string{"Deleted: 1", "Skipped: 1", "protected_path", "Affected bytes: 8 bytes"}},
+		{name: "partial failure", result: clean.Result{Status: "partial", Errors: []clean.StructuredIssue{{Code: "delete_failed", Message: "adapter failed", Recoverable: true}}, Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 4}}, wants: []string{"Status: partial", "Deleted: 1", "Errors: 1", "delete_failed", "Affected bytes: 4 bytes"}},
+		{name: "interrupted partial", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\remaining`, Reason: clean.StructuredIssue{Code: "context_canceled", Message: "context canceled"}}}, Totals: clean.Totals{DeletedCount: 1, SkippedCount: 1, AffectedBytes: 4}}, wants: []string{"Deleted: 1", "Skipped: 1", "context_canceled", "Affected bytes: 4 bytes"}},
+		{name: "recoverable diagnostic", result: clean.Result{Status: "ok", Errors: []clean.StructuredIssue{{Code: "running_application_detection_unknown", Message: "snapshot unavailable", Recoverable: true}}}, wants: []string{"Errors: 1", "running_application_detection_unknown", "snapshot unavailable", "Affected bytes: 0 bytes"}},
 		{name: "error", result: clean.Result{Status: "error", Errors: []clean.StructuredIssue{{Code: "permission_denied", Message: "access denied"}}}, wants: []string{"Status: error", "Errors: 1", "permission_denied", "access denied"}},
 	}
 	for _, tt := range tests {
