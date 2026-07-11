@@ -609,11 +609,6 @@ type recycleBinVolumeIdentity struct {
 	known bool
 }
 
-func executeRecycleBinCandidatesByVolume(ctx context.Context, opts Options, adapter delete.Adapter, candidates []recycleBinExecutionCandidate, result *Result) {
-	groups := prepareRecycleBinCandidateGroups(opts, candidates)
-	executeRecycleBinCandidateGroups(ctx, opts, adapter, groups, result)
-}
-
 type recycleBinCandidateGroups struct {
 	byVolume map[string]*recycleBinVolumeGroup
 	order    []string
