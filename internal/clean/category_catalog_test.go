@@ -35,6 +35,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"corepack-cache",
 		"uv-cache",
 		"bun-cache",
+		"playwright-browsers",
 		"administrator_only_caches",
 	}
 	gotIdentifiers := make([]string, 0, len(summaries))
@@ -163,6 +164,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryCorepack,
 		clean.DevCacheCategoryUV,
 		clean.DevCacheCategoryBun,
+		clean.DevCacheCategoryPlaywright,
 	}
 	wantDeveloperToolsOptIn := append(
 		[]string{clean.OpportunityCategoryVSCodeCache, clean.OpportunityCategoryCursorCache},
@@ -203,6 +205,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryCorepack:            clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryUV:                  clean.RunningApplicationPolicyDistinctiveProcessIdle,
 		clean.DevCacheCategoryBun:                 clean.RunningApplicationPolicyDistinctiveProcessIdle,
+		clean.DevCacheCategoryPlaywright:          clean.RunningApplicationPolicySharedRuntime,
 	}
 	for id, wantPolicy := range policies {
 		summary, ok := catalog.Summary(id)
@@ -224,11 +227,12 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 	for _, forbidden := range []string{
 		"NPM_CONFIG_CACHE", "GOCACHE", "PIP_CACHE_DIR", "CARGO_HOME",
 		"NUGET_HTTP_CACHE_PATH", "NUGET_PACKAGES", "COREPACK_HOME", "UV_CACHE_DIR",
-		"BUN_INSTALL_CACHE_DIR",
+		"BUN_INSTALL_CACHE_DIR", "PLAYWRIGHT_BROWSERS_PATH",
 		"go.exe", "cargo.exe", "dotnet.exe", "nuget.exe", "node.exe", "python.exe",
 		"uv.exe", "uvx.exe", "bun.exe", "bunx.exe", "Code.exe", "Cursor.exe",
-		"resolvePaths", "lookupEnv", "LOCALAPPDATA", "APPDATA",
-		"CachedData", "CachedExtensionVSIXs",
+		"resolvePaths", "lookupEnv", "LOCALAPPDATA", "APPDATA", "ms-playwright",
+		"CachedData", "CachedExtensionVSIXs", "INSTALLATION_COMPLETE",
+		"chromium_headless_shell", "discoverChildren",
 	} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("path-free catalog projection exposes %q: %s", forbidden, encoded)

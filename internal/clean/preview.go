@@ -28,6 +28,7 @@ const (
 	DevCacheCategoryCorepack            = "corepack-cache"
 	DevCacheCategoryUV                  = "uv-cache"
 	DevCacheCategoryBun                 = "bun-cache"
+	DevCacheCategoryPlaywright          = "playwright-browsers"
 	DevCacheCategoryAll                 = "dev-caches"
 )
 

@@ -2,6 +2,7 @@ package clean
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -496,6 +497,106 @@ func TestDevCachePathResolution(t *testing.T) {
 		paths = resolveDevCachePaths(DevCacheCategoryBun, deps)
 		if len(paths) != 0 {
 			t.Fatalf("expected 0 paths when no resolution, got %d", len(paths))
+		}
+	})
+}
+
+func TestResolvePlaywrightBrowserPaths(t *testing.T) {
+	baseDeps := devCachePathDependencies{
+		lookupEnv: func(string) (string, bool) { return "", false },
+		joinPath:  filepath.Join,
+		goos:      "windows",
+	}
+
+	t.Run("default Local AppData ms-playwright", func(t *testing.T) {
+		deps := baseDeps
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "LOCALAPPDATA" {
+				return `C:\Users\dev\AppData\Local`, true
+			}
+			return "", false
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryPlaywright, deps)
+		want := filepath.Join(`C:\Users\dev\AppData\Local`, "ms-playwright")
+		if len(paths) != 1 || paths[0] != want {
+			t.Fatalf("paths = %#v, want [%q]", paths, want)
+		}
+	})
+
+	t.Run("non-blank PLAYWRIGHT_BROWSERS_PATH override", func(t *testing.T) {
+		deps := baseDeps
+		deps.lookupEnv = func(key string) (string, bool) {
+			switch key {
+			case "PLAYWRIGHT_BROWSERS_PATH":
+				return `D:\custom\browsers`, true
+			case "LOCALAPPDATA":
+				return `C:\Users\dev\AppData\Local`, true
+			default:
+				return "", false
+			}
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryPlaywright, deps)
+		if len(paths) != 1 || paths[0] != `D:\custom\browsers` {
+			t.Fatalf("paths = %#v, want custom override", paths)
+		}
+	})
+
+	t.Run("blank override falls back to default", func(t *testing.T) {
+		deps := baseDeps
+		deps.lookupEnv = func(key string) (string, bool) {
+			switch key {
+			case "PLAYWRIGHT_BROWSERS_PATH":
+				return "   ", true
+			case "LOCALAPPDATA":
+				return `C:\Users\dev\AppData\Local`, true
+			default:
+				return "", false
+			}
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryPlaywright, deps)
+		want := filepath.Join(`C:\Users\dev\AppData\Local`, "ms-playwright")
+		if len(paths) != 1 || paths[0] != want {
+			t.Fatalf("paths = %#v, want default after blank override", paths)
+		}
+	})
+
+	t.Run("value 0 yields no global root", func(t *testing.T) {
+		deps := baseDeps
+		deps.lookupEnv = func(key string) (string, bool) {
+			switch key {
+			case "PLAYWRIGHT_BROWSERS_PATH":
+				return "0", true
+			case "LOCALAPPDATA":
+				return `C:\Users\dev\AppData\Local`, true
+			default:
+				return "", false
+			}
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryPlaywright, deps)
+		if len(paths) != 0 {
+			t.Fatalf("paths = %#v, want none for hermetic 0", paths)
+		}
+	})
+
+	t.Run("trimmed value 0 yields no global root", func(t *testing.T) {
+		deps := baseDeps
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "PLAYWRIGHT_BROWSERS_PATH" {
+				return "  0  ", true
+			}
+			return "", false
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryPlaywright, deps)
+		if len(paths) != 0 {
+			t.Fatalf("paths = %#v, want none for trimmed 0", paths)
+		}
+	})
+
+	t.Run("missing Local AppData yields no path", func(t *testing.T) {
+		deps := baseDeps
+		paths := resolveDevCachePaths(DevCacheCategoryPlaywright, deps)
+		if len(paths) != 0 {
+			t.Fatalf("paths = %#v, want none without LOCALAPPDATA", paths)
 		}
 	})
 }
