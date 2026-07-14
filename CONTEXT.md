@@ -101,7 +101,7 @@ The bytes represented by Foal default candidates in a clean preview, excluding s
 _Avoid_: total hinted space, external savings estimate
 
 **Opt-in candidate**:
-A cleanup item that is normally a skipped-by-default opportunity or a developer-tool Review suggestion, but that the user has explicitly opted in to clean through the Recycle Bin for the current run only. An opt-in candidate is never a default candidate: the default candidate set stays frozen, and opt-in never becomes default. Opt-in candidates still pass fresh-scan validation, protection-rule suppression, and running-application gating at execute time, and are never deleted by running an external tool's own cleanup command.
+A cleanup item that is normally a skipped-by-default opportunity or a developer-tool Review suggestion, but that the user has explicitly opted in to clean through the Recycle Bin for the current run only. An opt-in candidate is never a default candidate: the default candidate set stays frozen, and opt-in never becomes default. Opt-in candidates still pass fresh-scan validation, protection-rule suppression, and running-application gating at execute time, and are never deleted by running an external tool's own cleanup command. Developer-tool examples include npm, go, pip, cargo, NuGet HTTP and global packages, corepack, and uv cache (`uv-cache`), each selected only for the current run.
 _Avoid_: default candidate, default-enabled rule, permanent deletion, tool-command delegation
 
 **Opt-in candidate resolution**:

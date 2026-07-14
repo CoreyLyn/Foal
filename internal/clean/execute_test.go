@@ -862,7 +862,7 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 	if len(invalid) != 0 {
 		t.Fatalf("expected no invalid names, got %v", invalid)
 	}
-	// All 8 opportunity categories and 7 dev caches should be enabled
+	// All 8 opportunity categories and 8 dev caches should be enabled
 	expectedOpportunities := []string{
 		clean.OpportunityCategoryUserTemp,
 		clean.OpportunityCategoryCrashDumps,
@@ -881,6 +881,7 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 		clean.DevCacheCategoryNuGet,
 		clean.DevCacheCategoryNuGetGlobalPackages,
 		clean.DevCacheCategoryCorepack,
+		clean.DevCacheCategoryUV,
 	}
 	for _, cat := range expectedOpportunities {
 		if !enabled[cat] {
@@ -953,9 +954,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// Should have 8 opportunity categories + 7 dev caches + "dev-caches" + "all" = 17
-	if len(valid) != 17 {
-		t.Fatalf("expected 17 valid names, got %d: %v", len(valid), valid)
+	// Should have 8 opportunity categories + 8 dev caches + "dev-caches" + "all" = 18
+	if len(valid) != 18 {
+		t.Fatalf("expected 18 valid names, got %d: %v", len(valid), valid)
 	}
 }
 
@@ -2416,6 +2417,192 @@ func TestExecuteWithoutOptInDoesNotRunDevToolDetection(t *testing.T) {
 	}
 }
 
+// TestUVCacheOptInDryRunAndExecuteEndToEnd covers uv-cache selection, gate,
+// suggestion suppression, and execute reclaim via the shared Clean seams.
+func TestUVCacheOptInDryRunAndExecuteEndToEnd(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "uv-cache")
+	siblingSuggestion := filepath.Join(root, "uv-cache-sibling")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(siblingSuggestion, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachePath, "data.bin"), []byte("uv!!"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeResolver := func(category string) []string {
+		if category == clean.DevCacheCategoryUV {
+			return []string{cachePath}
+		}
+		return nil
+	}
+	idleDetector := func(context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{{
+			Application: clean.ApplicationUV,
+			State:       clean.RunningApplicationStateIdle,
+		}}
+	}
+	runningDetector := func(context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{{
+			Application: clean.ApplicationUV,
+			State:       clean.RunningApplicationStateRunning,
+		}}
+	}
+	unknownDetector := func(context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{{
+			Application: clean.ApplicationUV,
+			State:       clean.RunningApplicationStateUnknown,
+			Message:     "snapshot failed",
+		}}
+	}
+
+	t.Run("dry-run idle produces opt-in candidate and suppresses same-identity suggestion", func(t *testing.T) {
+		result := clean.DryRun(context.Background(), clean.Options{
+			OptIn:                     []string{clean.DevCacheCategoryUV},
+			DevCachePathResolver:      fakeResolver,
+			DetectRunningApplications: idleDetector,
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+				return []clean.ReviewSuggestion{
+					{Tool: "uv", Label: "uv cache", Command: "uv cache prune", CachePath: cachePath},
+					{Tool: "uv", Label: "uv cache sibling", Command: "uv cache prune", CachePath: siblingSuggestion},
+				}
+			},
+			Rules: []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+		})
+		if len(result.OptInCandidates) != 1 {
+			t.Fatalf("opt-in candidates = %#v, want 1", result.OptInCandidates)
+		}
+		if result.OptInCandidates[0].Category != clean.DevCacheCategoryUV {
+			t.Fatalf("category = %q, want %q", result.OptInCandidates[0].Category, clean.DevCacheCategoryUV)
+		}
+		if result.OptInCandidates[0].Bytes != 4 {
+			t.Fatalf("bytes = %d, want 4", result.OptInCandidates[0].Bytes)
+		}
+		if result.Totals.OptInReclaimableBytes != 4 {
+			t.Fatalf("opt-in reclaimable = %d, want 4", result.Totals.OptInReclaimableBytes)
+		}
+		if result.Totals.CandidateBytes != 0 || result.Totals.OpportunityObservedBytes != 0 {
+			t.Fatalf("uv bytes leaked into Potential space or Observed opportunity: %#v", result.Totals)
+		}
+		if len(result.ReviewSuggestions) != 1 || result.ReviewSuggestions[0].CachePath != siblingSuggestion {
+			t.Fatalf("review suggestions = %#v, want only sibling path", result.ReviewSuggestions)
+		}
+		model := clean.NewPreviewReadModel(result)
+		foundImpact := false
+		for _, notice := range model.Notices {
+			if notice.Kind == "opt_in_impact" && strings.Contains(notice.Message, "not zero-impact") {
+				foundImpact = true
+			}
+		}
+		if !foundImpact {
+			t.Fatalf("preview notices = %#v, want uv rebuild/non-zero-impact notice", model.Notices)
+		}
+	})
+
+	t.Run("dry-run running and unknown fail closed", func(t *testing.T) {
+		for name, detector := range map[string]func(context.Context) []clean.RunningApplicationState{
+			"running": runningDetector,
+			"unknown": unknownDetector,
+		} {
+			t.Run(name, func(t *testing.T) {
+				result := clean.DryRun(context.Background(), clean.Options{
+					OptIn:                     []string{clean.DevCacheCategoryUV},
+					DevCachePathResolver:      fakeResolver,
+					DetectRunningApplications: detector,
+					DiscoverOpportunities:     noOpportunities,
+					DiscoverReviewSuggestions: noReviewSuggestions,
+				})
+				if len(result.OptInCandidates) != 0 || result.Totals.OptInReclaimableBytes != 0 {
+					t.Fatalf("%s: candidates/bytes = %#v / %d", name, result.OptInCandidates, result.Totals.OptInReclaimableBytes)
+				}
+				if len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "dev_tool_running" {
+					t.Fatalf("%s: skipped = %#v, want dev_tool_running", name, result.Skipped)
+				}
+			})
+		}
+	})
+
+	t.Run("execute idle deletes via recycle bin; running skips adapter", func(t *testing.T) {
+		adapter := &recordingRecycleBinAdapter{}
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			OptIn:                     []string{clean.DevCacheCategoryUV},
+			DevCachePathResolver:      fakeResolver,
+			DetectRunningApplications: idleDetector,
+			RecycleBinAdapter:         adapter,
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: noReviewSuggestions,
+			Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+		})
+		if len(adapter.paths) != 1 || adapter.paths[0] != cachePath {
+			t.Fatalf("adapter paths = %v, want [%q]", adapter.paths, cachePath)
+		}
+		if result.Totals.OptInDeletedCount != 1 {
+			t.Fatalf("OptInDeletedCount = %d, want 1", result.Totals.OptInDeletedCount)
+		}
+
+		adapter = &recordingRecycleBinAdapter{}
+		result = executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			OptIn:                     []string{clean.DevCacheCategoryUV},
+			DevCachePathResolver:      fakeResolver,
+			DetectRunningApplications: runningDetector,
+			RecycleBinAdapter:         adapter,
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: noReviewSuggestions,
+			Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+		})
+		if len(adapter.paths) != 0 || result.Totals.OptInDeletedCount != 0 {
+			t.Fatalf("running execute adapter/deleted = %v / %d", adapter.paths, result.Totals.OptInDeletedCount)
+		}
+	})
+
+	t.Run("default execute without opt-in does not resolve uv or run detection", func(t *testing.T) {
+		detectionCalled := false
+		resolverCalled := false
+		adapter := &recordingRecycleBinAdapter{}
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			OptIn:                nil,
+			DevCachePathResolver: func(category string) []string {
+				resolverCalled = true
+				return fakeResolver(category)
+			},
+			DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+				detectionCalled = true
+				return nil
+			},
+			DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+				t.Fatal("execute without opt-in must not run review suggestion probes")
+				return nil
+			},
+			RecycleBinAdapter: adapter,
+			Rules:             []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+		})
+		if detectionCalled || resolverCalled {
+			t.Fatalf("detectionCalled=%v resolverCalled=%v, want both false", detectionCalled, resolverCalled)
+		}
+		if len(result.OptInCandidates) != 0 || result.Totals.OptInDeletedCount != 0 {
+			t.Fatalf("unexpected opt-in activity without selection: %#v", result)
+		}
+	})
+
+	t.Run("protection suppresses uv root before totals", func(t *testing.T) {
+		result := clean.DryRun(context.Background(), clean.Options{
+			OptIn:                     []string{clean.DevCacheCategoryUV},
+			Validator:                 pathsafe.NewValidator([]string{cachePath}),
+			DevCachePathResolver:      fakeResolver,
+			DetectRunningApplications: idleDetector,
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: noReviewSuggestions,
+		})
+		if len(result.OptInCandidates) != 0 || result.Totals.OptInReclaimableBytes != 0 {
+			t.Fatalf("protected uv root leaked: candidates=%#v totals=%#v", result.OptInCandidates, result.Totals)
+		}
+	})
+}
+
 // TestDetectSupportedApplicationsIncludesDevTools verifies DetectSupportedApplications detects dev tools
 func TestDetectSupportedApplicationsIncludesDevTools(t *testing.T) {
 	// We can't easily test the real process snapshot, but we can verify
@@ -2425,6 +2612,9 @@ func TestDetectSupportedApplicationsIncludesDevTools(t *testing.T) {
 	}
 	if clean.ApplicationCargo == "" {
 		t.Fatalf("ApplicationCargo should not be empty")
+	}
+	if clean.ApplicationUV == "" {
+		t.Fatalf("ApplicationUV should not be empty")
 	}
 	if clean.ApplicationDotNet == "" {
 		t.Fatalf("ApplicationDotNet should not be empty")

@@ -115,6 +115,10 @@ const previewReportSectionEntryLimit = 10
 
 const ReviewSuggestionSafetyNote = "Clearing a tool cache while the tool is installing or building can disrupt that operation. Confirm the tool is idle first."
 const administratorOnlyCacheBoundaryNotice = "Permission boundary: administrator-only caches such as SoftwareDistribution and Delivery Optimization are excluded from Opportunity discovery. Foal will not request elevation automatically."
+// uvCacheOptInImpactNotice is shown when uv-cache is an Opt-in candidate. uv
+// rebuilds disposable tool environments and re-downloads dependencies after a
+// cache reclaim; Foal must not present this as zero-impact cleanup.
+const uvCacheOptInImpactNotice = "Opt-in uv cache cleanup may require re-downloading dependencies and rebuilding disposable tool environments. It is not zero-impact."
 
 type PreviewReportCategory struct {
 	Name  string
@@ -198,6 +202,15 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Kind:    "permission_boundary",
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
+	}
+	for _, candidate := range result.OptInCandidates {
+		if candidate.Category == DevCacheCategoryUV {
+			notices = append(notices, PreviewNotice{
+				Kind:    "opt_in_impact",
+				Message: uvCacheOptInImpactNotice,
+			})
+			break
+		}
 	}
 
 	reviewSuggestions := make([]PreviewReviewSuggestion, 0, len(result.ReviewSuggestions))

@@ -11,7 +11,7 @@ import (
 )
 
 func TestNormalizedOptInSet_DevCaches(t *testing.T) {
-	t.Run("dev-caches enables all 7 dev cache categories", func(t *testing.T) {
+	t.Run("dev-caches enables all 8 dev cache categories", func(t *testing.T) {
 		enabled, invalid, valid := clean.NormalizedOptInSet([]string{"dev-caches"})
 		if len(invalid) != 0 {
 			t.Fatalf("expected no invalid names, got %v", invalid)
@@ -24,14 +24,15 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryNuGet,
 			clean.DevCacheCategoryNuGetGlobalPackages,
 			clean.DevCacheCategoryCorepack,
+			clean.DevCacheCategoryUV,
 		}
 		for _, cat := range expectedDevCaches {
 			if !enabled[cat] {
 				t.Fatalf("expected %q to be enabled by \"dev-caches\"", cat)
 			}
 		}
-		if len(enabled) != 7 {
-			t.Fatalf("expected 7 enabled dev cache categories, got %d", len(enabled))
+		if len(enabled) != 8 {
+			t.Fatalf("expected 8 enabled dev cache categories, got %d", len(enabled))
 		}
 		// Verify valid names include dev categories and dev-caches
 		found := make(map[string]bool)
@@ -71,6 +72,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryNuGet,
 			clean.DevCacheCategoryNuGetGlobalPackages,
 			clean.DevCacheCategoryCorepack,
+			clean.DevCacheCategoryUV,
 		}
 		for _, cat := range expectedOpportunities {
 			if !enabled[cat] {
@@ -82,8 +84,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"all\"", cat)
 			}
 		}
-		if len(enabled) != 8+7 {
-			t.Fatalf("expected 15 enabled categories (8+7), got %d", len(enabled))
+		if len(enabled) != 8+8 {
+			t.Fatalf("expected 16 enabled categories (8+8), got %d", len(enabled))
 		}
 	})
 
@@ -96,6 +98,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryNuGet,
 			clean.DevCacheCategoryNuGetGlobalPackages,
 			clean.DevCacheCategoryCorepack,
+			clean.DevCacheCategoryUV,
 		}
 		for _, cat := range devCaches {
 			t.Run(cat, func(t *testing.T) {
@@ -165,7 +168,7 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 		}
 	})
 
-	t.Run("dev-caches enables all 7 dev caches", func(t *testing.T) {
+	t.Run("dev-caches enables all 8 dev caches", func(t *testing.T) {
 		root := t.TempDir()
 		cachePaths := make(map[string]string)
 		devCaches := []string{
@@ -176,6 +179,7 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryNuGet,
 			clean.DevCacheCategoryNuGetGlobalPackages,
 			clean.DevCacheCategoryCorepack,
+			clean.DevCacheCategoryUV,
 		}
 		for _, cat := range devCaches {
 			cachePath := filepath.Join(root, cat)
@@ -203,8 +207,8 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			DiscoverReviewSuggestions: noReviewSuggestions,
 		})
 
-		if len(result.OptInCandidates) != 7 {
-			t.Fatalf("expected 7 opt-in candidates, got %d", len(result.OptInCandidates))
+		if len(result.OptInCandidates) != 8 {
+			t.Fatalf("expected 8 opt-in candidates, got %d", len(result.OptInCandidates))
 		}
 	})
 
@@ -440,7 +444,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 		}
 	})
 
-	t.Run("dev-caches enables all 7 dev caches for execute", func(t *testing.T) {
+	t.Run("dev-caches enables all 8 dev caches for execute", func(t *testing.T) {
 		root := t.TempDir()
 		cachePaths := make(map[string]string)
 		devCaches := []string{
@@ -451,6 +455,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryNuGet,
 			clean.DevCacheCategoryNuGetGlobalPackages,
 			clean.DevCacheCategoryCorepack,
+			clean.DevCacheCategoryUV,
 		}
 		for _, cat := range devCaches {
 			cachePath := filepath.Join(root, cat)
@@ -485,13 +490,13 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}},
 		})
 
-		// Verify all 7 paths were sent to Recycle Bin
-		if len(adapter.paths) != 7 {
-			t.Fatalf("expected 7 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
+		// Verify all 8 paths were sent to Recycle Bin
+		if len(adapter.paths) != 8 {
+			t.Fatalf("expected 8 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
 		}
 
-		if result.Totals.OptInDeletedCount != 7 {
-			t.Fatalf("expected OptInDeletedCount 7, got %d", result.Totals.OptInDeletedCount)
+		if result.Totals.OptInDeletedCount != 8 {
+			t.Fatalf("expected OptInDeletedCount 8, got %d", result.Totals.OptInDeletedCount)
 		}
 	})
 

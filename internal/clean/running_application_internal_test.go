@@ -49,6 +49,7 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 		ApplicationNuGet,
 		ApplicationNode,
 		ApplicationPython,
+		ApplicationUV,
 	}
 	if len(states) != len(wantOrder) {
 		t.Fatalf("states = %#v, want %d entries", states, len(wantOrder))
@@ -70,15 +71,36 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 }
 
 func TestClassifyProcessByExecutablesSupportsMultipleNames(t *testing.T) {
-	// One logical application with two executable names (future uv/uvx shape).
-	executables := []string{"tool.exe", "toolx.exe"}
-	if got := classifyProcessByExecutables("tool", executables, []string{"other.exe", "toolx.exe"}); got.State != RunningApplicationStateRunning {
-		t.Fatalf("toolx.exe state = %#v, want running", got)
+	// uv/uvx: one logical application, either executable means running.
+	executables := []string{"uv.exe", "uvx.exe"}
+	if got := classifyProcessByExecutables(ApplicationUV, executables, []string{"other.exe", "uvx.exe"}); got.State != RunningApplicationStateRunning {
+		t.Fatalf("uvx.exe state = %#v, want running", got)
 	}
-	if got := classifyProcessByExecutables("tool", executables, []string{"TOOL.EXE"}); got.State != RunningApplicationStateRunning {
-		t.Fatalf("case-insensitive tool.exe state = %#v, want running", got)
+	if got := classifyProcessByExecutables(ApplicationUV, executables, []string{"UV.EXE"}); got.State != RunningApplicationStateRunning {
+		t.Fatalf("case-insensitive uv.exe state = %#v, want running", got)
 	}
-	if got := classifyProcessByExecutables("tool", executables, []string{"notepad.exe"}); got.State != RunningApplicationStateIdle {
+	if got := classifyProcessByExecutables(ApplicationUV, executables, []string{"notepad.exe"}); got.State != RunningApplicationStateIdle {
 		t.Fatalf("idle state = %#v, want idle", got)
+	}
+}
+
+func TestDetectSupportedApplicationsTreatsUVxAsUV(t *testing.T) {
+	states := detectSupportedApplications(context.Background(), func(context.Context) processSnapshot {
+		return processSnapshot{Names: []string{"uvx.exe", "notepad.exe"}}
+	})
+	var uvState RunningApplicationState
+	found := false
+	for _, state := range states {
+		if state.Application == ApplicationUV {
+			uvState = state
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected uv application state")
+	}
+	if uvState.State != RunningApplicationStateRunning {
+		t.Fatalf("uv state with uvx.exe = %#v, want running", uvState)
 	}
 }
