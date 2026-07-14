@@ -11,7 +11,7 @@ import (
 )
 
 func TestNormalizedOptInSet_DevCaches(t *testing.T) {
-	t.Run("dev-caches enables all 6 dev cache categories", func(t *testing.T) {
+	t.Run("dev-caches enables all 7 dev cache categories", func(t *testing.T) {
 		enabled, invalid, valid := clean.NormalizedOptInSet([]string{"dev-caches"})
 		if len(invalid) != 0 {
 			t.Fatalf("expected no invalid names, got %v", invalid)
@@ -22,6 +22,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPip,
 			clean.DevCacheCategoryCargo,
 			clean.DevCacheCategoryNuGet,
+			clean.DevCacheCategoryNuGetGlobalPackages,
 			clean.DevCacheCategoryCorepack,
 		}
 		for _, cat := range expectedDevCaches {
@@ -29,8 +30,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"dev-caches\"", cat)
 			}
 		}
-		if len(enabled) != 6 {
-			t.Fatalf("expected 6 enabled dev cache categories, got %d", len(enabled))
+		if len(enabled) != 7 {
+			t.Fatalf("expected 7 enabled dev cache categories, got %d", len(enabled))
 		}
 		// Verify valid names include dev categories and dev-caches
 		found := make(map[string]bool)
@@ -68,6 +69,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPip,
 			clean.DevCacheCategoryCargo,
 			clean.DevCacheCategoryNuGet,
+			clean.DevCacheCategoryNuGetGlobalPackages,
 			clean.DevCacheCategoryCorepack,
 		}
 		for _, cat := range expectedOpportunities {
@@ -80,8 +82,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"all\"", cat)
 			}
 		}
-		if len(enabled) != 8+6 {
-			t.Fatalf("expected 14 enabled categories (8+6), got %d", len(enabled))
+		if len(enabled) != 8+7 {
+			t.Fatalf("expected 15 enabled categories (8+7), got %d", len(enabled))
 		}
 	})
 
@@ -92,6 +94,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPip,
 			clean.DevCacheCategoryCargo,
 			clean.DevCacheCategoryNuGet,
+			clean.DevCacheCategoryNuGetGlobalPackages,
 			clean.DevCacheCategoryCorepack,
 		}
 		for _, cat := range devCaches {
@@ -162,7 +165,7 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 		}
 	})
 
-	t.Run("dev-caches enables all 6 dev caches", func(t *testing.T) {
+	t.Run("dev-caches enables all 7 dev caches", func(t *testing.T) {
 		root := t.TempDir()
 		cachePaths := make(map[string]string)
 		devCaches := []string{
@@ -171,6 +174,7 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryPip,
 			clean.DevCacheCategoryCargo,
 			clean.DevCacheCategoryNuGet,
+			clean.DevCacheCategoryNuGetGlobalPackages,
 			clean.DevCacheCategoryCorepack,
 		}
 		for _, cat := range devCaches {
@@ -199,8 +203,8 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			DiscoverReviewSuggestions: noReviewSuggestions,
 		})
 
-		if len(result.OptInCandidates) != 6 {
-			t.Fatalf("expected 6 opt-in candidates, got %d", len(result.OptInCandidates))
+		if len(result.OptInCandidates) != 7 {
+			t.Fatalf("expected 7 opt-in candidates, got %d", len(result.OptInCandidates))
 		}
 	})
 
@@ -436,7 +440,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 		}
 	})
 
-	t.Run("dev-caches enables all 6 dev caches for execute", func(t *testing.T) {
+	t.Run("dev-caches enables all 7 dev caches for execute", func(t *testing.T) {
 		root := t.TempDir()
 		cachePaths := make(map[string]string)
 		devCaches := []string{
@@ -445,6 +449,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryPip,
 			clean.DevCacheCategoryCargo,
 			clean.DevCacheCategoryNuGet,
+			clean.DevCacheCategoryNuGetGlobalPackages,
 			clean.DevCacheCategoryCorepack,
 		}
 		for _, cat := range devCaches {
@@ -480,13 +485,13 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}},
 		})
 
-		// Verify all 6 paths were sent to Recycle Bin
-		if len(adapter.paths) != 6 {
-			t.Fatalf("expected 6 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
+		// Verify all 7 paths were sent to Recycle Bin
+		if len(adapter.paths) != 7 {
+			t.Fatalf("expected 7 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
 		}
 
-		if result.Totals.OptInDeletedCount != 6 {
-			t.Fatalf("expected OptInDeletedCount 6, got %d", result.Totals.OptInDeletedCount)
+		if result.Totals.OptInDeletedCount != 7 {
+			t.Fatalf("expected OptInDeletedCount 7, got %d", result.Totals.OptInDeletedCount)
 		}
 	})
 
@@ -817,7 +822,6 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 		}
 	})
 }
-
 
 func noOpportunities(context.Context) clean.OpportunityDiscoveryResult {
 	return clean.OpportunityDiscoveryResult{}

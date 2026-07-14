@@ -1,6 +1,7 @@
 package clean
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -203,6 +204,73 @@ func TestDevCachePathResolution(t *testing.T) {
 		}
 		if paths[0] != "C:\\Users\\test\\AppData\\Local\\node\\corepack\\v1" {
 			t.Errorf("expected default path, got %q", paths[0])
+		}
+	})
+
+	t.Run("env-wins: nuget global packages uses NUGET_PACKAGES only when set", func(t *testing.T) {
+		// Env set: only env path is returned
+		deps := devCachePathDependencies{
+			lookupEnv: func(key string) (string, bool) {
+				if key == "NUGET_PACKAGES" {
+					return "C:\\custom\\nuget-global", true
+				}
+				if key == "USERPROFILE" {
+					return "C:\\Users\\test", true
+				}
+				return "", false
+			},
+			joinPath: func(parts ...string) string {
+				return strings.Join(parts, "\\")
+			},
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryNuGetGlobalPackages, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path, got %d", len(paths))
+		}
+		if paths[0] != "C:\\custom\\nuget-global" {
+			t.Errorf("expected env path, got %q", paths[0])
+		}
+
+		// Env not set: default to USERPROFILE\.nuget\packages
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "USERPROFILE" {
+				return "C:\\Users\\test", true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryNuGetGlobalPackages, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path, got %d", len(paths))
+		}
+		if paths[0] != "C:\\Users\\test\\.nuget\\packages" {
+			t.Errorf("expected default USERPROFILE path, got %q", paths[0])
+		}
+
+		// No USERPROFILE but userHomeDir works
+		deps.lookupEnv = func(key string) (string, bool) {
+			return "", false
+		}
+		deps.userHomeDir = func() (string, error) {
+			return "C:\\Users\\testhome", nil
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryNuGetGlobalPackages, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path from userHomeDir, got %d", len(paths))
+		}
+		if paths[0] != "C:\\Users\\testhome\\.nuget\\packages" {
+			t.Errorf("expected userHomeDir path, got %q", paths[0])
+		}
+
+		// No env or userHomeDir: no paths
+		deps.lookupEnv = func(key string) (string, bool) {
+			return "", false
+		}
+		deps.userHomeDir = func() (string, error) {
+			return "", os.ErrNotExist
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryNuGetGlobalPackages, deps)
+		if len(paths) != 0 {
+			t.Fatalf("expected 0 paths when no resolution, got %d", len(paths))
 		}
 	})
 }

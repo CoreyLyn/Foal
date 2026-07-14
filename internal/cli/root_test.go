@@ -2030,6 +2030,7 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.DevCacheCategoryPip,
 		clean.DevCacheCategoryCargo,
 		clean.DevCacheCategoryNuGet,
+		clean.DevCacheCategoryNuGetGlobalPackages,
 		clean.DevCacheCategoryCorepack,
 	}
 	want := append(expectedOpportunities, expectedDevCaches...)
@@ -2075,6 +2076,7 @@ func TestCleanOptInInvalidName(t *testing.T) {
 		"pip-cache",
 		"cargo-cache",
 		"nuget-cache",
+		"nuget-global-packages",
 		"corepack-cache",
 		"dev-caches",
 		"all",

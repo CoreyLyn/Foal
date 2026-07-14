@@ -19,13 +19,14 @@ const plannedRecycleBinAction = "move_to_recycle_bin"
 
 // Dev cache categories - these are Review suggestions that become opt-in candidates
 const (
-	DevCacheCategoryNPM      = "npm-cache"
-	DevCacheCategoryGo       = "go-cache"
-	DevCacheCategoryPip      = "pip-cache"
-	DevCacheCategoryCargo    = "cargo-cache"
-	DevCacheCategoryNuGet    = "nuget-cache"
-	DevCacheCategoryCorepack = "corepack-cache"
-	DevCacheCategoryAll      = "dev-caches"
+	DevCacheCategoryNPM                 = "npm-cache"
+	DevCacheCategoryGo                  = "go-cache"
+	DevCacheCategoryPip                 = "pip-cache"
+	DevCacheCategoryCargo               = "cargo-cache"
+	DevCacheCategoryNuGet               = "nuget-cache"
+	DevCacheCategoryNuGetGlobalPackages = "nuget-global-packages"
+	DevCacheCategoryCorepack            = "corepack-cache"
+	DevCacheCategoryAll                 = "dev-caches"
 )
 
 // RecycleBinVolumeConfig holds the Recycle Bin configuration for a volume.

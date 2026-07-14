@@ -47,6 +47,8 @@ func resolveDevCachePaths(category string, deps devCachePathDependencies) []stri
 		return resolveCargoCachePaths(deps)
 	case DevCacheCategoryNuGet:
 		return resolveNuGetCachePaths(deps)
+	case DevCacheCategoryNuGetGlobalPackages:
+		return resolveNuGetGlobalPackagesPaths(deps)
 	case DevCacheCategoryCorepack:
 		return resolveCorepackOptInCachePaths(deps)
 	default:
@@ -114,6 +116,20 @@ func resolveNuGetCachePaths(deps devCachePathDependencies) []string {
 	}
 	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
 		return []string{deps.joinPath(localAppData, "NuGet", "v3-cache")}
+	}
+	return nil
+}
+
+func resolveNuGetGlobalPackagesPaths(deps devCachePathDependencies) []string {
+	// nuget global packages: NUGET_PACKAGES -> %USERPROFILE%\.nuget\packages
+	if path, ok := deps.lookupEnv("NUGET_PACKAGES"); ok && path != "" {
+		return []string{path}
+	}
+	if userProfile, ok := deps.lookupEnv("USERPROFILE"); ok && userProfile != "" {
+		return []string{deps.joinPath(userProfile, ".nuget", "packages")}
+	}
+	if home, err := deps.userHomeDir(); err == nil && home != "" {
+		return []string{deps.joinPath(home, ".nuget", "packages")}
 	}
 	return nil
 }

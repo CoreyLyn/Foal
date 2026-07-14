@@ -862,7 +862,7 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 	if len(invalid) != 0 {
 		t.Fatalf("expected no invalid names, got %v", invalid)
 	}
-	// All 8 opportunity categories and 6 dev caches should be enabled
+	// All 8 opportunity categories and 7 dev caches should be enabled
 	expectedOpportunities := []string{
 		clean.OpportunityCategoryUserTemp,
 		clean.OpportunityCategoryCrashDumps,
@@ -879,6 +879,7 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 		clean.DevCacheCategoryPip,
 		clean.DevCacheCategoryCargo,
 		clean.DevCacheCategoryNuGet,
+		clean.DevCacheCategoryNuGetGlobalPackages,
 		clean.DevCacheCategoryCorepack,
 	}
 	for _, cat := range expectedOpportunities {
@@ -952,9 +953,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// Should have 8 opportunity categories + 6 dev caches + "dev-caches" + "all" = 16
-	if len(valid) != 16 {
-		t.Fatalf("expected 16 valid names, got %d: %v", len(valid), valid)
+	// Should have 8 opportunity categories + 7 dev caches + "dev-caches" + "all" = 17
+	if len(valid) != 17 {
+		t.Fatalf("expected 17 valid names, got %d: %v", len(valid), valid)
 	}
 }
 
