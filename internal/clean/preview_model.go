@@ -125,6 +125,10 @@ const uvCacheOptInImpactNotice = "Opt-in uv cache cleanup may require re-downloa
 // and hardlinked project content can reduce actual reclaimable disk space.
 const bunCacheOptInImpactNotice = "Opt-in Bun cache cleanup may require re-downloading dependencies. Hardlinked project content can affect actual disk space reclaimed."
 
+// vscodeCachedExtensionVSIXsImpactNotice is shown when CachedExtensionVSIXs is
+// observed or selected. Installed extensions and settings are never selected.
+const vscodeCachedExtensionVSIXsImpactNotice = "VS Code CachedExtensionVSIXs holds downloaded extension packages that may need to be fetched again after cleanup. Installed extensions and settings are not selected."
+
 type PreviewReportCategory struct {
 	Name  string
 	Lines []string
@@ -208,13 +212,23 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasUVOptIn, hasBunOptIn bool
+	var hasUVOptIn, hasBunOptIn, hasVSCodeVSIX bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case DevCacheCategoryUV:
 			hasUVOptIn = true
 		case DevCacheCategoryBun:
 			hasBunOptIn = true
+		case OpportunityCategoryVSCodeCache:
+			if isCachedExtensionVSIXsPath(candidate.Path) {
+				hasVSCodeVSIX = true
+			}
+		}
+	}
+	for _, opportunity := range result.Opportunities {
+		if normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryVSCodeCache &&
+			isCachedExtensionVSIXsPath(opportunity.Path) {
+			hasVSCodeVSIX = true
 		}
 	}
 	if hasUVOptIn {
@@ -227,6 +241,12 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
 			Message: bunCacheOptInImpactNotice,
+		})
+	}
+	if hasVSCodeVSIX {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: vscodeCachedExtensionVSIXsImpactNotice,
 		})
 	}
 
@@ -245,10 +265,16 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			continue
 		}
 		displayName := applicationDisplayName(state.Application)
+		nameKind := "cache review"
+		reasonKind := "cache review"
+		if state.Application == ApplicationGoogleChrome || state.Application == ApplicationMicrosoftEdge {
+			nameKind = "browser review"
+			reasonKind = "browser cache review"
+		}
 		runningApplicationSkips = append(runningApplicationSkips, PreviewRunningApplicationSkip{
-			Name:        displayName + " browser review",
+			Name:        displayName + " " + nameKind,
 			Application: displayName,
-			Reason:      displayName + " is running; browser cache review was skipped.",
+			Reason:      displayName + " is running; " + reasonKind + " was skipped.",
 		})
 	}
 	opportunities := append([]Opportunity(nil), result.Opportunities...)
@@ -626,13 +652,32 @@ func browserReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 }
 
 func developerToolReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions) []string {
-	if len(model.ReviewSuggestions) == 0 {
-		return nil
+	var lines []string
+	devOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
+		return categoryReportGroup(normalizedOpportunityCategory(opportunity.Category)) == ReportCategoryDeveloperTools
+	})
+	if len(devOpportunities) > 0 {
+		lines = append(lines, fmt.Sprintf("  Skipped by default: %d developer-tool opportunity item(s)", len(devOpportunities)+omitted))
+		lines = append(lines, opportunityLines(devOpportunities, opts)...)
+		if omitted > 0 {
+			lines = append(lines, omittedLine(omitted, model.DetailedListPath))
+		}
 	}
-	lines := []string{
+	if opts.IncludeIncompleteInspections {
+		for _, incomplete := range model.IncompleteOpportunityInspections {
+			if categoryReportGroup(normalizedOpportunityCategory(incomplete.Category)) != ReportCategoryDeveloperTools {
+				continue
+			}
+			lines = append(lines, incompleteInspectionLine(incomplete, opts))
+		}
+	}
+	if len(model.ReviewSuggestions) == 0 {
+		return lines
+	}
+	lines = append(lines,
 		fmt.Sprintf("  Review suggestions (%d)", len(model.ReviewSuggestions)),
 		fmt.Sprintf("    %s", ReviewSuggestionSafetyNote),
-	}
+	)
 	for _, suggestion := range model.ReviewSuggestions {
 		if opts.Compact {
 			lines = append(lines, fmt.Sprintf("    [review] %s (Review suggestion) (status: Review suggestion)", suggestion.Label))
@@ -828,7 +873,12 @@ func incompleteInspectionLine(incomplete IncompleteOpportunityInspection, opts P
 }
 
 func isBrowserDiagnostic(issue StructuredIssue) bool {
-	return issue.Code == runningApplicationDetectionIssueCode || issue.Rule == "browser_review"
+	if issue.Rule == "browser_review" || issue.Rule == OpportunityCategoryBrowserCache {
+		return true
+	}
+	// Legacy browser diagnostics used the detection code with browser_review rule;
+	// keep code-only matches only when the rule is empty (older fixtures).
+	return issue.Code == runningApplicationDetectionIssueCode && issue.Rule == ""
 }
 
 func cappedEntryCountFor(count, limit int) int {

@@ -24,6 +24,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"d3d_shader_cache",
 		"nvidia_dx_cache",
 		"browser_cache",
+		"vscode_cache",
 		"npm-cache",
 		"go-cache",
 		"pip-cache",
@@ -162,18 +163,25 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryUV,
 		clean.DevCacheCategoryBun,
 	}
+	wantDeveloperToolsOptIn := append([]string{clean.OpportunityCategoryVSCodeCache}, wantDevCaches...)
 
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	summaries := catalog.Summaries()
-	var gotDevCaches []string
+	var gotDeveloperTools []string
 	for _, summary := range summaries {
 		if summary.ReportCategory == clean.ReportCategoryDeveloperTools &&
 			summary.Eligibility == clean.CategoryEligibilityOptIn {
-			gotDevCaches = append(gotDevCaches, summary.Identifier)
+			gotDeveloperTools = append(gotDeveloperTools, summary.Identifier)
 		}
 	}
-	if !reflect.DeepEqual(gotDevCaches, wantDevCaches) {
-		t.Fatalf("developer-cache order = %#v, want %#v", gotDevCaches, wantDevCaches)
+	if !reflect.DeepEqual(gotDeveloperTools, wantDeveloperToolsOptIn) {
+		t.Fatalf("developer tools opt-in order = %#v, want %#v", gotDeveloperTools, wantDeveloperToolsOptIn)
+	}
+
+	vscodeSummary, ok := catalog.Summary(clean.OpportunityCategoryVSCodeCache)
+	if !ok || vscodeSummary.Label != "VS Code cache" ||
+		vscodeSummary.RunningApplicationPolicy != clean.RunningApplicationPolicyApplicationIdleBeforeAfter {
+		t.Fatalf("vscode_cache summary = %#v, want application-idle opportunity", vscodeSummary)
 	}
 
 	policies := map[string]clean.RunningApplicationPolicy{
@@ -209,8 +217,9 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		"NUGET_HTTP_CACHE_PATH", "NUGET_PACKAGES", "COREPACK_HOME", "UV_CACHE_DIR",
 		"BUN_INSTALL_CACHE_DIR",
 		"go.exe", "cargo.exe", "dotnet.exe", "nuget.exe", "node.exe", "python.exe",
-		"uv.exe", "uvx.exe", "bun.exe", "bunx.exe",
-		"resolvePaths", "lookupEnv", "LOCALAPPDATA",
+		"uv.exe", "uvx.exe", "bun.exe", "bunx.exe", "Code.exe",
+		"resolvePaths", "lookupEnv", "LOCALAPPDATA", "APPDATA",
+		"CachedData", "CachedExtensionVSIXs",
 	} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("path-free catalog projection exposes %q: %s", forbidden, encoded)
@@ -227,7 +236,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 	if len(invalid) != 0 {
 		t.Fatalf("dev-caches invalid = %#v", invalid)
 	}
-	for _, id := range wantDevCaches {
+	for _, id := range wantDeveloperToolsOptIn {
 		if !enabled[id] {
 			t.Fatalf("dev-caches missing %q", id)
 		}

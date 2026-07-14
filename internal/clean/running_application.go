@@ -48,6 +48,7 @@ func DetectSupportedApplications(ctx context.Context) []RunningApplicationState 
 func detectSupportedApplications(ctx context.Context, snapshot func(context.Context) processSnapshot) []RunningApplicationState {
 	snapshotResult := snapshot(ctx)
 	developerApps := developerApplicationDefinitions
+	applicationCacheApps := applicationCacheApplicationDefinitions
 	if snapshotResult.Err != nil {
 		message := snapshotResult.Err.Error()
 		states := []RunningApplicationState{
@@ -61,6 +62,13 @@ func detectSupportedApplications(ctx context.Context, snapshot func(context.Cont
 				Message:     message,
 			})
 		}
+		for _, app := range applicationCacheApps {
+			states = append(states, RunningApplicationState{
+				Application: app.id,
+				State:       RunningApplicationStateUnknown,
+				Message:     message,
+			})
+		}
 		return states
 	}
 	states := []RunningApplicationState{
@@ -68,6 +76,9 @@ func detectSupportedApplications(ctx context.Context, snapshot func(context.Cont
 		classifyBrowserProcess(ApplicationMicrosoftEdge, "msedge.exe", snapshotResult.Names),
 	}
 	for _, app := range developerApps {
+		states = append(states, classifyProcessByExecutables(app.id, app.executables, snapshotResult.Names))
+	}
+	for _, app := range applicationCacheApps {
 		states = append(states, classifyProcessByExecutables(app.id, app.executables, snapshotResult.Names))
 	}
 	return states

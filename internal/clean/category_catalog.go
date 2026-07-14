@@ -29,10 +29,11 @@ const (
 type RunningApplicationPolicy string
 
 const (
-	RunningApplicationPolicyNotApplicable          RunningApplicationPolicy = "not-applicable"
-	RunningApplicationPolicyBrowserIdleBeforeAfter RunningApplicationPolicy = "browser-idle-before-and-after-inspection"
-	RunningApplicationPolicyDistinctiveProcessIdle RunningApplicationPolicy = "distinctive-process-must-be-idle"
-	RunningApplicationPolicySharedRuntime          RunningApplicationPolicy = "shared-runtime-not-attributable"
+	RunningApplicationPolicyNotApplicable             RunningApplicationPolicy = "not-applicable"
+	RunningApplicationPolicyBrowserIdleBeforeAfter    RunningApplicationPolicy = "browser-idle-before-and-after-inspection"
+	RunningApplicationPolicyApplicationIdleBeforeAfter RunningApplicationPolicy = "application-idle-before-and-after-inspection"
+	RunningApplicationPolicyDistinctiveProcessIdle    RunningApplicationPolicy = "distinctive-process-must-be-idle"
+	RunningApplicationPolicySharedRuntime             RunningApplicationPolicy = "shared-runtime-not-attributable"
 )
 
 // CleanupCategoryDefinition is the path-free policy vocabulary shared by
@@ -136,6 +137,7 @@ func validCategoryEligibility(eligibility CategoryEligibility) bool {
 func validRunningApplicationPolicy(policy RunningApplicationPolicy) bool {
 	switch policy {
 	case RunningApplicationPolicyNotApplicable, RunningApplicationPolicyBrowserIdleBeforeAfter,
+		RunningApplicationPolicyApplicationIdleBeforeAfter,
 		RunningApplicationPolicyDistinctiveProcessIdle, RunningApplicationPolicySharedRuntime:
 		return true
 	default:
@@ -181,7 +183,7 @@ type supportedApplicationDefinition struct {
 // developerApplicationDefinitions is the controlled registry of developer-tool
 // process requirements used by DetectSupportedApplications and by developer-
 // cache running-application gating. Order is part of the public detection
-// surface (browsers are prepended separately).
+// surface (browsers are prepended separately; application-cache apps follow).
 var developerApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationGo, displayName: "Go", executables: []string{"go.exe"}},
 	{id: ApplicationCargo, displayName: "Cargo", executables: []string{"cargo.exe"}},
@@ -195,14 +197,23 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationBun, displayName: "Bun", executables: []string{"bun.exe", "bunx.exe"}},
 }
 
+// applicationCacheApplicationDefinitions is the controlled registry of idle
+// Application cache owners (VS Code today; Cursor later). Process detection
+// is shared with DetectSupportedApplications after developer tools.
+var applicationCacheApplicationDefinitions = []supportedApplicationDefinition{
+	{id: ApplicationVisualStudioCode, displayName: "Visual Studio Code", executables: []string{"Code.exe"}},
+}
+
 // categoryCatalogEntry is the private canonical registration point. Public
 // catalog projections expose only path-free definition fields. Developer-cache
 // entries additionally bind a path resolver, optional Review suggestion tool
 // keys, and the applications required by the running-application policy.
+// Application-cache entries bind an idle Application cache policy id.
 type categoryCatalogEntry struct {
 	definition            CleanupCategoryDefinition
 	opportunity           bool
 	developerCache        bool
+	applicationCache      bool
 	fixedLocalAppDataPath []string
 	runningApplications   []string
 	// resolvePaths resolves env/default roots for a developer-cache category.
@@ -212,6 +223,9 @@ type categoryCatalogEntry struct {
 	// associated with this developer-cache category. Empty when no suggestion
 	// probe is associated (for example cargo). Referenced keys must exist.
 	reviewSuggestionTools []string
+	// applicationCachePolicyID selects a private applicationCachePolicy for
+	// application-cache opportunity categories. Required when applicationCache.
+	applicationCachePolicyID string
 }
 
 func developerCacheEntry(
@@ -239,6 +253,19 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	{definition: categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true, fixedLocalAppDataPath: []string{"D3DSCache"}},
 	{definition: categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true, fixedLocalAppDataPath: []string{"NVIDIA", "DXCache"}},
 	{definition: categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter), opportunity: true},
+	{
+		definition: categoryDefinition(
+			OpportunityCategoryVSCodeCache,
+			"VS Code cache",
+			ReportCategoryDeveloperTools,
+			CategoryEligibilityOptIn,
+			RunningApplicationPolicyApplicationIdleBeforeAfter,
+		),
+		opportunity:              true,
+		applicationCache:         true,
+		applicationCachePolicyID: applicationCachePolicyVSCode,
+		runningApplications:      []string{ApplicationVisualStudioCode},
+	},
 	developerCacheEntry(
 		categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
 		resolveNPMCachePaths,
@@ -312,6 +339,9 @@ func init() {
 	if err := validateDeveloperCacheRegistry(canonicalCategoryEntries, developerApplicationDefinitions, reviewSuggestionAllowlist); err != nil {
 		panic(err)
 	}
+	if err := validateApplicationCacheRegistry(canonicalCategoryEntries, applicationCacheApplicationDefinitions, applicationCachePolicies); err != nil {
+		panic(err)
+	}
 }
 
 func mustCleanupCategoryCatalog(entries []categoryCatalogEntry) CleanupCategoryCatalog {
@@ -370,6 +400,10 @@ func validateDeveloperCacheRegistry(
 			}
 			if len(entry.reviewSuggestionTools) > 0 {
 				return fmt.Errorf("non-developer-cache category %q must not register Review suggestion tools", entry.definition.Identifier)
+			}
+			if entry.applicationCache {
+				// Application-cache categories are validated separately.
+				continue
 			}
 			continue
 		}
@@ -436,10 +470,15 @@ func selectableCategoryIDs() []string {
 	return identifiers
 }
 
-func opportunityCategoryIDs(includeBrowser bool) []string {
+func opportunityCategoryIDs(includeGated bool) []string {
 	var identifiers []string
 	for _, entry := range canonicalCategoryEntries {
-		if !entry.opportunity || (!includeBrowser && entry.definition.Identifier == OpportunityCategoryBrowserCache) {
+		if !entry.opportunity {
+			continue
+		}
+		// Browser and idle Application cache categories use dedicated gated
+		// discovery; the generic existence/user-temp scanner must omit them.
+		if !includeGated && (entry.definition.Identifier == OpportunityCategoryBrowserCache || entry.applicationCache) {
 			continue
 		}
 		identifiers = append(identifiers, entry.definition.Identifier)
@@ -457,6 +496,147 @@ func developerCacheCategoryIDs() []string {
 	return identifiers
 }
 
+// developerToolsOptInCategoryIDs returns Developer tools opt-in categories for
+// the `dev-caches` group: registered developer-cache categories plus idle
+// Application cache opportunity categories (derived from catalog policy).
+func developerToolsOptInCategoryIDs() []string {
+	var identifiers []string
+	for _, entry := range canonicalCategoryEntries {
+		if entry.definition.Eligibility != CategoryEligibilityOptIn {
+			continue
+		}
+		if entry.definition.ReportCategory != ReportCategoryDeveloperTools {
+			continue
+		}
+		if entry.developerCache || entry.applicationCache {
+			identifiers = append(identifiers, entry.definition.Identifier)
+		}
+	}
+	return identifiers
+}
+
+func applicationCacheCategoryIDs() []string {
+	var identifiers []string
+	for _, entry := range canonicalCategoryEntries {
+		if entry.applicationCache {
+			identifiers = append(identifiers, entry.definition.Identifier)
+		}
+	}
+	return identifiers
+}
+
+func isApplicationCacheCategory(category string) bool {
+	entry, ok := canonicalCategoryEntry(category)
+	return ok && entry.applicationCache
+}
+
+// validateApplicationCacheRegistry rejects incomplete application-cache
+// registrations and ambiguous process ownership across application-cache apps.
+func validateApplicationCacheRegistry(
+	entries []categoryCatalogEntry,
+	applications []supportedApplicationDefinition,
+	policies map[string]applicationCachePolicy,
+) error {
+	appByID := make(map[string]supportedApplicationDefinition, len(applications))
+	executableOwner := make(map[string]string)
+	for _, app := range applications {
+		id := strings.TrimSpace(app.id)
+		if id == "" {
+			return fmt.Errorf("application-cache application definition has empty id")
+		}
+		if strings.TrimSpace(app.displayName) == "" {
+			return fmt.Errorf("application-cache application %q has empty display name", id)
+		}
+		if len(app.executables) == 0 {
+			return fmt.Errorf("application-cache application %q has no executable names", id)
+		}
+		if _, exists := appByID[id]; exists {
+			return fmt.Errorf("duplicate application-cache application id %q", id)
+		}
+		appByID[id] = app
+		for _, executable := range app.executables {
+			exeKey := strings.ToLower(strings.TrimSpace(executable))
+			if exeKey == "" {
+				return fmt.Errorf("application-cache application %q has an empty executable name", id)
+			}
+			if owner, exists := executableOwner[exeKey]; exists && owner != id {
+				return fmt.Errorf("ambiguous executable %q owned by both %q and %q", executable, owner, id)
+			}
+			executableOwner[exeKey] = id
+		}
+	}
+
+	for _, entry := range entries {
+		if !entry.applicationCache {
+			if entry.applicationCachePolicyID != "" {
+				return fmt.Errorf("non-application-cache category %q must not register an application cache policy", entry.definition.Identifier)
+			}
+			continue
+		}
+		id := entry.definition.Identifier
+		if !entry.opportunity {
+			return fmt.Errorf("application-cache category %q must be an opportunity", id)
+		}
+		if entry.developerCache {
+			return fmt.Errorf("application-cache category %q must not also be a developer-cache", id)
+		}
+		if entry.definition.RunningApplicationPolicy != RunningApplicationPolicyApplicationIdleBeforeAfter {
+			return fmt.Errorf("application-cache category %q must use application-idle-before-and-after-inspection policy", id)
+		}
+		if entry.applicationCachePolicyID == "" {
+			return fmt.Errorf("application-cache category %q is missing a policy id", id)
+		}
+		policy, ok := policies[entry.applicationCachePolicyID]
+		if !ok {
+			return fmt.Errorf("application-cache category %q references unknown policy %q", id, entry.applicationCachePolicyID)
+		}
+		if policy.category != id {
+			return fmt.Errorf("application-cache category %q policy category mismatch %q", id, policy.category)
+		}
+		if len(entry.runningApplications) == 0 {
+			return fmt.Errorf("application-cache category %q has no running applications", id)
+		}
+		seenApps := make(map[string]bool, len(entry.runningApplications))
+		for _, appID := range entry.runningApplications {
+			appID = strings.TrimSpace(appID)
+			if appID == "" {
+				return fmt.Errorf("application-cache category %q has an empty running application id", id)
+			}
+			if seenApps[appID] {
+				return fmt.Errorf("application-cache category %q has duplicate running application %q", id, appID)
+			}
+			seenApps[appID] = true
+			if _, ok := appByID[appID]; !ok {
+				return fmt.Errorf("application-cache category %q references unknown application %q", id, appID)
+			}
+		}
+		if policy.application != "" && !seenApps[policy.application] {
+			return fmt.Errorf("application-cache category %q policy application %q is not registered on the entry", id, policy.application)
+		}
+		if len(policy.relativeRoots) == 0 {
+			return fmt.Errorf("application-cache policy %q has an empty relative-root allowlist", entry.applicationCachePolicyID)
+		}
+		if len(policy.roamingAppDataPath) == 0 {
+			return fmt.Errorf("application-cache policy %q has an empty roaming AppData path", entry.applicationCachePolicyID)
+		}
+		seenRoots := make(map[string]bool, len(policy.relativeRoots))
+		for _, root := range policy.relativeRoots {
+			if strings.TrimSpace(root) == "" || root != strings.TrimSpace(root) {
+				return fmt.Errorf("application-cache policy %q has an invalid relative root %q", entry.applicationCachePolicyID, root)
+			}
+			if strings.Contains(root, `\`) || strings.Contains(root, `/`) || strings.Contains(root, "..") {
+				return fmt.Errorf("application-cache policy %q relative root %q must be a single path segment", entry.applicationCachePolicyID, root)
+			}
+			key := strings.ToLower(root)
+			if seenRoots[key] {
+				return fmt.Errorf("application-cache policy %q has duplicate relative root %q", entry.applicationCachePolicyID, root)
+			}
+			seenRoots[key] = true
+		}
+	}
+	return nil
+}
+
 func categoryReportGroup(identifier string) ReportCategory {
 	entry, ok := canonicalCategoryEntry(identifier)
 	if !ok {
@@ -471,5 +651,18 @@ func developerApplicationDefinition(id string) (supportedApplicationDefinition, 
 			return app, true
 		}
 	}
+	for _, app := range applicationCacheApplicationDefinitions {
+		if app.id == id {
+			return app, true
+		}
+	}
 	return supportedApplicationDefinition{}, false
+}
+
+func applicationCacheEntry(identifier string) (categoryCatalogEntry, bool) {
+	entry, ok := canonicalCategoryEntry(identifier)
+	if !ok || !entry.applicationCache {
+		return categoryCatalogEntry{}, false
+	}
+	return entry, true
 }
