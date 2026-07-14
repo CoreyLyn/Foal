@@ -9,6 +9,10 @@ import (
 // ResolveDevCachePaths resolves developer tool cache paths using only
 // environment variables and default paths (no external tool execution).
 // Returns empty slice if no paths can be determined.
+//
+// The default implementation dispatches through the private canonical
+// developer-cache registry. Callers may inject Options.DevCachePathResolver
+// for Dry-run/Execute tests without providing catalog metadata.
 func ResolveDevCachePaths(category string) []string {
 	return resolveDevCachePaths(category, devCachePathDependencies{
 		lookupEnv:   os.LookupEnv,
@@ -35,25 +39,15 @@ type devCachePathDependencies struct {
 	goos        string
 }
 
+// resolveDevCachePaths looks up the registered resolver for the category.
+// There is no independent category-to-resolver switch here: each developer-
+// cache category binds its resolver at the private registration point.
 func resolveDevCachePaths(category string, deps devCachePathDependencies) []string {
-	switch category {
-	case DevCacheCategoryNPM:
-		return resolveNPMCachePaths(deps)
-	case DevCacheCategoryGo:
-		return resolveGoCachePaths(deps)
-	case DevCacheCategoryPip:
-		return resolvePipCachePaths(deps)
-	case DevCacheCategoryCargo:
-		return resolveCargoCachePaths(deps)
-	case DevCacheCategoryNuGet:
-		return resolveNuGetCachePaths(deps)
-	case DevCacheCategoryNuGetGlobalPackages:
-		return resolveNuGetGlobalPackagesPaths(deps)
-	case DevCacheCategoryCorepack:
-		return resolveCorepackOptInCachePaths(deps)
-	default:
+	entry, ok := canonicalCategoryEntry(category)
+	if !ok || !entry.developerCache || entry.resolvePaths == nil {
 		return nil
 	}
+	return entry.resolvePaths(deps)
 }
 
 func resolveNPMCachePaths(deps devCachePathDependencies) []string {

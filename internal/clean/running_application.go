@@ -38,44 +38,55 @@ func classifyBrowserProcess(application, executable string, processNames []strin
 	return RunningApplicationState{Application: application, State: RunningApplicationStateIdle}
 }
 
-// DetectSupportedApplications detects both browsers and developer tools
+// DetectSupportedApplications detects both browsers and developer tools.
+// Developer-tool process requirements come from the controlled application
+// registry so one logical application may match multiple executable names.
 func DetectSupportedApplications(ctx context.Context) []RunningApplicationState {
 	return detectSupportedApplications(ctx, snapshotProcesses)
 }
 
 func detectSupportedApplications(ctx context.Context, snapshot func(context.Context) processSnapshot) []RunningApplicationState {
 	snapshotResult := snapshot(ctx)
+	developerApps := developerApplicationDefinitions
 	if snapshotResult.Err != nil {
 		message := snapshotResult.Err.Error()
-		return []RunningApplicationState{
+		states := []RunningApplicationState{
 			{Application: ApplicationGoogleChrome, State: RunningApplicationStateUnknown, Message: message},
 			{Application: ApplicationMicrosoftEdge, State: RunningApplicationStateUnknown, Message: message},
-			{Application: ApplicationGo, State: RunningApplicationStateUnknown, Message: message},
-			{Application: ApplicationCargo, State: RunningApplicationStateUnknown, Message: message},
-			{Application: ApplicationDotNet, State: RunningApplicationStateUnknown, Message: message},
-			{Application: ApplicationNuGet, State: RunningApplicationStateUnknown, Message: message},
-			{Application: ApplicationNode, State: RunningApplicationStateUnknown, Message: message},
-			{Application: ApplicationPython, State: RunningApplicationStateUnknown, Message: message},
 		}
+		for _, app := range developerApps {
+			states = append(states, RunningApplicationState{
+				Application: app.id,
+				State:       RunningApplicationStateUnknown,
+				Message:     message,
+			})
+		}
+		return states
 	}
-	return []RunningApplicationState{
-		classifyProcess(ApplicationGoogleChrome, "chrome.exe", snapshotResult.Names),
-		classifyProcess(ApplicationMicrosoftEdge, "msedge.exe", snapshotResult.Names),
-		classifyProcess(ApplicationGo, "go.exe", snapshotResult.Names),
-		classifyProcess(ApplicationCargo, "cargo.exe", snapshotResult.Names),
-		classifyProcess(ApplicationDotNet, "dotnet.exe", snapshotResult.Names),
-		classifyProcess(ApplicationNuGet, "nuget.exe", snapshotResult.Names),
-		classifyProcess(ApplicationNode, "node.exe", snapshotResult.Names),
-		classifyProcess(ApplicationPython, "python.exe", snapshotResult.Names),
+	states := []RunningApplicationState{
+		classifyBrowserProcess(ApplicationGoogleChrome, "chrome.exe", snapshotResult.Names),
+		classifyBrowserProcess(ApplicationMicrosoftEdge, "msedge.exe", snapshotResult.Names),
 	}
+	for _, app := range developerApps {
+		states = append(states, classifyProcessByExecutables(app.id, app.executables, snapshotResult.Names))
+	}
+	return states
 }
 
-func classifyProcess(application, executable string, processNames []string) RunningApplicationState {
+// classifyProcessByExecutables marks an application running when any of its
+// registered executable names appears in the process snapshot.
+func classifyProcessByExecutables(application string, executables []string, processNames []string) RunningApplicationState {
 	for _, name := range processNames {
-		if strings.EqualFold(name, executable) {
-			return RunningApplicationState{Application: application, State: RunningApplicationStateRunning}
+		for _, executable := range executables {
+			if strings.EqualFold(name, executable) {
+				return RunningApplicationState{Application: application, State: RunningApplicationStateRunning}
+			}
 		}
 	}
 	return RunningApplicationState{Application: application, State: RunningApplicationStateIdle}
 }
 
+// classifyProcess remains for single-executable call sites and tests.
+func classifyProcess(application, executable string, processNames []string) RunningApplicationState {
+	return classifyProcessByExecutables(application, []string{executable}, processNames)
+}

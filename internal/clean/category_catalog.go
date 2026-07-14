@@ -169,12 +169,60 @@ func summaryFromDefinition(definition CleanupCategoryDefinition) CleanupCategory
 	}
 }
 
+// supportedApplicationDefinition is the private process-detection definition
+// for one logical application. Multiple executable names may represent the
+// same application so future tools do not need a new detection switch.
+type supportedApplicationDefinition struct {
+	id          string
+	displayName string
+	executables []string
+}
+
+// developerApplicationDefinitions is the controlled registry of developer-tool
+// process requirements used by DetectSupportedApplications and by developer-
+// cache running-application gating. Order is part of the public detection
+// surface (browsers are prepended separately).
+var developerApplicationDefinitions = []supportedApplicationDefinition{
+	{id: ApplicationGo, displayName: "Go", executables: []string{"go.exe"}},
+	{id: ApplicationCargo, displayName: "Cargo", executables: []string{"cargo.exe"}},
+	{id: ApplicationDotNet, displayName: ".NET", executables: []string{"dotnet.exe"}},
+	{id: ApplicationNuGet, displayName: "NuGet", executables: []string{"nuget.exe"}},
+	{id: ApplicationNode, displayName: "Node.js", executables: []string{"node.exe"}},
+	{id: ApplicationPython, displayName: "Python", executables: []string{"python.exe"}},
+}
+
+// categoryCatalogEntry is the private canonical registration point. Public
+// catalog projections expose only path-free definition fields. Developer-cache
+// entries additionally bind a path resolver, optional Review suggestion tool
+// keys, and the applications required by the running-application policy.
 type categoryCatalogEntry struct {
 	definition            CleanupCategoryDefinition
 	opportunity           bool
 	developerCache        bool
 	fixedLocalAppDataPath []string
 	runningApplications   []string
+	// resolvePaths resolves env/default roots for a developer-cache category.
+	// Required when developerCache is true; ignored otherwise.
+	resolvePaths func(devCachePathDependencies) []string
+	// reviewSuggestionTools lists Review suggestion allowlist tool keys
+	// associated with this developer-cache category. Empty when no suggestion
+	// probe is associated (for example cargo). Referenced keys must exist.
+	reviewSuggestionTools []string
+}
+
+func developerCacheEntry(
+	definition CleanupCategoryDefinition,
+	resolvePaths func(devCachePathDependencies) []string,
+	reviewSuggestionTools []string,
+	runningApplications ...string,
+) categoryCatalogEntry {
+	return categoryCatalogEntry{
+		definition:            definition,
+		developerCache:        true,
+		resolvePaths:          resolvePaths,
+		reviewSuggestionTools: append([]string(nil), reviewSuggestionTools...),
+		runningApplications:   append([]string(nil), runningApplications...),
+	}
 }
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
@@ -187,13 +235,45 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	{definition: categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true, fixedLocalAppDataPath: []string{"D3DSCache"}},
 	{definition: categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true, fixedLocalAppDataPath: []string{"NVIDIA", "DXCache"}},
 	{definition: categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter), opportunity: true},
-	{definition: categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime), developerCache: true},
-	{definition: categoryDefinition(DevCacheCategoryGo, "Go build cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle), developerCache: true, runningApplications: []string{ApplicationGo}},
-	{definition: categoryDefinition(DevCacheCategoryPip, "pip cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime), developerCache: true},
-	{definition: categoryDefinition(DevCacheCategoryCargo, "Cargo cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle), developerCache: true, runningApplications: []string{ApplicationCargo}},
-	{definition: categoryDefinition(DevCacheCategoryNuGet, "NuGet cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle), developerCache: true, runningApplications: []string{ApplicationDotNet, ApplicationNuGet}},
-	{definition: categoryDefinition(DevCacheCategoryNuGetGlobalPackages, "NuGet global packages", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle), developerCache: true, runningApplications: []string{ApplicationDotNet, ApplicationNuGet}},
-	{definition: categoryDefinition(DevCacheCategoryCorepack, "Corepack cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime), developerCache: true},
+	developerCacheEntry(
+		categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		resolveNPMCachePaths,
+		[]string{"npm"},
+	),
+	developerCacheEntry(
+		categoryDefinition(DevCacheCategoryGo, "Go build cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		resolveGoCachePaths,
+		[]string{"go"},
+		ApplicationGo,
+	),
+	developerCacheEntry(
+		categoryDefinition(DevCacheCategoryPip, "pip cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		resolvePipCachePaths,
+		[]string{"pip"},
+	),
+	developerCacheEntry(
+		categoryDefinition(DevCacheCategoryCargo, "Cargo cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		resolveCargoCachePaths,
+		nil,
+		ApplicationCargo,
+	),
+	developerCacheEntry(
+		categoryDefinition(DevCacheCategoryNuGet, "NuGet cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		resolveNuGetCachePaths,
+		[]string{"dotnet"},
+		ApplicationDotNet, ApplicationNuGet,
+	),
+	developerCacheEntry(
+		categoryDefinition(DevCacheCategoryNuGetGlobalPackages, "NuGet global packages", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		resolveNuGetGlobalPackagesPaths,
+		[]string{"dotnet"},
+		ApplicationDotNet, ApplicationNuGet,
+	),
+	developerCacheEntry(
+		categoryDefinition(DevCacheCategoryCorepack, "Corepack cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		resolveCorepackOptInCachePaths,
+		[]string{"corepack"},
+	),
 	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable)},
 }
 
@@ -210,6 +290,14 @@ func categoryDefinition(identifier, label string, reportCategory ReportCategory,
 
 var canonicalCleanupCategoryCatalog = mustCleanupCategoryCatalog(canonicalCategoryEntries)
 
+func init() {
+	// Private developer-cache validation runs after package-level vars (including
+	// the Review suggestion allowlist) are initialized.
+	if err := validateDeveloperCacheRegistry(canonicalCategoryEntries, developerApplicationDefinitions, reviewSuggestionAllowlist); err != nil {
+		panic(err)
+	}
+}
+
 func mustCleanupCategoryCatalog(entries []categoryCatalogEntry) CleanupCategoryCatalog {
 	definitions := make([]CleanupCategoryDefinition, 0, len(entries))
 	for _, entry := range entries {
@@ -220,6 +308,89 @@ func mustCleanupCategoryCatalog(entries []categoryCatalogEntry) CleanupCategoryC
 		panic(err)
 	}
 	return catalog
+}
+
+// validateDeveloperCacheRegistry rejects incomplete or ambiguous private
+// developer-cache registrations. It is the construction-time consistency gate
+// for the canonical registry.
+func validateDeveloperCacheRegistry(
+	entries []categoryCatalogEntry,
+	applications []supportedApplicationDefinition,
+	suggestionAllowlist map[string]reviewSuggestionTool,
+) error {
+	appByID := make(map[string]supportedApplicationDefinition, len(applications))
+	executableOwner := make(map[string]string)
+	for _, app := range applications {
+		id := strings.TrimSpace(app.id)
+		if id == "" {
+			return fmt.Errorf("developer application definition has empty id")
+		}
+		if strings.TrimSpace(app.displayName) == "" {
+			return fmt.Errorf("developer application %q has empty display name", id)
+		}
+		if len(app.executables) == 0 {
+			return fmt.Errorf("developer application %q has no executable names", id)
+		}
+		if _, exists := appByID[id]; exists {
+			return fmt.Errorf("duplicate developer application id %q", id)
+		}
+		appByID[id] = app
+		for _, executable := range app.executables {
+			exeKey := strings.ToLower(strings.TrimSpace(executable))
+			if exeKey == "" {
+				return fmt.Errorf("developer application %q has an empty executable name", id)
+			}
+			if owner, exists := executableOwner[exeKey]; exists && owner != id {
+				return fmt.Errorf("ambiguous executable %q owned by both %q and %q", executable, owner, id)
+			}
+			executableOwner[exeKey] = id
+		}
+	}
+
+	for _, entry := range entries {
+		if !entry.developerCache {
+			if entry.resolvePaths != nil {
+				return fmt.Errorf("non-developer-cache category %q must not register a path resolver", entry.definition.Identifier)
+			}
+			if len(entry.reviewSuggestionTools) > 0 {
+				return fmt.Errorf("non-developer-cache category %q must not register Review suggestion tools", entry.definition.Identifier)
+			}
+			continue
+		}
+		id := entry.definition.Identifier
+		if entry.resolvePaths == nil {
+			return fmt.Errorf("developer-cache category %q is missing a path resolver", id)
+		}
+		for _, tool := range entry.reviewSuggestionTools {
+			tool = strings.TrimSpace(tool)
+			if tool == "" {
+				return fmt.Errorf("developer-cache category %q has an empty Review suggestion tool key", id)
+			}
+			if _, ok := suggestionAllowlist[tool]; !ok {
+				return fmt.Errorf("developer-cache category %q references unknown Review suggestion tool %q", id, tool)
+			}
+		}
+		if entry.definition.RunningApplicationPolicy == RunningApplicationPolicyDistinctiveProcessIdle {
+			if len(entry.runningApplications) == 0 {
+				return fmt.Errorf("developer-cache category %q uses distinctive-process policy without applications", id)
+			}
+		}
+		seenApps := make(map[string]bool, len(entry.runningApplications))
+		for _, appID := range entry.runningApplications {
+			appID = strings.TrimSpace(appID)
+			if appID == "" {
+				return fmt.Errorf("developer-cache category %q has an empty running application id", id)
+			}
+			if seenApps[appID] {
+				return fmt.Errorf("developer-cache category %q has duplicate running application %q", id, appID)
+			}
+			seenApps[appID] = true
+			if _, ok := appByID[appID]; !ok {
+				return fmt.Errorf("developer-cache category %q references unknown application %q", id, appID)
+			}
+		}
+	}
+	return nil
 }
 
 func CanonicalCleanupCategoryCatalog() CleanupCategoryCatalog {
@@ -276,4 +447,13 @@ func categoryReportGroup(identifier string) ReportCategory {
 		return ""
 	}
 	return entry.definition.ReportCategory
+}
+
+func developerApplicationDefinition(id string) (supportedApplicationDefinition, bool) {
+	for _, app := range developerApplicationDefinitions {
+		if app.id == id {
+			return app, true
+		}
+	}
+	return supportedApplicationDefinition{}, false
 }
