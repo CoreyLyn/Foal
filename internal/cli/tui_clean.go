@@ -36,7 +36,31 @@ func nextCleanPreviewFilter(filter cleanPreviewFilter) cleanPreviewFilter {
 }
 
 func cleanFormatBytes(bytes int64) string {
-	return fmt.Sprintf("%d bytes", bytes)
+	if bytes <= 0 {
+		return "0 KB"
+	}
+	if bytes < 1024 {
+		return "<1 KB"
+	}
+
+	const (
+		kilobyte = int64(1024)
+		megabyte = 1024 * kilobyte
+		gigabyte = 1024 * megabyte
+	)
+
+	value := float64(bytes) / float64(kilobyte)
+	unit := "KB"
+	if bytes >= gigabyte {
+		value = float64(bytes) / float64(gigabyte)
+		unit = "GB"
+	} else if bytes >= megabyte {
+		value = float64(bytes) / float64(megabyte)
+		unit = "MB"
+	}
+
+	formatted := strings.TrimSuffix(fmt.Sprintf("%.1f", value), ".0")
+	return formatted + " " + unit
 }
 
 type cleanPreviewLoadedMsg struct {
@@ -452,6 +476,7 @@ func renderCleanPreviewSections(model clean.PreviewReadModel, filter cleanPrevie
 		EntryLimit:                   cleanPreviewSectionEntryLimit,
 		Expanded:                     expanded,
 		Compact:                      true,
+		ByteFormatter:                cleanFormatBytes,
 		IncludeCandidates:            cleanPreviewFilterIncludesCandidates(filter),
 		IncludeSkipped:               cleanPreviewFilterIncludesSkipped(filter),
 		IncludeReview:                cleanPreviewFilterIncludesReview(filter),

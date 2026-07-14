@@ -125,6 +125,7 @@ type PreviewReportCategoryOptions struct {
 	EntryLimit                   int
 	Expanded                     bool
 	Compact                      bool
+	ByteFormatter                func(int64) string
 	IncludeCandidates            bool
 	IncludeSkipped               bool
 	IncludeReview                bool
@@ -453,7 +454,7 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 					if opts.Expanded {
 						label = candidate.Path
 					}
-					line := fmt.Sprintf("    [candidate] %s (%s)", label, formatBytes(candidate.Bytes))
+					line := fmt.Sprintf("    [candidate] %s (%s)", label, reportFormatBytes(opts, candidate.Bytes))
 					if opts.Expanded {
 						line += fmt.Sprintf(" (status: %s, rule: %s, planned action: Recycle Bin)", presentation.defaultCandidateLabel, candidate.Rule)
 					}
@@ -461,7 +462,7 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 					continue
 				}
 				lines = append(lines, fmt.Sprintf("    %s (%s, %srule: %s, planned action: Recycle Bin)",
-					candidate.Path, formatBytes(candidate.Bytes), statusLabel(presentation.defaultCandidateLabel), candidate.Rule))
+					candidate.Path, reportFormatBytes(opts, candidate.Bytes), statusLabel(presentation.defaultCandidateLabel), candidate.Rule))
 			}
 			if omitted := len(model.Candidates) - entryCount; omitted > 0 {
 				lines = append(lines, omittedLine(omitted, model.DetailedListPath))
@@ -524,7 +525,7 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 				line += fmt.Sprintf(" - %s", path)
 			}
 			if skipped.Bytes > 0 {
-				line += fmt.Sprintf(" (%s, status: skipped by default, not counted as Potential space)", formatBytes(skipped.Bytes))
+				line += fmt.Sprintf(" (%s, status: skipped by default, not counted as Potential space)", reportFormatBytes(opts, skipped.Bytes))
 			} else {
 				line += " (status: skipped by default, not counted as Potential space)"
 			}
@@ -699,15 +700,15 @@ func protectionReportLines(model PreviewReadModel, opts PreviewReportCategoryOpt
 
 func summaryReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions, presentation previewReportPresentation) []string {
 	lines := []string{
-		fmt.Sprintf("  Potential space: %s", formatBytes(model.PotentialSpaceBytes)),
-		fmt.Sprintf("  Observed opportunity bytes: %s (not counted as Potential space)", formatBytes(model.OpportunityObservedBytes)),
+		fmt.Sprintf("  Potential space: %s", reportFormatBytes(opts, model.PotentialSpaceBytes)),
+		fmt.Sprintf("  Observed opportunity bytes: %s (not counted as Potential space)", reportFormatBytes(opts, model.OpportunityObservedBytes)),
 	}
 	if opts.PreviewSummary {
 		lines = []string{
 			"  Dry-run complete",
 			"  No files changed.",
-			fmt.Sprintf("  Potential space: %s", formatBytes(model.PotentialSpaceBytes)),
-			fmt.Sprintf("  Observed opportunity bytes: %s (not counted as Potential space)", formatBytes(model.OpportunityObservedBytes)),
+			fmt.Sprintf("  Potential space: %s", reportFormatBytes(opts, model.PotentialSpaceBytes)),
+			fmt.Sprintf("  Observed opportunity bytes: %s (not counted as Potential space)", reportFormatBytes(opts, model.OpportunityObservedBytes)),
 		}
 	}
 	if model.DetailedListPath != "" {
@@ -774,7 +775,7 @@ func opportunityLines(opportunities []Opportunity, opts PreviewReportCategoryOpt
 			line = fmt.Sprintf("    %s%s browser cache (%s, category: %s, profiles: %d",
 				markerPrefix(opts, "opportunity"),
 				applicationDisplayName(opportunity.BrowserCache.Browser),
-				formatBytes(opportunity.Bytes),
+				reportFormatBytes(opts, opportunity.Bytes),
 				category,
 				opportunity.BrowserCache.ProfileCount)
 		} else {
@@ -783,7 +784,7 @@ func opportunityLines(opportunities []Opportunity, opts PreviewReportCategoryOpt
 				label = compactPathLabel(opportunity.Path)
 			}
 			line = fmt.Sprintf("    %s%s (%s, category: %s",
-				markerPrefix(opts, "opportunity"), label, formatBytes(opportunity.Bytes), category)
+				markerPrefix(opts, "opportunity"), label, reportFormatBytes(opts, opportunity.Bytes), category)
 		}
 		if category == OpportunityCategoryUserTemp {
 			line += fmt.Sprintf(", latest modified: %s, idle days: %d",
@@ -873,4 +874,11 @@ func compactPathLabel(path string) string {
 
 func formatBytes(bytes int64) string {
 	return fmt.Sprintf("%d bytes", bytes)
+}
+
+func reportFormatBytes(opts PreviewReportCategoryOptions, bytes int64) string {
+	if opts.ByteFormatter != nil {
+		return opts.ByteFormatter(bytes)
+	}
+	return formatBytes(bytes)
 }

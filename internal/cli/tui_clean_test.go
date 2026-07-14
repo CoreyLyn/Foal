@@ -264,7 +264,7 @@ func TestCleanCanceledAndFailedSelectionPreviewRemainNotReady(t *testing.T) {
 
 	model.loadGeneration++
 	model.applyLoaded(cleanPreviewLoadedMsg{generation: model.loadGeneration, failed: true, model: clean.PreviewReadModel{OptInReclaimableBytes: 999}})
-	if model.previewReady || !strings.Contains(model.content(), "failed") || strings.Contains(model.content(), "999 bytes") {
+	if model.previewReady || !strings.Contains(model.content(), "failed") || strings.Contains(model.content(), "<1 KB") {
 		t.Fatalf("failed preview became ready:\n%s", model.content())
 	}
 }
@@ -286,7 +286,7 @@ func TestCleanCategoryKeyboardActionsRenderPreviewOnlySelection(t *testing.T) {
 		Totals:          clean.Totals{OptInReclaimableBytes: 21},
 	}, []string{clean.OpportunityCategoryWindowsErrorReporting})
 	model.refreshViewportContent()
-	if !strings.Contains(model.content(), "[x] Windows Error Reporting (selected preview, 1 candidate(s), 21 bytes opt-in reclaimable)") ||
+	if !strings.Contains(model.content(), "[x] Windows Error Reporting (selected preview, 1 candidate(s), <1 KB opt-in reclaimable)") ||
 		strings.Contains(model.content(), "confirmation") {
 		t.Fatalf("selected preview wording crossed the confirmation boundary:\n%s", model.content())
 	}
@@ -323,11 +323,11 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 	for _, want := range []string{
 		"Foal Clean",
 		"Preview only - no files changed.",
-		"Potential space: 12 bytes",
+		"Potential space: <1 KB",
 		"Dry-run complete",
 		"No files changed.",
 		"Default candidates (1)",
-		"[candidate] foal-default.tmp (12 bytes)",
+		"[candidate] foal-default.tmp (<1 KB)",
 		"Skipped items (1)",
 		"[boundary] System32",
 		"protected_path",
@@ -338,7 +338,7 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"excluded from Opportunity discovery",
 		"will not request elevation automatically",
 		"Protection rules",
-		"Observed opportunity bytes: 25600 bytes (not counted as Potential space)",
+		"Observed opportunity bytes: 25 KB (not counted as Potential space)",
 		"[opportunity] old-tool-cache",
 		"category: user_temp",
 		"latest modified: 2026-06-01T12:00:00Z",
@@ -378,11 +378,11 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		"Deleted:",
 		"Execute",
 		"execute cleanup",
-		"Potential space: 4108 bytes",
+		"Potential space: 4 KB",
 		"Detailed candidate list:",
 		"Run as Administrator",
 		"0001-01-01",
-		"CrashDumps (8192 bytes, category: crash_dumps, latest modified:",
+		"CrashDumps (8 KB, category: crash_dumps, latest modified:",
 	} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("content contains forbidden execution or potential-space wording %q:\n%s", forbidden, content)
@@ -453,8 +453,8 @@ func TestCleanPreviewTUIUsesCompactHeaderAndBottomSummary(t *testing.T) {
 	for _, want := range []string{
 		"Dry-run complete",
 		"No files changed.",
-		"Potential space: 12 bytes",
-		"Observed opportunity bytes: 25600 bytes (not counted as Potential space)",
+		"Potential space: <1 KB",
+		"Observed opportunity bytes: 25 KB (not counted as Potential space)",
 		"Default candidates: 1 | Skipped: 1 | Diagnostics: 1",
 	} {
 		index := strings.LastIndex(content, want)
@@ -508,9 +508,9 @@ func TestCleanPreviewTUIRendersStatusMarkersAndCompactLabels(t *testing.T) {
 
 	compact := renderCleanPreviewSections(model, cleanPreviewFilterAll, false)
 	for _, want := range []string{
-		"[candidate] foal-default.tmp (12 bytes)",
+		"[candidate] foal-default.tmp (<1 KB)",
 		"[boundary] System32",
-		"[opportunity] old-tool-cache (4096 bytes, category: user_temp",
+		"[opportunity] old-tool-cache (4 KB, category: user_temp",
 		"[review] pnpm cache (Review suggestion)",
 		"[diagnostic] missing (rule: , error: inspection_failed, recoverable: true)",
 		"[loaded] Protection rules not reported.",
@@ -1112,7 +1112,7 @@ func TestCleanReadyPreviewRequiresSeparateConfirmationBeforeExecution(t *testing
 		next, cmd = model.Update(cmd())
 		model = next.(rootModel)
 	}
-	if calls != 1 || !strings.Contains(model.content(), "Clean execution result") || !strings.Contains(model.content(), "Deleted: 2") || !strings.Contains(model.content(), "Opt-in deleted: 1") || !strings.Contains(model.content(), "Affected bytes: 30 bytes") {
+	if calls != 1 || !strings.Contains(model.content(), "Clean execution result") || !strings.Contains(model.content(), "Deleted: 2") || !strings.Contains(model.content(), "Opt-in deleted: 1") || !strings.Contains(model.content(), "Affected bytes: <1 KB") {
 		t.Fatalf("shared result was not rendered directly:\n%s", model.content())
 	}
 }
@@ -1194,13 +1194,13 @@ func TestCleanExecutionResultRendersAllSkippedMixedAndErrorOutcomes(t *testing.T
 		result clean.Result
 		wants  []string
 	}{
-		{name: "success", result: clean.Result{Status: "ok", Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 5}}, wants: []string{"Status: ok", "Deleted: 1", "Affected bytes: 5 bytes"}},
-		{name: "no-op", result: clean.Result{Status: "ok"}, wants: []string{"Deleted: 0", "Skipped: 0", "Affected bytes: 0 bytes"}},
+		{name: "success", result: clean.Result{Status: "ok", Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 5}}, wants: []string{"Status: ok", "Deleted: 1", "Affected bytes: <1 KB"}},
+		{name: "no-op", result: clean.Result{Status: "ok"}, wants: []string{"Deleted: 0", "Skipped: 0", "Affected bytes: 0 KB"}},
 		{name: "all skipped", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\cache`, Reason: clean.StructuredIssue{Code: "recycle_bin_capacity", Message: "capacity unavailable"}}}, Totals: clean.Totals{SkippedCount: 1}}, wants: []string{"Deleted: 0", "Skipped: 1", "recycle_bin_capacity", "capacity unavailable"}},
-		{name: "mixed", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\protected`, Reason: clean.StructuredIssue{Code: "protected_path", Message: "protected"}}}, Totals: clean.Totals{DeletedCount: 1, SkippedCount: 1, AffectedBytes: 8}}, wants: []string{"Deleted: 1", "Skipped: 1", "protected_path", "Affected bytes: 8 bytes"}},
-		{name: "partial failure", result: clean.Result{Status: "partial", Errors: []clean.StructuredIssue{{Code: "delete_failed", Message: "adapter failed", Recoverable: true}}, Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 4}}, wants: []string{"Status: partial", "Deleted: 1", "Errors: 1", "delete_failed", "Affected bytes: 4 bytes"}},
-		{name: "interrupted partial", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\remaining`, Reason: clean.StructuredIssue{Code: "context_canceled", Message: "context canceled"}}}, Totals: clean.Totals{DeletedCount: 1, SkippedCount: 1, AffectedBytes: 4}}, wants: []string{"Deleted: 1", "Skipped: 1", "context_canceled", "Affected bytes: 4 bytes"}},
-		{name: "recoverable diagnostic", result: clean.Result{Status: "ok", Errors: []clean.StructuredIssue{{Code: "running_application_detection_unknown", Message: "snapshot unavailable", Recoverable: true}}}, wants: []string{"Errors: 1", "running_application_detection_unknown", "snapshot unavailable", "Affected bytes: 0 bytes"}},
+		{name: "mixed", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\protected`, Reason: clean.StructuredIssue{Code: "protected_path", Message: "protected"}}}, Totals: clean.Totals{DeletedCount: 1, SkippedCount: 1, AffectedBytes: 8}}, wants: []string{"Deleted: 1", "Skipped: 1", "protected_path", "Affected bytes: <1 KB"}},
+		{name: "partial failure", result: clean.Result{Status: "partial", Errors: []clean.StructuredIssue{{Code: "delete_failed", Message: "adapter failed", Recoverable: true}}, Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 4}}, wants: []string{"Status: partial", "Deleted: 1", "Errors: 1", "delete_failed", "Affected bytes: <1 KB"}},
+		{name: "interrupted partial", result: clean.Result{Status: "ok", Skipped: []clean.SkippedItem{{Path: `C:\remaining`, Reason: clean.StructuredIssue{Code: "context_canceled", Message: "context canceled"}}}, Totals: clean.Totals{DeletedCount: 1, SkippedCount: 1, AffectedBytes: 4}}, wants: []string{"Deleted: 1", "Skipped: 1", "context_canceled", "Affected bytes: <1 KB"}},
+		{name: "recoverable diagnostic", result: clean.Result{Status: "ok", Errors: []clean.StructuredIssue{{Code: "running_application_detection_unknown", Message: "snapshot unavailable", Recoverable: true}}}, wants: []string{"Errors: 1", "running_application_detection_unknown", "snapshot unavailable", "Affected bytes: 0 KB"}},
 		{name: "error", result: clean.Result{Status: "error", Errors: []clean.StructuredIssue{{Code: "permission_denied", Message: "access denied"}}}, wants: []string{"Status: error", "Errors: 1", "permission_denied", "access denied"}},
 	}
 	for _, tt := range tests {
@@ -1210,6 +1210,35 @@ func TestCleanExecutionResultRendersAllSkippedMixedAndErrorOutcomes(t *testing.T
 				if !strings.Contains(got, want) {
 					t.Fatalf("result missing %q:\n%s", want, got)
 				}
+			}
+		})
+	}
+}
+
+func TestCleanExecutionResultFormatsSizesWithReadableUnits(t *testing.T) {
+	tests := []struct {
+		name  string
+		bytes int64
+		want  string
+	}{
+		{name: "zero", bytes: 0, want: "Affected bytes: 0 KB"},
+		{name: "less than one kilobyte", bytes: 512, want: "Affected bytes: <1 KB"},
+		{name: "kilobytes", bytes: 1536, want: "Affected bytes: 1.5 KB"},
+		{name: "megabytes", bytes: 2 * 1024 * 1024, want: "Affected bytes: 2 MB"},
+		{name: "gigabytes", bytes: 3 * 1024 * 1024 * 1024, want: "Affected bytes: 3 GB"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := renderCleanExecutionResult(clean.Result{
+				Status: "ok",
+				Totals: clean.Totals{AffectedBytes: tt.bytes},
+			})
+			if !strings.Contains(content, tt.want) {
+				t.Fatalf("content missing %q:\n%s", tt.want, content)
+			}
+			if strings.Contains(content, " bytes\n") {
+				t.Fatalf("content still uses raw bytes:\n%s", content)
 			}
 		})
 	}
@@ -1253,7 +1282,7 @@ func TestCleanPreviewRendersChromeBrowserCacheOpportunityAsSummary(t *testing.T)
 		"Google Chrome browser cache",
 		"category: browser_cache",
 		"profiles: 2",
-		"12 bytes",
+		"<1 KB",
 		"not counted as Potential space",
 	} {
 		if !strings.Contains(output, want) {
@@ -1299,7 +1328,7 @@ func TestCleanPreviewRendersEdgeBrowserCacheOpportunityAsSummary(t *testing.T) {
 		"Microsoft Edge browser cache",
 		"category: browser_cache",
 		"profiles: 2",
-		"12 bytes",
+		"<1 KB",
 		"not counted as Potential space",
 	} {
 		if !strings.Contains(output, want) {
@@ -1321,7 +1350,7 @@ func TestCleanPreviewTUIRendersSharedFoalReportCategories(t *testing.T) {
 		}},
 		Candidates: []clean.PreviewCandidate{{
 			Path:          `C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
-			Bytes:         12,
+			Bytes:         2 * 1024 * 1024,
 			Rule:          "foal_owned_temp_sandboxes",
 			PlannedAction: "move_to_recycle_bin",
 		}},
@@ -1329,21 +1358,21 @@ func TestCleanPreviewTUIRendersSharedFoalReportCategories(t *testing.T) {
 			{
 				Category: clean.OpportunityCategoryUserTemp,
 				Path:     `C:\Users\corey\AppData\Local\Temp\old-cache`,
-				Bytes:    20,
+				Bytes:    20 * 1024 * 1024,
 				Status:   clean.OpportunityStatus,
 				Reason:   clean.OpportunityReason,
 			},
 			{
 				Category: clean.OpportunityCategoryWindowsErrorReporting,
 				Path:     `C:\Users\corey\AppData\Local\Microsoft\Windows\WER`,
-				Bytes:    30,
+				Bytes:    30 * 1024 * 1024,
 				Status:   clean.OpportunityStatus,
 				Reason:   clean.OpportunityReason,
 			},
 			{
 				Category: clean.OpportunityCategoryBrowserCache,
 				Path:     `C:\Users\corey\AppData\Local\Microsoft\Edge\User Data`,
-				Bytes:    40,
+				Bytes:    40 * 1024 * 1024,
 				Status:   clean.OpportunityStatus,
 				Reason:   clean.OpportunityReason,
 				BrowserCache: &clean.BrowserCacheOpportunityDetail{
@@ -1369,10 +1398,10 @@ func TestCleanPreviewTUIRendersSharedFoalReportCategories(t *testing.T) {
 			Kind:    "permission_boundary",
 			Message: "Permission boundary: administrator-only caches are excluded.",
 		}},
-		PotentialSpaceBytes:      12,
+		PotentialSpaceBytes:      2 * 1024 * 1024,
 		CandidateCount:           1,
 		OpportunityCount:         3,
-		OpportunityObservedBytes: 90,
+		OpportunityObservedBytes: 90 * 1024 * 1024,
 		Summary:                  "Dry-run summary: No changes were made.",
 	}
 
@@ -1397,7 +1426,7 @@ func TestCleanPreviewTUIRendersSharedFoalReportCategories(t *testing.T) {
 		"Applications",
 		"Cloud",
 		"Virtualization",
-		"Potential space: 102 bytes",
+		"Potential space: 92 MB",
 		"Execution complete",
 		"Deleted:",
 		"close browser",
@@ -1537,8 +1566,8 @@ func TestCleanPreviewIntentFiltersRenderFocusedSectionsWithoutChangingTotals(t *
 		t.Helper()
 		output := renderCleanPreviewSections(readModel, filter, true)
 		for _, text := range []string{
-			"Potential space: 12 bytes",
-			"Observed opportunity bytes: 8192 bytes (not counted as Potential space)",
+			"Potential space: <1 KB",
+			"Observed opportunity bytes: 8 KB (not counted as Potential space)",
 			"Default candidates: 1 | Skipped: 1 | Diagnostics: 1",
 		} {
 			if !strings.Contains(output, text) {
