@@ -2827,3 +2827,46 @@ func TestDryRunCancellationDoesNotReportPartialOptInBytes(t *testing.T) {
 		t.Fatalf("opt-in candidates = %d after cancellation, want 0", len(result.OptInCandidates))
 	}
 }
+
+func TestDryRunSuppressesReviewSuggestionsByWindowsPathIdentity(t *testing.T) {
+	// Create a test cache directory
+	cacheDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cacheDir, "cache.dat"), []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Build the path variations that should all be considered the same identity
+	pathStandard := cacheDir
+	pathLower := strings.ToLower(cacheDir)
+	pathLongPrefix := `\\?\` + cacheDir
+	pathTrailingSep := cacheDir + string(filepath.Separator)
+	pathForwardSlashes := strings.ReplaceAll(cacheDir, `\`, `/`)
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		OptIn:                     []string{clean.DevCacheCategoryNPM},
+		DevCachePathResolver:      func(category string) []string { return []string{pathStandard} },
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+			return []clean.ReviewSuggestion{
+				{Tool: "npm", Label: "npm cache", Command: "npm cache clean --force", CachePath: pathLower},
+				{Tool: "npm2", Label: "npm cache 2", Command: "npm cache clean --force", CachePath: pathLongPrefix},
+				{Tool: "npm3", Label: "npm cache 3", Command: "npm cache clean --force", CachePath: pathTrailingSep},
+				{Tool: "npm4", Label: "npm cache 4", Command: "npm cache clean --force", CachePath: pathForwardSlashes},
+				{Tool: "other", Label: "other cache", Command: "clean", CachePath: `C:\Other\Cache`},
+			}
+		},
+		Rules: []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	// All the npm suggestions should be suppressed (same identity as the opted-in candidate)
+	// Only the "other" cache should remain in suggestions
+	if len(result.ReviewSuggestions) != 1 {
+		t.Fatalf("review suggestions = %#v, want only the non-matching 'other' cache", result.ReviewSuggestions)
+	}
+	if result.ReviewSuggestions[0].Tool != "other" {
+		t.Fatalf("remaining review suggestion = %#v, want 'other'", result.ReviewSuggestions[0])
+	}
+	if len(result.OptInCandidates) != 1 {
+		t.Fatalf("opt-in candidates = %d, want 1", len(result.OptInCandidates))
+	}
+}

@@ -3,6 +3,8 @@ package clean
 import (
 	"context"
 	"path/filepath"
+
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 )
 
 // optInResolution is the result of resolving opt-in candidates for a run.
@@ -57,15 +59,20 @@ func optedOutOpportunityCategories(plan map[string]bool) []string {
 }
 
 // normalizeAndDeduplicatePaths normalizes paths and removes duplicates while
-// preserving order.
+// preserving order. Uses Windows path identity for deduplication and discards
+// empty/whitespace-only paths before cleaning.
 func normalizeAndDeduplicatePaths(paths []string) []string {
 	seen := make(map[string]bool, len(paths))
 	result := make([]string, 0, len(paths))
 	for _, path := range paths {
-		cleaned := filepath.Clean(path)
-		if !seen[cleaned] {
-			seen[cleaned] = true
-			result = append(result, cleaned)
+		if pathsafe.IsEmptyOrWhitespacePath(path) {
+			continue
+		}
+		identity := pathsafe.NormalizePathForIdentity(path)
+		if !seen[identity] {
+			seen[identity] = true
+			// Keep the first-seen spelling for display/execution, but clean it
+			result = append(result, filepath.Clean(path))
 		}
 	}
 	return result

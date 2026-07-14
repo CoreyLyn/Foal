@@ -258,3 +258,32 @@ func hasMultipleHardlinks(path string) (bool, error) {
 	}
 	return data.NumberOfLinks > 1, nil
 }
+
+// NormalizePathForIdentity normalizes a path for identity comparison purposes.
+// It handles:
+// - Case insensitivity (lowercase)
+// - Stripping Windows long-path prefixes
+// - Cleaning redundant separators
+// - Removing trailing separators
+// Empty or whitespace-only paths return empty string.
+func NormalizePathForIdentity(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	path = stripLongPathPrefix(path)
+	path = filepath.Clean(path)
+	return strings.ToLower(path)
+}
+
+// PathsAreSameIdentity reports whether two paths represent the same logical
+// path on Windows, considering case insensitivity, separators, and long-path
+// prefixes.
+func PathsAreSameIdentity(a, b string) bool {
+	return NormalizePathForIdentity(a) == NormalizePathForIdentity(b)
+}
+
+// IsEmptyOrWhitespacePath reports whether the path is empty or only whitespace.
+func IsEmptyOrWhitespacePath(path string) bool {
+	return strings.TrimSpace(path) == ""
+}

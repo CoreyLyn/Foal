@@ -134,3 +134,86 @@ func TestValidateDeletePathRejectsReparsePoint(t *testing.T) {
 		t.Fatalf("reason.Code = %q, want reparse_point", reason.Code)
 	}
 }
+
+func TestNormalizePathForIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "empty path", path: "", want: ""},
+		{name: "whitespace only", path: "   \t  ", want: ""},
+		{name: "lowercase preserved", path: `c:\users\corey\cache`, want: `c:\users\corey\cache`},
+		{name: "uppercase normalized", path: `C:\Users\Corey\Cache`, want: `c:\users\corey\cache`},
+		{name: "long path prefix stripped", path: `\\?\C:\Users\Corey\Cache`, want: `c:\users\corey\cache`},
+		{name: "UNC long path not normalized (preserved as-is)", path: `\\?\UNC\server\share`, want: `\\server\share`},
+		{name: "redundant separators cleaned", path: `C:\\Users\\Corey\\\Cache`, want: `c:\users\corey\cache`},
+		{name: "trailing separator removed", path: `C:\Users\Corey\Cache\`, want: `c:\users\corey\cache`},
+		{name: "forward slashes normalized", path: `C:/Users/Corey/Cache`, want: `c:\users\corey\cache`},
+		{name: "dot segments cleaned", path: `C:\Users\.\Corey\..\Corey\Cache`, want: `c:\users\corey\cache`},
+		{name: "mixed variations", path: `\\?\C:/Users/Corey\Cache/`, want: `c:\users\corey\cache`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pathsafe.NormalizePathForIdentity(tt.path)
+			if got != tt.want {
+				t.Fatalf("NormalizePathForIdentity(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPathsAreSameIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+		b    string
+		want bool
+	}{
+		{name: "exact match", a: `C:\Cache`, b: `C:\Cache`, want: true},
+		{name: "case different", a: `C:\Cache`, b: `c:\cache`, want: true},
+		{name: "with long prefix", a: `C:\Cache`, b: `\\?\C:\Cache`, want: true},
+		{name: "trailing separator", a: `C:\Cache`, b: `C:\Cache\`, want: true},
+		{name: "redundant separators", a: `C:\Users\Corey\Cache`, b: `C:\\Users\\Corey\\Cache`, want: true},
+		{name: "forward vs back slashes", a: `C:\Users\Corey\Cache`, b: `C:/Users/Corey/Cache`, want: true},
+		{name: "all variations combined", a: `C:\Users\Corey\Cache`, b: `\\?\C:/Users/Corey/Cache\`, want: true},
+		{name: "different paths not same", a: `C:\Cache`, b: `C:\OtherCache`, want: false},
+		{name: "sibling paths not same", a: `C:\Users\Corey\Cache`, b: `C:\Users\Other\Cache`, want: false},
+		{name: "parent not same as child", a: `C:\Users\Corey`, b: `C:\Users\Corey\Cache`, want: false},
+		{name: "empty vs empty", a: "", b: "   ", want: true},
+		{name: "empty vs non-empty", a: "", b: `C:\Cache`, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pathsafe.PathsAreSameIdentity(tt.a, tt.b)
+			if got != tt.want {
+				t.Fatalf("PathsAreSameIdentity(%q, %q) = %t, want %t", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsEmptyOrWhitespacePath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "empty string", path: "", want: true},
+		{name: "spaces only", path: "   ", want: true},
+		{name: "tabs and newlines", path: "\t\n  \t\n", want: true},
+		{name: "non-empty path", path: `C:\Cache`, want: false},
+		{name: "path with whitespace around", path: "  C:\\Cache  ", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pathsafe.IsEmptyOrWhitespacePath(tt.path)
+			if got != tt.want {
+				t.Fatalf("IsEmptyOrWhitespacePath(%q) = %t, want %t", tt.path, got, tt.want)
+			}
+		})
+	}
+}
