@@ -85,7 +85,7 @@ func TestResolveOptInCandidatesBrowserYieldsIndividualCacheDirs(t *testing.T) {
 func TestResolveOptInCandidatesDevCacheRunningRecordsSkip(t *testing.T) {
 	root := t.TempDir()
 	cachePath := filepath.Join(root, "go-build")
-	if err := os.MkdirAll(cachePath, 0700); err != nil {
+	if err := os.Mkdir(cachePath, 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(cachePath, "f"), []byte("x"), 0600); err != nil {
@@ -96,7 +96,7 @@ func TestResolveOptInCandidatesDevCacheRunningRecordsSkip(t *testing.T) {
 	}
 	opts := Options{
 		DetectRunningApplications: detector,
-		DevCachePathResolver:      func(string) string { return cachePath },
+		DevCachePathResolver:      func(string) []string { return []string{cachePath} },
 		OptIn:                     []string{DevCacheCategoryGo},
 	}
 	plan, _, _ := NormalizedOptInSet(opts.OptIn)

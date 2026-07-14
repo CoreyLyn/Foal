@@ -47,10 +47,10 @@ type RecycleBinVolumeConfig struct {
 // volume containing the given path.
 type RecycleBinCapacityProbe func(path string) (RecycleBinVolumeConfig, error)
 
-// DevCachePathResolver resolves the path for a developer tool cache.
+// DevCachePathResolver resolves paths for a developer tool cache.
 // The category is one of the DevCacheCategory* constants.
-// Returns empty string if the path cannot be resolved from env vars/defaults.
-type DevCachePathResolver func(category string) string
+// Returns empty slice if no paths can be resolved from env vars/defaults.
+type DevCachePathResolver func(category string) []string
 
 // ExecutionPhase identifies an observation-only stage of shared Clean execution.
 type ExecutionPhase string
@@ -360,7 +360,7 @@ func applyOptInReviewProjection(ctx context.Context, opts Options, result *Resul
 	optedInDevCachePaths := make(map[string]bool)
 	for _, c := range resolution.candidates {
 		if isDevCacheCategory(c.Category) {
-			optedInDevCachePaths[c.Path] = true
+			optedInDevCachePaths[filepath.Clean(c.Path)] = true
 		}
 	}
 	discoverSuggestions := opts.DiscoverReviewSuggestions
@@ -371,17 +371,7 @@ func applyOptInReviewProjection(ctx context.Context, opts Options, result *Resul
 		if suggestion.CachePath != "" && opts.Validator.IsUserProtected(suggestion.CachePath) {
 			continue
 		}
-		if suggestion.CachePath != "" && optedInDevCachePaths[suggestion.CachePath] {
-			continue
-		}
-		skip := false
-		for category := range plan {
-			if isDevCacheCategory(category) && devCacheCategoryMatchesSuggestion(category, suggestion) {
-				skip = true
-				break
-			}
-		}
-		if skip {
+		if suggestion.CachePath != "" && optedInDevCachePaths[filepath.Clean(suggestion.CachePath)] {
 			continue
 		}
 		result.ReviewSuggestions = append(result.ReviewSuggestions, suggestion)
