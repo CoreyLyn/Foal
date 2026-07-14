@@ -55,6 +55,8 @@ type RecycleBinCapacityProbe func(path string) (RecycleBinVolumeConfig, error)
 // Returns empty slice if no paths can be resolved from env vars/defaults.
 type DevCachePathResolver func(category string) []string
 
+// DevCacheChildDiscoverer is defined in structured_dev_cache.go.
+
 // ExecutionPhase identifies an observation-only stage of shared Clean execution.
 type ExecutionPhase string
 
@@ -94,7 +96,10 @@ type Options struct {
 	OptIn                             []string
 	RecycleBinCapacityProbe           RecycleBinCapacityProbe
 	DevCachePathResolver              DevCachePathResolver
-	ProgressReporter                  ProgressReporter
+	// DevCacheChildDiscoverer overrides catalog-owned structured child discovery
+	// for tests. Production leaves it nil so categories use private catalog policy.
+	DevCacheChildDiscoverer DevCacheChildDiscoverer
+	ProgressReporter        ProgressReporter
 }
 
 type Rule struct {
