@@ -191,6 +191,8 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationPython, displayName: "Python", executables: []string{"python.exe"}},
 	// uv and uvx are one logical application: either process means the tool is running.
 	{id: ApplicationUV, displayName: "uv", executables: []string{"uv.exe", "uvx.exe"}},
+	// bun and bunx are one logical application: either process means the tool is running.
+	{id: ApplicationBun, displayName: "Bun", executables: []string{"bun.exe", "bunx.exe"}},
 }
 
 // categoryCatalogEntry is the private canonical registration point. Public
@@ -281,6 +283,12 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		resolveUVCachePaths,
 		[]string{"uv"},
 		ApplicationUV,
+	),
+	developerCacheEntry(
+		categoryDefinition(DevCacheCategoryBun, "Bun cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		resolveBunCachePaths,
+		[]string{"bun"},
+		ApplicationBun,
 	),
 	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable)},
 }

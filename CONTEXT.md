@@ -93,7 +93,7 @@ Structured, non-authoritative next steps that point at an external tool's own co
 _Avoid_: cleanup actions, delegated execution, running the referenced tool's cleanup command, Foal-owned deletion of the referenced cache without opt-in
 
 **Tool cache query probe**:
-A bounded, read-only execution of an allowlisted developer tool's own query subcommand (for example `npm config get cache` or `go env GOCACHE`) that Clean uses only to resolve the displayed cache path for a Review suggestion. Each probe is restricted to a built-in tool allowlist, runs only non-mutating query subcommands, and is bounded by a per-call context timeout. A probe that is not allowlisted, fails, or times out yields no path and never blocks the preview. This is the one deliberate exception to Clean's otherwise execution-free preview, and it never runs a tool's cleanup command.
+A bounded, read-only execution of an allowlisted developer tool's own query subcommand (for example `npm config get cache` or `go env GOCACHE`) that Clean uses only to resolve the displayed cache path for a Review suggestion. Each probe is restricted to a built-in tool allowlist, runs only non-mutating query subcommands, and is bounded by a per-call context timeout. A probe that is not allowlisted, fails, or times out yields no path and never blocks the preview, except Bun: when `bun pm cache` fails, times out, or yields no usable existing path, Review discovery may fall back to Bun's official env/default roots while `bun` is on PATH. This is the one deliberate exception to Clean's otherwise execution-free preview, and it never runs a tool's cleanup command.
 _Avoid_: running tool cleanup commands, executing arbitrary PATH binaries, unbounded execution, treating probe output as cleanup authorization, probing during Clean execution
 
 **Potential space**:
@@ -101,7 +101,7 @@ The bytes represented by Foal default candidates in a clean preview, excluding s
 _Avoid_: total hinted space, external savings estimate
 
 **Opt-in candidate**:
-A cleanup item that is normally a skipped-by-default opportunity or a developer-tool Review suggestion, but that the user has explicitly opted in to clean through the Recycle Bin for the current run only. An opt-in candidate is never a default candidate: the default candidate set stays frozen, and opt-in never becomes default. Opt-in candidates still pass fresh-scan validation, protection-rule suppression, and running-application gating at execute time, and are never deleted by running an external tool's own cleanup command. Developer-tool examples include npm, go, pip, cargo, NuGet HTTP and global packages, corepack, and uv cache (`uv-cache`), each selected only for the current run.
+A cleanup item that is normally a skipped-by-default opportunity or a developer-tool Review suggestion, but that the user has explicitly opted in to clean through the Recycle Bin for the current run only. An opt-in candidate is never a default candidate: the default candidate set stays frozen, and opt-in never becomes default. Opt-in candidates still pass fresh-scan validation, protection-rule suppression, and running-application gating at execute time, and are never deleted by running an external tool's own cleanup command. Developer-tool examples include npm, go, pip, cargo, NuGet HTTP and global packages, corepack, uv cache (`uv-cache`), and Bun cache (`bun-cache`), each selected only for the current run.
 _Avoid_: default candidate, default-enabled rule, permanent deletion, tool-command delegation
 
 **Opt-in candidate resolution**:

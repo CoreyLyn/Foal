@@ -417,4 +417,85 @@ func TestDevCachePathResolution(t *testing.T) {
 			t.Fatalf("expected 0 paths when no resolution, got %d", len(paths))
 		}
 	})
+
+	t.Run("env-wins: bun uses non-empty BUN_INSTALL_CACHE_DIR only when set", func(t *testing.T) {
+		deps := devCachePathDependencies{
+			lookupEnv: func(key string) (string, bool) {
+				if key == "BUN_INSTALL_CACHE_DIR" {
+					return "C:\\custom\\bun-cache", true
+				}
+				if key == "USERPROFILE" {
+					return "C:\\Users\\test", true
+				}
+				return "", false
+			},
+			joinPath: func(parts ...string) string {
+				return strings.Join(parts, "\\")
+			},
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryBun, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path, got %d", len(paths))
+		}
+		if paths[0] != "C:\\custom\\bun-cache" {
+			t.Errorf("expected env path, got %q", paths[0])
+		}
+
+		// Whitespace-only BUN_INSTALL_CACHE_DIR falls through to official default.
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "BUN_INSTALL_CACHE_DIR" {
+				return "   ", true
+			}
+			if key == "USERPROFILE" {
+				return "C:\\Users\\test", true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryBun, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 default path after blank BUN_INSTALL_CACHE_DIR, got %d", len(paths))
+		}
+		if paths[0] != "C:\\Users\\test\\.bun\\install\\cache" {
+			t.Errorf("expected default path, got %q", paths[0])
+		}
+
+		// Env not set: official user default .bun\install\cache.
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "USERPROFILE" {
+				return "C:\\Users\\test", true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryBun, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path, got %d", len(paths))
+		}
+		if paths[0] != "C:\\Users\\test\\.bun\\install\\cache" {
+			t.Errorf("expected default path, got %q", paths[0])
+		}
+
+		// USERPROFILE missing: userHomeDir fallback.
+		deps.lookupEnv = func(key string) (string, bool) {
+			return "", false
+		}
+		deps.userHomeDir = func() (string, error) {
+			return "C:\\Users\\from-home", nil
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryBun, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path from userHomeDir, got %d", len(paths))
+		}
+		if paths[0] != "C:\\Users\\from-home\\.bun\\install\\cache" {
+			t.Errorf("expected home default path, got %q", paths[0])
+		}
+
+		// No home resolution: no candidate root.
+		deps.userHomeDir = func() (string, error) {
+			return "", os.ErrNotExist
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryBun, deps)
+		if len(paths) != 0 {
+			t.Fatalf("expected 0 paths when no resolution, got %d", len(paths))
+		}
+	})
 }

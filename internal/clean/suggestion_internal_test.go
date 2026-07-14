@@ -568,3 +568,139 @@ func TestDiscoverReviewSuggestionsHonorsContextCancellation(t *testing.T) {
 		t.Fatal("canceled suggestion discovery blocked")
 	}
 }
+
+func TestDiscoverReviewSuggestionsBunPrefersQueryThenFallsBackToOfficialDefault(t *testing.T) {
+	const (
+		queryPath    = `D:\custom\bun-install-cache`
+		defaultPath  = `C:\Users\corey\.bun\install\cache`
+		bunExe       = `C:\Users\corey\.bun\bin\bun.exe`
+	)
+
+	t.Run("successful query prefers config-aware path", func(t *testing.T) {
+		var queried bool
+		result := discoverReviewSuggestions(context.Background(), []string{"bun"}, reviewSuggestionDependencies{
+			lookPath: func(tool string) (string, error) {
+				if tool != "bun" {
+					t.Fatalf("lookPath tool = %q", tool)
+				}
+				return bunExe, nil
+			},
+			runQuery: func(_ context.Context, executable string, args ...string) ([]byte, error) {
+				queried = true
+				if executable != bunExe || !equalStrings(args, []string{"pm", "cache"}) {
+					t.Fatalf("unexpected query: %s %#v", executable, args)
+				}
+				return []byte(queryPath + "\r\n"), nil
+			},
+			pathExists: func(path string) bool {
+				return path == queryPath
+			},
+			lookupEnv: func(key string) (string, bool) {
+				t.Fatal("fallback env lookup must not run when query path exists")
+				return "", false
+			},
+		})
+		if !queried {
+			t.Fatal("expected bun pm cache query")
+		}
+		if len(result) != 1 || result[0].CachePath != queryPath || result[0].Command != "bun pm cache rm" {
+			t.Fatalf("suggestions = %#v, want query path only", result)
+		}
+	})
+
+	for _, test := range []struct {
+		name       string
+		queryErr   error
+		queryOut   string
+		existsOnly string
+	}{
+		{name: "no-project query failure", queryErr: errors.New("No package.json was found for directory"), existsOnly: defaultPath},
+		{name: "query timeout", queryErr: context.DeadlineExceeded, existsOnly: defaultPath},
+		{name: "query path missing falls back", queryOut: `D:\missing\bun-cache` + "\n", existsOnly: defaultPath},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := discoverReviewSuggestions(context.Background(), []string{"bun"}, reviewSuggestionDependencies{
+				lookPath: func(string) (string, error) {
+					return bunExe, nil
+				},
+				runQuery: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+					if test.queryErr != nil {
+						return nil, test.queryErr
+					}
+					return []byte(test.queryOut), nil
+				},
+				pathExists: func(path string) bool {
+					return path == test.existsOnly
+				},
+				lookupEnv: func(key string) (string, bool) {
+					if key == "USERPROFILE" {
+						return `C:\Users\corey`, true
+					}
+					return "", false
+				},
+				joinPath: func(parts ...string) string {
+					return strings.Join(parts, `\`)
+				},
+			})
+			if len(result) != 1 || result[0].CachePath != defaultPath {
+				t.Fatalf("suggestions = %#v, want official default fallback %q", result, defaultPath)
+			}
+			if result[0].Tool != "bun" || result[0].Command != "bun pm cache rm" {
+				t.Fatalf("suggestion = %#v, want bun review suggestion command", result[0])
+			}
+		})
+	}
+
+	t.Run("env BUN_INSTALL_CACHE_DIR wins on fallback", func(t *testing.T) {
+		const envPath = `E:\bun\install-cache`
+		result := discoverReviewSuggestions(context.Background(), []string{"bun"}, reviewSuggestionDependencies{
+			lookPath: func(string) (string, error) {
+				return bunExe, nil
+			},
+			runQuery: func(context.Context, string, ...string) ([]byte, error) {
+				return nil, errors.New("No package.json was found for directory")
+			},
+			pathExists: func(path string) bool {
+				return path == envPath
+			},
+			lookupEnv: func(key string) (string, bool) {
+				if key == "BUN_INSTALL_CACHE_DIR" {
+					return envPath, true
+				}
+				if key == "USERPROFILE" {
+					return `C:\Users\corey`, true
+				}
+				return "", false
+			},
+		})
+		if len(result) != 1 || result[0].CachePath != envPath {
+			t.Fatalf("suggestions = %#v, want env fallback %q", result, envPath)
+		}
+	})
+
+	t.Run("fallback root missing yields no suggestion", func(t *testing.T) {
+		result := discoverReviewSuggestions(context.Background(), []string{"bun"}, reviewSuggestionDependencies{
+			lookPath: func(string) (string, error) {
+				return bunExe, nil
+			},
+			runQuery: func(context.Context, string, ...string) ([]byte, error) {
+				return nil, errors.New("No package.json was found for directory")
+			},
+			pathExists: func(string) bool {
+				return false
+			},
+			lookupEnv: func(key string) (string, bool) {
+				if key == "USERPROFILE" {
+					return `C:\Users\corey`, true
+				}
+				return "", false
+			},
+			joinPath: func(parts ...string) string {
+				return strings.Join(parts, `\`)
+			},
+		})
+		if len(result) != 0 {
+			t.Fatalf("suggestions = %#v, want none when fallback missing", result)
+		}
+	})
+}

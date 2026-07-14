@@ -170,6 +170,25 @@ func resolveUVCachePaths(deps devCachePathDependencies) []string {
 	return nil
 }
 
+func resolveBunCachePaths(deps devCachePathDependencies) []string {
+	// bun: non-empty BUN_INSTALL_CACHE_DIR -> %USERPROFILE%\.bun\install\cache
+	// Blank/whitespace BUN_INSTALL_CACHE_DIR is ignored so the official default still applies.
+	// Execute never reads bunfig.toml/.npmrc, never infers --cache-dir, and never runs
+	// bun pm cache / bun pm cache rm or any other Bun command.
+	if path, ok := deps.lookupEnv("BUN_INSTALL_CACHE_DIR"); ok {
+		if trimmed := strings.TrimSpace(path); trimmed != "" {
+			return []string{trimmed}
+		}
+	}
+	if userProfile, ok := deps.lookupEnv("USERPROFILE"); ok && userProfile != "" {
+		return []string{deps.joinPath(userProfile, ".bun", "install", "cache")}
+	}
+	if home, err := deps.userHomeDir(); err == nil && home != "" {
+		return []string{deps.joinPath(home, ".bun", "install", "cache")}
+	}
+	return nil
+}
+
 // devCacheCategories returns the list of all dev cache categories.
 func devCacheCategories() []string {
 	return developerCacheCategoryIDs()
