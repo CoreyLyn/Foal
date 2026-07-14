@@ -115,6 +115,200 @@ func TestResolveOptInCandidatesDevCacheRunningRecordsSkip(t *testing.T) {
 	if res.skipped[0].Path != cachePath {
 		t.Errorf("skip path = %q, want %q", res.skipped[0].Path, cachePath)
 	}
+	if res.skipped[0].Bytes != 0 {
+		t.Errorf("skip bytes = %d, want 0 (pre-gate must not measure)", res.skipped[0].Bytes)
+	}
+}
+
+// sequenceGoDetector returns successive Go application states across detector
+// calls. Pre-measurement and each post-measurement re-check consume one call.
+func sequenceGoDetector(states ...RunningApplicationStatus) func(context.Context) []RunningApplicationState {
+	call := 0
+	return func(context.Context) []RunningApplicationState {
+		state := states[len(states)-1]
+		if call < len(states) {
+			state = states[call]
+		}
+		call++
+		return []RunningApplicationState{{Application: ApplicationGo, State: state}}
+	}
+}
+
+// TestResolveOptInCandidatesDevCachePostMeasurementReCheck covers issue #166:
+// idle→running after measurement discards the root; idle→idle preserves it.
+func TestResolveOptInCandidatesDevCachePostMeasurementReCheck(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "go-build")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachePath, "f"), []byte("payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("idle to idle yields candidate", func(t *testing.T) {
+		opts := Options{
+			DetectRunningApplications: sequenceGoDetector(
+				RunningApplicationStateIdle,
+				RunningApplicationStateIdle,
+			),
+			DevCachePathResolver: func(string) []string { return []string{cachePath} },
+			OptIn:                []string{DevCacheCategoryGo},
+		}
+		plan, _, _ := NormalizedOptInSet(opts.OptIn)
+		res := resolveOptInCandidates(context.Background(), opts, plan)
+		if len(res.candidates) != 1 {
+			t.Fatalf("candidates = %d, want 1", len(res.candidates))
+		}
+		if res.candidates[0].Bytes != 7 {
+			t.Errorf("candidate bytes = %d, want 7", res.candidates[0].Bytes)
+		}
+		if len(res.skipped) != 0 {
+			t.Fatalf("skipped = %d, want 0", len(res.skipped))
+		}
+	})
+
+	t.Run("idle to running discards candidate and bytes", func(t *testing.T) {
+		opts := Options{
+			DetectRunningApplications: sequenceGoDetector(
+				RunningApplicationStateIdle,
+				RunningApplicationStateRunning,
+			),
+			DevCachePathResolver: func(string) []string { return []string{cachePath} },
+			OptIn:                []string{DevCacheCategoryGo},
+		}
+		plan, _, _ := NormalizedOptInSet(opts.OptIn)
+		res := resolveOptInCandidates(context.Background(), opts, plan)
+		if len(res.candidates) != 0 {
+			t.Fatalf("candidates = %d, want 0 after post running", len(res.candidates))
+		}
+		if len(res.skipped) != 1 {
+			t.Fatalf("skipped = %d, want 1", len(res.skipped))
+		}
+		if res.skipped[0].Reason.Code != devToolRunningIssueCode || res.skipped[0].Bytes != 0 {
+			t.Fatalf("skip = %+v, want dev_tool_running with 0 bytes", res.skipped[0])
+		}
+	})
+
+	t.Run("idle to unknown discards candidate", func(t *testing.T) {
+		opts := Options{
+			DetectRunningApplications: sequenceGoDetector(
+				RunningApplicationStateIdle,
+				RunningApplicationStateUnknown,
+			),
+			DevCachePathResolver: func(string) []string { return []string{cachePath} },
+			OptIn:                []string{DevCacheCategoryGo},
+		}
+		plan, _, _ := NormalizedOptInSet(opts.OptIn)
+		res := resolveOptInCandidates(context.Background(), opts, plan)
+		if len(res.candidates) != 0 || len(res.skipped) != 1 {
+			t.Fatalf("candidates=%d skipped=%d, want 0/1", len(res.candidates), len(res.skipped))
+		}
+	})
+
+	t.Run("idle to missing discards candidate", func(t *testing.T) {
+		call := 0
+		opts := Options{
+			DetectRunningApplications: func(context.Context) []RunningApplicationState {
+				call++
+				if call == 1 {
+					return []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateIdle}}
+				}
+				return nil // post missing required state
+			},
+			DevCachePathResolver: func(string) []string { return []string{cachePath} },
+			OptIn:                []string{DevCacheCategoryGo},
+		}
+		plan, _, _ := NormalizedOptInSet(opts.OptIn)
+		res := resolveOptInCandidates(context.Background(), opts, plan)
+		if len(res.candidates) != 0 || len(res.skipped) != 1 {
+			t.Fatalf("candidates=%d skipped=%d, want 0/1", len(res.candidates), len(res.skipped))
+		}
+	})
+}
+
+// TestResolveOptInCandidatesDevCacheMultiRootIndependentEvidence ensures one
+// root discarded by the post-gate does not authorize or double-count another.
+func TestResolveOptInCandidatesDevCacheMultiRootIndependentEvidence(t *testing.T) {
+	root := t.TempDir()
+	pathA := filepath.Join(root, "a")
+	pathB := filepath.Join(root, "b")
+	for _, p := range []string{pathA, pathB} {
+		if err := os.Mkdir(p, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "f"), []byte("xx"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Call sequence: pre (idle), post for A (running → discard A), post for B (idle → keep B).
+	call := 0
+	opts := Options{
+		DetectRunningApplications: func(context.Context) []RunningApplicationState {
+			call++
+			switch call {
+			case 1:
+				return []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateIdle}}
+			case 2:
+				return []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateRunning}}
+			default:
+				return []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateIdle}}
+			}
+		},
+		DevCachePathResolver: func(category string) []string {
+			if category == DevCacheCategoryGo {
+				return []string{pathA, pathB}
+			}
+			return nil
+		},
+		OptIn: []string{DevCacheCategoryGo},
+	}
+	plan, _, _ := NormalizedOptInSet(opts.OptIn)
+	res := resolveOptInCandidates(context.Background(), opts, plan)
+
+	if len(res.candidates) != 1 {
+		t.Fatalf("candidates = %d, want 1 (only root B)", len(res.candidates))
+	}
+	if res.candidates[0].Path != pathB {
+		t.Errorf("candidate path = %q, want %q", res.candidates[0].Path, pathB)
+	}
+	if res.candidates[0].Bytes != 2 {
+		t.Errorf("candidate bytes = %d, want 2 (no double-count of A)", res.candidates[0].Bytes)
+	}
+	if len(res.skipped) != 1 || res.skipped[0].Path != pathA {
+		t.Fatalf("skipped = %+v, want only path A", res.skipped)
+	}
+}
+
+// TestResolveOptInCandidatesSharedRuntimeDoesNotDetect ensures npm/pip/corepack
+// opt-in alone does not run developer-tool process detection.
+func TestResolveOptInCandidatesSharedRuntimeDoesNotDetect(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "npm-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachePath, "f"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	detectCalled := false
+	opts := Options{
+		DetectRunningApplications: func(context.Context) []RunningApplicationState {
+			detectCalled = true
+			return nil
+		},
+		DevCachePathResolver: func(string) []string { return []string{cachePath} },
+		OptIn:                []string{DevCacheCategoryNPM},
+	}
+	plan, _, _ := NormalizedOptInSet(opts.OptIn)
+	res := resolveOptInCandidates(context.Background(), opts, plan)
+	if detectCalled {
+		t.Fatal("shared-runtime npm-cache must not trigger developer-tool detection")
+	}
+	if len(res.candidates) != 1 {
+		t.Fatalf("candidates = %d, want 1", len(res.candidates))
+	}
 }
 
 // TestResolveOptInCandidatesBrowserRunningRecordsState covers Q4: a browser
