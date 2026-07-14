@@ -11,7 +11,7 @@ import (
 )
 
 func TestNormalizedOptInSet_DevCaches(t *testing.T) {
-	t.Run("dev-caches enables all 9 dev cache categories", func(t *testing.T) {
+	t.Run("dev-caches enables all developer-tools opt-in categories", func(t *testing.T) {
 		enabled, invalid, valid := clean.NormalizedOptInSet([]string{"dev-caches"})
 		if len(invalid) != 0 {
 			t.Fatalf("expected no invalid names, got %v", invalid)
@@ -27,14 +27,15 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryUV,
 			clean.DevCacheCategoryBun,
 			clean.OpportunityCategoryVSCodeCache,
+			clean.OpportunityCategoryCursorCache,
 		}
 		for _, cat := range expectedDevCaches {
 			if !enabled[cat] {
 				t.Fatalf("expected %q to be enabled by \"dev-caches\"", cat)
 			}
 		}
-		if len(enabled) != 10 {
-			t.Fatalf("expected 10 enabled developer-tools categories, got %d", len(enabled))
+		if len(enabled) != 11 {
+			t.Fatalf("expected 11 enabled developer-tools categories, got %d", len(enabled))
 		}
 		// Verify valid names include dev categories and dev-caches
 		found := make(map[string]bool)
@@ -66,6 +67,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.OpportunityCategoryNVIDIADXCache,
 			clean.OpportunityCategoryBrowserCache,
 			clean.OpportunityCategoryVSCodeCache,
+			clean.OpportunityCategoryCursorCache,
 		}
 		expectedDevCaches := []string{
 			clean.DevCacheCategoryNPM,
@@ -88,8 +90,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"all\"", cat)
 			}
 		}
-		if len(enabled) != 9+9 {
-			t.Fatalf("expected 18 enabled categories (9+9), got %d", len(enabled))
+		if len(enabled) != 10+9 {
+			t.Fatalf("expected 19 enabled categories (10+9), got %d", len(enabled))
 		}
 	})
 

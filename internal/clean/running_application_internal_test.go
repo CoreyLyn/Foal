@@ -52,6 +52,7 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 		ApplicationUV,
 		ApplicationBun,
 		ApplicationVisualStudioCode,
+		ApplicationCursor,
 	}
 	if len(states) != len(wantOrder) {
 		t.Fatalf("states = %#v, want %d entries", states, len(wantOrder))
@@ -83,6 +84,33 @@ func TestClassifyProcessByExecutablesSupportsMultipleNames(t *testing.T) {
 	}
 	if got := classifyProcessByExecutables(ApplicationUV, executables, []string{"notepad.exe"}); got.State != RunningApplicationStateIdle {
 		t.Fatalf("idle state = %#v, want idle", got)
+	}
+}
+
+func TestDetectSupportedApplicationsClassifiesCursorCaseInsensitive(t *testing.T) {
+	states := detectSupportedApplications(context.Background(), func(context.Context) processSnapshot {
+		return processSnapshot{Names: []string{"CURSOR.EXE", "notepad.exe"}}
+	})
+	var cursorState RunningApplicationState
+	found := false
+	for _, state := range states {
+		if state.Application == ApplicationCursor {
+			cursorState = state
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected cursor application state")
+	}
+	if cursorState.State != RunningApplicationStateRunning {
+		t.Fatalf("Cursor.exe case-insensitive state = %#v, want running", cursorState)
+	}
+	// Code.exe must remain independent when only Cursor is present.
+	for _, state := range states {
+		if state.Application == ApplicationVisualStudioCode && state.State != RunningApplicationStateIdle {
+			t.Fatalf("VS Code state = %#v, want idle when only Cursor runs", state)
+		}
 	}
 }
 

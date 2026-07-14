@@ -198,10 +198,12 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 }
 
 // applicationCacheApplicationDefinitions is the controlled registry of idle
-// Application cache owners (VS Code today; Cursor later). Process detection
-// is shared with DetectSupportedApplications after developer tools.
+// Application cache owners. Process detection is shared with
+// DetectSupportedApplications after developer tools. Each editor is an
+// independent logical application so gates never cross-authorize.
 var applicationCacheApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationVisualStudioCode, displayName: "Visual Studio Code", executables: []string{"Code.exe"}},
+	{id: ApplicationCursor, displayName: "Cursor", executables: []string{"Cursor.exe"}},
 }
 
 // categoryCatalogEntry is the private canonical registration point. Public
@@ -265,6 +267,19 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		applicationCache:         true,
 		applicationCachePolicyID: applicationCachePolicyVSCode,
 		runningApplications:      []string{ApplicationVisualStudioCode},
+	},
+	{
+		definition: categoryDefinition(
+			OpportunityCategoryCursorCache,
+			"Cursor cache",
+			ReportCategoryDeveloperTools,
+			CategoryEligibilityOptIn,
+			RunningApplicationPolicyApplicationIdleBeforeAfter,
+		),
+		opportunity:              true,
+		applicationCache:         true,
+		applicationCachePolicyID: applicationCachePolicyCursor,
+		runningApplications:      []string{ApplicationCursor},
 	},
 	developerCacheEntry(
 		categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),

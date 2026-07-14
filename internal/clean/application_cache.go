@@ -13,10 +13,24 @@ import (
 
 const (
 	applicationCachePolicyVSCode = "visual_studio_code"
+	applicationCachePolicyCursor = "cursor"
 	// CachedExtensionVSIXsRootName is the exact allowlisted relative root that
 	// stores downloaded VSIX packages (not installed extensions).
 	CachedExtensionVSIXsRootName = "CachedExtensionVSIXs"
 )
+
+// applicationCacheAllowlistedRelativeRoots is the fixed v1 regenerating-cache
+// allowlist shared by registered Application cache editors. Each editor still
+// has its own category, root base, and process identity.
+var applicationCacheAllowlistedRelativeRoots = []string{
+	"Cache",
+	"CachedData",
+	CachedExtensionVSIXsRootName,
+	"Code Cache",
+	"GPUCache",
+	"DawnGraphiteCache",
+	"DawnWebGPUCache",
+}
 
 // ApplicationCacheDiscoveryOptions configures idle Application cache discovery.
 // Only the current user's standard Roaming AppData base is supported.
@@ -35,23 +49,21 @@ type applicationCachePolicy struct {
 	relativeRoots      []string
 }
 
-// applicationCachePolicies is the private policy table. Adding a second editor
-// requires an explicit policy with its own category, application identity, and
-// exact relative-root allowlist — never a user-data tree scan.
+// applicationCachePolicies is the private policy table. Each editor requires
+// an explicit policy with its own category, application identity, and exact
+// relative-root allowlist — never a user-data tree scan.
 var applicationCachePolicies = map[string]applicationCachePolicy{
 	applicationCachePolicyVSCode: {
 		category:           OpportunityCategoryVSCodeCache,
 		application:        ApplicationVisualStudioCode,
 		roamingAppDataPath: []string{"Code"},
-		relativeRoots: []string{
-			"Cache",
-			"CachedData",
-			CachedExtensionVSIXsRootName,
-			"Code Cache",
-			"GPUCache",
-			"DawnGraphiteCache",
-			"DawnWebGPUCache",
-		},
+		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+	},
+	applicationCachePolicyCursor: {
+		category:           OpportunityCategoryCursorCache,
+		application:        ApplicationCursor,
+		roamingAppDataPath: []string{"Cursor"},
+		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
 	},
 }
 

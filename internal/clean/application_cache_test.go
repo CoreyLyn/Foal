@@ -520,8 +520,583 @@ func TestNormalizedOptInSetVSCodeAndDevCaches(t *testing.T) {
 	if len(invalid) != 0 || !enabled[clean.OpportunityCategoryVSCodeCache] {
 		t.Fatalf("vscode_cache opt-in = %#v %#v", enabled, invalid)
 	}
+	enabled, invalid, _ = clean.NormalizedOptInSet([]string{"cursor_cache"})
+	if len(invalid) != 0 || !enabled[clean.OpportunityCategoryCursorCache] {
+		t.Fatalf("cursor_cache opt-in = %#v %#v", enabled, invalid)
+	}
+	if enabled[clean.OpportunityCategoryVSCodeCache] {
+		t.Fatalf("cursor_cache opt-in must not enable vscode_cache: %#v", enabled)
+	}
 	enabled, invalid, _ = clean.NormalizedOptInSet([]string{"dev-caches"})
-	if len(invalid) != 0 || !enabled[clean.OpportunityCategoryVSCodeCache] {
-		t.Fatalf("dev-caches should enable vscode_cache: %#v %#v", enabled, invalid)
+	if len(invalid) != 0 ||
+		!enabled[clean.OpportunityCategoryVSCodeCache] ||
+		!enabled[clean.OpportunityCategoryCursorCache] {
+		t.Fatalf("dev-caches should enable both editor caches: %#v %#v", enabled, invalid)
+	}
+	enabled, invalid, _ = clean.NormalizedOptInSet([]string{"all"})
+	if len(invalid) != 0 ||
+		!enabled[clean.OpportunityCategoryVSCodeCache] ||
+		!enabled[clean.OpportunityCategoryCursorCache] {
+		t.Fatalf("all should enable both editor caches: %#v %#v", enabled, invalid)
+	}
+}
+
+func editorAllowlistedRoots() []string {
+	return []string{
+		"Cache",
+		"CachedData",
+		"CachedExtensionVSIXs",
+		"Code Cache",
+		"GPUCache",
+		"DawnGraphiteCache",
+		"DawnWebGPUCache",
+	}
+}
+
+func writeEditorUserDataRoot(t *testing.T, roamingAppData, appFolder string, rootContents map[string]string) string {
+	t.Helper()
+	userDataRoot := filepath.Join(roamingAppData, appFolder)
+	if err := os.MkdirAll(userDataRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range rootContents {
+		path := filepath.Join(userDataRoot, name)
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if contents != "" {
+			if err := os.WriteFile(filepath.Join(path, "data.bin"), []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return userDataRoot
+}
+
+func writeCursorRoot(t *testing.T, roamingAppData string, rootContents map[string]string) string {
+	t.Helper()
+	return writeEditorUserDataRoot(t, roamingAppData, "Cursor", rootContents)
+}
+
+func idleCursorDetector() func(context.Context) []clean.RunningApplicationState {
+	return func(context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{Application: clean.ApplicationCursor, State: clean.RunningApplicationStateIdle},
+		}
+	}
+}
+
+func idleBothEditorsDetector() func(context.Context) []clean.RunningApplicationState {
+	return func(context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{Application: clean.ApplicationVisualStudioCode, State: clean.RunningApplicationStateIdle},
+			{Application: clean.ApplicationCursor, State: clean.RunningApplicationStateIdle},
+		}
+	}
+}
+
+func TestDryRunReportsIdleCursorCacheRootsAsIndependentOpportunities(t *testing.T) {
+	roaming := t.TempDir()
+	contents := map[string]string{}
+	var wantBytes int64
+	for _, root := range editorAllowlistedRoots() {
+		payload := "cursor-" + root
+		contents[root] = payload
+		wantBytes += int64(len(payload))
+	}
+	for _, decoy := range []string{
+		"User", "workspaceStorage", "globalStorage", "Backups",
+		"extensions", "Service Worker", "Local Storage", "Session Storage", "WebStorage",
+		"Network", "Cookies", "logs", "Crashpad", "MyCache", "cache-temp",
+	} {
+		contents[decoy] = "must-not-count"
+	}
+	cursorRoot := writeCursorRoot(t, roaming, contents)
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder: recorder,
+		DetailedListDir: filepath.Join(t.TempDir(), "Foal", "history"),
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleCursorDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	cursorOpps := opportunitiesForCategory(result, clean.OpportunityCategoryCursorCache)
+	if len(cursorOpps) != len(editorAllowlistedRoots()) {
+		t.Fatalf("cursor opportunities = %#v, want one per allowlisted root", cursorOpps)
+	}
+	seen := make(map[string]bool)
+	var total int64
+	for _, opportunity := range cursorOpps {
+		if opportunity.Status != clean.OpportunityStatus || opportunity.Reason != clean.OpportunityReason {
+			t.Fatalf("opportunity status/reason = %#v", opportunity)
+		}
+		if !strings.HasPrefix(opportunity.Path, cursorRoot) {
+			t.Fatalf("opportunity path %q not under Cursor root", opportunity.Path)
+		}
+		seen[filepath.Base(opportunity.Path)] = true
+		total += opportunity.Bytes
+	}
+	for _, root := range editorAllowlistedRoots() {
+		if !seen[root] {
+			t.Fatalf("missing allowlisted root %q", root)
+		}
+	}
+	if total != wantBytes || result.Totals.OpportunityObservedBytes != wantBytes || result.Totals.CandidateBytes != 0 {
+		t.Fatalf("totals = %#v total=%d want observed-only %d", result.Totals, total, wantBytes)
+	}
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)) != 0 {
+		t.Fatalf("cursor roots must not project as vscode_cache: %#v", result.Opportunities)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonText := string(encoded)
+	if !strings.Contains(jsonText, `"category":"cursor_cache"`) {
+		t.Fatalf("JSON missing cursor_cache: %s", jsonText)
+	}
+	for _, forbidden := range []string{
+		`"category":"vscode_cache"`, "workspaceStorage", "globalStorage", "Backups",
+		"Service Worker", "Local Storage", "Cookies", "Crashpad", "MyCache", "cache-temp",
+	} {
+		if strings.Contains(jsonText, forbidden) {
+			t.Fatalf("JSON contains excluded data %q: %s", forbidden, jsonText)
+		}
+	}
+
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	for _, want := range []string{
+		"Developer tools",
+		"category: cursor_cache",
+		"Observed opportunity bytes:",
+		"Potential space: 0 bytes",
+		"CachedExtensionVSIXs holds downloaded extension packages",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("human report missing %q:\n%s", want, report)
+		}
+	}
+	if strings.Contains(report, "category: vscode_cache") {
+		t.Fatalf("cursor-only dry-run should keep vscode summary separate/absent:\n%s", report)
+	}
+
+	if len(recorder.sessions) != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityCount != len(cursorOpps) ||
+		recorder.sessions[0].Aggregate.OpportunityObservedBytes != wantBytes ||
+		len(recorder.items) != 0 {
+		t.Fatalf("history = %#v / %#v, want aggregate-only privacy", recorder.sessions, recorder.items)
+	}
+	if strings.Contains(recorder.encoded, cursorRoot) || strings.Contains(recorder.encoded, "CachedData") {
+		t.Fatalf("history leaked editor path: %s", recorder.encoded)
+	}
+}
+
+func TestDryRunCursorMissingRootIsSilentAbsence(t *testing.T) {
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleCursorDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryCursorCache {
+			t.Fatalf("unexpected cursor opportunity: %#v", opportunity)
+		}
+	}
+	if len(result.IncompleteOpportunityInspections) != 0 {
+		t.Fatalf("incomplete = %#v, want empty for missing Cursor root", result.IncompleteOpportunityInspections)
+	}
+}
+
+func TestDryRunCursorRunningSkipsWithoutMeasuring(t *testing.T) {
+	roaming := t.TempDir()
+	writeCursorRoot(t, roaming, map[string]string{"Cache": "cache", "CachedData": "data"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationCursor, State: clean.RunningApplicationStateRunning},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryCursorCache {
+			t.Fatalf("running Cursor produced opportunity: %#v", opportunity)
+		}
+	}
+	if result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("observed bytes = %d, want 0", result.Totals.OpportunityObservedBytes)
+	}
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	if !strings.Contains(report, "Cursor") {
+		t.Fatalf("report missing Cursor running skip:\n%s", report)
+	}
+}
+
+func TestDryRunCursorUnknownFailsClosed(t *testing.T) {
+	roaming := t.TempDir()
+	writeCursorRoot(t, roaming, map[string]string{"Cache": "cache"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationCursor, State: clean.RunningApplicationStateUnknown, Message: "snapshot failed"},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryCursorCache {
+			t.Fatalf("unknown state produced opportunity: %#v", opportunity)
+		}
+	}
+	found := false
+	for _, err := range result.Errors {
+		if err.Code == "running_application_detection_unknown" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("errors = %#v, want unknown diagnostic", result.Errors)
+	}
+}
+
+func TestDryRunCursorPostRunningDiscardsMeasuredRoots(t *testing.T) {
+	roaming := t.TempDir()
+	writeCursorRoot(t, roaming, map[string]string{"Cache": "cache", "GPUCache": "gpu"})
+	calls := 0
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			calls++
+			state := clean.RunningApplicationStateIdle
+			if calls > 1 {
+				state = clean.RunningApplicationStateRunning
+			}
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationCursor, State: state},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryCursorCache {
+			t.Fatalf("post-running kept opportunity: %#v", opportunity)
+		}
+	}
+	if result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("observed bytes = %d after post-running discard", result.Totals.OpportunityObservedBytes)
+	}
+}
+
+func TestDryRunIndependentEditorGates(t *testing.T) {
+	roaming := t.TempDir()
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "vscode-cache"})
+	writeCursorRoot(t, roaming, map[string]string{"Cache": "cursor-cache"})
+
+	// Running VS Code must not suppress idle Cursor.
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		BrowserCacheDiscoveryOptions:     clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: t.TempDir()},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationVisualStudioCode, State: clean.RunningApplicationStateRunning},
+				{Application: clean.ApplicationCursor, State: clean.RunningApplicationStateIdle},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)) != 0 {
+		t.Fatalf("running VS Code still produced opportunities: %#v", result.Opportunities)
+	}
+	cursorOpps := opportunitiesForCategory(result, clean.OpportunityCategoryCursorCache)
+	if len(cursorOpps) != 1 || filepath.Base(cursorOpps[0].Path) != "Cache" {
+		t.Fatalf("idle Cursor opportunities = %#v, want Cache only", cursorOpps)
+	}
+
+	// Running Cursor must not suppress idle VS Code.
+	result = clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		BrowserCacheDiscoveryOptions:     clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: t.TempDir()},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationVisualStudioCode, State: clean.RunningApplicationStateIdle},
+				{Application: clean.ApplicationCursor, State: clean.RunningApplicationStateRunning},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryCursorCache)) != 0 {
+		t.Fatalf("running Cursor still produced opportunities: %#v", result.Opportunities)
+	}
+	vscodeOpps := opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)
+	if len(vscodeOpps) != 1 || filepath.Base(vscodeOpps[0].Path) != "Cache" {
+		t.Fatalf("idle VS Code opportunities = %#v, want Cache only", vscodeOpps)
+	}
+}
+
+func TestDryRunCursorProtectionSuppressesRootBeforeTotals(t *testing.T) {
+	roaming := t.TempDir()
+	cursorRoot := writeCursorRoot(t, roaming, map[string]string{
+		"Cache":      "cache",
+		"CachedData": "data",
+		"GPUCache":   "gpu",
+	})
+	protected := filepath.Join(cursorRoot, "CachedData")
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator: pathsafe.NewValidator([]string{protected}),
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleCursorDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryCursorCache && opportunity.Path == protected {
+			t.Fatalf("protected root leaked: %#v", opportunity)
+		}
+	}
+	var cursorCount int
+	var observed int64
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryCursorCache {
+			cursorCount++
+			observed += opportunity.Bytes
+		}
+	}
+	if cursorCount != 2 || observed != 8 {
+		t.Fatalf("cursorCount=%d observed=%d, want 2 siblings totaling 8", cursorCount, observed)
+	}
+}
+
+func TestDryRunCursorOptInConvertsRootsToCandidatesWithoutSelectingVSCode(t *testing.T) {
+	roaming := t.TempDir()
+	writeCursorRoot(t, roaming, map[string]string{
+		"Cache":                "cache",
+		"CachedExtensionVSIXs": "vsix-pkg",
+	})
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "vscode-only"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		OptIn: []string{clean.OpportunityCategoryCursorCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleBothEditorsDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryCursorCache)) != 0 {
+		t.Fatalf("opted-in cursor still listed as opportunity: %#v", result.Opportunities)
+	}
+	vscodeOpps := opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)
+	if len(vscodeOpps) != 1 {
+		t.Fatalf("non-opted-in vscode should remain opportunity: %#v", result.Opportunities)
+	}
+	if len(result.OptInCandidates) != 2 {
+		t.Fatalf("opt-in candidates = %#v, want 2 cursor roots", result.OptInCandidates)
+	}
+	for _, candidate := range result.OptInCandidates {
+		if candidate.Category != clean.OpportunityCategoryCursorCache {
+			t.Fatalf("candidate category = %q, want cursor_cache only", candidate.Category)
+		}
+		if candidate.PlannedAction != "move_to_recycle_bin" {
+			t.Fatalf("planned action = %q", candidate.PlannedAction)
+		}
+	}
+	model := clean.NewPreviewReadModel(result)
+	foundNotice := false
+	for _, notice := range model.Notices {
+		if notice.Kind == "opt_in_impact" && strings.Contains(notice.Message, "CachedExtensionVSIXs") {
+			foundNotice = true
+		}
+	}
+	if !foundNotice {
+		t.Fatalf("notices = %#v, want VSIX impact notice", model.Notices)
+	}
+}
+
+func TestExecuteWithoutCursorOptInSkipsDetection(t *testing.T) {
+	roaming := t.TempDir()
+	writeCursorRoot(t, roaming, map[string]string{"Cache": "cache"})
+	detectorCalls := 0
+	adapter := &recordingRecycleBinAdapter{}
+	_ = clean.Execute(context.Background(), clean.Options{
+		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			detectorCalls++
+			return idleCursorDetector()(context.Background())
+		},
+	})
+	if detectorCalls != 0 {
+		t.Fatalf("DetectRunningApplications called %d times without opt-in", detectorCalls)
+	}
+	if len(adapter.paths) != 0 {
+		t.Fatalf("adapter paths = %v", adapter.paths)
+	}
+}
+
+func TestExecuteOptInCursorCacheCleansWhenIdle(t *testing.T) {
+	roaming := t.TempDir()
+	cursorRoot := writeCursorRoot(t, roaming, map[string]string{
+		"Cache":      "cache-data",
+		"CachedData": "compiled",
+	})
+	cachePath := filepath.Join(cursorRoot, "Cache")
+	cachedDataPath := filepath.Join(cursorRoot, "CachedData")
+	adapter := &recordingRecycleBinAdapter{}
+	recorder := &recordingHistoryRecorder{}
+
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   recorder,
+		OptIn:             []string{clean.OpportunityCategoryCursorCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleCursorDetector(),
+	})
+
+	if result.Totals.OptInDeletedCount != 2 {
+		t.Fatalf("OptInDeletedCount = %d, want 2; result=%#v", result.Totals.OptInDeletedCount, result)
+	}
+	found := map[string]bool{}
+	for _, path := range adapter.paths {
+		found[path] = true
+	}
+	if !found[cachePath] || !found[cachedDataPath] {
+		t.Fatalf("adapter paths = %v, want Cache and CachedData", adapter.paths)
+	}
+	if len(recorder.items) == 0 {
+		t.Fatalf("history items empty, want path-bearing opt-in records")
+	}
+	for _, item := range recorder.items {
+		if item.Path == cachePath || item.Path == cachedDataPath {
+			return
+		}
+	}
+	t.Fatalf("history items = %#v, want Cursor paths", recorder.items)
+}
+
+func TestExecuteOptInCursorFreshResolvesNotPreviewPaths(t *testing.T) {
+	roamingExecute := t.TempDir()
+	cursorRoot := writeCursorRoot(t, roamingExecute, map[string]string{"GPUCache": "execute-root"})
+	executePath := filepath.Join(cursorRoot, "GPUCache")
+	adapter := &recordingRecycleBinAdapter{}
+
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		OptIn:             []string{clean.OpportunityCategoryCursorCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roamingExecute,
+		},
+		DetectRunningApplications: idleCursorDetector(),
+	})
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("OptInDeletedCount = %d, want 1", result.Totals.OptInDeletedCount)
+	}
+	if len(adapter.paths) != 1 || adapter.paths[0] != executePath {
+		t.Fatalf("adapter paths = %v, want fresh GPUCache %q", adapter.paths, executePath)
+	}
+}
+
+func TestExecuteOptInCursorCapacityFailureSkipsBeforeDeletion(t *testing.T) {
+	roaming := t.TempDir()
+	writeCursorRoot(t, roaming, map[string]string{"Cache": string(make([]byte, 64))})
+	adapter := &recordingRecycleBinAdapter{}
+	probe := func(path string) (clean.RecycleBinVolumeConfig, error) {
+		return clean.RecycleBinVolumeConfig{
+			Volume:       filepath.VolumeName(path),
+			NukeOnDelete: false,
+			MaxCapacity:  1,
+			CurrentUsage: 0,
+		}, nil
+	}
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules:                   []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter:       adapter,
+		RecycleBinCapacityProbe: probe,
+		OptIn:                   []string{clean.OpportunityCategoryCursorCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleCursorDetector(),
+	})
+	if len(adapter.paths) != 0 {
+		t.Fatalf("adapter called despite capacity failure: %v", adapter.paths)
+	}
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("deleted count = %d", result.Totals.OptInDeletedCount)
+	}
+	found := false
+	for _, skipped := range result.Skipped {
+		if skipped.Reason.Code == "recycle_bin_capacity" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("skipped = %#v, want recycle_bin_capacity", result.Skipped)
+	}
+}
+
+func TestExecuteOptInCursorDoesNotAuthorizeVSCode(t *testing.T) {
+	roaming := t.TempDir()
+	writeCursorRoot(t, roaming, map[string]string{"Cache": "cursor"})
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "vscode"})
+	adapter := &recordingRecycleBinAdapter{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		OptIn:             []string{clean.OpportunityCategoryCursorCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleBothEditorsDetector(),
+	})
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("OptInDeletedCount = %d, want 1 cursor root", result.Totals.OptInDeletedCount)
+	}
+	for _, path := range adapter.paths {
+		if strings.Contains(path, string(filepath.Separator)+"Code"+string(filepath.Separator)) ||
+			strings.HasSuffix(path, string(filepath.Separator)+"Code") {
+			t.Fatalf("cursor opt-in deleted VS Code path: %v", adapter.paths)
+		}
 	}
 }

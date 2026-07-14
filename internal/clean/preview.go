@@ -188,6 +188,7 @@ const (
 	ApplicationUV                          = "uv"
 	ApplicationBun                         = "bun"
 	ApplicationVisualStudioCode            = "visual_studio_code"
+	ApplicationCursor                      = "cursor"
 	RunningApplicationStateRunning         = RunningApplicationStatus("running")
 	RunningApplicationStateIdle            = RunningApplicationStatus("idle")
 	RunningApplicationStateUnknown         = RunningApplicationStatus("unknown")
@@ -394,7 +395,7 @@ func applyOptInReviewProjection(ctx context.Context, opts Options, result *Resul
 }
 
 // applyApplicationCacheReview is the dry-run review surface for non-opted-in
-// idle Application cache categories (VS Code today). Opted-in categories are
+// idle Application cache categories (VS Code, Cursor). Opted-in categories are
 // resolved by the opt-in candidate resolver instead.
 func applyApplicationCacheReview(ctx context.Context, opts Options, result *Result, plan map[string]bool) {
 	var categories []string
