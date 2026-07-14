@@ -29,6 +29,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"pip-cache",
 		"cargo-cache",
 		"nuget-cache",
+		"nuget-global-packages",
 		"corepack-cache",
 		"administrator_only_caches",
 	}
