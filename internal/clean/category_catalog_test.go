@@ -31,6 +31,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"nuget-cache",
 		"nuget-global-packages",
 		"corepack-cache",
+		"uv-cache",
 		"administrator_only_caches",
 	}
 	gotIdentifiers := make([]string, 0, len(summaries))
@@ -157,6 +158,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryNuGet,
 		clean.DevCacheCategoryNuGetGlobalPackages,
 		clean.DevCacheCategoryCorepack,
+		clean.DevCacheCategoryUV,
 	}
 
 	catalog := clean.CanonicalCleanupCategoryCatalog()
@@ -180,6 +182,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryNuGet:               clean.RunningApplicationPolicyDistinctiveProcessIdle,
 		clean.DevCacheCategoryNuGetGlobalPackages: clean.RunningApplicationPolicyDistinctiveProcessIdle,
 		clean.DevCacheCategoryCorepack:            clean.RunningApplicationPolicySharedRuntime,
+		clean.DevCacheCategoryUV:                  clean.RunningApplicationPolicyDistinctiveProcessIdle,
 	}
 	for id, wantPolicy := range policies {
 		summary, ok := catalog.Summary(id)
@@ -200,8 +203,9 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"NPM_CONFIG_CACHE", "GOCACHE", "PIP_CACHE_DIR", "CARGO_HOME",
-		"NUGET_HTTP_CACHE_PATH", "NUGET_PACKAGES", "COREPACK_HOME",
+		"NUGET_HTTP_CACHE_PATH", "NUGET_PACKAGES", "COREPACK_HOME", "UV_CACHE_DIR",
 		"go.exe", "cargo.exe", "dotnet.exe", "nuget.exe", "node.exe", "python.exe",
+		"uv.exe", "uvx.exe",
 		"resolvePaths", "lookupEnv", "LOCALAPPDATA",
 	} {
 		if strings.Contains(string(encoded), forbidden) {

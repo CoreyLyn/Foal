@@ -26,6 +26,7 @@ const (
 	DevCacheCategoryNuGet               = "nuget-cache"
 	DevCacheCategoryNuGetGlobalPackages = "nuget-global-packages"
 	DevCacheCategoryCorepack            = "corepack-cache"
+	DevCacheCategoryUV                  = "uv-cache"
 	DevCacheCategoryAll                 = "dev-caches"
 )
 
@@ -181,6 +182,7 @@ const (
 	ApplicationNuGet                       = "nuget"
 	ApplicationNode                        = "node"
 	ApplicationPython                      = "python"
+	ApplicationUV                          = "uv"
 	RunningApplicationStateRunning         = RunningApplicationStatus("running")
 	RunningApplicationStateIdle            = RunningApplicationStatus("idle")
 	RunningApplicationStateUnknown         = RunningApplicationStatus("unknown")

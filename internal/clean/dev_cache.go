@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // ResolveDevCachePaths resolves developer tool cache paths using only
@@ -149,6 +150,22 @@ func resolveCorepackOptInCachePaths(deps devCachePathDependencies) []string {
 	}
 	if base != "" {
 		return []string{deps.joinPath(base, "node", "corepack", "v1")}
+	}
+	return nil
+}
+
+func resolveUVCachePaths(deps devCachePathDependencies) []string {
+	// uv: non-empty UV_CACHE_DIR -> %LOCALAPPDATA%\uv\cache
+	// Blank/whitespace UV_CACHE_DIR is ignored so the Windows default still applies.
+	// Execute never reads pyproject.toml/uv.toml or runs uv commands; invocation-
+	// specific --cache-dir remains discoverable only via the Review suggestion probe.
+	if path, ok := deps.lookupEnv("UV_CACHE_DIR"); ok {
+		if trimmed := strings.TrimSpace(path); trimmed != "" {
+			return []string{trimmed}
+		}
+	}
+	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
+		return []string{deps.joinPath(localAppData, "uv", "cache")}
 	}
 	return nil
 }

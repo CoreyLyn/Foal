@@ -189,6 +189,8 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationNuGet, displayName: "NuGet", executables: []string{"nuget.exe"}},
 	{id: ApplicationNode, displayName: "Node.js", executables: []string{"node.exe"}},
 	{id: ApplicationPython, displayName: "Python", executables: []string{"python.exe"}},
+	// uv and uvx are one logical application: either process means the tool is running.
+	{id: ApplicationUV, displayName: "uv", executables: []string{"uv.exe", "uvx.exe"}},
 }
 
 // categoryCatalogEntry is the private canonical registration point. Public
@@ -273,6 +275,12 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		categoryDefinition(DevCacheCategoryCorepack, "Corepack cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
 		resolveCorepackOptInCachePaths,
 		[]string{"corepack"},
+	),
+	developerCacheEntry(
+		categoryDefinition(DevCacheCategoryUV, "uv cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		resolveUVCachePaths,
+		[]string{"uv"},
+		ApplicationUV,
 	),
 	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable)},
 }

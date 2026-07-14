@@ -351,4 +351,70 @@ func TestDevCachePathResolution(t *testing.T) {
 			t.Fatalf("expected 0 paths when no resolution, got %d", len(paths))
 		}
 	})
+
+	t.Run("env-wins: uv uses non-empty UV_CACHE_DIR only when set", func(t *testing.T) {
+		deps := devCachePathDependencies{
+			lookupEnv: func(key string) (string, bool) {
+				if key == "UV_CACHE_DIR" {
+					return "C:\\custom\\uv-cache", true
+				}
+				if key == "LOCALAPPDATA" {
+					return "C:\\Users\\test\\AppData\\Local", true
+				}
+				return "", false
+			},
+			joinPath: func(parts ...string) string {
+				return strings.Join(parts, "\\")
+			},
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryUV, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path, got %d", len(paths))
+		}
+		if paths[0] != "C:\\custom\\uv-cache" {
+			t.Errorf("expected env path, got %q", paths[0])
+		}
+
+		// Whitespace-only UV_CACHE_DIR falls through to default.
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "UV_CACHE_DIR" {
+				return "   ", true
+			}
+			if key == "LOCALAPPDATA" {
+				return "C:\\Users\\test\\AppData\\Local", true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryUV, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 default path after blank UV_CACHE_DIR, got %d", len(paths))
+		}
+		if paths[0] != "C:\\Users\\test\\AppData\\Local\\uv\\cache" {
+			t.Errorf("expected default path, got %q", paths[0])
+		}
+
+		// Env not set: Windows standard user cache under uv\cache.
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "LOCALAPPDATA" {
+				return "C:\\Users\\test\\AppData\\Local", true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryUV, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path, got %d", len(paths))
+		}
+		if paths[0] != "C:\\Users\\test\\AppData\\Local\\uv\\cache" {
+			t.Errorf("expected default path, got %q", paths[0])
+		}
+
+		// Missing LOCALAPPDATA: no candidate root.
+		deps.lookupEnv = func(key string) (string, bool) {
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryUV, deps)
+		if len(paths) != 0 {
+			t.Fatalf("expected 0 paths when no resolution, got %d", len(paths))
+		}
+	})
 }

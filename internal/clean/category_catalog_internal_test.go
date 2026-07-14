@@ -120,6 +120,7 @@ func TestCanonicalDeveloperCacheRegistryBindsResolvers(t *testing.T) {
 		DevCacheCategoryNuGet:               `C:\Users\test\AppData\Local\NuGet\v3-cache`,
 		DevCacheCategoryNuGetGlobalPackages: `C:\Users\test\.nuget\packages`,
 		DevCacheCategoryCorepack:            `C:\Users\test\AppData\Local\node\corepack\v1`,
+		DevCacheCategoryUV:                  `C:\Users\test\AppData\Local\uv\cache`,
 	}
 	for category, wantPath := range want {
 		paths := resolveDevCachePaths(category, deps)
