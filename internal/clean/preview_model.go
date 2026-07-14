@@ -120,6 +120,11 @@ const administratorOnlyCacheBoundaryNotice = "Permission boundary: administrator
 // cache reclaim; Foal must not present this as zero-impact cleanup.
 const uvCacheOptInImpactNotice = "Opt-in uv cache cleanup may require re-downloading dependencies and rebuilding disposable tool environments. It is not zero-impact."
 
+// bunCacheOptInImpactNotice is shown when bun-cache is an Opt-in candidate.
+// Clearing Bun's global install cache may require future dependency downloads,
+// and hardlinked project content can reduce actual reclaimable disk space.
+const bunCacheOptInImpactNotice = "Opt-in Bun cache cleanup may require re-downloading dependencies. Hardlinked project content can affect actual disk space reclaimed."
+
 type PreviewReportCategory struct {
 	Name  string
 	Lines []string
@@ -203,14 +208,26 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
+	var hasUVOptIn, hasBunOptIn bool
 	for _, candidate := range result.OptInCandidates {
-		if candidate.Category == DevCacheCategoryUV {
-			notices = append(notices, PreviewNotice{
-				Kind:    "opt_in_impact",
-				Message: uvCacheOptInImpactNotice,
-			})
-			break
+		switch candidate.Category {
+		case DevCacheCategoryUV:
+			hasUVOptIn = true
+		case DevCacheCategoryBun:
+			hasBunOptIn = true
 		}
+	}
+	if hasUVOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: uvCacheOptInImpactNotice,
+		})
+	}
+	if hasBunOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: bunCacheOptInImpactNotice,
+		})
 	}
 
 	reviewSuggestions := make([]PreviewReviewSuggestion, 0, len(result.ReviewSuggestions))

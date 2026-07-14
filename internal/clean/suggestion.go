@@ -18,7 +18,12 @@ type reviewSuggestionProbe struct {
 	queryArgs    []string
 	cleanCommand string
 	parsePaths   func([]byte) []string
+	// resolvePaths resolves paths without spawning the tool (Corepack-style).
 	resolvePaths func(reviewSuggestionDependencies) []string
+	// fallbackResolvePaths is used when a query fails, times out, or yields no
+	// usable existing path. Bun uses this so Review discovery is not coupled to
+	// the caller's current working directory (bun pm cache requires package.json).
+	fallbackResolvePaths func(reviewSuggestionDependencies) []string
 }
 
 type reviewSuggestionTool struct {
@@ -49,9 +54,10 @@ var reviewSuggestionAllowlist = map[string]reviewSuggestionTool{
 	},
 	"bun": {
 		probes: []reviewSuggestionProbe{{
-			label:        "bun cache",
-			queryArgs:    []string{"pm", "cache"},
-			cleanCommand: "bun pm cache rm",
+			label:                "bun cache",
+			queryArgs:            []string{"pm", "cache"},
+			cleanCommand:         "bun pm cache rm",
+			fallbackResolvePaths: resolveBunReviewCachePaths,
 		}},
 	},
 	"pip": {
@@ -167,9 +173,19 @@ func discoverReviewSuggestions(ctx context.Context, tools []string, deps reviewS
 				queryErr := queryCtx.Err()
 				cancel()
 				if err != nil || queryErr != nil {
-					continue
+					// Prefer a successful query; fall back only when configured
+					// (Bun: CWD-sensitive pm cache must not hide the official root).
+					if probe.fallbackResolvePaths == nil {
+						continue
+					}
+					paths = probe.fallbackResolvePaths(deps)
+				} else {
+					paths = parseReviewSuggestionPaths(probe, output)
+					// Query succeeded but no usable existing path: fall back.
+					if probe.fallbackResolvePaths != nil && firstExistingCachePath(paths, deps.pathExists) == "" {
+						paths = probe.fallbackResolvePaths(deps)
+					}
 				}
-				paths = parseReviewSuggestionPaths(probe, output)
 			}
 			// Emit a separate suggestion for each existing path
 			for _, path := range paths {
@@ -225,6 +241,20 @@ func resolveCorepackCachePaths(deps reviewSuggestionDependencies) []string {
 		corepackHome = deps.joinPath(base, "node", "corepack")
 	}
 	return []string{deps.joinPath(corepackHome, "v1")}
+}
+
+// resolveBunReviewCachePaths is the Dry-run Review fallback when bun pm cache
+// fails (for example outside a Bun project), times out, or returns no usable
+// existing path. It reuses the Execute env/default resolver so Review and
+// Opt-in share the same official roots; custom probe paths remain preferred
+// when the query succeeds.
+func resolveBunReviewCachePaths(deps reviewSuggestionDependencies) []string {
+	return resolveBunCachePaths(devCachePathDependencies{
+		lookupEnv:   deps.lookupEnv,
+		userHomeDir: deps.userHomeDir,
+		joinPath:    deps.joinPath,
+		goos:        deps.goos,
+	})
 }
 
 func parseReviewSuggestionPaths(probe reviewSuggestionProbe, output []byte) []string {

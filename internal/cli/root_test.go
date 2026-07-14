@@ -2033,6 +2033,7 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.DevCacheCategoryNuGetGlobalPackages,
 		clean.DevCacheCategoryCorepack,
 		clean.DevCacheCategoryUV,
+		clean.DevCacheCategoryBun,
 	}
 	want := append(expectedOpportunities, expectedDevCaches...)
 	if len(capturedOpts.OptIn) != len(want) {
@@ -2080,6 +2081,7 @@ func TestCleanOptInInvalidName(t *testing.T) {
 		"nuget-global-packages",
 		"corepack-cache",
 		"uv-cache",
+		"bun-cache",
 		"dev-caches",
 		"all",
 	}

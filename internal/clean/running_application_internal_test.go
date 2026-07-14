@@ -50,6 +50,7 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 		ApplicationNode,
 		ApplicationPython,
 		ApplicationUV,
+		ApplicationBun,
 	}
 	if len(states) != len(wantOrder) {
 		t.Fatalf("states = %#v, want %d entries", states, len(wantOrder))
@@ -102,5 +103,39 @@ func TestDetectSupportedApplicationsTreatsUVxAsUV(t *testing.T) {
 	}
 	if uvState.State != RunningApplicationStateRunning {
 		t.Fatalf("uv state with uvx.exe = %#v, want running", uvState)
+	}
+}
+
+func TestClassifyProcessByExecutablesSupportsBunAndBunx(t *testing.T) {
+	executables := []string{"bun.exe", "bunx.exe"}
+	if got := classifyProcessByExecutables(ApplicationBun, executables, []string{"other.exe", "bunx.exe"}); got.State != RunningApplicationStateRunning {
+		t.Fatalf("bunx.exe state = %#v, want running", got)
+	}
+	if got := classifyProcessByExecutables(ApplicationBun, executables, []string{"BUN.EXE"}); got.State != RunningApplicationStateRunning {
+		t.Fatalf("case-insensitive bun.exe state = %#v, want running", got)
+	}
+	if got := classifyProcessByExecutables(ApplicationBun, executables, []string{"notepad.exe"}); got.State != RunningApplicationStateIdle {
+		t.Fatalf("idle state = %#v, want idle", got)
+	}
+}
+
+func TestDetectSupportedApplicationsTreatsBunxAsBun(t *testing.T) {
+	states := detectSupportedApplications(context.Background(), func(context.Context) processSnapshot {
+		return processSnapshot{Names: []string{"bunx.exe", "notepad.exe"}}
+	})
+	var bunState RunningApplicationState
+	found := false
+	for _, state := range states {
+		if state.Application == ApplicationBun {
+			bunState = state
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected bun application state")
+	}
+	if bunState.State != RunningApplicationStateRunning {
+		t.Fatalf("bun state with bunx.exe = %#v, want running", bunState)
 	}
 }
