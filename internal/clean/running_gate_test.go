@@ -2,6 +2,7 @@ package clean
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -11,73 +12,233 @@ func TestDevCacheGateTier(t *testing.T) {
 			t.Errorf("devCacheGateTier(%q) = %v, want none", c, got)
 		}
 	}
-	for _, c := range []string{DevCacheCategoryGo, DevCacheCategoryCargo, DevCacheCategoryNuGet} {
-		if got := devCacheGateTier(c); got != runningGateTierSingle {
-			t.Errorf("devCacheGateTier(%q) = %v, want single", c, got)
+	for _, c := range []string{DevCacheCategoryGo, DevCacheCategoryCargo, DevCacheCategoryNuGet, DevCacheCategoryNuGetGlobalPackages} {
+		if got := devCacheGateTier(c); got != runningGateTierBeforeAfter {
+			t.Errorf("devCacheGateTier(%q) = %v, want before/after", c, got)
 		}
 	}
 }
 
-func TestGateDevCacheNoneTierAlwaysProceeds(t *testing.T) {
-	g := runningGate{}
-	// None-tier proceeds even when an unrelated tool is running.
-	states := []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateRunning}}
+func TestPlanNeedsDistinctiveProcessDetection(t *testing.T) {
+	if planNeedsDistinctiveProcessDetection(nil) {
+		t.Fatal("empty plan should not need detection")
+	}
+	if planNeedsDistinctiveProcessDetection(map[string]bool{DevCacheCategoryNPM: true}) {
+		t.Fatal("shared-runtime only should not need distinctive-process detection")
+	}
+	if !planNeedsDistinctiveProcessDetection(map[string]bool{DevCacheCategoryGo: true}) {
+		t.Fatal("go-cache should need distinctive-process detection")
+	}
+	if !planNeedsDistinctiveProcessDetection(map[string]bool{
+		DevCacheCategoryNPM: true,
+		DevCacheCategoryGo:  true,
+	}) {
+		t.Fatal("mixed plan with go-cache should need detection")
+	}
+}
+
+func TestGateDevCacheRootNoneTierAlwaysProceeds(t *testing.T) {
+	// None-tier proceeds even when an unrelated tool is running; no detect call.
+	detectCalled := false
+	g := runningGate{detect: func(context.Context) []RunningApplicationState {
+		detectCalled = true
+		return []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateRunning}}
+	}}
+	pre := []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateRunning}}
 	for _, category := range []string{DevCacheCategoryNPM, DevCacheCategoryPip, DevCacheCategoryCorepack} {
-		outcome := g.gateDevCache(category, `C:\cache`, states)
-		if !outcome.proceed || outcome.skipReason != nil {
-			t.Fatalf("none-tier %q: outcome = %+v, want proceed", category, outcome)
+		detectCalled = false
+		measureCalled := false
+		outcome := g.gateDevCacheRoot(context.Background(), category, `C:\cache`, pre, func() (int64, error) {
+			measureCalled = true
+			return 42, nil
+		})
+		if !outcome.proceed || outcome.skipReason != nil || outcome.bytes != 42 {
+			t.Fatalf("none-tier %q: outcome = %+v, want proceed with 42 bytes", category, outcome)
+		}
+		if !measureCalled {
+			t.Fatalf("none-tier %q: measure should run", category)
+		}
+		if detectCalled {
+			t.Fatalf("none-tier %q: post detect should not run", category)
 		}
 	}
 }
 
-func TestGateDevCacheSingleTier(t *testing.T) {
-	g := runningGate{}
+func TestGateDevCacheRootStateSequences(t *testing.T) {
 	const path = `C:\go-cache`
+	const measured int64 = 100
 
-	// idle -> proceed
-	outcome := g.gateDevCache(DevCacheCategoryGo, path, []RunningApplicationState{
-		{Application: ApplicationGo, State: RunningApplicationStateIdle},
+	// Controllable detector sequences: each post-check call returns the next state.
+	newGate := func(states ...RunningApplicationStatus) (runningGate, *int) {
+		call := 0
+		g := runningGate{detect: func(context.Context) []RunningApplicationState {
+			state := states[len(states)-1]
+			if call < len(states) {
+				state = states[call]
+			}
+			call++
+			return []RunningApplicationState{{Application: ApplicationGo, State: state}}
+		}}
+		return g, &call
+	}
+
+	t.Run("idle to idle proceeds with measured bytes", func(t *testing.T) {
+		g, detectCalls := newGate(RunningApplicationStateIdle)
+		// preStates supplied by caller (first check); post uses detect.
+		pre := []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateIdle}}
+		measureCalled := false
+		outcome := g.gateDevCacheRoot(context.Background(), DevCacheCategoryGo, path, pre, func() (int64, error) {
+			measureCalled = true
+			return measured, nil
+		})
+		if !outcome.proceed || outcome.skipReason != nil || outcome.bytes != measured {
+			t.Fatalf("idle→idle: outcome = %+v, want proceed with %d", outcome, measured)
+		}
+		if !measureCalled {
+			t.Fatal("idle→idle: measure should run")
+		}
+		if *detectCalls != 1 {
+			t.Fatalf("idle→idle: post detect calls = %d, want 1", *detectCalls)
+		}
 	})
-	if !outcome.proceed || outcome.skipReason != nil {
-		t.Fatalf("idle go: outcome = %+v, want proceed", outcome)
-	}
 
-	// running -> skip with reason carrying path + category
-	outcome = g.gateDevCache(DevCacheCategoryGo, path, []RunningApplicationState{
-		{Application: ApplicationGo, State: RunningApplicationStateRunning},
+	t.Run("idle to running discards measurement", func(t *testing.T) {
+		g, _ := newGate(RunningApplicationStateRunning)
+		pre := []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateIdle}}
+		outcome := g.gateDevCacheRoot(context.Background(), DevCacheCategoryGo, path, pre, func() (int64, error) {
+			return measured, nil
+		})
+		if outcome.proceed || outcome.skipReason == nil || outcome.bytes != 0 {
+			t.Fatalf("idle→running: outcome = %+v, want skip discard bytes", outcome)
+		}
+		if outcome.skipReason.Code != devToolRunningIssueCode {
+			t.Errorf("skip code = %q, want %q", outcome.skipReason.Code, devToolRunningIssueCode)
+		}
 	})
-	if outcome.proceed || outcome.skipReason == nil {
-		t.Fatalf("running go: outcome = %+v, want skip", outcome)
-	}
-	if outcome.skipReason.Code != devToolRunningIssueCode {
-		t.Errorf("running go reason code = %q, want %q", outcome.skipReason.Code, devToolRunningIssueCode)
-	}
-	if outcome.skipReason.Path != path {
-		t.Errorf("running go reason path = %q, want %q", outcome.skipReason.Path, path)
-	}
 
-	// unknown -> skip (fail-closed: unknown never means idle)
-	outcome = g.gateDevCache(DevCacheCategoryGo, path, []RunningApplicationState{
-		{Application: ApplicationGo, State: RunningApplicationStateUnknown},
+	t.Run("idle to unknown discards measurement", func(t *testing.T) {
+		g, _ := newGate(RunningApplicationStateUnknown)
+		pre := []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateIdle}}
+		outcome := g.gateDevCacheRoot(context.Background(), DevCacheCategoryGo, path, pre, func() (int64, error) {
+			return measured, nil
+		})
+		if outcome.proceed || outcome.skipReason == nil || outcome.bytes != 0 {
+			t.Fatalf("idle→unknown: outcome = %+v, want skip discard bytes", outcome)
+		}
 	})
-	if outcome.proceed || outcome.skipReason == nil {
-		t.Fatalf("unknown go: outcome = %+v, want skip (fail-closed)", outcome)
-	}
 
-	// absent state -> skip (fail-closed: !ok)
-	outcome = g.gateDevCache(DevCacheCategoryGo, path, nil)
-	if outcome.proceed || outcome.skipReason == nil {
-		t.Fatalf("absent go state: outcome = %+v, want skip (fail-closed)", outcome)
-	}
-
-	// nuget: both dotnet and nuget checked; either running skips
-	outcome = g.gateDevCache(DevCacheCategoryNuGet, path, []RunningApplicationState{
-		{Application: ApplicationDotNet, State: RunningApplicationStateIdle},
-		{Application: ApplicationNuGet, State: RunningApplicationStateRunning},
+	t.Run("idle to missing discards measurement", func(t *testing.T) {
+		// Post detect returns empty states → missing required application state.
+		g := runningGate{detect: func(context.Context) []RunningApplicationState { return nil }}
+		pre := []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateIdle}}
+		outcome := g.gateDevCacheRoot(context.Background(), DevCacheCategoryGo, path, pre, func() (int64, error) {
+			return measured, nil
+		})
+		if outcome.proceed || outcome.skipReason == nil || outcome.bytes != 0 {
+			t.Fatalf("idle→missing: outcome = %+v, want skip discard bytes", outcome)
+		}
 	})
-	if outcome.proceed || outcome.skipReason == nil {
-		t.Fatalf("nuget with nuget running: outcome = %+v, want skip", outcome)
-	}
+
+	t.Run("running at start skips measurement", func(t *testing.T) {
+		detectCalled := false
+		g := runningGate{detect: func(context.Context) []RunningApplicationState {
+			detectCalled = true
+			return nil
+		}}
+		pre := []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateRunning}}
+		measureCalled := false
+		outcome := g.gateDevCacheRoot(context.Background(), DevCacheCategoryGo, path, pre, func() (int64, error) {
+			measureCalled = true
+			return measured, nil
+		})
+		if outcome.proceed || outcome.skipReason == nil {
+			t.Fatalf("running-at-start: outcome = %+v, want skip", outcome)
+		}
+		if measureCalled {
+			t.Fatal("running-at-start: measure must not run")
+		}
+		if detectCalled {
+			t.Fatal("running-at-start: post detect must not run")
+		}
+	})
+
+	t.Run("unknown at start skips measurement", func(t *testing.T) {
+		g := runningGate{}
+		pre := []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateUnknown}}
+		measureCalled := false
+		outcome := g.gateDevCacheRoot(context.Background(), DevCacheCategoryGo, path, pre, func() (int64, error) {
+			measureCalled = true
+			return measured, nil
+		})
+		if outcome.proceed || outcome.skipReason == nil || measureCalled {
+			t.Fatalf("unknown-at-start: outcome = %+v measureCalled=%v, want skip without measure", outcome, measureCalled)
+		}
+	})
+
+	t.Run("missing state at start skips measurement", func(t *testing.T) {
+		g := runningGate{}
+		measureCalled := false
+		outcome := g.gateDevCacheRoot(context.Background(), DevCacheCategoryGo, path, nil, func() (int64, error) {
+			measureCalled = true
+			return measured, nil
+		})
+		if outcome.proceed || outcome.skipReason == nil || measureCalled {
+			t.Fatalf("missing-at-start: outcome = %+v measureCalled=%v, want skip without measure", outcome, measureCalled)
+		}
+	})
+
+	t.Run("measure failure skips post re-check", func(t *testing.T) {
+		detectCalled := false
+		g := runningGate{detect: func(context.Context) []RunningApplicationState {
+			detectCalled = true
+			// Would be idle — must not re-authorize after incomplete measure.
+			return []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateIdle}}
+		}}
+		pre := []RunningApplicationState{{Application: ApplicationGo, State: RunningApplicationStateIdle}}
+		measureErr := errors.New("canceled")
+		outcome := g.gateDevCacheRoot(context.Background(), DevCacheCategoryGo, path, pre, func() (int64, error) {
+			return 0, measureErr
+		})
+		if outcome.proceed || outcome.skipReason != nil || !errors.Is(outcome.measureErr, measureErr) {
+			t.Fatalf("measure failure: outcome = %+v, want measureErr only", outcome)
+		}
+		if detectCalled {
+			t.Fatal("measure failure: post detect must not re-authorize")
+		}
+	})
+
+	t.Run("nuget requires all related apps idle on both checks", func(t *testing.T) {
+		// Pre: both idle. Post: dotnet idle, nuget running → fail closed.
+		g := runningGate{detect: func(context.Context) []RunningApplicationState {
+			return []RunningApplicationState{
+				{Application: ApplicationDotNet, State: RunningApplicationStateIdle},
+				{Application: ApplicationNuGet, State: RunningApplicationStateRunning},
+			}
+		}}
+		pre := []RunningApplicationState{
+			{Application: ApplicationDotNet, State: RunningApplicationStateIdle},
+			{Application: ApplicationNuGet, State: RunningApplicationStateIdle},
+		}
+		outcome := g.gateDevCacheRoot(context.Background(), DevCacheCategoryNuGet, path, pre, func() (int64, error) {
+			return measured, nil
+		})
+		if outcome.proceed || outcome.skipReason == nil || outcome.bytes != 0 {
+			t.Fatalf("nuget multi-app post fail: outcome = %+v, want skip", outcome)
+		}
+
+		// Pre: nuget running → no measure
+		measureCalled := false
+		outcome = g.gateDevCacheRoot(context.Background(), DevCacheCategoryNuGet, path, []RunningApplicationState{
+			{Application: ApplicationDotNet, State: RunningApplicationStateIdle},
+			{Application: ApplicationNuGet, State: RunningApplicationStateRunning},
+		}, func() (int64, error) {
+			measureCalled = true
+			return measured, nil
+		})
+		if outcome.proceed || measureCalled {
+			t.Fatalf("nuget multi-app pre fail: proceed=%v measureCalled=%v", outcome.proceed, measureCalled)
+		}
+	})
 }
 
 func TestGateBrowserPreNotIdleSkipsDiscovery(t *testing.T) {

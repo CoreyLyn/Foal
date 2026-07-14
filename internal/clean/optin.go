@@ -90,11 +90,19 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 	}
 
 	hasDetector := opts.DetectRunningApplications != nil
-	var devCacheStates []RunningApplicationState
-	if hasDetector {
-		// Dev-cache states are used only for gating; they are not reported in
+	// Distinctive-process developer caches need a pre-measurement snapshot and
+	// a post-measurement re-check. Shared-runtime selections alone must not
+	// trigger developer-tool detection (ADR-0008 attribution policy).
+	needsDistinctiveDetection := hasDetector && planNeedsDistinctiveProcessDetection(plan)
+	var devCachePreStates []RunningApplicationState
+	if needsDistinctiveDetection {
+		// Pre-states are used only for gating; they are not reported in
 		// RunningApplications (only browser states are).
-		devCacheStates = opts.DetectRunningApplications(ctx)
+		devCachePreStates = opts.DetectRunningApplications(ctx)
+	}
+	devCacheGate := runningGate{}
+	if needsDistinctiveDetection {
+		devCacheGate.detect = opts.DetectRunningApplications
 	}
 
 	resolveDevCache := opts.DevCachePathResolver
@@ -102,7 +110,8 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 		resolveDevCache = ResolveDevCachePaths
 	}
 
-	// Developer-tool caches.
+	// Developer-tool caches. Each root is gated and measured independently so
+	// discarding one root never authorizes or double-counts another.
 	for _, category := range developerCacheCategoryIDs() {
 		if !plan[category] {
 			continue
@@ -112,21 +121,41 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 			if path == "" || opts.Validator.IsUserProtected(path) {
 				continue
 			}
-			if hasDetector {
-				if outcome := (runningGate{}).gateDevCache(category, path, devCacheStates); !outcome.proceed {
-					if outcome.skipReason != nil {
-						if bytes, err := measureBytes(ctx, path); err == nil {
-							res.skipped = append(res.skipped, SkippedItem{
-								Path:   path,
-								Bytes:  bytes,
-								Rule:   category,
-								Reason: *outcome.skipReason,
-							})
-						}
+			// Without a detector, tests and shared-runtime-only paths measure
+			// directly. Distinctive-process categories with a detector always
+			// go through pre/measure/post so Dry-run and Execute share results.
+			if needsDistinctiveDetection && devCacheGateTier(category) == runningGateTierBeforeAfter {
+				outcome := devCacheGate.gateDevCacheRoot(ctx, category, path, devCachePreStates, func() (int64, error) {
+					return measureBytes(ctx, path)
+				})
+				if outcome.measureErr != nil {
+					if ctx.Err() != nil {
+						res.diagnostics = append(res.diagnostics, issue("context_canceled", ctx.Err().Error(), true, path, category))
 					}
 					continue
 				}
+				if !outcome.proceed {
+					if outcome.skipReason != nil {
+						// Structured safety skip without reclaimable bytes: pre
+						// gate never measured; post gate discarded the measure.
+						res.skipped = append(res.skipped, SkippedItem{
+							Path:   path,
+							Bytes:  0,
+							Rule:   category,
+							Reason: *outcome.skipReason,
+						})
+					}
+					continue
+				}
+				res.candidates = append(res.candidates, OptInCandidate{
+					Path:          path,
+					Bytes:         outcome.bytes,
+					Category:      category,
+					PlannedAction: plannedRecycleBinAction,
+				})
+				continue
 			}
+
 			bytes, err := measureBytes(ctx, path)
 			if err != nil {
 				// Failed or canceled measurement yields no candidate; non-canceled

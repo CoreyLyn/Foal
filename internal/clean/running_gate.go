@@ -7,16 +7,18 @@ import (
 
 // runningGate centralizes running-application gating: the tier table (which
 // opt-in categories need which check), the three-state fail-closed rule
-// (unknown never means idle), and the browser pre/discover/post sequence.
-// Discovery is injected so the gate is testable without filesystem access.
+// (unknown never means idle), browser pre/discover/post, and distinctive-
+// process developer-cache pre/measure/post. Discovery and measurement are
+// injected so the gate is testable without filesystem access.
 //
 // Two consumers cross this seam: the opt-in candidate resolver and the dry-run
 // review projection. The running/idle/unknown rule and the tier policy live
 // here once, not re-derived at each call site.
 type runningGate struct {
-	// detect returns the current running-application states. It is used for
-	// the browser post-discovery re-check. Callers that only gate dev caches
-	// (single-check, against pre-detected states) may leave it nil.
+	// detect returns the current running-application states. Used for the
+	// browser post-discovery re-check and the distinctive-process developer-
+	// cache post-measurement re-check. Callers that only need a single-shot
+	// state list may leave it nil when they never enter those paths.
 	detect func(context.Context) []RunningApplicationState
 }
 
@@ -27,18 +29,34 @@ const (
 	// runningGateTierNone: shared-runtime tools (npm/pip/corepack) run under a
 	// shared runtime and cannot be attributed to the tool, so no check is made.
 	runningGateTierNone runningGateTier = iota
-	// runningGateTierSingle: distinctive-process tools (go/cargo/nuget) get one
-	// state check before cleanup.
-	runningGateTierSingle
+	// runningGateTierBeforeAfter: distinctive-process tools (go/cargo/nuget)
+	// must be idle before measurement and again after measurement before the
+	// root becomes an Opt-in candidate.
+	runningGateTierBeforeAfter
 )
 
 // devCacheGateTier returns the gate tier for a developer-tool cache category.
 func devCacheGateTier(category string) runningGateTier {
 	entry, ok := canonicalCategoryEntry(category)
 	if ok && entry.definition.RunningApplicationPolicy == RunningApplicationPolicyDistinctiveProcessIdle {
-		return runningGateTierSingle
+		return runningGateTierBeforeAfter
 	}
 	return runningGateTierNone
+}
+
+// planNeedsDistinctiveProcessDetection reports whether the opt-in plan selects
+// any distinctive-process developer-cache category. Shared-runtime selections
+// alone must not trigger developer-tool process detection.
+func planNeedsDistinctiveProcessDetection(plan map[string]bool) bool {
+	for category, enabled := range plan {
+		if !enabled {
+			continue
+		}
+		if isDevCacheCategory(category) && devCacheGateTier(category) == runningGateTierBeforeAfter {
+			return true
+		}
+	}
+	return false
 }
 
 // devCacheCategoryToApplications maps a dev-cache category to the application(s)
@@ -51,33 +69,82 @@ func devCacheCategoryToApplications(category string) []string {
 	return append([]string(nil), entry.runningApplications...)
 }
 
-// devCacheGateOutcome is the result of gating a dev-cache category.
+// devCacheGateOutcome is the result of gating a developer-cache root through
+// the tier-appropriate running-application checks around measurement.
 type devCacheGateOutcome struct {
-	// proceed is true when the category may be cleaned (no tier, or the tool
-	// is idle). When false, skipReason is set.
+	// proceed is true when the root may become an Opt-in candidate: either the
+	// category has no running-application tier, or every related application
+	// was idle before and after a successful measurement.
 	proceed bool
-	// skipReason is the structured skip reason when a tool is running or its
-	// state is unknown. nil when proceed is true or the category has no tier.
+	// bytes is the measured size when proceed is true. Post-gate discards do
+	// not expose measured bytes here so callers cannot reclaim them.
+	bytes int64
+	// measureErr is set when measurement failed or was canceled. When set,
+	// proceed is false, skipReason is nil, and the post re-check did not run
+	// (cancellation must not be re-authorized by a second idle check).
+	measureErr error
+	// skipReason is the structured skip reason when a tool is running, unknown,
+	// or missing required state on the pre- or post-check. nil when proceed is
+	// true or when measurement failed without a gate skip.
 	skipReason *StructuredIssue
 }
 
-// gateDevCache applies the single-check tier for a dev-cache category against
-// already-detected states. None-tier categories always proceed. path and
-// category are included in the skip reason so callers can build a SkippedItem
-// directly. gateDevCache does not measure bytes; the caller fresh-measures.
-func (g runningGate) gateDevCache(category, path string, states []RunningApplicationState) devCacheGateOutcome {
-	if devCacheGateTier(category) == runningGateTierNone {
-		return devCacheGateOutcome{proceed: true}
-	}
+// appsIdleForDevCache reports whether every application tied to the category is
+// idle in states. Missing state, running, and unknown all fail closed.
+func appsIdleForDevCache(category, path string, states []RunningApplicationState) (bool, *StructuredIssue) {
 	apps := devCacheCategoryToApplications(category)
 	for _, app := range apps {
 		state, ok := runningApplicationStateFor(states, app)
 		if !ok || state.State == RunningApplicationStateRunning || state.State == RunningApplicationStateUnknown {
 			reason := devToolRunningSkipIssue(apps, path, category)
-			return devCacheGateOutcome{proceed: false, skipReason: &reason}
+			return false, &reason
 		}
 	}
-	return devCacheGateOutcome{proceed: true}
+	return true, nil
+}
+
+// gateDevCacheRoot applies the developer-cache running-application gate around
+// an injected measurement for one resolved root.
+//
+// None-tier categories measure immediately with no process check.
+// Before/after-tier categories require all related applications idle in
+// preStates before measuring; after a successful measurement they re-detect
+// via g.detect and require idle again before proceed. A failed or canceled
+// measurement never runs the post re-check.
+func (g runningGate) gateDevCacheRoot(
+	ctx context.Context,
+	category, path string,
+	preStates []RunningApplicationState,
+	measure func() (int64, error),
+) devCacheGateOutcome {
+	if devCacheGateTier(category) == runningGateTierNone {
+		bytes, err := measure()
+		if err != nil {
+			return devCacheGateOutcome{measureErr: err}
+		}
+		return devCacheGateOutcome{proceed: true, bytes: bytes}
+	}
+
+	if idle, reason := appsIdleForDevCache(category, path, preStates); !idle {
+		return devCacheGateOutcome{skipReason: reason}
+	}
+
+	bytes, err := measure()
+	if err != nil {
+		// Incomplete measurement: do not run the post re-check and do not
+		// surface partial bytes as reclaimable evidence.
+		return devCacheGateOutcome{measureErr: err}
+	}
+
+	var postStates []RunningApplicationState
+	if g.detect != nil {
+		postStates = g.detect(ctx)
+	}
+	if idle, reason := appsIdleForDevCache(category, path, postStates); !idle {
+		// Discard the successful measurement: no candidate bytes.
+		return devCacheGateOutcome{skipReason: reason}
+	}
+	return devCacheGateOutcome{proceed: true, bytes: bytes}
 }
 
 // devToolRunningSkipIssue builds the skip reason for a dev cache gated out by a
