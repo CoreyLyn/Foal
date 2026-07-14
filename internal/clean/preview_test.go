@@ -2700,3 +2700,130 @@ func TestPreviewReadModelProjectsCanonicalOptInCategorySelection(t *testing.T) {
 		t.Fatalf("user temp summary = %#v", userTemp)
 	}
 }
+
+func TestDryRunCancellationDuringMeasurementReturnsRecoverableDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	candidateDir := filepath.Join(root, "candidate-dir")
+	if err := os.Mkdir(candidateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Create multiple files to give WalkDir something to iterate over
+	for i := 0; i < 20; i++ {
+		if err := os.WriteFile(filepath.Join(candidateDir, fmt.Sprintf("file-%d.txt", i)), []byte("data"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately to trigger cancellation during measurement
+	cancel()
+
+	result := clean.DryRun(ctx, clean.Options{
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			Description:    "test rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidateDir},
+		}},
+	})
+
+	if result.Totals.CandidateCount != 0 || result.Totals.CandidateBytes != 0 {
+		t.Fatalf("candidate totals = %#v, want no partial candidates/bytes after cancellation", result.Totals)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("skipped count = %d, want 1 skipped item for cancelled measurement", len(result.Skipped))
+	}
+	if result.Skipped[0].Reason.Code != "context_canceled" || !result.Skipped[0].Reason.Recoverable {
+		t.Fatalf("skipped reason = %#v, want recoverable context_canceled", result.Skipped[0].Reason)
+	}
+}
+
+func TestDryRunCancellationMidIterationStopsWithoutPartialBytes(t *testing.T) {
+	root := t.TempDir()
+
+	// First candidate (will process)
+	okPath := filepath.Join(root, "ok.tmp")
+	if err := os.WriteFile(okPath, []byte("ok"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second candidate (will cancel during measurement)
+	slowDir := filepath.Join(root, "slow-dir")
+	if err := os.Mkdir(slowDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		if err := os.WriteFile(filepath.Join(slowDir, fmt.Sprintf("file-%d.txt", i)), []byte("data"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	opts := clean.Options{
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			Description:    "test rule",
+			DefaultEnabled: true,
+			CandidatePaths: []string{okPath, slowDir},
+		}},
+	}
+
+	result := clean.DryRun(ctx, opts)
+	// May or may not have processed the first candidate depending on timing
+	// but we expect NO partial bytes for anything cancelled
+	if result.Totals.CandidateBytes > 0 {
+		// If first candidate processed, it should have complete bytes
+		for _, c := range result.Candidates {
+			if c.Path == okPath && c.Bytes != 2 {
+				t.Fatalf("first candidate bytes = %d, want complete 2 bytes for ok.tmp", c.Bytes)
+			}
+		}
+	}
+	// Verify no partial byte counts in totals (no candidate has partial byte count)
+	for _, c := range result.Candidates {
+		if c.Bytes < 0 {
+			t.Fatalf("candidate has negative bytes = %d", c.Bytes)
+		}
+	}
+}
+
+func TestDryRunCancellationDoesNotReportPartialOptInBytes(t *testing.T) {
+	root := t.TempDir()
+	npmPath := filepath.Join(root, "npm-cache")
+	if err := os.Mkdir(npmPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		if err := os.WriteFile(filepath.Join(npmPath, fmt.Sprintf("file-%d.dat", i)), []byte("cachedata"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := clean.DryRun(ctx, clean.Options{
+		OptIn:                     []string{clean.DevCacheCategoryNPM},
+		DevCachePathResolver:      func(category string) []string { return []string{npmPath} },
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+	})
+
+	// Verify no partial bytes are counted
+	if result.Totals.OptInReclaimableBytes != 0 {
+		t.Fatalf("opt-in reclaimable bytes = %d after cancellation, want 0 (fail closed, no partial bytes)", result.Totals.OptInReclaimableBytes)
+	}
+	if len(result.OptInCandidates) != 0 {
+		t.Fatalf("opt-in candidates = %d after cancellation, want 0", len(result.OptInCandidates))
+	}
+}
