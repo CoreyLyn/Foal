@@ -27,6 +27,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryUV,
 			clean.DevCacheCategoryBun,
 			clean.DevCacheCategoryPlaywright,
+			clean.DevCacheCategoryPuppeteerBrowsers,
 			clean.OpportunityCategoryVSCodeCache,
 			clean.OpportunityCategoryCursorCache,
 		}
@@ -35,8 +36,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"dev-caches\"", cat)
 			}
 		}
-		if len(enabled) != 12 {
-			t.Fatalf("expected 12 enabled developer-tools categories, got %d", len(enabled))
+		if len(enabled) != 13 {
+			t.Fatalf("expected 13 enabled developer-tools categories, got %d", len(enabled))
 		}
 		// Verify valid names include dev categories and dev-caches
 		found := make(map[string]bool)
@@ -81,6 +82,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryUV,
 			clean.DevCacheCategoryBun,
 			clean.DevCacheCategoryPlaywright,
+			clean.DevCacheCategoryPuppeteerBrowsers,
 		}
 		for _, cat := range expectedOpportunities {
 			if !enabled[cat] {
@@ -92,8 +94,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"all\"", cat)
 			}
 		}
-		if len(enabled) != 10+10 {
-			t.Fatalf("expected 20 enabled categories (10+10), got %d", len(enabled))
+		if len(enabled) != 10+11 {
+			t.Fatalf("expected 21 enabled categories (10+11), got %d", len(enabled))
 		}
 	})
 
@@ -109,6 +111,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryUV,
 			clean.DevCacheCategoryBun,
 			clean.DevCacheCategoryPlaywright,
+			clean.DevCacheCategoryPuppeteerBrowsers,
 		}
 		for _, cat := range devCaches {
 			t.Run(cat, func(t *testing.T) {
@@ -178,10 +181,10 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 		}
 	})
 
-	t.Run("dev-caches enables all 9 dev caches", func(t *testing.T) {
+	t.Run("dev-caches enables all developer-cache categories", func(t *testing.T) {
 		root := t.TempDir()
 		cachePaths := make(map[string]string)
-		devCaches := []string{
+		wholeRootCaches := []string{
 			clean.DevCacheCategoryNPM,
 			clean.DevCacheCategoryGo,
 			clean.DevCacheCategoryPip,
@@ -192,7 +195,7 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryUV,
 			clean.DevCacheCategoryBun,
 		}
-		for _, cat := range devCaches {
+		for _, cat := range wholeRootCaches {
 			cachePath := filepath.Join(root, cat)
 			if err := os.Mkdir(cachePath, 0700); err != nil {
 				t.Fatal(err)
@@ -203,6 +206,29 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			}
 			cachePaths[cat] = cachePath
 		}
+		// Playwright needs complete allowlisted revision children with INSTALLATION_COMPLETE.
+		playwrightRoot := filepath.Join(root, "ms-playwright")
+		pwInstall := filepath.Join(playwrightRoot, "chromium-1")
+		if err := os.MkdirAll(pwInstall, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pwInstall, "INSTALLATION_COMPLETE"), []byte("ok"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pwInstall, "data.bin"), []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cachePaths[clean.DevCacheCategoryPlaywright] = playwrightRoot
+		// Puppeteer needs structured product/platform-version children.
+		puppeteerRoot := filepath.Join(root, "puppeteer")
+		install := filepath.Join(puppeteerRoot, "chrome", "win64-1.0.0")
+		if err := os.MkdirAll(install, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(install, "data.bin"), []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cachePaths[clean.DevCacheCategoryPuppeteerBrowsers] = puppeteerRoot
 
 		fakeResolver := func(category string) []string {
 			if path, ok := cachePaths[category]; ok {
@@ -218,8 +244,10 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			DiscoverReviewSuggestions: noReviewSuggestions,
 		})
 
-		if len(result.OptInCandidates) != 9 {
-			t.Fatalf("expected 9 opt-in candidates, got %d", len(result.OptInCandidates))
+		// 9 whole-root + 1 playwright install child + 1 puppeteer install child
+		// (vscode/cursor need detector).
+		if len(result.OptInCandidates) != 11 {
+			t.Fatalf("expected 11 opt-in candidates, got %d: %#v", len(result.OptInCandidates), result.OptInCandidates)
 		}
 	})
 
@@ -455,10 +483,10 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 		}
 	})
 
-	t.Run("dev-caches enables all 9 dev caches for execute", func(t *testing.T) {
+	t.Run("dev-caches enables all developer-cache categories for execute", func(t *testing.T) {
 		root := t.TempDir()
 		cachePaths := make(map[string]string)
-		devCaches := []string{
+		wholeRootCaches := []string{
 			clean.DevCacheCategoryNPM,
 			clean.DevCacheCategoryGo,
 			clean.DevCacheCategoryPip,
@@ -469,7 +497,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryUV,
 			clean.DevCacheCategoryBun,
 		}
-		for _, cat := range devCaches {
+		for _, cat := range wholeRootCaches {
 			cachePath := filepath.Join(root, cat)
 			if err := os.Mkdir(cachePath, 0700); err != nil {
 				t.Fatal(err)
@@ -480,6 +508,27 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}
 			cachePaths[cat] = cachePath
 		}
+		playwrightRoot := filepath.Join(root, "ms-playwright")
+		pwInstall := filepath.Join(playwrightRoot, "chromium-1")
+		if err := os.MkdirAll(pwInstall, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pwInstall, "INSTALLATION_COMPLETE"), []byte("ok"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pwInstall, "data.bin"), []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cachePaths[clean.DevCacheCategoryPlaywright] = playwrightRoot
+		puppeteerRoot := filepath.Join(root, "puppeteer")
+		install := filepath.Join(puppeteerRoot, "chrome", "win64-1.0.0")
+		if err := os.MkdirAll(install, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(install, "data.bin"), []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cachePaths[clean.DevCacheCategoryPuppeteerBrowsers] = puppeteerRoot
 
 		fakeResolver := func(category string) []string {
 			if path, ok := cachePaths[category]; ok {
@@ -502,13 +551,13 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}},
 		})
 
-		// Verify all 9 paths were sent to Recycle Bin
-		if len(adapter.paths) != 9 {
-			t.Fatalf("expected 9 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
+		// 9 whole-root + 1 playwright install child + 1 puppeteer install child
+		if len(adapter.paths) != 11 {
+			t.Fatalf("expected 11 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
 		}
 
-		if result.Totals.OptInDeletedCount != 9 {
-			t.Fatalf("expected OptInDeletedCount 9, got %d", result.Totals.OptInDeletedCount)
+		if result.Totals.OptInDeletedCount != 11 {
+			t.Fatalf("expected OptInDeletedCount 11, got %d", result.Totals.OptInDeletedCount)
 		}
 	})
 

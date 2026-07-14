@@ -365,16 +365,20 @@ func TestPublicCatalogRemainsPathFreeWithStructuredSeam(t *testing.T) {
 		summary.RunningApplicationPolicy != clean.RunningApplicationPolicySharedRuntime {
 		t.Fatalf("playwright-browsers summary = %#v", summary)
 	}
-	for _, s := range catalog.Summaries() {
-		if strings.Contains(s.Identifier, "puppeteer") {
-			t.Fatalf("puppeteer must not register in this slice: %#v", s)
-		}
+	puppeteerSummary, ok := catalog.Summary(clean.DevCacheCategoryPuppeteerBrowsers)
+	if !ok || puppeteerSummary.Eligibility != clean.CategoryEligibilityOptIn ||
+		puppeteerSummary.ReportCategory != clean.ReportCategoryDeveloperTools ||
+		puppeteerSummary.RunningApplicationPolicy != clean.RunningApplicationPolicySharedRuntime {
+		t.Fatalf("puppeteer-browsers summary = %#v", puppeteerSummary)
 	}
 	encoded, err := json.Marshal(catalog.Summaries())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"discoverChildren", "resolvePaths", "ms-playwright", "PLAYWRIGHT_BROWSERS_PATH", "INSTALLATION_COMPLETE"} {
+	for _, forbidden := range []string{
+		"discoverChildren", "resolvePaths", "ms-playwright",
+		"PLAYWRIGHT_BROWSERS_PATH", "INSTALLATION_COMPLETE", "PUPPETEER_CACHE_DIR",
+	} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("catalog exposes private discovery detail %q: %s", forbidden, encoded)
 		}

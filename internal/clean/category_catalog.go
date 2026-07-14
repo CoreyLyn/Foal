@@ -368,6 +368,15 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		discoverPlaywrightBrowserChildren,
 		nil,
 	),
+	// Puppeteer browser binaries: shared-runtime (Node/Python/Chrome/Firefox are
+	// not attributable). Structured children under env/default root only; root
+	// and product parents are never candidates (ADR 0011).
+	developerCacheEntryWithChildren(
+		categoryDefinition(DevCacheCategoryPuppeteerBrowsers, "Puppeteer browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		resolvePuppeteerCachePaths,
+		discoverPuppeteerBrowserChildren,
+		nil,
+	),
 	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable)},
 }
 
