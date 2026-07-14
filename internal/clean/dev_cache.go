@@ -189,6 +189,27 @@ func resolveBunCachePaths(deps devCachePathDependencies) []string {
 	return nil
 }
 
+func resolvePlaywrightBrowserPaths(deps devCachePathDependencies) []string {
+	// playwright: non-blank PLAYWRIGHT_BROWSERS_PATH (unless exactly "0") ->
+	// %LOCALAPPDATA%\ms-playwright. Trimmed value "0" means hermetic/project-local
+	// browsers: resolve no global root and never scan CWD/node_modules. Blank or
+	// whitespace falls back to the Windows default. Execute never runs Playwright,
+	// npx, or package-manager commands and never reads package manifests.
+	if path, ok := deps.lookupEnv("PLAYWRIGHT_BROWSERS_PATH"); ok {
+		trimmed := strings.TrimSpace(path)
+		if trimmed == "0" {
+			return nil
+		}
+		if trimmed != "" {
+			return []string{trimmed}
+		}
+	}
+	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
+		return []string{deps.joinPath(localAppData, "ms-playwright")}
+	}
+	return nil
+}
+
 // devCacheCategories returns the list of all dev cache categories.
 func devCacheCategories() []string {
 	return developerCacheCategoryIDs()

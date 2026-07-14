@@ -181,10 +181,17 @@ func TestAppendStructuredDevCacheCandidatesCanceledSiblingIndependence(t *testin
 	}
 }
 
-func TestCanonicalDeveloperCachesHaveNoStructuredPolicyYet(t *testing.T) {
+func TestCanonicalStructuredDevCachePolicyIsPlaywrightOnly(t *testing.T) {
 	for _, id := range developerCacheCategoryIDs() {
-		if categoryHasStructuredDevCacheDiscovery(id) {
-			t.Fatalf("prefactor must not attach structured policy to %q yet", id)
+		has := categoryHasStructuredDevCacheDiscovery(id)
+		if id == DevCacheCategoryPlaywright {
+			if !has {
+				t.Fatal("playwright-browsers must register structured child discovery")
+			}
+			continue
+		}
+		if has {
+			t.Fatalf("unexpected structured policy on %q", id)
 		}
 	}
 }

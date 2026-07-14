@@ -359,16 +359,22 @@ func TestStructuredDevCacheDiscovery_DeduplicatesNormalizedChildren(t *testing.T
 
 func TestPublicCatalogRemainsPathFreeWithStructuredSeam(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
-	for _, summary := range catalog.Summaries() {
-		if strings.Contains(summary.Identifier, "playwright") || strings.Contains(summary.Identifier, "puppeteer") {
-			t.Fatalf("prefactor must not register framework categories: %#v", summary)
+	summary, ok := catalog.Summary(clean.DevCacheCategoryPlaywright)
+	if !ok || summary.Eligibility != clean.CategoryEligibilityOptIn ||
+		summary.ReportCategory != clean.ReportCategoryDeveloperTools ||
+		summary.RunningApplicationPolicy != clean.RunningApplicationPolicySharedRuntime {
+		t.Fatalf("playwright-browsers summary = %#v", summary)
+	}
+	for _, s := range catalog.Summaries() {
+		if strings.Contains(s.Identifier, "puppeteer") {
+			t.Fatalf("puppeteer must not register in this slice: %#v", s)
 		}
 	}
 	encoded, err := json.Marshal(catalog.Summaries())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"discoverChildren", "resolvePaths", "ms-playwright", "PLAYWRIGHT"} {
+	for _, forbidden := range []string{"discoverChildren", "resolvePaths", "ms-playwright", "PLAYWRIGHT_BROWSERS_PATH", "INSTALLATION_COMPLETE"} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("catalog exposes private discovery detail %q: %s", forbidden, encoded)
 		}

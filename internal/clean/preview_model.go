@@ -125,6 +125,11 @@ const uvCacheOptInImpactNotice = "Opt-in uv cache cleanup may require re-downloa
 // and hardlinked project content can reduce actual reclaimable disk space.
 const bunCacheOptInImpactNotice = "Opt-in Bun cache cleanup may require re-downloading dependencies. Hardlinked project content can affect actual disk space reclaimed."
 
+// playwrightBrowsersOptInImpactNotice is shown when playwright-browsers has
+// Opt-in candidates. Installations are re-downloadable but may be large, needed
+// offline, or in use by active automation; Foal does not stop processes.
+const playwrightBrowsersOptInImpactNotice = "Opt-in Playwright browser cleanup reclaims re-downloadable browser installations. Offline workflows may need those browsers again, and active automation may fail if an installation is in use."
+
 // applicationCacheCachedExtensionVSIXsImpactNotice is shown when an Application
 // cache CachedExtensionVSIXs root is observed or selected. Installed extensions
 // and settings are never selected for any editor category.
@@ -213,13 +218,15 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasUVOptIn, hasBunOptIn, hasApplicationCacheVSIX bool
+	var hasUVOptIn, hasBunOptIn, hasPlaywrightOptIn, hasApplicationCacheVSIX bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case DevCacheCategoryUV:
 			hasUVOptIn = true
 		case DevCacheCategoryBun:
 			hasBunOptIn = true
+		case DevCacheCategoryPlaywright:
+			hasPlaywrightOptIn = true
 		default:
 			if isApplicationCacheCategory(candidate.Category) && isCachedExtensionVSIXsPath(candidate.Path) {
 				hasApplicationCacheVSIX = true
@@ -242,6 +249,12 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
 			Message: bunCacheOptInImpactNotice,
+		})
+	}
+	if hasPlaywrightOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: playwrightBrowsersOptInImpactNotice,
 		})
 	}
 	if hasApplicationCacheVSIX {

@@ -359,6 +359,15 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		[]string{"bun"},
 		ApplicationBun,
 	),
+	// Playwright global browser binaries: structured child discovery under the
+	// env/default root. Shared-runtime policy: do not attribute node/chrome/etc.
+	// as Playwright-owned. No Review suggestion probe (Foal owns Recycle Bin).
+	developerCacheEntryWithChildren(
+		categoryDefinition(DevCacheCategoryPlaywright, "Playwright browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		resolvePlaywrightBrowserPaths,
+		discoverPlaywrightBrowserChildren,
+		nil,
+	),
 	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable)},
 }
 
