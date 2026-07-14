@@ -1,6 +1,7 @@
 package clean
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -208,9 +209,13 @@ var applicationCacheApplicationDefinitions = []supportedApplicationDefinition{
 
 // categoryCatalogEntry is the private canonical registration point. Public
 // catalog projections expose only path-free definition fields. Developer-cache
-// entries additionally bind a path resolver, optional Review suggestion tool
-// keys, and the applications required by the running-application policy.
-// Application-cache entries bind an idle Application cache policy id.
+// entries additionally bind a path resolver, optional structured child candidate
+// discovery policy, optional Review suggestion tool keys, and the applications
+// required by the running-application policy. Application-cache entries bind an
+// idle Application cache policy id.
+//
+// Path resolvers, allowlists, structural matchers, and executable paths never
+// appear on public CleanupCategoryDefinition / CleanupCategorySummary.
 type categoryCatalogEntry struct {
 	definition            CleanupCategoryDefinition
 	opportunity           bool
@@ -219,8 +224,15 @@ type categoryCatalogEntry struct {
 	fixedLocalAppDataPath []string
 	runningApplications   []string
 	// resolvePaths resolves env/default roots for a developer-cache category.
-	// Required when developerCache is true; ignored otherwise.
+	// Required when developerCache is true; ignored otherwise. Root resolution
+	// never authorizes deletion by itself.
 	resolvePaths func(devCachePathDependencies) []string
+	// discoverChildren is an optional structured child candidate discovery
+	// policy. When nil, each resolved root is one Opt-in candidate (whole-root
+	// mode). When set, Foal discovers independent child candidates under each
+	// unprotected root; the root itself is never a candidate. Policies must
+	// fail closed: unknown layouts return no children until explicitly updated.
+	discoverChildren func(ctx context.Context, root string) []string
 	// reviewSuggestionTools lists Review suggestion allowlist tool keys
 	// associated with this developer-cache category. Empty when no suggestion
 	// probe is associated (for example cargo). Referenced keys must exist.
@@ -243,6 +255,21 @@ func developerCacheEntry(
 		reviewSuggestionTools: append([]string(nil), reviewSuggestionTools...),
 		runningApplications:   append([]string(nil), runningApplications...),
 	}
+}
+
+// developerCacheEntryWithChildren registers a developer-cache category that
+// uses structured child candidate discovery under each resolved root instead of
+// whole-root candidates. discoverChildren must be non-nil and fail closed.
+func developerCacheEntryWithChildren(
+	definition CleanupCategoryDefinition,
+	resolvePaths func(devCachePathDependencies) []string,
+	discoverChildren func(ctx context.Context, root string) []string,
+	reviewSuggestionTools []string,
+	runningApplications ...string,
+) categoryCatalogEntry {
+	entry := developerCacheEntry(definition, resolvePaths, reviewSuggestionTools, runningApplications...)
+	entry.discoverChildren = discoverChildren
+	return entry
 }
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
@@ -412,6 +439,9 @@ func validateDeveloperCacheRegistry(
 		if !entry.developerCache {
 			if entry.resolvePaths != nil {
 				return fmt.Errorf("non-developer-cache category %q must not register a path resolver", entry.definition.Identifier)
+			}
+			if entry.discoverChildren != nil {
+				return fmt.Errorf("non-developer-cache category %q must not register child candidate discovery", entry.definition.Identifier)
 			}
 			if len(entry.reviewSuggestionTools) > 0 {
 				return fmt.Errorf("non-developer-cache category %q must not register Review suggestion tools", entry.definition.Identifier)

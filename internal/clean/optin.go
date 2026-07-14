@@ -111,16 +111,35 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 	}
 
 	// Developer-tool caches. Each root is gated and measured independently so
-	// discarding one root never authorizes or double-counts another.
+	// discarding one root never authorizes or double-counts another. Categories
+	// with a structured child discovery policy (or injected structured mode)
+	// never treat the root as a candidate; each surviving child is independent.
 	for _, category := range developerCacheCategoryIDs() {
 		if !plan[category] {
 			continue
 		}
 		paths := normalizeAndDeduplicatePaths(resolveDevCache(category))
 		for _, path := range paths {
-			if path == "" || opts.Validator.IsUserProtected(path) {
+			if path == "" {
 				continue
 			}
+			if opts.Validator.IsUserProtected(path) {
+				// Protected root: do not discover children or measure the root.
+				// Protection never authorizes siblings under another root.
+				res.suppressedProtectionPaths = append(
+					res.suppressedProtectionPaths,
+					structuredDevCacheProtectedRulePaths(path, opts.Validator)...,
+				)
+				continue
+			}
+
+			children, structured := resolveDevCacheChildCandidates(ctx, opts, category, path)
+			if structured {
+				resolveStructuredDevCacheRoot(ctx, opts, &res, category, path, children, needsDistinctiveDetection, devCacheGate, devCachePreStates)
+				continue
+			}
+
+			// Whole-root mode: the resolved root is the single candidate.
 			// Without a detector, tests and shared-runtime-only paths measure
 			// directly. Distinctive-process categories with a detector always
 			// go through pre/measure/post so Dry-run and Execute share results.
@@ -220,6 +239,63 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 	}
 
 	return res
+}
+
+// resolveStructuredDevCacheRoot discovers and measures independent child
+// candidates under one resolved developer-cache root. Distinctive-process
+// categories require idle before discovery and after measurement; a post-gate
+// failure discards every child from this root without authorizing siblings
+// under other roots.
+func resolveStructuredDevCacheRoot(
+	ctx context.Context,
+	opts Options,
+	res *optInResolution,
+	category, root string,
+	children []string,
+	needsDistinctiveDetection bool,
+	devCacheGate runningGate,
+	devCachePreStates []RunningApplicationState,
+) {
+	useDistinctive := needsDistinctiveDetection && devCacheGateTier(category) == runningGateTierBeforeAfter
+	if useDistinctive {
+		if idle, reason := appsIdleForDevCache(category, root, devCachePreStates); !idle {
+			if reason != nil {
+				res.skipped = append(res.skipped, SkippedItem{
+					Path:   root,
+					Bytes:  0,
+					Rule:   category,
+					Reason: *reason,
+				})
+			}
+			return
+		}
+	}
+
+	start := len(res.candidates)
+	appendStructuredDevCacheCandidates(ctx, opts, res, category, root, children, structuredDevCacheMeasureDependencies{})
+	if len(res.candidates) == start {
+		return
+	}
+
+	if !useDistinctive {
+		return
+	}
+	var postStates []RunningApplicationState
+	if devCacheGate.detect != nil {
+		postStates = devCacheGate.detect(ctx)
+	}
+	if idle, reason := appsIdleForDevCache(category, root, postStates); !idle {
+		// Discard all children measured under this root.
+		res.candidates = res.candidates[:start]
+		if reason != nil {
+			res.skipped = append(res.skipped, SkippedItem{
+				Path:   root,
+				Bytes:  0,
+				Rule:   category,
+				Reason: *reason,
+			})
+		}
+	}
 }
 
 // resolveApplicationCacheOptInCandidates gates one Application cache category
