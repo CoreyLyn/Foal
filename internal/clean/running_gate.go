@@ -218,3 +218,59 @@ func (g runningGate) gateBrowser(ctx context.Context, application string, preSta
 	}
 	return browserGateOutcome{preIdle: true, discovery: discovery, postIdle: true}
 }
+
+// applicationCacheGateOutcome is the result of gating idle Application cache
+// discovery with pre/inspect/post application process checks.
+type applicationCacheGateOutcome struct {
+	// preIdle is false when the application was not idle before discovery.
+	// Discovery was not run and other fields are zero.
+	preIdle bool
+	// discovery is the injected discovery result when preIdle is true.
+	discovery applicationCacheDiscoveryResult
+	// postIdle is false when the application was not idle after discovery.
+	// When discovery is canceled, post re-check is skipped (postIdle false,
+	// postState nil) so measured roots cannot be reauthorized.
+	postIdle bool
+	// postState is set when postIdle is false and a post state was present.
+	postState *RunningApplicationState
+	// postDiagnostic is set for unknown post state.
+	postDiagnostic *StructuredIssue
+}
+
+// gateApplicationCache runs pre/discover/post idle gating around an injected
+// Application cache discovery for one logical application.
+func (g runningGate) gateApplicationCache(
+	ctx context.Context,
+	application string,
+	preStates []RunningApplicationState,
+	discover func() applicationCacheDiscoveryResult,
+) applicationCacheGateOutcome {
+	preState, ok := runningApplicationStateFor(preStates, application)
+	if !ok || preState.State != RunningApplicationStateIdle {
+		return applicationCacheGateOutcome{preIdle: false}
+	}
+	discovery := discover()
+	if discovery.canceled {
+		// Incomplete/canceled scan: do not post-check reauthorize.
+		return applicationCacheGateOutcome{preIdle: true, discovery: discovery, postIdle: false}
+	}
+	// Post re-check always runs after a non-canceled discovery so an app that
+	// starts during root inspection discards every measured root.
+	var postStates []RunningApplicationState
+	if g.detect != nil {
+		postStates = g.detect(ctx)
+	}
+	postState, ok := runningApplicationStateFor(postStates, application)
+	if !ok {
+		return applicationCacheGateOutcome{preIdle: true, discovery: discovery, postIdle: false}
+	}
+	if postState.State != RunningApplicationStateIdle {
+		outcome := applicationCacheGateOutcome{preIdle: true, discovery: discovery, postIdle: false, postState: &postState}
+		if postState.State == RunningApplicationStateUnknown {
+			diagnostic := runningApplicationUnknownIssue(postState)
+			outcome.postDiagnostic = &diagnostic
+		}
+		return outcome
+	}
+	return applicationCacheGateOutcome{preIdle: true, discovery: discovery, postIdle: true}
+}

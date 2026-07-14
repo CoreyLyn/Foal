@@ -86,13 +86,15 @@ type Options struct {
 	DiscoverUserTempOpportunities func(context.Context) UserTempDiscoveryResult
 	OpportunityDiscoveryOptions   OpportunityDiscoveryOptions
 	DiscoverOpportunities         func(context.Context) OpportunityDiscoveryResult
-	BrowserCacheDiscoveryOptions  BrowserCacheDiscoveryOptions
-	DiscoverReviewSuggestions     func(context.Context) []ReviewSuggestion
-	DetectRunningApplications     func(context.Context) []RunningApplicationState
-	OptIn                         []string
-	RecycleBinCapacityProbe       RecycleBinCapacityProbe
-	DevCachePathResolver          DevCachePathResolver
-	ProgressReporter              ProgressReporter
+	BrowserCacheDiscoveryOptions      BrowserCacheDiscoveryOptions
+	ApplicationCacheDiscoveryOptions  ApplicationCacheDiscoveryOptions
+	DiscoverApplicationCaches         DiscoverApplicationCachesFunc
+	DiscoverReviewSuggestions         func(context.Context) []ReviewSuggestion
+	DetectRunningApplications         func(context.Context) []RunningApplicationState
+	OptIn                             []string
+	RecycleBinCapacityProbe           RecycleBinCapacityProbe
+	DevCachePathResolver              DevCachePathResolver
+	ProgressReporter                  ProgressReporter
 }
 
 type Rule struct {
@@ -185,6 +187,7 @@ const (
 	ApplicationPython                      = "python"
 	ApplicationUV                          = "uv"
 	ApplicationBun                         = "bun"
+	ApplicationVisualStudioCode            = "visual_studio_code"
 	RunningApplicationStateRunning         = RunningApplicationStatus("running")
 	RunningApplicationStateIdle            = RunningApplicationStatus("idle")
 	RunningApplicationStateUnknown         = RunningApplicationStatus("unknown")
@@ -385,6 +388,106 @@ func applyOptInReviewProjection(ctx context.Context, opts Options, result *Resul
 	if !plan[OpportunityCategoryBrowserCache] && opts.DetectRunningApplications != nil {
 		applyBrowserCacheReview(ctx, opts, result)
 	}
+	if opts.DetectRunningApplications != nil {
+		applyApplicationCacheReview(ctx, opts, result, plan)
+	}
+}
+
+// applyApplicationCacheReview is the dry-run review surface for non-opted-in
+// idle Application cache categories (VS Code today). Opted-in categories are
+// resolved by the opt-in candidate resolver instead.
+func applyApplicationCacheReview(ctx context.Context, opts Options, result *Result, plan map[string]bool) {
+	var categories []string
+	for _, id := range applicationCacheCategoryIDs() {
+		if !plan[id] {
+			categories = append(categories, id)
+		}
+	}
+	if len(categories) == 0 {
+		return
+	}
+	gate := runningGate{detect: opts.DetectRunningApplications}
+	// Share one pre-snapshot across application-cache categories. Browser
+	// review may already have appended states; still detect here so application
+	// cache review works when browser is opted in or browser review is absent.
+	preStates := opts.DetectRunningApplications(ctx)
+	// Only surface states for applications we are reviewing to avoid duplicate
+	// browser/dev-tool noise when browser review already recorded them.
+	for _, category := range categories {
+		entry, ok := applicationCacheEntry(category)
+		if !ok || len(entry.runningApplications) == 0 {
+			continue
+		}
+		application := entry.runningApplications[0]
+		if state, found := runningApplicationStateFor(preStates, application); found {
+			replaceRunningApplicationState(result, state)
+			if state.State == RunningApplicationStateUnknown {
+				result.Errors = append(result.Errors, runningApplicationUnknownIssue(state))
+			}
+		}
+		applyOneApplicationCacheReview(ctx, opts, result, gate, preStates, category, application)
+	}
+}
+
+func applyOneApplicationCacheReview(
+	ctx context.Context,
+	opts Options,
+	result *Result,
+	gate runningGate,
+	preStates []RunningApplicationState,
+	category, application string,
+) {
+	policyID, policy, ok := applicationCachePolicyForCategory(category)
+	if !ok {
+		return
+	}
+	if roaming := applicationCacheRoamingAppDataDir(opts.ApplicationCacheDiscoveryOptions); roaming != "" {
+		userDataRoot := applicationCacheUserDataRoot(roaming, policy)
+		if opts.Validator.IsUserProtected(userDataRoot) {
+			suppressProtectionRules(result, applicationCacheProtectedRulePaths(userDataRoot, opts.Validator))
+			return
+		}
+	}
+	outcome := gate.gateApplicationCache(ctx, application, preStates, func() applicationCacheDiscoveryResult {
+		return resolveApplicationCacheDiscovery(ctx, opts, policyID)
+	})
+	if !outcome.preIdle {
+		return
+	}
+	discovery := outcome.discovery
+	if len(discovery.suppressedProtectionPaths) > 0 {
+		suppressProtectionRules(result, discovery.suppressedProtectionPaths)
+	}
+	for _, incomplete := range discovery.incompletes {
+		if opts.Validator.IsUserProtected(incomplete.Path) {
+			continue
+		}
+		result.IncompleteOpportunityInspections = append(result.IncompleteOpportunityInspections, incomplete)
+		result.Errors = append(result.Errors, incomplete.Reason)
+	}
+	if discovery.canceled || !outcome.postIdle {
+		if outcome.postState != nil {
+			replaceRunningApplicationState(result, *outcome.postState)
+		}
+		if outcome.postDiagnostic != nil {
+			result.Errors = append(result.Errors, *outcome.postDiagnostic)
+		}
+		// Measured roots discarded; incompletes already projected above.
+		return
+	}
+	for _, opportunity := range discovery.opportunities {
+		if opts.Validator.IsUserProtected(opportunity.Path) {
+			continue
+		}
+		result.Opportunities = append(result.Opportunities, opportunity)
+	}
+}
+
+func resolveApplicationCacheDiscovery(ctx context.Context, opts Options, policyID string) applicationCacheDiscoveryResult {
+	if opts.DiscoverApplicationCaches != nil {
+		return opts.DiscoverApplicationCaches(ctx, policyID, opts.ApplicationCacheDiscoveryOptions, opts.Validator)
+	}
+	return discoverApplicationCaches(ctx, policyID, opts.ApplicationCacheDiscoveryOptions, opts.Validator)
 }
 
 func browserCacheLocalAppDataDir(opts BrowserCacheDiscoveryOptions) string {
@@ -797,9 +900,13 @@ func withoutRunningApplicationDiagnostics(issues []StructuredIssue) []Structured
 func runningApplicationUnknownIssue(state RunningApplicationState) StructuredIssue {
 	message := state.Message
 	if message == "" {
-		message = applicationDisplayName(state.Application) + " process state could not be determined; browser review was skipped."
+		message = applicationDisplayName(state.Application) + " process state could not be determined; cache review was skipped."
 	}
-	return issue(runningApplicationDetectionIssueCode, message, true, "", "browser_review")
+	rule := "cache_review"
+	if state.Application == ApplicationGoogleChrome || state.Application == ApplicationMicrosoftEdge {
+		rule = "browser_review"
+	}
+	return issue(runningApplicationDetectionIssueCode, message, true, "", rule)
 }
 
 func structuredIssueKey(issue StructuredIssue) string {
@@ -1106,7 +1213,9 @@ func issue(code, message string, recoverable bool, path, ruleID string) Structur
 // names for error reporting.
 func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []string, valid []string) {
 	selectable := selectableCategoryIDs()
-	devCaches := developerCacheCategoryIDs()
+	// dev-caches expands from catalog policy: developer-cache categories plus
+	// idle Application cache opportunities under Developer tools.
+	devCaches := developerToolsOptInCategoryIDs()
 	valid = make([]string, 0, len(selectable)+2)
 	valid = append(valid, selectable...)
 	valid = append(valid, DevCacheCategoryAll, "all")

@@ -39,7 +39,7 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 	states := detectSupportedApplications(context.Background(), func(context.Context) processSnapshot {
 		return processSnapshot{Names: []string{"go.exe", "cargo.exe", "notepad.exe"}}
 	})
-	// Browsers first, then developer applications in registry order.
+	// Browsers first, then developer applications, then application-cache apps.
 	wantOrder := []string{
 		ApplicationGoogleChrome,
 		ApplicationMicrosoftEdge,
@@ -51,6 +51,7 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 		ApplicationPython,
 		ApplicationUV,
 		ApplicationBun,
+		ApplicationVisualStudioCode,
 	}
 	if len(states) != len(wantOrder) {
 		t.Fatalf("states = %#v, want %d entries", states, len(wantOrder))

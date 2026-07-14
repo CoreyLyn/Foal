@@ -210,7 +210,83 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 		resolveBrowserOptInCandidates(ctx, opts, &res)
 	}
 
+	// Idle Application cache categories (opted-in only) - one candidate per root.
+	if hasDetector {
+		for _, category := range applicationCacheCategoryIDs() {
+			if plan[category] {
+				resolveApplicationCacheOptInCandidates(ctx, opts, category, &res)
+			}
+		}
+	}
+
 	return res
+}
+
+// resolveApplicationCacheOptInCandidates gates one Application cache category
+// and appends independent Opt-in candidates for each measured root.
+func resolveApplicationCacheOptInCandidates(ctx context.Context, opts Options, category string, res *optInResolution) {
+	entry, ok := applicationCacheEntry(category)
+	if !ok || len(entry.runningApplications) == 0 {
+		return
+	}
+	application := entry.runningApplications[0]
+	policyID, policy, ok := applicationCachePolicyForCategory(category)
+	if !ok {
+		return
+	}
+	if roaming := applicationCacheRoamingAppDataDir(opts.ApplicationCacheDiscoveryOptions); roaming != "" {
+		userDataRoot := applicationCacheUserDataRoot(roaming, policy)
+		if opts.Validator.IsUserProtected(userDataRoot) {
+			res.suppressedProtectionPaths = append(
+				res.suppressedProtectionPaths,
+				applicationCacheProtectedRulePaths(userDataRoot, opts.Validator)...,
+			)
+			return
+		}
+	}
+
+	gate := runningGate{detect: opts.DetectRunningApplications}
+	preStates := opts.DetectRunningApplications(ctx)
+	// Surface the application state for this category (may already include
+	// browsers from other resolution paths).
+	if state, found := runningApplicationStateFor(preStates, application); found {
+		res.runningStates = append(res.runningStates, state)
+	}
+
+	outcome := gate.gateApplicationCache(ctx, application, preStates, func() applicationCacheDiscoveryResult {
+		return resolveApplicationCacheDiscovery(ctx, opts, policyID)
+	})
+	if !outcome.preIdle {
+		return
+	}
+	discovery := outcome.discovery
+	res.suppressedProtectionPaths = append(res.suppressedProtectionPaths, discovery.suppressedProtectionPaths...)
+	for _, incomplete := range discovery.incompletes {
+		if opts.Validator.IsUserProtected(incomplete.Path) {
+			continue
+		}
+		res.diagnostics = append(res.diagnostics, incomplete.Reason)
+	}
+	if discovery.canceled || !outcome.postIdle {
+		if outcome.postState != nil {
+			res.runningStates = append(res.runningStates, *outcome.postState)
+		}
+		if outcome.postDiagnostic != nil {
+			res.diagnostics = append(res.diagnostics, *outcome.postDiagnostic)
+		}
+		return
+	}
+	for _, opportunity := range discovery.opportunities {
+		if opts.Validator.IsUserProtected(opportunity.Path) {
+			continue
+		}
+		res.candidates = append(res.candidates, OptInCandidate{
+			Path:          opportunity.Path,
+			Bytes:         opportunity.Bytes,
+			Category:      category,
+			PlannedAction: plannedRecycleBinAction,
+		})
+	}
 }
 
 // resolveBrowserOptInCandidates gates each supported browser's cache discovery

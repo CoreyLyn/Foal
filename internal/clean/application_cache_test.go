@@ -1,0 +1,527 @@
+package clean_test
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
+)
+
+func vscodeAllowlistedRoots() []string {
+	return []string{
+		"Cache",
+		"CachedData",
+		"CachedExtensionVSIXs",
+		"Code Cache",
+		"GPUCache",
+		"DawnGraphiteCache",
+		"DawnWebGPUCache",
+	}
+}
+
+func writeVSCodeRoot(t *testing.T, roamingAppData string, rootContents map[string]string) string {
+	t.Helper()
+	codeRoot := filepath.Join(roamingAppData, "Code")
+	if err := os.MkdirAll(codeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range rootContents {
+		path := filepath.Join(codeRoot, name)
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if contents != "" {
+			if err := os.WriteFile(filepath.Join(path, "data.bin"), []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return codeRoot
+}
+
+func idleVSCodeDetector() func(context.Context) []clean.RunningApplicationState {
+	return func(context.Context) []clean.RunningApplicationState {
+		// Omit browsers so default browser discovery does not inspect the host.
+		return []clean.RunningApplicationState{
+			{Application: clean.ApplicationVisualStudioCode, State: clean.RunningApplicationStateIdle},
+		}
+	}
+}
+
+func TestDryRunReportsIdleVSCodeCacheRootsAsIndependentOpportunities(t *testing.T) {
+	roaming := t.TempDir()
+	contents := map[string]string{}
+	var wantBytes int64
+	for _, root := range vscodeAllowlistedRoots() {
+		payload := root + "-bytes"
+		contents[root] = payload
+		wantBytes += int64(len(payload))
+	}
+	// Sensitive and decoy directories must never become opportunities.
+	for _, decoy := range []string{
+		"User", "CachedProfilesData", "workspaceStorage", "globalStorage", "Backups",
+		"extensions", "Service Worker", "Local Storage", "Session Storage", "WebStorage",
+		"Network", "Cookies", "logs", "Crashpad", "MyCache", "cache-temp",
+	} {
+		contents[decoy] = "must-not-count"
+	}
+	codeRoot := writeVSCodeRoot(t, roaming, contents)
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder: recorder,
+		DetailedListDir: filepath.Join(t.TempDir(), "Foal", "history"),
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleVSCodeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	vscodeOpps := opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)
+	if len(vscodeOpps) != len(vscodeAllowlistedRoots()) {
+		t.Fatalf("vscode opportunities = %#v, want one per allowlisted root", vscodeOpps)
+	}
+	seen := make(map[string]bool)
+	var total int64
+	for i, opportunity := range vscodeOpps {
+		if opportunity.Status != clean.OpportunityStatus || opportunity.Reason != clean.OpportunityReason {
+			t.Fatalf("opportunity[%d] status/reason = %#v", i, opportunity)
+		}
+		base := filepath.Base(opportunity.Path)
+		if !strings.HasPrefix(opportunity.Path, codeRoot) {
+			t.Fatalf("opportunity path %q not under Code root", opportunity.Path)
+		}
+		seen[base] = true
+		total += opportunity.Bytes
+	}
+	for _, root := range vscodeAllowlistedRoots() {
+		if !seen[root] {
+			t.Fatalf("missing allowlisted root %q", root)
+		}
+	}
+	if total != wantBytes || result.Totals.OpportunityObservedBytes != wantBytes || result.Totals.CandidateBytes != 0 {
+		t.Fatalf("totals = %#v total=%d want observed-only %d", result.Totals, total, wantBytes)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonText := string(encoded)
+	wantObserved := `"opportunity_observed_bytes":` + string(mustJSON(wantBytes))
+	for _, want := range []string{`"category":"vscode_cache"`, wantObserved} {
+		if !strings.Contains(jsonText, want) {
+			t.Fatalf("JSON missing %q: %s", want, jsonText)
+		}
+	}
+	for _, forbidden := range []string{
+		`\User\`, `/User/`, "workspaceStorage", "globalStorage", "Backups",
+		`\extensions\`, "Service Worker", "Local Storage", "Cookies", "Crashpad",
+		"MyCache", "cache-temp", "move_to_recycle_bin",
+	} {
+		if strings.Contains(jsonText, forbidden) {
+			t.Fatalf("JSON contains excluded data %q: %s", forbidden, jsonText)
+		}
+	}
+
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	for _, want := range []string{
+		"Developer tools",
+		"developer-tool opportunity",
+		"category: vscode_cache",
+		"Observed opportunity bytes:",
+		"Potential space: 0 bytes",
+		"CachedExtensionVSIXs holds downloaded extension packages",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("human report missing %q:\n%s", want, report)
+		}
+	}
+
+	if len(recorder.sessions) != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityCount != len(vscodeOpps) ||
+		recorder.sessions[0].Aggregate.OpportunityObservedBytes != wantBytes ||
+		len(recorder.items) != 0 {
+		t.Fatalf("history = %#v / %#v, want aggregate-only privacy", recorder.sessions, recorder.items)
+	}
+	if strings.Contains(recorder.encoded, codeRoot) || strings.Contains(recorder.encoded, "CachedData") {
+		t.Fatalf("history leaked editor path: %s", recorder.encoded)
+	}
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func TestDryRunVSCodeMissingRootIsSilentAbsence(t *testing.T) {
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleVSCodeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryVSCodeCache {
+			t.Fatalf("unexpected vscode opportunity: %#v", opportunity)
+		}
+	}
+	if len(result.IncompleteOpportunityInspections) != 0 {
+		t.Fatalf("incomplete = %#v, want empty for missing Code root", result.IncompleteOpportunityInspections)
+	}
+}
+
+func TestDryRunVSCodeRunningSkipsWithoutMeasuring(t *testing.T) {
+	roaming := t.TempDir()
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "cache", "CachedData": "data"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationVisualStudioCode, State: clean.RunningApplicationStateRunning},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryVSCodeCache {
+			t.Fatalf("running VS Code produced opportunity: %#v", opportunity)
+		}
+	}
+	if result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("observed bytes = %d, want 0", result.Totals.OpportunityObservedBytes)
+	}
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	if !strings.Contains(report, "Visual Studio Code") {
+		t.Fatalf("report missing VS Code running skip:\n%s", report)
+	}
+}
+
+func TestDryRunVSCodeUnknownFailsClosed(t *testing.T) {
+	roaming := t.TempDir()
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "cache"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationVisualStudioCode, State: clean.RunningApplicationStateUnknown, Message: "snapshot failed"},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryVSCodeCache {
+			t.Fatalf("unknown state produced opportunity: %#v", opportunity)
+		}
+	}
+	found := false
+	for _, err := range result.Errors {
+		if err.Code == "running_application_detection_unknown" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("errors = %#v, want unknown diagnostic", result.Errors)
+	}
+}
+
+func TestDryRunVSCodePostRunningDiscardsMeasuredRoots(t *testing.T) {
+	roaming := t.TempDir()
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "cache", "GPUCache": "gpu"})
+	calls := 0
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			calls++
+			state := clean.RunningApplicationStateIdle
+			if calls > 1 {
+				state = clean.RunningApplicationStateRunning
+			}
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationVisualStudioCode, State: state},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryVSCodeCache {
+			t.Fatalf("post-running kept opportunity: %#v", opportunity)
+		}
+	}
+	if result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("observed bytes = %d after post-running discard", result.Totals.OpportunityObservedBytes)
+	}
+}
+
+func TestDryRunVSCodeProtectionSuppressesRootBeforeTotals(t *testing.T) {
+	roaming := t.TempDir()
+	codeRoot := writeVSCodeRoot(t, roaming, map[string]string{
+		"Cache":      "cache",
+		"CachedData": "data",
+		"GPUCache":   "gpu",
+	})
+	protected := filepath.Join(codeRoot, "CachedData")
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator: pathsafe.NewValidator([]string{protected}),
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleVSCodeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryVSCodeCache && opportunity.Path == protected {
+			t.Fatalf("protected root leaked: %#v", opportunity)
+		}
+	}
+	var vscodeCount int
+	var observed int64
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryVSCodeCache {
+			vscodeCount++
+			observed += opportunity.Bytes
+		}
+	}
+	if vscodeCount != 2 || observed != 8 {
+		t.Fatalf("vscodeCount=%d observed=%d, want 2 siblings totaling 8", vscodeCount, observed)
+	}
+}
+
+func opportunitiesForCategory(result clean.Result, category string) []clean.Opportunity {
+	var out []clean.Opportunity
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == category {
+			out = append(out, opportunity)
+		}
+	}
+	return out
+}
+
+func TestDryRunVSCodeOptInConvertsRootsToCandidates(t *testing.T) {
+	roaming := t.TempDir()
+	writeVSCodeRoot(t, roaming, map[string]string{
+		"Cache":                "cache",
+		"CachedExtensionVSIXs": "vsix-pkg",
+	})
+	result := clean.DryRun(context.Background(), clean.Options{
+		OptIn: []string{clean.OpportunityCategoryVSCodeCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleVSCodeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)) != 0 {
+		t.Fatalf("opted-in category still listed as opportunity: %#v", result.Opportunities)
+	}
+	if len(result.OptInCandidates) != 2 {
+		t.Fatalf("opt-in candidates = %#v, want 2", result.OptInCandidates)
+	}
+	var reclaimable int64
+	for _, candidate := range result.OptInCandidates {
+		if candidate.Category != clean.OpportunityCategoryVSCodeCache {
+			t.Fatalf("candidate category = %q", candidate.Category)
+		}
+		if candidate.PlannedAction != "move_to_recycle_bin" {
+			t.Fatalf("planned action = %q", candidate.PlannedAction)
+		}
+		reclaimable += candidate.Bytes
+	}
+	if result.Totals.OptInReclaimableBytes != reclaimable {
+		t.Fatalf("totals = %#v, reclaimable=%d", result.Totals, reclaimable)
+	}
+	if result.Totals.OpportunityObservedBytes != 0 {
+		// Non-VS Code observations may exist; VS Code must not contribute after opt-in.
+		for _, opportunity := range result.Opportunities {
+			if opportunity.Category == clean.OpportunityCategoryVSCodeCache {
+				t.Fatalf("vscode still in opportunities: %#v", opportunity)
+			}
+		}
+	}
+	model := clean.NewPreviewReadModel(result)
+	foundNotice := false
+	for _, notice := range model.Notices {
+		if notice.Kind == "opt_in_impact" && strings.Contains(notice.Message, "CachedExtensionVSIXs") {
+			foundNotice = true
+		}
+	}
+	if !foundNotice {
+		t.Fatalf("notices = %#v, want VSIX impact notice", model.Notices)
+	}
+}
+
+func TestExecuteWithoutVSCodeOptInSkipsDetection(t *testing.T) {
+	roaming := t.TempDir()
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "cache"})
+	detectorCalls := 0
+	adapter := &recordingRecycleBinAdapter{}
+	_ = clean.Execute(context.Background(), clean.Options{
+		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			detectorCalls++
+			return idleVSCodeDetector()(context.Background())
+		},
+	})
+	if detectorCalls != 0 {
+		t.Fatalf("DetectRunningApplications called %d times without opt-in", detectorCalls)
+	}
+	if len(adapter.paths) != 0 {
+		t.Fatalf("adapter paths = %v", adapter.paths)
+	}
+}
+
+func TestExecuteOptInVSCodeCacheCleansWhenIdle(t *testing.T) {
+	roaming := t.TempDir()
+	codeRoot := writeVSCodeRoot(t, roaming, map[string]string{
+		"Cache":      "cache-data",
+		"CachedData": "compiled",
+	})
+	cachePath := filepath.Join(codeRoot, "Cache")
+	cachedDataPath := filepath.Join(codeRoot, "CachedData")
+	adapter := &recordingRecycleBinAdapter{}
+	recorder := &recordingHistoryRecorder{}
+
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   recorder,
+		OptIn:             []string{clean.OpportunityCategoryVSCodeCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleVSCodeDetector(),
+	})
+
+	if result.Totals.OptInDeletedCount != 2 {
+		t.Fatalf("OptInDeletedCount = %d, want 2; result=%#v", result.Totals.OptInDeletedCount, result)
+	}
+	found := map[string]bool{}
+	for _, path := range adapter.paths {
+		found[path] = true
+	}
+	if !found[cachePath] || !found[cachedDataPath] {
+		t.Fatalf("adapter paths = %v, want Cache and CachedData", adapter.paths)
+	}
+	// Opted-in execution history keeps path-bearing item records.
+	if len(recorder.items) == 0 {
+		t.Fatalf("history items empty, want path-bearing opt-in records")
+	}
+	for _, item := range recorder.items {
+		if item.Path == cachePath || item.Path == cachedDataPath {
+			return
+		}
+	}
+	t.Fatalf("history items = %#v, want VS Code paths", recorder.items)
+}
+
+func TestExecuteOptInVSCodeFreshResolvesNotPreviewPaths(t *testing.T) {
+	roamingPreview := t.TempDir()
+	writeVSCodeRoot(t, roamingPreview, map[string]string{"Cache": "preview-only"})
+	roamingExecute := t.TempDir()
+	codeRoot := writeVSCodeRoot(t, roamingExecute, map[string]string{"GPUCache": "execute-root"})
+	executePath := filepath.Join(codeRoot, "GPUCache")
+	adapter := &recordingRecycleBinAdapter{}
+
+	// Preview would see Cache under roamingPreview; execute must use fresh options.
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		OptIn:             []string{clean.OpportunityCategoryVSCodeCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roamingExecute,
+		},
+		DetectRunningApplications: idleVSCodeDetector(),
+	})
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("OptInDeletedCount = %d, want 1", result.Totals.OptInDeletedCount)
+	}
+	if len(adapter.paths) != 1 || adapter.paths[0] != executePath {
+		t.Fatalf("adapter paths = %v, want fresh GPUCache %q", adapter.paths, executePath)
+	}
+}
+
+func TestExecuteOptInVSCodeCapacityFailureSkipsBeforeDeletion(t *testing.T) {
+	roaming := t.TempDir()
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": string(make([]byte, 64))})
+	adapter := &recordingRecycleBinAdapter{}
+	probe := func(path string) (clean.RecycleBinVolumeConfig, error) {
+		return clean.RecycleBinVolumeConfig{
+			Volume:       filepath.VolumeName(path),
+			NukeOnDelete: false,
+			MaxCapacity:  1,
+			CurrentUsage: 0,
+		}, nil
+	}
+	result := clean.Execute(context.Background(), clean.Options{
+		Rules:                   []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter:       adapter,
+		RecycleBinCapacityProbe: probe,
+		OptIn:                   []string{clean.OpportunityCategoryVSCodeCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleVSCodeDetector(),
+	})
+	if len(adapter.paths) != 0 {
+		t.Fatalf("adapter called despite capacity failure: %v", adapter.paths)
+	}
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("deleted count = %d", result.Totals.OptInDeletedCount)
+	}
+	found := false
+	for _, skipped := range result.Skipped {
+		if skipped.Reason.Code == "recycle_bin_capacity" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("skipped = %#v, want recycle_bin_capacity", result.Skipped)
+	}
+}
+
+func TestNormalizedOptInSetVSCodeAndDevCaches(t *testing.T) {
+	enabled, invalid, _ := clean.NormalizedOptInSet([]string{"vscode_cache"})
+	if len(invalid) != 0 || !enabled[clean.OpportunityCategoryVSCodeCache] {
+		t.Fatalf("vscode_cache opt-in = %#v %#v", enabled, invalid)
+	}
+	enabled, invalid, _ = clean.NormalizedOptInSet([]string{"dev-caches"})
+	if len(invalid) != 0 || !enabled[clean.OpportunityCategoryVSCodeCache] {
+		t.Fatalf("dev-caches should enable vscode_cache: %#v %#v", enabled, invalid)
+	}
+}
