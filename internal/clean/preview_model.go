@@ -294,19 +294,10 @@ func applicationDisplayName(application string) string {
 		return "Google Chrome"
 	case ApplicationMicrosoftEdge:
 		return "Microsoft Edge"
-	case ApplicationGo:
-		return "Go"
-	case ApplicationCargo:
-		return "Cargo"
-	case ApplicationDotNet:
-		return ".NET"
-	case ApplicationNuGet:
-		return "NuGet"
-	case ApplicationNode:
-		return "Node.js"
-	case ApplicationPython:
-		return "Python"
 	default:
+		if app, ok := developerApplicationDefinition(application); ok {
+			return app.displayName
+		}
 		return application
 	}
 }

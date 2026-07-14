@@ -144,3 +144,93 @@ func TestFixedPathOpportunityUsesCanonicalCatalogVocabulary(t *testing.T) {
 		t.Fatalf("NormalizedOptInSet() = %#v, %#v; want canonical crash_dumps", enabled, invalid)
 	}
 }
+
+func TestDeveloperCacheRegistryConsistency(t *testing.T) {
+	// Public seam: stable order, completeness, path-free projection, and
+	// resolver dispatch through the registered rules. Does not inspect private
+	// struct layout.
+	wantDevCaches := []string{
+		clean.DevCacheCategoryNPM,
+		clean.DevCacheCategoryGo,
+		clean.DevCacheCategoryPip,
+		clean.DevCacheCategoryCargo,
+		clean.DevCacheCategoryNuGet,
+		clean.DevCacheCategoryNuGetGlobalPackages,
+		clean.DevCacheCategoryCorepack,
+	}
+
+	catalog := clean.CanonicalCleanupCategoryCatalog()
+	summaries := catalog.Summaries()
+	var gotDevCaches []string
+	for _, summary := range summaries {
+		if summary.ReportCategory == clean.ReportCategoryDeveloperTools &&
+			summary.Eligibility == clean.CategoryEligibilityOptIn {
+			gotDevCaches = append(gotDevCaches, summary.Identifier)
+		}
+	}
+	if !reflect.DeepEqual(gotDevCaches, wantDevCaches) {
+		t.Fatalf("developer-cache order = %#v, want %#v", gotDevCaches, wantDevCaches)
+	}
+
+	policies := map[string]clean.RunningApplicationPolicy{
+		clean.DevCacheCategoryNPM:                 clean.RunningApplicationPolicySharedRuntime,
+		clean.DevCacheCategoryGo:                  clean.RunningApplicationPolicyDistinctiveProcessIdle,
+		clean.DevCacheCategoryPip:                 clean.RunningApplicationPolicySharedRuntime,
+		clean.DevCacheCategoryCargo:               clean.RunningApplicationPolicyDistinctiveProcessIdle,
+		clean.DevCacheCategoryNuGet:               clean.RunningApplicationPolicyDistinctiveProcessIdle,
+		clean.DevCacheCategoryNuGetGlobalPackages: clean.RunningApplicationPolicyDistinctiveProcessIdle,
+		clean.DevCacheCategoryCorepack:            clean.RunningApplicationPolicySharedRuntime,
+	}
+	for id, wantPolicy := range policies {
+		summary, ok := catalog.Summary(id)
+		if !ok {
+			t.Fatalf("missing developer-cache category %q", id)
+		}
+		if summary.RunningApplicationPolicy != wantPolicy {
+			t.Fatalf("%s policy = %q, want %q", id, summary.RunningApplicationPolicy, wantPolicy)
+		}
+		if summary.Eligibility != clean.CategoryEligibilityOptIn {
+			t.Fatalf("%s eligibility = %q, want opt-in", id, summary.Eligibility)
+		}
+	}
+
+	encoded, err := json.Marshal(summaries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		"NPM_CONFIG_CACHE", "GOCACHE", "PIP_CACHE_DIR", "CARGO_HOME",
+		"NUGET_HTTP_CACHE_PATH", "NUGET_PACKAGES", "COREPACK_HOME",
+		"go.exe", "cargo.exe", "dotnet.exe", "nuget.exe", "node.exe", "python.exe",
+		"resolvePaths", "lookupEnv", "LOCALAPPDATA",
+	} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("path-free catalog projection exposes %q: %s", forbidden, encoded)
+		}
+	}
+
+	// Unknown categories never resolve through the registry-backed default.
+	if paths := clean.ResolveDevCachePaths("not-a-real-cache"); len(paths) != 0 {
+		t.Fatalf("unknown category resolved paths: %#v", paths)
+	}
+
+	// dev-caches / all selection order stays complete through NormalizedOptInSet.
+	enabled, invalid, valid := clean.NormalizedOptInSet([]string{"dev-caches"})
+	if len(invalid) != 0 {
+		t.Fatalf("dev-caches invalid = %#v", invalid)
+	}
+	for _, id := range wantDevCaches {
+		if !enabled[id] {
+			t.Fatalf("dev-caches missing %q", id)
+		}
+	}
+	foundDevCachesGroup := false
+	for _, name := range valid {
+		if name == clean.DevCacheCategoryAll {
+			foundDevCachesGroup = true
+		}
+	}
+	if !foundDevCachesGroup {
+		t.Fatal("valid names missing dev-caches group token")
+	}
+}
