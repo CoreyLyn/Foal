@@ -181,12 +181,14 @@ func TestAppendStructuredDevCacheCandidatesCanceledSiblingIndependence(t *testin
 	}
 }
 
-func TestCanonicalStructuredDevCachePolicyIsPlaywrightOnly(t *testing.T) {
+func TestCanonicalStructuredDevCachePolicyIsPlaywrightAndPuppeteer(t *testing.T) {
+	// playwright-browsers and puppeteer-browsers ship structured child discovery;
+	// whole-root categories stay nil.
 	for _, id := range developerCacheCategoryIDs() {
 		has := categoryHasStructuredDevCacheDiscovery(id)
-		if id == DevCacheCategoryPlaywright {
+		if id == DevCacheCategoryPlaywright || id == DevCacheCategoryPuppeteerBrowsers {
 			if !has {
-				t.Fatal("playwright-browsers must register structured child discovery")
+				t.Fatalf("%s must register structured child discovery", id)
 			}
 			continue
 		}

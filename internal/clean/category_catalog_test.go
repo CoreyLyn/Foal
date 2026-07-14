@@ -36,6 +36,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"uv-cache",
 		"bun-cache",
 		"playwright-browsers",
+		"puppeteer-browsers",
 		"administrator_only_caches",
 	}
 	gotIdentifiers := make([]string, 0, len(summaries))
@@ -165,6 +166,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryUV,
 		clean.DevCacheCategoryBun,
 		clean.DevCacheCategoryPlaywright,
+		clean.DevCacheCategoryPuppeteerBrowsers,
 	}
 	wantDeveloperToolsOptIn := append(
 		[]string{clean.OpportunityCategoryVSCodeCache, clean.OpportunityCategoryCursorCache},
@@ -206,6 +208,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryUV:                  clean.RunningApplicationPolicyDistinctiveProcessIdle,
 		clean.DevCacheCategoryBun:                 clean.RunningApplicationPolicyDistinctiveProcessIdle,
 		clean.DevCacheCategoryPlaywright:          clean.RunningApplicationPolicySharedRuntime,
+		clean.DevCacheCategoryPuppeteerBrowsers:   clean.RunningApplicationPolicySharedRuntime,
 	}
 	for id, wantPolicy := range policies {
 		summary, ok := catalog.Summary(id)
@@ -227,12 +230,12 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 	for _, forbidden := range []string{
 		"NPM_CONFIG_CACHE", "GOCACHE", "PIP_CACHE_DIR", "CARGO_HOME",
 		"NUGET_HTTP_CACHE_PATH", "NUGET_PACKAGES", "COREPACK_HOME", "UV_CACHE_DIR",
-		"BUN_INSTALL_CACHE_DIR", "PLAYWRIGHT_BROWSERS_PATH",
+		"BUN_INSTALL_CACHE_DIR", "PLAYWRIGHT_BROWSERS_PATH", "PUPPETEER_CACHE_DIR",
 		"go.exe", "cargo.exe", "dotnet.exe", "nuget.exe", "node.exe", "python.exe",
 		"uv.exe", "uvx.exe", "bun.exe", "bunx.exe", "Code.exe", "Cursor.exe",
 		"resolvePaths", "lookupEnv", "LOCALAPPDATA", "APPDATA", "ms-playwright",
 		"CachedData", "CachedExtensionVSIXs", "INSTALLATION_COMPLETE",
-		"chromium_headless_shell", "discoverChildren",
+		"chromium_headless_shell", "chrome-headless-shell", "discoverChildren",
 	} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("path-free catalog projection exposes %q: %s", forbidden, encoded)

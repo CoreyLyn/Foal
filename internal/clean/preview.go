@@ -29,6 +29,7 @@ const (
 	DevCacheCategoryUV                  = "uv-cache"
 	DevCacheCategoryBun                 = "bun-cache"
 	DevCacheCategoryPlaywright          = "playwright-browsers"
+	DevCacheCategoryPuppeteerBrowsers   = "puppeteer-browsers"
 	DevCacheCategoryAll                 = "dev-caches"
 )
 

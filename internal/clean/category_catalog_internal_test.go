@@ -123,6 +123,7 @@ func TestCanonicalDeveloperCacheRegistryBindsResolvers(t *testing.T) {
 		DevCacheCategoryUV:                  `C:\Users\test\AppData\Local\uv\cache`,
 		DevCacheCategoryBun:                 `C:\Users\test\.bun\install\cache`,
 		DevCacheCategoryPlaywright:          `C:\Users\test\AppData\Local\ms-playwright`,
+		DevCacheCategoryPuppeteerBrowsers:   `C:\Users\test\.cache\puppeteer`,
 	}
 	for category, wantPath := range want {
 		paths := resolveDevCachePaths(category, deps)
