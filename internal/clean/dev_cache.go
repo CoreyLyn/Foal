@@ -6,16 +6,26 @@ import (
 	"runtime"
 )
 
-// ResolveDevCachePath resolves a developer tool cache path using only
+// ResolveDevCachePaths resolves developer tool cache paths using only
 // environment variables and default paths (no external tool execution).
-// Returns empty string if the path cannot be determined.
-func ResolveDevCachePath(category string) string {
-	return resolveDevCachePath(category, devCachePathDependencies{
+// Returns empty slice if no paths can be determined.
+func ResolveDevCachePaths(category string) []string {
+	return resolveDevCachePaths(category, devCachePathDependencies{
 		lookupEnv:   os.LookupEnv,
 		userHomeDir: os.UserHomeDir,
 		joinPath:    filepath.Join,
 		goos:        runtime.GOOS,
 	})
+}
+
+// ResolveDevCachePath resolves a single developer tool cache path for backward
+// compatibility. Use ResolveDevCachePaths instead.
+func ResolveDevCachePath(category string) string {
+	paths := ResolveDevCachePaths(category)
+	if len(paths) > 0 {
+		return paths[0]
+	}
+	return ""
 }
 
 type devCachePathDependencies struct {
@@ -25,59 +35,59 @@ type devCachePathDependencies struct {
 	goos        string
 }
 
-func resolveDevCachePath(category string, deps devCachePathDependencies) string {
+func resolveDevCachePaths(category string, deps devCachePathDependencies) []string {
 	switch category {
 	case DevCacheCategoryNPM:
-		return resolveNPMCachePath(deps)
+		return resolveNPMCachePaths(deps)
 	case DevCacheCategoryGo:
-		return resolveGoCachePath(deps)
+		return resolveGoCachePaths(deps)
 	case DevCacheCategoryPip:
-		return resolvePipCachePath(deps)
+		return resolvePipCachePaths(deps)
 	case DevCacheCategoryCargo:
-		return resolveCargoCachePath(deps)
+		return resolveCargoCachePaths(deps)
 	case DevCacheCategoryNuGet:
-		return resolveNuGetCachePath(deps)
+		return resolveNuGetCachePaths(deps)
 	case DevCacheCategoryCorepack:
-		return resolveCorepackOptInCachePath(deps)
+		return resolveCorepackOptInCachePaths(deps)
 	default:
-		return ""
+		return nil
 	}
 }
 
-func resolveNPMCachePath(deps devCachePathDependencies) string {
+func resolveNPMCachePaths(deps devCachePathDependencies) []string {
 	// npm: NPM_CONFIG_CACHE -> %LOCALAPPDATA%\npm-cache
 	if path, ok := deps.lookupEnv("NPM_CONFIG_CACHE"); ok && path != "" {
-		return path
+		return []string{path}
 	}
 	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
-		return deps.joinPath(localAppData, "npm-cache")
+		return []string{deps.joinPath(localAppData, "npm-cache")}
 	}
-	return ""
+	return nil
 }
 
-func resolveGoCachePath(deps devCachePathDependencies) string {
+func resolveGoCachePaths(deps devCachePathDependencies) []string {
 	// go: GOCACHE -> %LOCALAPPDATA%\go-build
 	if path, ok := deps.lookupEnv("GOCACHE"); ok && path != "" {
-		return path
+		return []string{path}
 	}
 	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
-		return deps.joinPath(localAppData, "go-build")
+		return []string{deps.joinPath(localAppData, "go-build")}
 	}
-	return ""
+	return nil
 }
 
-func resolvePipCachePath(deps devCachePathDependencies) string {
+func resolvePipCachePaths(deps devCachePathDependencies) []string {
 	// pip: PIP_CACHE_DIR -> %LOCALAPPDATA%\pip\Cache
 	if path, ok := deps.lookupEnv("PIP_CACHE_DIR"); ok && path != "" {
-		return path
+		return []string{path}
 	}
 	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
-		return deps.joinPath(localAppData, "pip", "Cache")
+		return []string{deps.joinPath(localAppData, "pip", "Cache")}
 	}
-	return ""
+	return nil
 }
 
-func resolveCargoCachePath(deps devCachePathDependencies) string {
+func resolveCargoCachePaths(deps devCachePathDependencies) []string {
 	// cargo: CARGO_HOME -> %USERPROFILE%\.cargo\registry\cache
 	var cargoHome string
 	if path, ok := deps.lookupEnv("CARGO_HOME"); ok && path != "" {
@@ -92,26 +102,26 @@ func resolveCargoCachePath(deps devCachePathDependencies) string {
 		}
 	}
 	if cargoHome != "" {
-		return deps.joinPath(cargoHome, "registry", "cache")
+		return []string{deps.joinPath(cargoHome, "registry", "cache")}
 	}
-	return ""
+	return nil
 }
 
-func resolveNuGetCachePath(deps devCachePathDependencies) string {
+func resolveNuGetCachePaths(deps devCachePathDependencies) []string {
 	// nuget: NUGET_HTTP_CACHE_PATH -> %LOCALAPPDATA%\NuGet\v3-cache
 	if path, ok := deps.lookupEnv("NUGET_HTTP_CACHE_PATH"); ok && path != "" {
-		return path
+		return []string{path}
 	}
 	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
-		return deps.joinPath(localAppData, "NuGet", "v3-cache")
+		return []string{deps.joinPath(localAppData, "NuGet", "v3-cache")}
 	}
-	return ""
+	return nil
 }
 
-func resolveCorepackOptInCachePath(deps devCachePathDependencies) string {
+func resolveCorepackOptInCachePaths(deps devCachePathDependencies) []string {
 	// corepack: COREPACK_HOME -> %LOCALAPPDATA%\node\corepack\v1
 	if corepackHome, ok := deps.lookupEnv("COREPACK_HOME"); ok && corepackHome != "" {
-		return deps.joinPath(corepackHome, "v1")
+		return []string{deps.joinPath(corepackHome, "v1")}
 	}
 	base, ok := deps.lookupEnv("XDG_CACHE_HOME")
 	if !ok {
@@ -119,16 +129,18 @@ func resolveCorepackOptInCachePath(deps devCachePathDependencies) string {
 	}
 	if !ok {
 		home, err := deps.userHomeDir()
-		if err != nil || home == "" {
-			return ""
-		}
-		if deps.goos == "windows" {
-			base = deps.joinPath(home, "AppData", "Local")
-		} else {
-			base = deps.joinPath(home, ".cache")
+		if err == nil && home != "" {
+			if deps.goos == "windows" {
+				base = deps.joinPath(home, "AppData", "Local")
+			} else {
+				base = deps.joinPath(home, ".cache")
+			}
 		}
 	}
-	return deps.joinPath(base, "node", "corepack", "v1")
+	if base != "" {
+		return []string{deps.joinPath(base, "node", "corepack", "v1")}
+	}
+	return nil
 }
 
 // devCacheCategories returns the list of all dev cache categories.
@@ -140,26 +152,4 @@ func devCacheCategories() []string {
 func isDevCacheCategory(category string) bool {
 	entry, ok := canonicalCategoryEntry(category)
 	return ok && entry.developerCache
-}
-
-// devCacheCategoryMatchesSuggestion checks if a dev cache category matches
-// a ReviewSuggestion. Returns true if the suggestion corresponds to the
-// category (e.g., npm-cache matches an npm cache suggestion).
-func devCacheCategoryMatchesSuggestion(category string, suggestion ReviewSuggestion) bool {
-	switch category {
-	case DevCacheCategoryNPM:
-		return suggestion.Tool == "npm"
-	case DevCacheCategoryGo:
-		return suggestion.Tool == "go" && suggestion.Label == "Go build cache"
-	case DevCacheCategoryPip:
-		return suggestion.Tool == "pip"
-	case DevCacheCategoryCargo:
-		return suggestion.Tool == "cargo"
-	case DevCacheCategoryNuGet:
-		return suggestion.Tool == "dotnet"
-	case DevCacheCategoryCorepack:
-		return suggestion.Tool == "corepack"
-	default:
-		return false
-	}
 }

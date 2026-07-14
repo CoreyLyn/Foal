@@ -171,16 +171,18 @@ func discoverReviewSuggestions(ctx context.Context, tools []string, deps reviewS
 				}
 				paths = parseReviewSuggestionPaths(probe, output)
 			}
-			cachePath := firstExistingCachePath(paths, deps.pathExists)
-			if cachePath == "" {
-				continue
+			// Emit a separate suggestion for each existing path
+			for _, path := range paths {
+				path = strings.TrimSpace(path)
+				if path != "" && deps.pathExists(path) {
+					suggestions = append(suggestions, ReviewSuggestion{
+						Tool:      toolName,
+						Label:     probe.label,
+						Command:   probe.cleanCommand,
+						CachePath: path,
+					})
+				}
 			}
-			suggestions = append(suggestions, ReviewSuggestion{
-				Tool:      toolName,
-				Label:     probe.label,
-				Command:   probe.cleanCommand,
-				CachePath: cachePath,
-			})
 		}
 	}
 	return suggestions

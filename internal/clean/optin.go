@@ -2,6 +2,7 @@ package clean
 
 import (
 	"context"
+	"path/filepath"
 )
 
 // optInResolution is the result of resolving opt-in candidates for a run.
@@ -55,6 +56,21 @@ func optedOutOpportunityCategories(plan map[string]bool) []string {
 	return disabled
 }
 
+// normalizeAndDeduplicatePaths normalizes paths and removes duplicates while
+// preserving order.
+func normalizeAndDeduplicatePaths(paths []string) []string {
+	seen := make(map[string]bool, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		cleaned := filepath.Clean(path)
+		if !seen[cleaned] {
+			seen[cleaned] = true
+			result = append(result, cleaned)
+		}
+	}
+	return result
+}
+
 // resolveOptInCandidates turns an opt-in plan into the concrete deletable
 // Opt-in candidate paths for a run. Only opted-in categories are scanned
 // (ADR-0008: non-opted-in categories stay omitted from execute); the dry-run
@@ -76,7 +92,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 
 	resolveDevCache := opts.DevCachePathResolver
 	if resolveDevCache == nil {
-		resolveDevCache = ResolveDevCachePath
+		resolveDevCache = ResolveDevCachePaths
 	}
 
 	// Developer-tool caches.
@@ -84,35 +100,37 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 		if !plan[category] {
 			continue
 		}
-		path := resolveDevCache(category)
-		if path == "" || opts.Validator.IsUserProtected(path) {
-			continue
-		}
-		if hasDetector {
-			if outcome := (runningGate{}).gateDevCache(category, path, devCacheStates); !outcome.proceed {
-				if outcome.skipReason != nil {
-					if bytes, err := measureBytes(path); err == nil {
-						res.skipped = append(res.skipped, SkippedItem{
-							Path:   path,
-							Bytes:  bytes,
-							Rule:   category,
-							Reason: *outcome.skipReason,
-						})
-					}
-				}
+		paths := normalizeAndDeduplicatePaths(resolveDevCache(category))
+		for _, path := range paths {
+			if path == "" || opts.Validator.IsUserProtected(path) {
 				continue
 			}
+			if hasDetector {
+				if outcome := (runningGate{}).gateDevCache(category, path, devCacheStates); !outcome.proceed {
+					if outcome.skipReason != nil {
+						if bytes, err := measureBytes(path); err == nil {
+							res.skipped = append(res.skipped, SkippedItem{
+								Path:   path,
+								Bytes:  bytes,
+								Rule:   category,
+								Reason: *outcome.skipReason,
+							})
+						}
+					}
+					continue
+				}
+			}
+			bytes, err := measureBytes(path)
+			if err != nil {
+				continue
+			}
+			res.candidates = append(res.candidates, OptInCandidate{
+				Path:          path,
+				Bytes:         bytes,
+				Category:      category,
+				PlannedAction: plannedRecycleBinAction,
+			})
 		}
-		bytes, err := measureBytes(path)
-		if err != nil {
-			continue
-		}
-		res.candidates = append(res.candidates, OptInCandidate{
-			Path:          path,
-			Bytes:         bytes,
-			Category:      category,
-			PlannedAction: plannedRecycleBinAction,
-		})
 	}
 
 	// Opportunity categories (opted-in only).

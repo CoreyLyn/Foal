@@ -123,11 +123,11 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fakeResolver := func(category string) string {
+		fakeResolver := func(category string) []string {
 			if category == clean.DevCacheCategoryNPM {
-				return cachePath
+				return []string{cachePath}
 			}
-			return ""
+			return nil
 		}
 
 		result := clean.DryRun(context.Background(), clean.Options{
@@ -185,8 +185,11 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			cachePaths[cat] = cachePath
 		}
 
-		fakeResolver := func(category string) string {
-			return cachePaths[category]
+		fakeResolver := func(category string) []string {
+			if path, ok := cachePaths[category]; ok {
+				return []string{path}
+			}
+			return nil
 		}
 
 		result := clean.DryRun(context.Background(), clean.Options{
@@ -202,8 +205,8 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 	})
 
 	t.Run("empty path from resolver skips the dev cache", func(t *testing.T) {
-		fakeResolver := func(category string) string {
-			return ""
+		fakeResolver := func(category string) []string {
+			return nil
 		}
 
 		result := clean.DryRun(context.Background(), clean.Options{
@@ -228,11 +231,11 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fakeResolver := func(category string) string {
+		fakeResolver := func(category string) []string {
 			if category == clean.DevCacheCategoryNPM {
-				return protectedPath
+				return []string{protectedPath}
 			}
-			return ""
+			return nil
 		}
 
 		result := clean.DryRun(context.Background(), clean.Options{
@@ -245,6 +248,122 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 
 		if len(result.OptInCandidates) != 0 {
 			t.Fatalf("expected 0 opt-in candidates for protected path, got %d", len(result.OptInCandidates))
+		}
+	})
+
+	t.Run("multiple roots for single category", func(t *testing.T) {
+		root := t.TempDir()
+		cachePath1 := filepath.Join(root, "npm-cache-1")
+		cachePath2 := filepath.Join(root, "npm-cache-2")
+		for _, path := range []string{cachePath1, cachePath2} {
+			if err := os.Mkdir(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			testFile := filepath.Join(path, "data.bin")
+			if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		fakeResolver := func(category string) []string {
+			if category == clean.DevCacheCategoryNPM {
+				return []string{cachePath1, cachePath2}
+			}
+			return nil
+		}
+
+		result := clean.DryRun(context.Background(), clean.Options{
+			OptIn:                     []string{"npm-cache"},
+			DevCachePathResolver:      fakeResolver,
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: noReviewSuggestions,
+		})
+
+		if len(result.OptInCandidates) != 2 {
+			t.Fatalf("expected 2 opt-in candidates, got %d", len(result.OptInCandidates))
+		}
+		seen := make(map[string]bool)
+		for _, c := range result.OptInCandidates {
+			if c.Category != clean.DevCacheCategoryNPM {
+				t.Errorf("unexpected category: %q", c.Category)
+			}
+			seen[c.Path] = true
+		}
+		if !seen[cachePath1] || !seen[cachePath2] {
+			t.Errorf("expected both paths to be present, got: %v", seen)
+		}
+	})
+
+	t.Run("duplicate roots are deduplicated", func(t *testing.T) {
+		root := t.TempDir()
+		cachePath := filepath.Join(root, "npm-cache")
+		if err := os.Mkdir(cachePath, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cachePath, "data.bin"), []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		fakeResolver := func(category string) []string {
+			if category == clean.DevCacheCategoryNPM {
+				// Return same path twice with different casing/slashes
+				return []string{
+					cachePath,
+					filepath.Join(root, "npm-cache"),
+				}
+			}
+			return nil
+		}
+
+		result := clean.DryRun(context.Background(), clean.Options{
+			OptIn:                     []string{"npm-cache"},
+			DevCachePathResolver:      fakeResolver,
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: noReviewSuggestions,
+		})
+
+		if len(result.OptInCandidates) != 1 {
+			t.Fatalf("expected 1 opt-in candidate (deduplicated), got %d", len(result.OptInCandidates))
+		}
+		if result.OptInCandidates[0].Path != cachePath {
+			t.Errorf("unexpected path: %q", result.OptInCandidates[0].Path)
+		}
+	})
+
+	t.Run("one protected root doesn't block other roots", func(t *testing.T) {
+		root := t.TempDir()
+		protectedPath := filepath.Join(root, "protected")
+		allowedPath := filepath.Join(root, "allowed")
+		for _, path := range []string{protectedPath, allowedPath} {
+			if err := os.Mkdir(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			testFile := filepath.Join(path, "data.bin")
+			if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		fakeResolver := func(category string) []string {
+			if category == clean.DevCacheCategoryNPM {
+				return []string{protectedPath, allowedPath}
+			}
+			return nil
+		}
+
+		result := clean.DryRun(context.Background(), clean.Options{
+			OptIn:                     []string{"npm-cache"},
+			Validator:                 pathsafe.NewValidator([]string{protectedPath}),
+			DevCachePathResolver:      fakeResolver,
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: noReviewSuggestions,
+		})
+
+		if len(result.OptInCandidates) != 1 {
+			t.Fatalf("expected 1 opt-in candidate (protected path skipped), got %d", len(result.OptInCandidates))
+		}
+		if result.OptInCandidates[0].Path != allowedPath {
+			t.Errorf("expected allowed path %q, got %q", allowedPath, result.OptInCandidates[0].Path)
 		}
 	})
 }
@@ -261,11 +380,11 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fakeResolver := func(category string) string {
+		fakeResolver := func(category string) []string {
 			if category == clean.DevCacheCategoryNPM {
-				return cachePath
+				return []string{cachePath}
 			}
-			return ""
+			return nil
 		}
 
 		adapter := &recordingRecycleBinAdapter{}
@@ -340,8 +459,11 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			cachePaths[cat] = cachePath
 		}
 
-		fakeResolver := func(category string) string {
-			return cachePaths[category]
+		fakeResolver := func(category string) []string {
+			if path, ok := cachePaths[category]; ok {
+				return []string{path}
+			}
+			return nil
 		}
 
 		adapter := &recordingRecycleBinAdapter{}
@@ -378,11 +500,11 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fakeResolver := func(category string) string {
+		fakeResolver := func(category string) []string {
 			if category == clean.DevCacheCategoryNPM {
-				return cachePath
+				return []string{cachePath}
 			}
-			return ""
+			return nil
 		}
 
 		// Fake probe that returns very low capacity
@@ -433,11 +555,11 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fakeResolver := func(category string) string {
+		fakeResolver := func(category string) []string {
 			if category == clean.DevCacheCategoryNPM {
-				return cachePath
+				return []string{cachePath}
 			}
-			return ""
+			return nil
 		}
 
 		// Fake probe that returns error
@@ -484,11 +606,11 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fakeResolver := func(category string) string {
+		fakeResolver := func(category string) []string {
 			if category == clean.DevCacheCategoryNPM {
-				return cachePath
+				return []string{cachePath}
 			}
-			return ""
+			return nil
 		}
 
 		// Fake probe that returns NukeOnDelete true
@@ -529,8 +651,8 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 	})
 
 	t.Run("empty path from resolver skips execute", func(t *testing.T) {
-		fakeResolver := func(category string) string {
-			return ""
+		fakeResolver := func(category string) []string {
+			return nil
 		}
 
 		adapter := &recordingRecycleBinAdapter{}
@@ -565,8 +687,8 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		fakeResolver := func(category string) string {
-			return cachePath
+		fakeResolver := func(category string) []string {
+			return []string{cachePath}
 		}
 
 		adapter := &recordingRecycleBinAdapter{}
@@ -590,15 +712,112 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			t.Fatalf("expected OptInDeletedCount 0, got %d", result.Totals.OptInDeletedCount)
 		}
 	})
-}
 
-func TestDevCachePathResolution(t *testing.T) {
-	t.Run("ResolveDevCachePath uses environment variables when set", func(t *testing.T) {
-		// Note: This doesn't modify real env - ResolveDevCachePath is just a wrapper
-		// that calls through to os.LookupEnv, but we can test the internal implementation
-		// by using test helpers.
+	t.Run("multiple roots for single category in execute", func(t *testing.T) {
+		root := t.TempDir()
+		cachePath1 := filepath.Join(root, "npm-cache-1")
+		cachePath2 := filepath.Join(root, "npm-cache-2")
+		for _, path := range []string{cachePath1, cachePath2} {
+			if err := os.Mkdir(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			testFile := filepath.Join(path, "data.bin")
+			if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		fakeResolver := func(category string) []string {
+			if category == clean.DevCacheCategoryNPM {
+				return []string{cachePath1, cachePath2}
+			}
+			return nil
+		}
+
+		adapter := &recordingRecycleBinAdapter{}
+
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			OptIn:                     []string{"npm-cache"},
+			DevCachePathResolver:      fakeResolver,
+			RecycleBinAdapter:         adapter,
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: noReviewSuggestions,
+			Rules: []clean.Rule{{
+				ID:             "test_rule",
+				DefaultEnabled: false,
+			}},
+		})
+
+		if len(adapter.paths) != 2 {
+			t.Fatalf("expected 2 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
+		}
+		if result.Totals.OptInDeletedCount != 2 {
+			t.Fatalf("expected OptInDeletedCount 2, got %d", result.Totals.OptInDeletedCount)
+		}
+	})
+
+	t.Run("one skipped root doesn't block other roots", func(t *testing.T) {
+		root := t.TempDir()
+		skippedPath := filepath.Join(root, "skipped")
+		allowedPath := filepath.Join(root, "allowed")
+		for _, path := range []string{skippedPath, allowedPath} {
+			if err := os.Mkdir(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			testFile := filepath.Join(path, "data.bin")
+			if err := os.WriteFile(testFile, []byte("test"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		fakeResolver := func(category string) []string {
+			if category == clean.DevCacheCategoryNPM {
+				return []string{skippedPath, allowedPath}
+			}
+			return nil
+		}
+
+		// Fake probe that fails only for skippedPath
+		fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
+			if path == skippedPath {
+				return clean.RecycleBinVolumeConfig{}, os.ErrNotExist
+			}
+			return clean.RecycleBinVolumeConfig{
+				Volume:       filepath.VolumeName(path),
+				NukeOnDelete: false,
+				MaxCapacity:  1000,
+			}, nil
+		}
+
+		adapter := &recordingRecycleBinAdapter{}
+
+		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			OptIn:                     []string{"npm-cache"},
+			DevCachePathResolver:      fakeResolver,
+			RecycleBinCapacityProbe:   fakeProbe,
+			RecycleBinAdapter:         adapter,
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: noReviewSuggestions,
+			Rules: []clean.Rule{{
+				ID:             "test_rule",
+				DefaultEnabled: false,
+			}},
+		})
+
+		// Verify only allowed path was executed
+		if len(adapter.paths) != 1 || adapter.paths[0] != allowedPath {
+			t.Fatalf("expected only allowed path to be executed, got %v", adapter.paths)
+		}
+		// Verify one deleted, one skipped
+		if result.Totals.OptInDeletedCount != 1 {
+			t.Fatalf("expected OptInDeletedCount 1, got %d", result.Totals.OptInDeletedCount)
+		}
+		if len(result.Skipped) != 1 || result.Skipped[0].Path != skippedPath {
+			t.Fatalf("expected skipped path to be present")
+		}
 	})
 }
+
 
 func noOpportunities(context.Context) clean.OpportunityDiscoveryResult {
 	return clean.OpportunityDiscoveryResult{}

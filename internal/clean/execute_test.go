@@ -1763,11 +1763,11 @@ func TestExecuteOptInGoCacheSkipsWhenGoRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryGo {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports Go as running
@@ -1826,11 +1826,11 @@ func TestExecuteOptInGoCacheCleansWhenGoIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryGo {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports Go as idle
@@ -1886,11 +1886,11 @@ func TestExecuteOptInCargoCacheSkipsWhenCargoRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryCargo {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports Cargo as running
@@ -1944,11 +1944,11 @@ func TestExecuteOptInNuGetCacheSkipsWhenDotNetRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryNuGet {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports dotnet as running
@@ -2002,11 +2002,11 @@ func TestExecuteOptInNuGetCacheSkipsWhenNuGetRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryNuGet {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports NuGet as running
@@ -2060,11 +2060,11 @@ func TestExecuteOptInDevCacheSkipsWhenStateUnknown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryGo {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports unknown state
@@ -2119,11 +2119,11 @@ func TestExecuteOptInNPMCacheStillCleansWhenNodeRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryNPM {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports Node as running
@@ -2179,11 +2179,11 @@ func TestExecuteOptInPipCacheStillCleansWhenPythonRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryPip {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports Python as running
@@ -2239,11 +2239,11 @@ func TestExecuteOptInCorepackCacheStillCleansWhenNodeRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryCorepack {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports Node as running
@@ -2299,11 +2299,11 @@ func TestDryRunOptInDevCacheHidesWhenToolRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryGo {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports Go as running
@@ -2342,11 +2342,11 @@ func TestDryRunOptInDevCacheShowsWhenToolIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeResolver := func(category string) string {
+	fakeResolver := func(category string) []string {
 		if category == clean.DevCacheCategoryGo {
-			return cachePath
+			return []string{cachePath}
 		}
-		return ""
+		return nil
 	}
 
 	// Create a detector that reports Go as idle
