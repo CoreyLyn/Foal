@@ -25,6 +25,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"nvidia_dx_cache",
 		"browser_cache",
 		"vscode_cache",
+		"cursor_cache",
 		"npm-cache",
 		"go-cache",
 		"pip-cache",
@@ -163,7 +164,10 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryUV,
 		clean.DevCacheCategoryBun,
 	}
-	wantDeveloperToolsOptIn := append([]string{clean.OpportunityCategoryVSCodeCache}, wantDevCaches...)
+	wantDeveloperToolsOptIn := append(
+		[]string{clean.OpportunityCategoryVSCodeCache, clean.OpportunityCategoryCursorCache},
+		wantDevCaches...,
+	)
 
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	summaries := catalog.Summaries()
@@ -182,6 +186,11 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 	if !ok || vscodeSummary.Label != "VS Code cache" ||
 		vscodeSummary.RunningApplicationPolicy != clean.RunningApplicationPolicyApplicationIdleBeforeAfter {
 		t.Fatalf("vscode_cache summary = %#v, want application-idle opportunity", vscodeSummary)
+	}
+	cursorSummary, ok := catalog.Summary(clean.OpportunityCategoryCursorCache)
+	if !ok || cursorSummary.Label != "Cursor cache" ||
+		cursorSummary.RunningApplicationPolicy != clean.RunningApplicationPolicyApplicationIdleBeforeAfter {
+		t.Fatalf("cursor_cache summary = %#v, want application-idle opportunity", cursorSummary)
 	}
 
 	policies := map[string]clean.RunningApplicationPolicy{
@@ -217,7 +226,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		"NUGET_HTTP_CACHE_PATH", "NUGET_PACKAGES", "COREPACK_HOME", "UV_CACHE_DIR",
 		"BUN_INSTALL_CACHE_DIR",
 		"go.exe", "cargo.exe", "dotnet.exe", "nuget.exe", "node.exe", "python.exe",
-		"uv.exe", "uvx.exe", "bun.exe", "bunx.exe", "Code.exe",
+		"uv.exe", "uvx.exe", "bun.exe", "bunx.exe", "Code.exe", "Cursor.exe",
 		"resolvePaths", "lookupEnv", "LOCALAPPDATA", "APPDATA",
 		"CachedData", "CachedExtensionVSIXs",
 	} {

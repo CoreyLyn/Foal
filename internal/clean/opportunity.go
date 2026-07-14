@@ -21,6 +21,7 @@ const (
 	OpportunityCategoryNVIDIADXCache          = "nvidia_dx_cache"
 	OpportunityCategoryBrowserCache           = "browser_cache"
 	OpportunityCategoryVSCodeCache            = "vscode_cache"
+	OpportunityCategoryCursorCache            = "cursor_cache"
 	OpportunityStatus                         = "skipped_by_default"
 	OpportunityReason                         = "requires_explicit_opt_in"
 	UserTempOpportunityStatus                 = OpportunityStatus

@@ -2024,6 +2024,7 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.OpportunityCategoryNVIDIADXCache,
 		clean.OpportunityCategoryBrowserCache,
 		clean.OpportunityCategoryVSCodeCache,
+		clean.OpportunityCategoryCursorCache,
 	}
 	expectedDevCaches := []string{
 		clean.DevCacheCategoryNPM,
@@ -2075,6 +2076,7 @@ func TestCleanOptInInvalidName(t *testing.T) {
 		"nvidia_dx_cache",
 		"browser_cache",
 		"vscode_cache",
+		"cursor_cache",
 		"npm-cache",
 		"go-cache",
 		"pip-cache",

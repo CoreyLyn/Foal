@@ -125,9 +125,10 @@ const uvCacheOptInImpactNotice = "Opt-in uv cache cleanup may require re-downloa
 // and hardlinked project content can reduce actual reclaimable disk space.
 const bunCacheOptInImpactNotice = "Opt-in Bun cache cleanup may require re-downloading dependencies. Hardlinked project content can affect actual disk space reclaimed."
 
-// vscodeCachedExtensionVSIXsImpactNotice is shown when CachedExtensionVSIXs is
-// observed or selected. Installed extensions and settings are never selected.
-const vscodeCachedExtensionVSIXsImpactNotice = "VS Code CachedExtensionVSIXs holds downloaded extension packages that may need to be fetched again after cleanup. Installed extensions and settings are not selected."
+// applicationCacheCachedExtensionVSIXsImpactNotice is shown when an Application
+// cache CachedExtensionVSIXs root is observed or selected. Installed extensions
+// and settings are never selected for any editor category.
+const applicationCacheCachedExtensionVSIXsImpactNotice = "CachedExtensionVSIXs holds downloaded extension packages that may need to be fetched again after cleanup. Installed extensions and settings are not selected."
 
 type PreviewReportCategory struct {
 	Name  string
@@ -212,23 +213,23 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasUVOptIn, hasBunOptIn, hasVSCodeVSIX bool
+	var hasUVOptIn, hasBunOptIn, hasApplicationCacheVSIX bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case DevCacheCategoryUV:
 			hasUVOptIn = true
 		case DevCacheCategoryBun:
 			hasBunOptIn = true
-		case OpportunityCategoryVSCodeCache:
-			if isCachedExtensionVSIXsPath(candidate.Path) {
-				hasVSCodeVSIX = true
+		default:
+			if isApplicationCacheCategory(candidate.Category) && isCachedExtensionVSIXsPath(candidate.Path) {
+				hasApplicationCacheVSIX = true
 			}
 		}
 	}
 	for _, opportunity := range result.Opportunities {
-		if normalizedOpportunityCategory(opportunity.Category) == OpportunityCategoryVSCodeCache &&
-			isCachedExtensionVSIXsPath(opportunity.Path) {
-			hasVSCodeVSIX = true
+		category := normalizedOpportunityCategory(opportunity.Category)
+		if isApplicationCacheCategory(category) && isCachedExtensionVSIXsPath(opportunity.Path) {
+			hasApplicationCacheVSIX = true
 		}
 	}
 	if hasUVOptIn {
@@ -243,10 +244,10 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: bunCacheOptInImpactNotice,
 		})
 	}
-	if hasVSCodeVSIX {
+	if hasApplicationCacheVSIX {
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
-			Message: vscodeCachedExtensionVSIXsImpactNotice,
+			Message: applicationCacheCachedExtensionVSIXsImpactNotice,
 		})
 	}
 

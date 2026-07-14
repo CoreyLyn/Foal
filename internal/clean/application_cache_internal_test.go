@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,47 @@ func TestDiscoverApplicationCachesExactAllowlistOnly(t *testing.T) {
 		t.Fatalf("opportunities = %#v, want Cache and CachedData only", result.opportunities)
 	}
 	for _, opportunity := range result.opportunities {
+		base := filepath.Base(opportunity.Path)
+		if base != "Cache" && base != "CachedData" {
+			t.Fatalf("unexpected root %q", base)
+		}
+		if opportunity.Category != OpportunityCategoryVSCodeCache {
+			t.Fatalf("category = %q, want vscode_cache", opportunity.Category)
+		}
+	}
+}
+
+func TestDiscoverApplicationCachesCursorExactAllowlistOnly(t *testing.T) {
+	roaming := t.TempDir()
+	cursorRoot := filepath.Join(roaming, "Cursor")
+	for _, name := range []string{"Cache", "CachedData", "MyCache", "User", "extensions", "workspaceStorage"} {
+		if err := os.MkdirAll(filepath.Join(cursorRoot, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cursorRoot, name, "f.bin"), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// VS Code roots under the same Roaming base must never leak into Cursor discovery.
+	if err := os.MkdirAll(filepath.Join(roaming, "Code", "Cache"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roaming, "Code", "Cache", "f.bin"), []byte("vscode"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := discoverApplicationCaches(context.Background(), applicationCachePolicyCursor, ApplicationCacheDiscoveryOptions{
+		RoamingAppDataDir: roaming,
+	}, pathsafe.Validator{})
+	if len(result.opportunities) != 2 {
+		t.Fatalf("opportunities = %#v, want Cache and CachedData only", result.opportunities)
+	}
+	for _, opportunity := range result.opportunities {
+		if opportunity.Category != OpportunityCategoryCursorCache {
+			t.Fatalf("category = %q, want cursor_cache", opportunity.Category)
+		}
+		if !strings.HasPrefix(opportunity.Path, cursorRoot) {
+			t.Fatalf("path %q not under Cursor root", opportunity.Path)
+		}
 		base := filepath.Base(opportunity.Path)
 		if base != "Cache" && base != "CachedData" {
 			t.Fatalf("unexpected root %q", base)
@@ -159,6 +201,56 @@ func TestGateApplicationCachePostDiscard(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("post detect calls = %d", calls)
+	}
+}
+
+func TestGateApplicationCacheIndependentEditorApplications(t *testing.T) {
+	// Cursor gate only inspects the Cursor application identity.
+	discoverCalls := 0
+	gate := runningGate{detect: func(context.Context) []RunningApplicationState {
+		return []RunningApplicationState{
+			{Application: ApplicationVisualStudioCode, State: RunningApplicationStateRunning},
+			{Application: ApplicationCursor, State: RunningApplicationStateIdle},
+		}
+	}}
+	outcome := gate.gateApplicationCache(context.Background(), ApplicationCursor, []RunningApplicationState{
+		{Application: ApplicationVisualStudioCode, State: RunningApplicationStateRunning},
+		{Application: ApplicationCursor, State: RunningApplicationStateIdle},
+	}, func() applicationCacheDiscoveryResult {
+		discoverCalls++
+		return applicationCacheDiscoveryResult{
+			opportunities: []Opportunity{{
+				Category: OpportunityCategoryCursorCache,
+				Path:     `C:\fake\Cursor\Cache`,
+				Bytes:    7,
+			}},
+		}
+	})
+	if !outcome.preIdle || !outcome.postIdle || discoverCalls != 1 {
+		t.Fatalf("outcome = %#v discoverCalls=%d, want idle Cursor despite running VS Code", outcome, discoverCalls)
+	}
+
+	// VS Code gate ignores Cursor running state on both pre and post checks.
+	gate = runningGate{detect: func(context.Context) []RunningApplicationState {
+		return []RunningApplicationState{
+			{Application: ApplicationVisualStudioCode, State: RunningApplicationStateIdle},
+			{Application: ApplicationCursor, State: RunningApplicationStateRunning},
+		}
+	}}
+	outcome = gate.gateApplicationCache(context.Background(), ApplicationVisualStudioCode, []RunningApplicationState{
+		{Application: ApplicationVisualStudioCode, State: RunningApplicationStateIdle},
+		{Application: ApplicationCursor, State: RunningApplicationStateRunning},
+	}, func() applicationCacheDiscoveryResult {
+		return applicationCacheDiscoveryResult{
+			opportunities: []Opportunity{{
+				Category: OpportunityCategoryVSCodeCache,
+				Path:     `C:\fake\Code\Cache`,
+				Bytes:    3,
+			}},
+		}
+	})
+	if !outcome.preIdle || !outcome.postIdle {
+		t.Fatalf("outcome = %#v, want idle VS Code despite running Cursor", outcome)
 	}
 }
 
