@@ -1001,7 +1001,7 @@ func previewCandidate(ctx context.Context, validator pathsafe.Validator, path, r
 		return
 	}
 
-	bytes, err := measureBytes(path)
+	bytes, err := measureBytes(ctx, path)
 	if err != nil {
 		result.Skipped = append(result.Skipped, SkippedItem{
 			Path:   path,
@@ -1028,11 +1028,16 @@ func protectionRules(validator pathsafe.Validator) []ProtectionRule {
 	return rules
 }
 
-func measureBytes(path string) (int64, error) {
+func measureBytes(ctx context.Context, path string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(path, func(current string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -1046,7 +1051,10 @@ func measureBytes(path string) (int64, error) {
 		}
 		return nil
 	})
-	return total, err
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 func matchesRuleName(name string, prefixes []string) bool {

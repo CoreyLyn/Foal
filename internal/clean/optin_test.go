@@ -2,6 +2,7 @@ package clean
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -177,5 +178,106 @@ func TestResolveOptInCandidatesEmptyPlanProducesNothing(t *testing.T) {
 	}
 	if discoverCalled {
 		t.Fatal("discovery should not run for an empty plan")
+	}
+}
+
+func TestResolveOptInCandidatesCancellationAddsRecoverableDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "npm-cache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Add multiple files to measure
+	for i := 0; i < 20; i++ {
+		if err := os.WriteFile(filepath.Join(cachePath, fmt.Sprintf("file-%d.dat", i)), []byte("cachedata"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately
+	cancel()
+
+	opts := Options{
+		DevCachePathResolver: func(category string) []string {
+			if category == DevCacheCategoryNPM {
+				return []string{cachePath}
+			}
+			return nil
+		},
+		DiscoverOpportunities: func(context.Context) OpportunityDiscoveryResult {
+			return OpportunityDiscoveryResult{}
+		},
+	}
+	plan := map[string]bool{DevCacheCategoryNPM: true}
+
+	res := resolveOptInCandidates(ctx, opts, plan)
+
+	if len(res.candidates) != 0 {
+		t.Fatalf("candidates = %d, want 0 after cancellation", len(res.candidates))
+	}
+	if len(res.diagnostics) != 1 {
+		t.Fatalf("diagnostics count = %d, want 1 context_canceled diagnostic", len(res.diagnostics))
+	}
+	if res.diagnostics[0].Code != "context_canceled" || !res.diagnostics[0].Recoverable {
+		t.Fatalf("diagnostic = %+v, want recoverable context_canceled", res.diagnostics[0])
+	}
+	if res.diagnostics[0].Path != cachePath {
+		t.Errorf("diagnostic path = %q, want %q", res.diagnostics[0].Path, cachePath)
+	}
+	if res.diagnostics[0].Rule != DevCacheCategoryNPM {
+		t.Errorf("diagnostic rule = %q, want %q", res.diagnostics[0].Rule, DevCacheCategoryNPM)
+	}
+}
+
+func TestResolveOptInCandidatesCancellationSkipsPartialBytes(t *testing.T) {
+	root := t.TempDir()
+	// Create two dev cache paths
+	npmPath := filepath.Join(root, "npm-cache")
+	if err := os.Mkdir(npmPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(npmPath, "small.dat"), []byte("1234"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	goPath := filepath.Join(root, "go-cache")
+	if err := os.Mkdir(goPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		if err := os.WriteFile(filepath.Join(goPath, fmt.Sprintf("file-%d.dat", i)), []byte("godata"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Test with uncancelled context first for baseline
+	opts := Options{
+		DevCachePathResolver: func(category string) []string {
+			switch category {
+			case DevCacheCategoryNPM:
+				return []string{npmPath}
+			case DevCacheCategoryGo:
+				return []string{goPath}
+			}
+			return nil
+		},
+		DiscoverOpportunities: func(context.Context) OpportunityDiscoveryResult {
+			return OpportunityDiscoveryResult{}
+		},
+	}
+	plan := map[string]bool{DevCacheCategoryNPM: true, DevCacheCategoryGo: true}
+
+	res := resolveOptInCandidates(context.Background(), opts, plan)
+	if len(res.candidates) != 2 {
+		t.Fatalf("uncancelled candidates = %d, want 2", len(res.candidates))
+	}
+	baselineTotal := int64(0)
+	for _, c := range res.candidates {
+		baselineTotal += c.Bytes
+	}
+	expectedTotal := int64(4) + 50*6 // small.dat (4) + 50 files * 6 bytes each
+	if baselineTotal != expectedTotal {
+		t.Fatalf("uncancelled total bytes = %d, want %d", baselineTotal, expectedTotal)
 	}
 }

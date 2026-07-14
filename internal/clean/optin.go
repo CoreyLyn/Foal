@@ -108,7 +108,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 			if hasDetector {
 				if outcome := (runningGate{}).gateDevCache(category, path, devCacheStates); !outcome.proceed {
 					if outcome.skipReason != nil {
-						if bytes, err := measureBytes(path); err == nil {
+						if bytes, err := measureBytes(ctx, path); err == nil {
 							res.skipped = append(res.skipped, SkippedItem{
 								Path:   path,
 								Bytes:  bytes,
@@ -120,8 +120,13 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 					continue
 				}
 			}
-			bytes, err := measureBytes(path)
+			bytes, err := measureBytes(ctx, path)
 			if err != nil {
+				// Failed or canceled measurement yields no candidate; non-canceled
+				// unrelated roots continue. Cancellation shows as recoverable diagnostic.
+				if ctx.Err() != nil {
+					res.diagnostics = append(res.diagnostics, issue("context_canceled", ctx.Err().Error(), true, path, category))
+				}
 				continue
 			}
 			res.candidates = append(res.candidates, OptInCandidate{
