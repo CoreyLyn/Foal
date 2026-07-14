@@ -358,10 +358,10 @@ func applyOptInReviewProjection(ctx context.Context, opts Options, result *Resul
 		}
 	}
 
-	optedInDevCachePaths := make(map[string]bool)
+	optedInDevCacheIdentities := make(map[string]bool)
 	for _, c := range resolution.candidates {
 		if isDevCacheCategory(c.Category) {
-			optedInDevCachePaths[filepath.Clean(c.Path)] = true
+			optedInDevCacheIdentities[pathsafe.NormalizePathForIdentity(c.Path)] = true
 		}
 	}
 	discoverSuggestions := opts.DiscoverReviewSuggestions
@@ -372,7 +372,7 @@ func applyOptInReviewProjection(ctx context.Context, opts Options, result *Resul
 		if suggestion.CachePath != "" && opts.Validator.IsUserProtected(suggestion.CachePath) {
 			continue
 		}
-		if suggestion.CachePath != "" && optedInDevCachePaths[filepath.Clean(suggestion.CachePath)] {
+		if suggestion.CachePath != "" && optedInDevCacheIdentities[pathsafe.NormalizePathForIdentity(suggestion.CachePath)] {
 			continue
 		}
 		result.ReviewSuggestions = append(result.ReviewSuggestions, suggestion)
