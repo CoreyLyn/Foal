@@ -19,3 +19,5 @@ The default file is optional: if it does not exist, Foal runs with no user-defin
 ## Consequences
 
 The config file format (newline-delimited absolute paths, blank lines ignored, `#` comments) becomes a user-facing contract that is awkward to change once people rely on it. A future contributor may be tempted to extend protection entries into a cleanup authorization mechanism ("the user opted in, so it's safe") — that is explicitly out of bounds: protection is a one-way deny. Over-broad entries are fail-safe (they protect more, never delete more). Invalid lines are skipped with Protection diagnostics; selected-file load failures remain fail-closed.
+
+ADR 0015 qualifies downstream suppression for the category-first Clean TUI only: protected paths and bytes remain suppressed, while a stable path-free excluded count and `skipped` or `partial` category state may survive as aggregate safety evidence. Protection remains deny-only and never authorizes a candidate.

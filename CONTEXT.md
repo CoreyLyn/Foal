@@ -65,11 +65,11 @@ Plain ASCII presentation-only labels used in non-JSON output to make preview sta
 _Avoid_: Unicode symbols, JSON status codes, execution semantics
 
 **TUI status markers**:
-Presentation-only symbols used by interactive Foal views to make review state easier to scan. In the Clean TUI, markers emphasize safety semantics: default candidates remain previewed Recycle Bin candidates, skipped-by-default opportunities remain non-executable review data, review clues and suggestions remain manual investigation prompts, running/protected/permission skips remain boundaries, and diagnostics remain recoverable inspection evidence. A positive marker must not imply cleanup authorization or completed deletion.
-_Avoid_: JSON status code, cleanup authorization, execution result, safe-to-delete signal
+Presentation-only symbols used by interactive Foal views to make review state easier to scan. The Clean TUI category-first preview uses `…` for waiting, an animated spinner for scanning, `✓` for a complete scan with candidates, `–` for empty, `⊘` for a safety skip, and `!` for partial, incomplete, or failed diagnostic states; the `>` cursor and `[x]`/`[ ]` selection remain separate, and no status marker implies cleanup authorization.
+_Avoid_: JSON status code, byte-derived progress percentage, cleanup authorization, execution result, safe-to-delete signal
 
 **TUI compact item labels**:
-Presentation-only item summaries used by interactive Foal views to keep grouped review lists scannable. The Clean TUI may show a short item name, marker, count, size, or status by default while keeping full paths and contract fields available through expansion or existing detailed review surfaces. Compact labels do not remove evidence from the read model, do not hide protected-path suppression behavior, and do not make browser profile or cache-directory paths part of the default summary.
+Presentation-only item summaries used by interactive Foal views to keep grouped review lists scannable. The Clean TUI may show a short item name, marker, count, size, or status while keeping full paths and contract fields in CLI, JSON, history, or other existing detailed review surfaces; compact labels do not remove evidence from shared models, bypass protected-path suppression, or make browser profile and cache-directory paths part of the primary TUI.
 _Avoid_: lossy read model, path suppression bypass, browser profile listing by default, execution manifest
 
 **Report category**:
@@ -81,19 +81,19 @@ A human-readable notice that explains protected or administrator-only locations 
 _Avoid_: full preview prompt, automatic elevation, run as administrator recommendation
 
 **Protection rules**:
-Foal's active cleanup safety boundaries, including default Windows path-safety rules and user-defined deny-only entries loaded from `%APPDATA%\Foal\protection.txt` or `FOAL_PROTECTION_FILE`. Each valid absolute local path protects itself and its subtree using normalized, case-insensitive, path-component-aware matching. Protected path-backed review discoveries disappear before totals and downstream projection; a Review suggestion without a resolved cache path is not matched by interpreting its command text.
-_Avoid_: cleanup authorization, allow-only model
+Foal's active cleanup safety boundaries, including default Windows path-safety rules and user-defined deny-only entries loaded from `%APPDATA%\Foal\protection.txt` or `FOAL_PROTECTION_FILE`. Each valid absolute local path protects itself and its subtree using normalized, case-insensitive, path-component-aware matching; protected candidates disappear before reclaimable totals and path-bearing projection, while the Clean TUI eager preview may retain only a path-free category exclusion count and `skipped` or `partial` state, and a Review suggestion without a resolved cache path is never matched by interpreting command text.
+_Avoid_: cleanup authorization, allow-only model, protected path disclosure, protected-byte total
 
 **Detailed candidate list**:
 A human-readable companion file for clean preview reports that records candidates, skipped items, review clues, and reasons without authorizing later execution.
 _Avoid_: execution manifest, deletion input
 
 **Review suggestions**:
-Structured, non-authoritative next steps that point at an external tool's own command (or manual investigation) which Foal surfaces but never executes by default and never counts as a Foal cleanup action by default. A developer-tool cache suggestion may become an opt-in candidate that Foal deletes through its own Recycle Bin action, but Foal never runs the tool's own cleanup command. They are part of the JSON clean contract so automation, human output, and the TUI all see the same suggestions; being structured does not make them executable by default.
+Structured, non-authoritative next steps that point at an external tool's own command (or manual investigation) which Foal surfaces but never executes by default and never counts as a Foal cleanup action by default. A developer-tool cache suggestion may become an opt-in candidate that Foal deletes through its own Recycle Bin action, but Foal never runs the tool's own cleanup command. They remain part of the JSON and human Clean preview contracts; the category-first Clean TUI intentionally presents only canonical cleanup categories and does not duplicate these non-executable suggestions in its primary flow. Being structured does not make them executable by default.
 _Avoid_: cleanup actions, delegated execution, running the referenced tool's cleanup command, Foal-owned deletion of the referenced cache without opt-in
 
 **Tool cache query probe**:
-A bounded, read-only execution of an allowlisted developer tool's own query subcommand (for example `npm config get cache` or `go env GOCACHE`) that Clean uses only to resolve the displayed cache path for a Review suggestion. Each probe is restricted to a built-in tool allowlist, runs only non-mutating query subcommands, and is bounded by a per-call context timeout. A probe that is not allowlisted, fails, or times out yields no path and never blocks the preview, except Bun: when `bun pm cache` fails, times out, or yields no usable existing path, Review discovery may fall back to Bun's official env/default roots while `bun` is on PATH. This is the one deliberate exception to Clean's otherwise execution-free preview, and it never runs a tool's cleanup command.
+A bounded, read-only execution of an allowlisted developer tool's own query subcommand (for example `npm config get cache` or `go env GOCACHE`) that Clean uses only to resolve the displayed cache path for a Review suggestion. Each probe is restricted to a built-in tool allowlist, runs only non-mutating query subcommands, and is bounded by a per-call context timeout. A probe that is not allowlisted, fails, or times out yields no path and never blocks the preview, except Bun: when `bun pm cache` fails, times out, or yields no usable existing path, Review discovery may fall back to Bun's official env/default roots while `bun` is on PATH. This is the one deliberate exception to Clean's otherwise execution-free report preview, and it never runs a tool's cleanup command. The category-first Clean TUI does not invoke these probes because Review suggestions are outside its cleanup-category list.
 _Avoid_: running tool cleanup commands, executing arbitrary PATH binaries, unbounded execution, treating probe output as cleanup authorization, probing during Clean execution
 
 **Potential space**:
@@ -105,7 +105,7 @@ A cleanup item that is normally a skipped-by-default opportunity or a developer-
 _Avoid_: default candidate, default-enabled rule, permanent deletion, tool-command delegation
 
 **Opt-in candidate resolution**:
-The step that turns an opt-in plan into the concrete Opt-in candidate paths for a run, performed fresh for both dry-run preview and execute so preview and execute resolve the same candidate set rather than execute trusting dry-run's resolved paths. Only opted-in categories are scanned; non-opted-in categories stay omitted from execute. A Browser cache opt-in candidate resolves to individual regenerating cache directories (`Cache`, `Code Cache`, `GPUCache`) per profile, not the browser `User Data` root, because only those directories are deletable. A structured developer-cache category fresh-resolves roots and fresh-discovers child candidates through the same shared seam; Execute never trusts Dry-run child paths.
+The step that turns an opt-in plan into the concrete Opt-in candidate paths for a run, performed fresh for both dry-run preview and execute so preview and execute resolve the same candidate set rather than execute trusting dry-run's resolved paths. CLI dry-run and Execute resolve only opted-in categories; the Clean TUI eager preview scan may use the same shared resolution seam to measure every opt-in category before selection, but returns only path-free category results and does not alter Clean opt-in selection. Execute still scans only opted-in categories and never trusts preview paths. A Browser cache opt-in candidate resolves to individual regenerating cache directories (`Cache`, `Code Cache`, `GPUCache`) per profile, not the browser `User Data` root, because only those directories are deletable. A structured developer-cache category fresh-resolves roots and fresh-discovers child candidates through the same shared seam; Execute never trusts Dry-run child paths.
 _Avoid_: execute trusting dry-run resolved paths, scanning non-opted-in categories at execute, browser User Data root as an opt-in candidate, mode-specific candidate resolution
 
 **Structured developer-cache child discovery**:
@@ -117,7 +117,7 @@ A re-downloadable installation or similar disposable artifact under a developer-
 _Avoid_: proximity-based deletion under a tool root, fail-open version-looking names, root-as-candidate for mixed-state caches, project-local Puppeteer discovery
 
 **Playwright browsers opt-in**:
-A skipped-by-default Developer tools opt-in category (`playwright-browsers`) that reclaims only complete versioned browser-component directories under the global Playwright browsers root. Root resolution uses non-blank `PLAYWRIGHT_BROWSERS_PATH` unless its trimmed value is exactly `0` (hermetic: no global candidate); otherwise the current user's standard Windows Local AppData `ms-playwright` root. Discovery is one direct-child level only: allowlisted `chromium`, `chromium_headless_shell`, `firefox`, `webkit`, `ffmpeg`, and `winldd` names with numeric revisions and `INSTALLATION_COMPLETE` evidence. Each revision is an independent Opt-in candidate; the root is never a candidate. Permanently excluded: every `mcp-*` Profile/state directory, `.links`, `b`, unknown layouts, incomplete installs, regular files, links/junctions/reparse points, CWD/`node_modules`/package-manager stores, and any path outside the resolved root. Shared-runtime policy: Foal does not attribute Node/Python/Chrome/Firefox processes to Playwright, inspect command lines, stop processes, or run Playwright/npx/package-manager commands. Default Dry-run and Execute omit resolution until explicit category, `dev-caches`, `all`, or Clean TUI selection for that run only.
+A skipped-by-default Developer tools opt-in category (`playwright-browsers`) that reclaims only complete versioned browser-component directories under the global Playwright browsers root. Root resolution uses non-blank `PLAYWRIGHT_BROWSERS_PATH` unless its trimmed value is exactly `0` (hermetic: no global candidate); otherwise the current user's standard Windows Local AppData `ms-playwright` root. Discovery is one direct-child level only: allowlisted `chromium`, `chromium_headless_shell`, `firefox`, `webkit`, `ffmpeg`, and `winldd` names with numeric revisions and `INSTALLATION_COMPLETE` evidence. Each revision is an independent Opt-in candidate; the root is never a candidate. Permanently excluded: every `mcp-*` Profile/state directory, `.links`, `b`, unknown layouts, incomplete installs, regular files, links/junctions/reparse points, CWD/`node_modules`/package-manager stores, and any path outside the resolved root. Shared-runtime policy: Foal does not attribute Node/Python/Chrome/Firefox processes to Playwright, inspect command lines, stop processes, or run Playwright/npx/package-manager commands. Default Dry-run and Execute omit resolution until explicit category, `dev-caches`, or `all`; the Clean TUI eager preview scan may measure the category before selection without selecting or authorizing it for cleanup.
 _Avoid_: whole-root ms-playwright deletion, MCP profile cleanup, hermetic project-local browser scan, process stopping, Playwright CLI garbage collection
 
 
@@ -177,25 +177,61 @@ _Avoid_: per-command TUI platform, editable report, execution surface
 The visual shell for Foal's interactive surfaces, using Foal-owned ASCII branding, a Windows preview-first tagline, scan-friendly command descriptions, and compact keyboard hints without copying Mole's product wording, Mac positioning, or optimize-first promise.
 _Avoid_: Mole brand clone, Mac maintenance wording, decorative UI that obscures safety state
 
-**Clean TUI preview view**:
-The Clean TUI state for browsing the Clean preview read model, category summaries, totals, candidates, skipped items, review clues, notices, and suggestions before any execution confirmation.
-_Avoid_: multi-command TUI platform, new scanner rules, execution without confirmation, preview path manifest
+**Clean TUI category-first preview**:
+The primary interactive Clean surface for watching eager scan progress, navigating grouped path-free category rows, forming the exact cleanup selection, reviewing its selected total, and entering confirmation. The full dry-run report, filters, expansion controls, and candidate-path copying remain outside this primary surface while Clean preview and execution CLI/JSON contracts stay unchanged; optional path-free TUI execution provenance is an additive History contract instead.
+_Avoid_: full-report browser, filter-first Clean UI, duplicated dry-run report, preview path browser, execution manifest
 
-**Clean TUI report presentation**:
-A scan-friendly presentation mode for the Clean TUI that renders the Clean preview read model as grouped report content, with compact visual status markers and summary-first review context while preserving preview semantics and shared command behavior.
-_Avoid_: new discovery behavior, JSON status change, preview treated as execution, cleanup completion claim
+**Clean TUI fatal preview failure**:
+A global safety or configuration failure detected before any category can be scanned, presented as a dedicated `Clean unavailable` surface rather than duplicated category failures. It exposes no selection, totals, confirmation, history, or raw path-bearing error and ends only by returning to the menu or quitting.
+_Avoid_: per-category failure fanout, partial scan after failed safety configuration, execution affordance, raw path-bearing error
+
+**Clean TUI focused category detail**:
+A read-only contextual panel that follows the visible row cursor and explains the focused category's safely completed count and bytes, optional safety note, or partial, empty, skipped, incomplete, and failed reason without requiring another interaction mode. Safety notes are optional path-free evidence supplied by shared Clean within the existing impact-notice vocabulary; the TUI does not infer them from paths or invent one for every category. For partial state the panel may show an excluded sibling count and stable path-free reason, but never excluded paths, excluded bytes, or raw path-bearing errors. Disabled rows remain focusable for this explanation; the panel never exposes a full candidate-path list, changes selection, or authorizes cleanup.
+_Avoid_: detail navigation mode, expansion toggle, candidate-path browser, cleanup authorization
+
+**Clean TUI eager preview scan**:
+A read-only, sequential measurement of every canonical default and opt-in cleanup category that begins when the Clean TUI opens. Browsing and Clean TUI cleanup selection remain available while it runs; changing selection never restarts scanning, unfinished categories contribute no bytes to the current known selected total, permission-boundary entries remain notices, and confirmed execution resolves selected categories fresh. Non-executable Review suggestions and review clues are not queue entries and do not trigger external tool query probes in this surface.
+_Avoid_: blocking selection until scan completion, selection-triggered rescan, estimated unfinished bytes, implicit select all, cleanup authorization, execution manifest, persisted preview paths, permission-boundary cleanup scan
+
+**Clean TUI category scan outcome**:
+The terminal, path-free preview result for one eagerly scanned cleanup category: `complete`, `partial`, `empty`, `skipped`, `incomplete`, or `failed`. `complete` carries one or more safely measured candidates even when their bytes are zero, `partial` carries only safely completed candidates and remains selectable with excluded-sibling diagnostics, `empty` means no candidates were found, and the other outcomes contribute no reclaimable bytes; every scannable category must reach an outcome before confirmation becomes available.
+_Avoid_: partial result presented as complete, unfinished-byte estimate, scan outcome as cleanup authorization
+
+**Clean TUI cleanup selection**:
+The exact per-run set of canonical default and opt-in category identifiers chosen for Clean TUI confirmation. Default categories start selected but may be cleared, opt-in categories start unselected, and confirmed execution must not silently add an unselected category or consume preview paths; a waiting or scanning category may be selected provisionally, but an `empty`, `skipped`, `incomplete`, or `failed` outcome removes and disables it for the rest of the current eager preview scan.
+_Avoid_: hidden default cleanup, selected path list, execution manifest, persistent cleanup profile
+
+**Clean TUI selected preview bytes**:
+The safely completed preview bytes summed across the current Clean TUI cleanup selection, including selected default and opt-in categories in `complete` or `partial` state. While selected categories are waiting or scanning, their unknown bytes are excluded and the UI reports those categories separately as pending rather than representing them as zero. Empty, skipped, incomplete, and failed categories contribute zero and cannot remain selected; this total does not replace Potential space or Opt-in reclaimable bytes, and confirmed execution may resolve a different value.
+_Avoid_: Potential space, exact execution bytes, unfinished-byte estimate, failed-scan estimate
 
 **Clean opt-in selection**:
-The per-run set of opt-in category identifiers chosen in the Clean TUI for preview and later confirmation. It never contains candidate paths, remains empty by default, and a select-all action is an explicit selection rather than a new cleanup default.
+The opt-in subset of the Clean TUI cleanup selection. It never contains candidate paths, remains empty by default, and a select-all action is an explicit per-run selection rather than a new cleanup default.
 _Avoid_: execution manifest, selected path list, persistent opt-in profile, implicit select all
 
 **Clean execution confirmation**:
-The deliberate TUI transition that confirms a Clean opt-in selection and authorizes the shared Clean execution path to resolve and validate fresh candidates for that selection.
+The separate TUI view that reviews the exact Clean TUI cleanup selection before execution; entering it performs no cleanup, and only a second Enter authorizes the shared Clean execution path to resolve and validate fresh candidates. It becomes available only when the selection is non-empty and every scannable category has a Clean TUI category scan outcome; skipped, incomplete, and failed outcomes are terminal evidence rather than an indefinite blocker.
 _Avoid_: executing preview paths, one-key accidental cleanup, browsing-as-confirmation
 
 **Clean execution progress**:
-Observation-only stages emitted by shared Clean execution for fresh candidate scanning, aggregate Recycle Bin safety checks, Recycle Bin operations, and completion. Progress is not part of the JSON result and never authorizes candidates or drives safety decisions.
-_Avoid_: TUI-inferred progress, execution manifest, progress as cleanup authorization, rollback promise
+Observation-only shared Clean events for the current execution phase and path-free per-selected-category states such as `rechecking`, `ready`, `cleaning`, `empty`, `cleaned`, `partial`, `skipped`, `failed`, and `canceled`, without candidate paths or byte-derived percentages. Progress is not part of the JSON result and never authorizes candidates or drives safety decisions; the final Result and history remain authoritative.
+_Avoid_: TUI-inferred progress, byte-derived percentage, candidate path stream, execution manifest, progress as cleanup authorization, rollback promise
+
+**Clean execution category outcome**:
+The terminal, path-free projection of one selected category's fresh execution: `empty`, `cleaned`, `partial`, `skipped`, `failed`, or `canceled`. `partial` means at least one item succeeded alongside any excluded, skipped, failed, or canceled item; affected bytes count only successful Recycle Bin moves, processed-category progress counts only terminal categories, and item-level Result and history remain authoritative.
+_Avoid_: single-state masking of mixed outcomes, preview-derived outcome, failed bytes counted as affected, category outcome replacing item history
+
+**Clean execution cancellation**:
+A cooperative stop request made after confirmed Clean execution begins, with no promise to roll back completed Recycle Bin operations. The TUI keeps waiting for the shared final Result, which remains authoritative for completed, skipped, failed, and item-level `context_canceled` outcomes and normal history semantics; the result view may project the latter as a path-free canceled category outcome.
+_Avoid_: force quit, rollback promise, abandoning final Result, discarding partial-operation history
+
+**Clean execution result view**:
+The terminal Clean TUI surface that projects the shared final Result into path-free empty, cleaned, partial, skipped, failed, and canceled category outcomes plus actual affected bytes. Item-level Result and history, including `context_canceled` skipped outcomes, remain authoritative. The view ends the current preview and selection session; returning to the main menu discards that stale state, and entering Clean again starts a new eager preview scan.
+_Avoid_: restoring pre-execution preview, progress-derived result, automatic repeat execution, stale selection reuse
+
+**Clean TUI execution provenance**:
+Optional, path-free history metadata that identifies `surface=tui`, `selection_mode=exact`, and the canonical selected category identifiers in stable display-and-scan order for confirmed Clean execution. It is a backward-compatible additive History JSON contract, does not fabricate CLI arguments, restore unselected defaults, or replace the normal item-level execution outcomes retained by history.
+_Avoid_: synthetic CLI invocation, implicit default authorization, preview paths in command metadata, selection omitted from history
 
 **Aggregate Recycle Bin capacity pre-check**:
 A fail-closed Clean safety check that establishes Recycle Bin recoverability for all selected candidates together on each volume before confirmed execution begins.

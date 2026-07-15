@@ -17,3 +17,5 @@ Note the module path: v2 lives under `charm.land/...`, not `github.com/charmbrac
 - The TUI remains a read-only review surface over shared read models (see CONTEXT.md); the framework choice does not change that boundary.
 
 ADR 0009 supersedes the final consequence above for Clean only: Bubble Tea remains the shell framework, while the Clean TUI may orchestrate explicitly confirmed shared Clean execution. Other command views remain read-only.
+
+ADR 0014 further qualifies the Ctrl+C consequence during active confirmed Clean execution only: the first Ctrl+C requests cooperative cancellation, and the TUI waits for the shared final Result instead of immediately taking the normal interrupt-exit path. Preview and every non-executing view keep the exit-130 behavior above.

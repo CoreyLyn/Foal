@@ -1,5 +1,7 @@
 # Plan: Clean TUI report presentation
 
+> Superseded for the primary Clean TUI surface by [Plan: Clean TUI category-first interaction](./clean-tui-category-first-interaction.md). This file remains a historical record of the completed grouped-report presentation slice; its filter, expansion, copy-path, and full-report layout are not requirements for the new category-first view.
+
 A design note captured from a grilling session, durable for a later `/to-prd`.
 The goal is to make the Clean TUI feel closer to a scan-friendly terminal report
 while preserving Foal's Windows-native safety model and read-only TUI boundary.
