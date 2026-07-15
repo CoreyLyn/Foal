@@ -292,32 +292,21 @@ func TestCleanCategoryKeyboardActionsRenderPreviewOnlySelection(t *testing.T) {
 	}
 }
 
-func openCleanPreview(t *testing.T) rootModel {
+// loadedReportFirstCleanModel builds a report-first cleanModel for isolated
+// presentation coverage. The primary Clean entry uses category-first eager
+// preview only; these helpers must not be reached through rootModel.
+func loadedReportFirstCleanModel(t *testing.T) cleanModel {
 	t.Helper()
-	model := newRootModel()
-	// Wide window so long candidate paths are not clipped by the viewport.
-	next, _ := model.Update(tea.WindowSizeMsg{Width: 240, Height: 80})
-	model = next.(rootModel)
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = next.(rootModel)
-	if cmd == nil {
-		t.Fatal("opening the clean view must return a load command")
-	}
-	if !strings.Contains(model.content(), "Loading clean preview (dry-run)...") {
-		t.Fatalf("clean view should show a loading state before data arrives:\n%s", model.content())
-	}
-	loaded, ok := cmd().(cleanPreviewLoadedMsg)
-	if !ok {
-		t.Fatalf("load command produced %T, want cleanPreviewLoadedMsg", cmd())
-	}
-	next, _ = model.Update(loaded)
-	return next.(rootModel)
+	stubCleanPreviewDryRun(t)
+	model := newCleanModel(240, 80)
+	msg := loadCleanPreviewCmd(context.Background(), 1)().(cleanPreviewLoadedMsg)
+	model.loadGeneration = 1
+	model.applyLoaded(msg)
+	return model
 }
 
 func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
-	stubCleanPreviewDryRun(t)
-
-	model := openCleanPreview(t)
+	model := loadedReportFirstCleanModel(t)
 
 	content := model.content()
 	for _, want := range []string{
@@ -389,7 +378,7 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 		}
 	}
 
-	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'e', Text: "e"})
+	model.handleKey("e")
 	for _, want := range []string{
 		`C:\Users\corey\AppData\Local\Temp\foal-default.tmp`,
 		`\\?\C:\Windows\System32`,
@@ -418,11 +407,9 @@ func TestCleanSelectionRendersReadOnlyPreview(t *testing.T) {
 }
 
 func TestCleanPreviewTUIUsesCompactHeaderAndBottomSummary(t *testing.T) {
-	stubCleanPreviewDryRun(t)
-
-	model := openCleanPreview(t)
+	model := loadedReportFirstCleanModel(t)
 	content := model.content()
-	header := model.clean.headerContent()
+	header := model.headerContent()
 
 	for _, want := range []string{
 		"Foal Clean",
@@ -656,9 +643,7 @@ func TestCleanPreviewRendersProtectionDiagnosticsFromReadModel(t *testing.T) {
 }
 
 func TestCleanPreviewBackReturnsToMenu(t *testing.T) {
-	stubCleanPreviewDryRun(t)
-
-	model := openCleanPreview(t)
+	model := openCategoryFirstClean(t)
 	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'b', Text: "b"})
 
 	if !strings.Contains(model.content(), "Foal main menu") {
@@ -668,90 +653,57 @@ func TestCleanPreviewBackReturnsToMenu(t *testing.T) {
 
 func TestCleanPreviewBackCancelsInFlightLoad(t *testing.T) {
 	disableHistoryRecording(t)
-	originalDryRun := dryRunClean
+	original := runEagerPreviewFn
 	started := make(chan struct{})
 	canceled := make(chan struct{})
-	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
+	runEagerPreviewFn = func(ctx context.Context, opts clean.Options, emit func(clean.CategoryPreviewObservation)) error {
 		close(started)
 		<-ctx.Done()
 		close(canceled)
-		return clean.Result{}
+		return ctx.Err()
 	}
-	t.Cleanup(func() { dryRunClean = originalDryRun })
+	t.Cleanup(func() { runEagerPreviewFn = original })
+	originalBuild := buildEagerPreviewOptions
+	buildEagerPreviewOptions = func() clean.Options { return clean.Options{} }
+	t.Cleanup(func() { buildEagerPreviewOptions = originalBuild })
 
 	model := newRootModel()
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	model = next.(rootModel)
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(rootModel)
 	if cmd == nil {
-		t.Fatal("opening the clean view must start a load")
+		t.Fatal("opening the clean view must start eager scanning")
 	}
-	done := make(chan struct{})
-	go func() {
-		_ = cmd()
-		close(done)
-	}()
-	<-started
+	// Begin the stream worker via the start half of the Batch.
+	for _, msg := range expandTeaCmd(cmd) {
+		var nextCmd tea.Cmd
+		model, nextCmd = applyRootMsgs(t, model, msg)
+		if startedMsg, ok := msg.(eagerPreviewStartedMsg); ok {
+			// Keep wait off the test goroutine; cancel should unblock the worker.
+			_ = startedMsg
+			_ = nextCmd
+		}
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("eager scan did not start")
+	}
 
 	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'b', Text: "b"})
 
 	select {
 	case <-canceled:
 	case <-time.After(time.Second):
-		t.Fatal("leaving the clean preview did not cancel the in-flight load")
+		t.Fatal("leaving Clean did not cancel the in-flight eager scan")
 	}
-	<-done
 	if !strings.Contains(model.content(), "Foal main menu") {
 		t.Fatalf("b should return to the main menu:\n%s", model.content())
 	}
 }
 
-func TestCleanPreviewReloadCancelsPreviousAndRemainsCancellable(t *testing.T) {
-	disableHistoryRecording(t)
-	originalDryRun := dryRunClean
-	contexts := make(chan context.Context, 2)
-	dryRunClean = func(ctx context.Context, opts clean.Options) clean.Result {
-		contexts <- ctx
-		<-ctx.Done()
-		return clean.Result{}
-	}
-	t.Cleanup(func() { dryRunClean = originalDryRun })
-
-	model := newRootModel()
-	next, firstCmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = next.(rootModel)
-	firstDone := make(chan struct{})
-	go func() {
-		_ = firstCmd()
-		close(firstDone)
-	}()
-	firstCtx := <-contexts
-
-	next, secondCmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	model = next.(rootModel)
-	select {
-	case <-firstCtx.Done():
-	case <-time.After(time.Second):
-		t.Fatal("reload did not cancel the previous clean preview load")
-	}
-	<-firstDone
-
-	secondDone := make(chan struct{})
-	go func() {
-		_ = secondCmd()
-		close(secondDone)
-	}()
-	secondCtx := <-contexts
-	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'b', Text: "b"})
-	select {
-	case <-secondCtx.Done():
-	case <-time.After(time.Second):
-		t.Fatal("reloaded clean preview was not cancellable")
-	}
-	<-secondDone
-}
-
 func TestCleanPreviewBrowsingRecordsNoHistoryAndWritesNoFiles(t *testing.T) {
-	stubCleanPreviewDryRun(t)
 	originalRecorder := newHistoryRecorder
 	originalDir := newHistoryDir
 	newHistoryRecorder = func() (history.Recorder, error) {
@@ -767,23 +719,15 @@ func TestCleanPreviewBrowsingRecordsNoHistoryAndWritesNoFiles(t *testing.T) {
 		newHistoryDir = originalDir
 	})
 
-	model := openCleanPreview(t)
-	next, cmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	model = next.(rootModel)
-	if cmd == nil {
-		t.Fatal("reload must return a load command")
-	}
-	msg := cmd()
-	loaded, ok := msg.(cleanPreviewLoadedMsg)
-	if !ok {
-		t.Fatalf("reload command produced %T, want cleanPreviewLoadedMsg", msg)
-	}
-	next, _ = model.Update(loaded)
-	_ = next.(rootModel)
+	model := openCategoryFirstClean(t)
+	// Selection/navigation must remain side-effect free.
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: ' ', Text: " "})
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'a', Text: "a"})
+	_ = model
 }
 
 func TestCleanPreviewCopyKeySendsCandidatePathsToClipboard(t *testing.T) {
-	stubCleanPreviewDryRun(t)
 	originalCopy := copyTextToClipboard
 	copied := ""
 	copyTextToClipboard = func(text string) error {
@@ -792,8 +736,8 @@ func TestCleanPreviewCopyKeySendsCandidatePathsToClipboard(t *testing.T) {
 	}
 	t.Cleanup(func() { copyTextToClipboard = originalCopy })
 
-	model := openCleanPreview(t)
-	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	model := loadedReportFirstCleanModel(t)
+	model.handleKey("c")
 
 	if want := `C:\Users\corey\AppData\Local\Temp\foal-default.tmp` + "\n"; copied != want {
 		t.Fatalf("clipboard payload = %q, want %q", copied, want)
@@ -943,36 +887,17 @@ func TestCleanPreviewCopyPayloadExcludesAllReviewOnlySurfaces(t *testing.T) {
 }
 
 func TestCleanPreviewCopyKeyReportsClipboardFailure(t *testing.T) {
-	stubCleanPreviewDryRun(t)
 	originalCopy := copyTextToClipboard
 	copyTextToClipboard = func(text string) error {
 		return errors.New("clip unavailable")
 	}
 	t.Cleanup(func() { copyTextToClipboard = originalCopy })
 
-	model := openCleanPreview(t)
-	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'c', Text: "c"})
+	model := loadedReportFirstCleanModel(t)
+	model.handleKey("c")
 
 	if !strings.Contains(model.content(), "Clipboard copy failed: clip unavailable") {
 		t.Fatalf("content missing clipboard failure notice:\n%s", model.content())
-	}
-}
-
-func TestCleanPreviewRefreshKeyReloadsThroughDryRun(t *testing.T) {
-	stubCleanPreviewDryRun(t)
-
-	model := openCleanPreview(t)
-	next, cmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	model = next.(rootModel)
-
-	if cmd == nil {
-		t.Fatal("r must return a reload command")
-	}
-	if !strings.Contains(model.content(), "Loading clean preview (dry-run)...") {
-		t.Fatalf("refresh should re-enter the loading state:\n%s", model.content())
-	}
-	if _, ok := cmd().(cleanPreviewLoadedMsg); !ok {
-		t.Fatal("reload command must produce cleanPreviewLoadedMsg")
 	}
 }
 
@@ -1066,69 +991,41 @@ func TestCleanPreviewLoadAndReloadRenderBrowserRunningStateFromSharedReadModel(t
 }
 
 func TestCleanReadyPreviewRequiresSeparateConfirmationBeforeExecution(t *testing.T) {
-	stubCleanPreviewDryRun(t)
-	calls := 0
-	original := executeClean
-	executeClean = func(_ context.Context, opts clean.Options) clean.Result {
-		calls++
-		if got := strings.Join(opts.OptIn, ","); got != clean.OpportunityCategoryCrashDumps {
-			t.Fatalf("execute OptIn = %q, want canonical category identifier", got)
-		}
-		if opts.DetailedListDir != "" {
-			t.Fatal("TUI execute must not pass a detailed-list directory")
-		}
-		return clean.Result{Status: "ok", Mode: "execute", Totals: clean.Totals{DeletedCount: 2, OptInDeletedCount: 1, AffectedBytes: 30, OptInAffectedBytes: 20}}
-	}
-	t.Cleanup(func() { executeClean = original })
-
-	model := openCleanPreview(t)
-	model.clean.selected[clean.OpportunityCategoryCrashDumps] = true
-	model.clean.model = clean.NewPreviewReadModelForSelection(clean.Result{
-		Candidates:      []clean.CandidatePreview{{Bytes: 10}},
+	// Category-first confirmation and exact execution handoff are covered by
+	// tui_clean_eager_test.go and tui_clean_cutover_test.go. Keep a focused
+	// report-first unit check that confirmation still exists on cleanModel for
+	// isolated presentation helpers until that code is fully removed.
+	model := newCleanModel(80, 24)
+	model.previewReady = true
+	model.selected = map[string]bool{clean.OpportunityCategoryCrashDumps: true}
+	model.model = clean.NewPreviewReadModelForSelection(clean.Result{
 		OptInCandidates: []clean.OptInCandidate{{Category: clean.OpportunityCategoryCrashDumps, Bytes: 20}},
-		Totals:          clean.Totals{CandidateCount: 1, CandidateBytes: 10, OptInCandidateCount: 1, OptInReclaimableBytes: 20},
+		Totals:          clean.Totals{OptInCandidateCount: 1, OptInReclaimableBytes: 20},
 	}, []string{clean.OpportunityCategoryCrashDumps})
-	model.clean.previewReady = true
-
-	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = next.(rootModel)
-	if cmd != nil || calls != 0 || !strings.Contains(model.content(), "Confirm Clean execution") || !strings.Contains(model.content(), "Crash dumps") || !strings.Contains(model.content(), "rescans") {
-		t.Fatalf("enter must open confirmation without executing:\n%s", model.content())
-	}
-	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = next.(rootModel)
-	if cmd == nil || calls != 0 || !strings.Contains(model.content(), "Executing Clean") {
-		t.Fatalf("confirmation must enter visible executing state:\n%s", model.content())
-	}
-	// A second Enter while in flight cannot start another execution.
-	next, second := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = next.(rootModel)
-	if second != nil || calls != 0 {
-		t.Fatal("executing state accepted a second confirmation")
-	}
-	next, cmd = model.Update(cmd())
-	model = next.(rootModel)
-	for cmd != nil && model.clean.executionState == cleanExecutionRunning {
-		next, cmd = model.Update(cmd())
-		model = next.(rootModel)
-	}
-	if calls != 1 || !strings.Contains(model.content(), "Clean execution result") || !strings.Contains(model.content(), "Deleted: 2") || !strings.Contains(model.content(), "Opt-in deleted: 1") || !strings.Contains(model.content(), "Affected bytes: <1 KB") {
-		t.Fatalf("shared result was not rendered directly:\n%s", model.content())
+	model.executionState = cleanExecutionConfirmation
+	if !strings.Contains(model.content(), "Confirm Clean execution") {
+		t.Fatalf("confirmation content missing:\n%s", model.content())
 	}
 }
 
 func TestCleanConfirmationBackAndEscapeCancelWithoutExecution(t *testing.T) {
-	stubCleanPreviewDryRun(t)
-	model := openCleanPreview(t)
-	model.clean.previewReady = true
+	model := openCategoryFirstClean(t)
+	markEagerQueueTerminal(&model.clean, true)
+	model.clean.finished = true
+	if !model.clean.confirmationEnabled() {
+		t.Fatal("expected confirmation enabled")
+	}
 	model, _ = updateRootKeyWithCmd(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.clean.phase != eagerPhaseConfirmation {
+		t.Fatalf("phase=%v", model.clean.phase)
+	}
 	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'b', Text: "b"})
-	if model.screen != screenCleanPreview || !model.clean.previewReady || strings.Contains(model.content(), "Confirm Clean execution") {
-		t.Fatal("back must return to ready preview")
+	if model.screen != screenCleanPreview || model.clean.phase != eagerPhasePreview {
+		t.Fatal("back must return to ready category-first preview")
 	}
 	model, _ = updateRootKeyWithCmd(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyEscape})
-	if model.screen != screenCleanPreview || !model.clean.previewReady {
+	if model.screen != screenCleanPreview || model.clean.phase != eagerPhasePreview {
 		t.Fatal("escape must cancel confirmation without quitting")
 	}
 }

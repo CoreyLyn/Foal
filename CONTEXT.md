@@ -238,8 +238,8 @@ A fail-closed Clean safety check that establishes Recycle Bin recoverability for
 _Avoid_: per-item-only capacity assurance, assumed capacity, overflow to permanent deletion
 
 **Clean TUI action model**:
-A TUI interaction boundary where browsing and selection remain side-effect free, while Clean alone may transition through explicit confirmation to the shared Clean execution path; uninstaller execution, process stopping, elevation prompts, and leftover deletion remain absent.
-_Avoid_: TUI-owned execution engine, implicit cleanup, browsing-as-operation history noise, non-Clean execution
+A four-stage TUI interaction boundary (eager category-first preview → exact selection with measured totals → separate confirmation → shared execution/result) where browsing and selection remain side-effect free, the first slice exposes no retry or rescan, and Clean alone may transition through explicit confirmation to the shared Clean execution path; uninstaller execution, process stopping, elevation prompts, and leftover deletion remain absent.
+_Avoid_: TUI-owned execution engine, implicit cleanup, browsing-as-operation history noise, non-Clean execution, deferred retry documented as current
 
 **Uninstall preview report**:
 A human-readable presentation surface rendered directly over the uninstall preview read model, mirroring the Mole-inspired report style while keeping uninstall preview-only and read-only.
