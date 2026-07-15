@@ -78,26 +78,33 @@ type ExecutionProgress struct {
 type ProgressReporter func(ExecutionProgress)
 
 type Options struct {
-	Rules                         []Rule
-	Validator                     pathsafe.Validator
-	ProtectionDiagnostics         []ProtectionDiagnostic
-	ProtectionLoadError           *StructuredIssue
-	RecycleBinAdapter             delete.Adapter
-	HistoryRecorder               history.Recorder
-	DetailedListDir               string
-	CommandParameters             history.CommandParameters
-	UserTempDiscoveryOptions      UserTempDiscoveryOptions
-	DiscoverUserTempOpportunities func(context.Context) UserTempDiscoveryResult
-	OpportunityDiscoveryOptions   OpportunityDiscoveryOptions
-	DiscoverOpportunities         func(context.Context) OpportunityDiscoveryResult
-	BrowserCacheDiscoveryOptions      BrowserCacheDiscoveryOptions
-	ApplicationCacheDiscoveryOptions  ApplicationCacheDiscoveryOptions
-	DiscoverApplicationCaches         DiscoverApplicationCachesFunc
-	DiscoverReviewSuggestions         func(context.Context) []ReviewSuggestion
-	DetectRunningApplications         func(context.Context) []RunningApplicationState
-	OptIn                             []string
-	RecycleBinCapacityProbe           RecycleBinCapacityProbe
-	DevCachePathResolver              DevCachePathResolver
+	Rules                            []Rule
+	Validator                        pathsafe.Validator
+	ProtectionDiagnostics            []ProtectionDiagnostic
+	ProtectionLoadError              *StructuredIssue
+	RecycleBinAdapter                delete.Adapter
+	HistoryRecorder                  history.Recorder
+	DetailedListDir                  string
+	CommandParameters                history.CommandParameters
+	UserTempDiscoveryOptions         UserTempDiscoveryOptions
+	DiscoverUserTempOpportunities    func(context.Context) UserTempDiscoveryResult
+	OpportunityDiscoveryOptions      OpportunityDiscoveryOptions
+	DiscoverOpportunities            func(context.Context) OpportunityDiscoveryResult
+	BrowserCacheDiscoveryOptions     BrowserCacheDiscoveryOptions
+	ApplicationCacheDiscoveryOptions ApplicationCacheDiscoveryOptions
+	DiscoverApplicationCaches        DiscoverApplicationCachesFunc
+	DiscoverReviewSuggestions        func(context.Context) []ReviewSuggestion
+	DetectRunningApplications        func(context.Context) []RunningApplicationState
+	// OptIn holds CLI opt-in tokens (canonical IDs, aliases, or group tokens).
+	// Used only when Plan is nil to compile an additive category plan.
+	OptIn []string
+	// Plan is the optional compiled category selection. When set, DryRun and
+	// Execute honor it directly: additive plans always include defaults, exact
+	// plans omit unlisted defaults. When nil, an additive plan is compiled from
+	// OptIn so existing CLI callers stay compatible.
+	Plan                    *CategoryPlan
+	RecycleBinCapacityProbe RecycleBinCapacityProbe
+	DevCachePathResolver    DevCachePathResolver
 	// DevCacheChildDiscoverer overrides catalog-owned structured child discovery
 	// for tests. Production leaves it nil so categories use private catalog policy.
 	DevCacheChildDiscoverer DevCacheChildDiscoverer
@@ -246,16 +253,27 @@ func dryRun(ctx context.Context, opts Options) Result {
 	if opts.ProtectionLoadError != nil {
 		return protectionLoadFailure("dry_run", opts, start)
 	}
-	result := scanDefaultCandidates(ctx, opts, start)
+	categoryPlan := effectiveCategoryPlan(opts)
+	result := newCleanResultSkeleton("dry_run", opts)
+	exactDefaults := categoryPlan.Mode == SelectionModeExact
+	appendDefaultCandidates(ctx, opts, planDefaultSet(categoryPlan), exactDefaults, &result)
+	if ctx.Err() != nil {
+		result.ElapsedMS = time.Since(start).Milliseconds()
+		result.Totals = totals(result)
+		return result
+	}
 
 	// Resolve opt-in candidates once; both modes share this resolution.
-	plan, _, _ := NormalizedOptInSet(opts.OptIn)
-	resolution := resolveOptInCandidates(ctx, opts, plan)
+	optInPlan := planOptInSet(categoryPlan)
+	resolution := resolveOptInCandidates(ctx, opts, optInPlan)
 	applyOptInResolution(&result, resolution)
 
-	// Review projection: non-opted-in opportunities, suggestions, and browser
-	// cache review. Opted-in categories are already resolved above.
-	applyOptInReviewProjection(ctx, opts, &result, plan, resolution)
+	// Review projection is CLI additive dry-run only: non-opted-in opportunities,
+	// suggestions, and browser cache review. Exact plans skip the review fan-out
+	// so unselected categories are not implicitly resolved.
+	if categoryPlan.Mode != SelectionModeExact {
+		applyOptInReviewProjection(ctx, opts, &result, optInPlan, resolution)
+	}
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
@@ -566,65 +584,6 @@ func suppressProtectionRules(result *Result, suppressedPaths []string) {
 	result.ProtectionRules = filtered
 }
 
-func scanDefaultCandidates(ctx context.Context, opts Options, start time.Time) Result {
-	rules := opts.Rules
-	if len(rules) == 0 {
-		rules = DefaultRuleCatalog()
-	}
-
-	result := Result{
-		Status:                           "preview",
-		Mode:                             "dry_run",
-		DefaultRuleCatalog:               defaultRuleSummaries(rules),
-		ProtectionRules:                  protectionRules(opts.Validator),
-		ProtectionDiagnostics:            append([]ProtectionDiagnostic(nil), opts.ProtectionDiagnostics...),
-		Candidates:                       []CandidatePreview{},
-		Deleted:                          []DeletedItem{},
-		Skipped:                          []SkippedItem{},
-		Errors:                           []StructuredIssue{},
-		Opportunities:                    []Opportunity{},
-		IncompleteOpportunityInspections: []IncompleteOpportunityInspection{},
-		ReviewSuggestions:                []ReviewSuggestion{},
-		RunningApplications:              []RunningApplicationState{},
-	}
-
-	for _, rule := range rules {
-		if !rule.DefaultEnabled {
-			continue
-		}
-		for _, path := range rule.CandidatePaths {
-			previewCandidate(ctx, opts.Validator, path, rule.ID, &result)
-		}
-		for _, root := range rule.Roots {
-			select {
-			case <-ctx.Done():
-				result.Errors = append(result.Errors, issue("context_canceled", ctx.Err().Error(), true, root, rule.ID))
-				result.ElapsedMS = time.Since(start).Milliseconds()
-				result.Totals = totals(result)
-				return result
-			default:
-			}
-
-			entries, err := os.ReadDir(root)
-			if err != nil {
-				result.Errors = append(result.Errors, issue(classifyError(err), err.Error(), true, root, rule.ID))
-				continue
-			}
-			for _, entry := range entries {
-				if !matchesRuleName(entry.Name(), rule.CandidateNamePrefixes) {
-					continue
-				}
-				path := filepath.Join(root, entry.Name())
-				previewCandidate(ctx, opts.Validator, path, rule.ID, &result)
-			}
-		}
-	}
-
-	result.ElapsedMS = time.Since(start).Milliseconds()
-	result.Totals = totals(result)
-	return result
-}
-
 func Execute(ctx context.Context, opts Options) Result {
 	if ctx == nil {
 		ctx = context.Background()
@@ -636,10 +595,10 @@ func Execute(ctx context.Context, opts Options) Result {
 		reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseComplete)
 		return result
 	}
-	result := scanDefaultCandidates(ctx, opts, start)
-	result.Status = "ok"
-	result.Mode = "execute"
-	result.Deleted = []DeletedItem{}
+	categoryPlan := effectiveCategoryPlan(opts)
+	result := newCleanResultSkeleton("execute", opts)
+	exactDefaults := categoryPlan.Mode == SelectionModeExact
+	appendDefaultCandidates(ctx, opts, planDefaultSet(categoryPlan), exactDefaults, &result)
 
 	adapter := opts.RecycleBinAdapter
 	if adapter == nil {
@@ -655,12 +614,12 @@ func Execute(ctx context.Context, opts Options) Result {
 	}
 
 	// Opt-in candidates: resolve fresh, then capacity-check and delete. The
-	// resolver scans only opted-in categories (ADR-0008) and runs gating; both
-	// modes share it, so execute now surfaces browser running states and
-	// diagnostics it previously dropped.
-	plan, _, _ := NormalizedOptInSet(opts.OptIn)
-	if len(plan) > 0 {
-		resolution := resolveOptInCandidates(ctx, opts, plan)
+	// resolver scans only planned opt-in categories (ADR-0008) and runs gating;
+	// both modes share it, so execute surfaces browser running states and
+	// diagnostics. Exact plans omit unlisted defaults and unselected opt-ins.
+	optInPlan := planOptInSet(categoryPlan)
+	if len(optInPlan) > 0 {
+		resolution := resolveOptInCandidates(ctx, opts, optInPlan)
 		result.RunningApplications = append(result.RunningApplications, resolution.runningStates...)
 		result.Errors = append(result.Errors, resolution.diagnostics...)
 		result.Skipped = append(result.Skipped, resolution.skipped...)
