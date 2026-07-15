@@ -9,13 +9,15 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/history"
 )
 
 // Category-first eager preview model for the Clean TUI. This surface delivers
 // path-free terminal outcomes, exact per-session cleanup selection with live
 // measured totals, focused diagnostics, unavailable and no-work classification,
-// and confirmation-gate readiness. Confirm/execute and root cutover remain
-// later tickets.
+// a separate confirmation page, and a one-shot handoff into shared exact Clean
+// execution. Full progressive execution/result UI and root cutover remain later
+// tickets; this ticket freezes authorization and invokes shared Clean once.
 
 var eagerPreviewSpinnerFrames = []string{"|", "/", "-", "\\"}
 
@@ -29,6 +31,18 @@ const (
 	eagerPreviewNavMenu
 	eagerPreviewNavQuit
 	eagerPreviewNavInterrupt
+)
+
+// eagerCleanPhase is the authorization boundary for category-first Clean.
+type eagerCleanPhase int
+
+const (
+	eagerPhasePreview eagerCleanPhase = iota
+	eagerPhaseConfirmation
+	eagerPhaseExecuting
+	// Minimal terminal attachment so one-shot handoff is observable; full
+	// category result taxonomy belongs to the execution-progress ticket.
+	eagerPhaseResult
 )
 
 type eagerCategoryRow struct {
@@ -90,6 +104,84 @@ var buildEagerPreviewOptions = func() clean.Options {
 	}
 }
 
+// runExactCleanSelection is the confirmed TUI exact-execution seam. It compiles
+// a path-free exact CategoryPlan, records structured TUI History provenance,
+// and reuses shared Clean Execute (fresh resolution, protection, capacity,
+// Recycle Bin-only). Tests replace it to assert handoff without deletion.
+var runExactCleanSelection = func(ctx context.Context, selected []string, reporter clean.ProgressReporter) clean.Result {
+	plan, err := clean.CompileExactCategoryPlan(selected)
+	if err != nil {
+		return clean.Result{
+			Status: "error",
+			Mode:   "execute",
+			Errors: []clean.StructuredIssue{{
+				Code:        "invalid_category_plan",
+				Message:     err.Error(),
+				Recoverable: true,
+			}},
+		}
+	}
+	config := loadProtectionConfiguration()
+	recorder, _ := newHistoryRecorder()
+	return executeClean(ctx, clean.Options{
+		Validator:                 config.Validator,
+		ProtectionDiagnostics:     config.Diagnostics,
+		ProtectionLoadError:       config.LoadError,
+		HistoryRecorder:           recorder,
+		CommandParameters:         exactTUICommandParameters(plan.Categories),
+		Plan:                      &plan,
+		DetectRunningApplications: clean.DetectSupportedApplications,
+		ProgressReporter:          reporter,
+	})
+}
+
+// exactTUICommandParameters builds path-free History provenance for a confirmed
+// exact TUI plan. It does not synthesize CLI args (ADR 0016).
+func exactTUICommandParameters(categories []string) history.CommandParameters {
+	return history.CommandParameters{
+		Command:            "clean",
+		Surface:            "tui",
+		SelectionMode:      string(clean.SelectionModeExact),
+		SelectedCategories: append([]string(nil), categories...),
+	}
+}
+
+func executeExactCleanSelectionCmd(ctx context.Context, selected []string) tea.Cmd {
+	selected = append([]string(nil), selected...)
+	return func() tea.Msg {
+		progress := make(chan clean.ExecutionProgress, 4)
+		result := make(chan clean.Result, 1)
+		stream := &cleanExecutionStream{progress: progress, result: result}
+		go func() {
+			defer close(progress)
+			result <- runExactCleanSelection(ctx, selected, func(event clean.ExecutionProgress) {
+				progress <- event
+			})
+			close(result)
+		}()
+		return eagerExactExecutionStartedMsg{stream: stream}
+	}
+}
+
+func waitEagerExactExecutionCmd(stream *cleanExecutionStream) tea.Cmd {
+	return func() tea.Msg {
+		if stream == nil {
+			return eagerExactExecutedMsg{result: clean.Result{Status: "error", Mode: "execute"}}
+		}
+		if progress, ok := <-stream.progress; ok {
+			return eagerExactExecutionProgressMsg{progress: progress, stream: stream}
+		}
+		return eagerExactExecutedMsg{result: <-stream.result}
+	}
+}
+
+type eagerExactExecutionStartedMsg struct{ stream *cleanExecutionStream }
+type eagerExactExecutionProgressMsg struct {
+	progress clean.ExecutionProgress
+	stream   *cleanExecutionStream
+}
+type eagerExactExecutedMsg struct{ result clean.Result }
+
 type eagerCleanModel struct {
 	generation   uint64
 	cancel       context.CancelFunc
@@ -106,6 +198,13 @@ type eagerCleanModel struct {
 	height       int
 	now          func() time.Time
 	nav          eagerPreviewNav
+
+	phase              eagerCleanPhase
+	frozenCategories   []string
+	executionStarted   bool
+	executionResult    clean.Result
+	executionProgress  clean.ExecutionProgress
+	cancelExecution    context.CancelFunc
 }
 
 func newEagerCleanModel(width, height int) eagerCleanModel {
@@ -133,6 +232,10 @@ func newEagerCleanModel(width, height int) eagerCleanModel {
 
 func (m *eagerCleanModel) start() tea.Cmd {
 	m.cancelPending()
+	if m.cancelExecution != nil {
+		m.cancelExecution()
+		m.cancelExecution = nil
+	}
 	m.generation++
 	m.finished = false
 	m.canceled = false
@@ -142,6 +245,11 @@ func (m *eagerCleanModel) start() tea.Cmd {
 	m.startedAt = m.now()
 	m.nav = eagerPreviewNavNone
 	m.unavailable = nil
+	m.phase = eagerPhasePreview
+	m.frozenCategories = nil
+	m.executionStarted = false
+	m.executionResult = clean.Result{}
+	m.executionProgress = clean.ExecutionProgress{}
 	for i := range m.rows {
 		m.rows[i].State = clean.CategoryPreviewWaiting
 		m.rows[i].CandidateCount = 0
@@ -311,9 +419,10 @@ func (m eagerCleanModel) allCategoriesTerminal() bool {
 }
 
 // confirmationEnabled requires every scannable category terminal and a
-// non-empty exact selection. Does not open confirmation itself (ticket #190).
+// non-empty exact selection before the first Enter may open confirmation.
 func (m eagerCleanModel) confirmationEnabled() bool {
-	return m.unavailable == nil && !m.canceled && m.allCategoriesTerminal() && m.selectedCount() > 0
+	return m.unavailable == nil && !m.canceled && m.phase == eagerPhasePreview &&
+		m.allCategoriesTerminal() && m.selectedCount() > 0 && !m.executionStarted
 }
 
 // noWorkState classifies finished zero-selection presentation.
@@ -426,10 +535,11 @@ func (m eagerCleanModel) focusedRow() (eagerCategoryRow, bool) {
 	return m.rows[m.cursor], true
 }
 
-// handleKey processes category-first keys. Browsing and selection never restart
-// the queue, write History, or call execution. Escape/b request menu; q quits;
-// Ctrl+C is interrupt. Enter on unavailable returns to the menu. Confirmation
-// Enter is owned by the next ticket; this ticket only tracks readiness.
+// handleKey processes category-first keys. Preview browsing and selection never
+// restart the queue, write History, or call execution. First Enter opens the
+// confirmation page when enabled; second Enter freezes the exact selection and
+// invokes shared Clean once. Escape/b from confirmation returns to preview
+// without rescanning.
 func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 	if m.unavailable != nil {
 		switch key {
@@ -447,6 +557,55 @@ func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 		}
 	}
 
+	switch m.phase {
+	case eagerPhaseExecuting:
+		// Active execution owns input until the shared Result arrives. Full
+		// cancellation messaging belongs to the progress ticket; here we only
+		// request cooperative cancel and reject duplicate execution starts.
+		if key == "ctrl+c" {
+			if m.cancelExecution != nil {
+				m.cancelExecution()
+			}
+		}
+		return eagerPreviewNavNone, nil
+	case eagerPhaseResult:
+		switch key {
+		case "ctrl+c":
+			m.nav = eagerPreviewNavInterrupt
+			return m.nav, nil
+		case "q":
+			m.nav = eagerPreviewNavQuit
+			return m.nav, nil
+		case "enter", "esc", "b", "escape":
+			m.nav = eagerPreviewNavMenu
+			return m.nav, nil
+		default:
+			return eagerPreviewNavNone, nil
+		}
+	case eagerPhaseConfirmation:
+		switch key {
+		case "ctrl+c":
+			m.cancelPending()
+			m.canceled = true
+			m.nav = eagerPreviewNavInterrupt
+			return m.nav, nil
+		case "q":
+			m.cancelPending()
+			m.canceled = true
+			m.nav = eagerPreviewNavQuit
+			return m.nav, nil
+		case "esc", "b", "escape":
+			// Preserve in-memory scan and selection; do not rescan.
+			m.phase = eagerPhasePreview
+			return eagerPreviewNavNone, nil
+		case "enter":
+			return m.beginExactExecution()
+		default:
+			return eagerPreviewNavNone, nil
+		}
+	}
+
+	// Preview phase.
 	switch key {
 	case "ctrl+c":
 		m.cancelPending()
@@ -463,6 +622,11 @@ func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 		m.canceled = true
 		m.nav = eagerPreviewNavMenu
 		return m.nav, nil
+	case "enter":
+		if m.confirmationEnabled() {
+			m.phase = eagerPhaseConfirmation
+		}
+		return eagerPreviewNavNone, nil
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
@@ -482,9 +646,77 @@ func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 	return eagerPreviewNavNone, nil
 }
 
+// beginExactExecution freezes the confirmed selection and starts shared Clean
+// exactly once. Repeated input cannot start a second execution.
+func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
+	if m.executionStarted || m.phase == eagerPhaseExecuting {
+		return eagerPreviewNavNone, nil
+	}
+	ids := m.selectedCategoryIDs()
+	if len(ids) == 0 {
+		return eagerPreviewNavNone, nil
+	}
+	plan, err := clean.CompileExactCategoryPlan(ids)
+	if err != nil {
+		// Selection is catalog-derived; reject before any cleanup work.
+		m.executionStarted = true
+		m.phase = eagerPhaseResult
+		m.executionResult = clean.Result{
+			Status: "error",
+			Mode:   "execute",
+			Errors: []clean.StructuredIssue{{
+				Code:        "invalid_category_plan",
+				Message:     err.Error(),
+				Recoverable: true,
+			}},
+		}
+		return eagerPreviewNavNone, nil
+	}
+	m.frozenCategories = append([]string(nil), plan.Categories...)
+	m.executionStarted = true
+	m.phase = eagerPhaseExecuting
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelExecution = cancel
+	return eagerPreviewNavNone, executeExactCleanSelectionCmd(ctx, m.frozenCategories)
+}
+
+func (m *eagerCleanModel) applyExactExecutionStarted(msg eagerExactExecutionStartedMsg) tea.Cmd {
+	if m.phase != eagerPhaseExecuting {
+		return nil
+	}
+	return waitEagerExactExecutionCmd(msg.stream)
+}
+
+func (m *eagerCleanModel) applyExactExecutionProgress(msg eagerExactExecutionProgressMsg) tea.Cmd {
+	if m.phase != eagerPhaseExecuting {
+		return nil
+	}
+	m.executionProgress = msg.progress
+	return waitEagerExactExecutionCmd(msg.stream)
+}
+
+func (m *eagerCleanModel) applyExactExecuted(msg eagerExactExecutedMsg) {
+	if m.phase != eagerPhaseExecuting {
+		return
+	}
+	m.executionResult = msg.result
+	m.phase = eagerPhaseResult
+	if m.cancelExecution != nil {
+		m.cancelExecution = nil
+	}
+}
+
 func (m eagerCleanModel) content() string {
 	if m.unavailable != nil {
 		return m.unavailableContent()
+	}
+	switch m.phase {
+	case eagerPhaseConfirmation:
+		return m.confirmationContent()
+	case eagerPhaseExecuting:
+		return m.executingContent()
+	case eagerPhaseResult:
+		return m.resultContent()
 	}
 
 	var builder strings.Builder
@@ -513,6 +745,61 @@ func (m eagerCleanModel) content() string {
 	builder.WriteString("\n")
 	builder.WriteString(m.footerHints())
 	return builder.String()
+}
+
+// confirmationContent lists only the selected exact categories and the latest
+// selected preview total. It never starts cleanup or writes History.
+func (m eagerCleanModel) confirmationContent() string {
+	var builder strings.Builder
+	builder.WriteString("Foal Clean\n")
+	builder.WriteString("Confirm cleanup\n")
+	builder.WriteString("\n")
+	builder.WriteString("Selected categories:\n")
+	for _, row := range m.rows {
+		if !row.Selected {
+			continue
+		}
+		builder.WriteString(fmt.Sprintf("  - %s\n", row.Label))
+	}
+	n, measured, _ := m.selectionTotals()
+	builder.WriteString("\n")
+	builder.WriteString(fmt.Sprintf("Selected: %d categories · %s\n", n, cleanFormatBytes(measured)))
+	builder.WriteString("Latest preview total only. Execution resolves fresh state; candidates or bytes may differ from preview.\n")
+	builder.WriteString("Successful cleanup moves items to the Recycle Bin.\n")
+	builder.WriteString("\n")
+	builder.WriteString("Enter: execute | b/Esc: back to preview\n")
+	return builder.String()
+}
+
+func (m eagerCleanModel) executingContent() string {
+	label := "Starting shared Clean execution"
+	switch m.executionProgress.Phase {
+	case clean.ExecutionPhaseScanning:
+		label = "Fresh scanning"
+	case clean.ExecutionPhaseRecycleBinSafety:
+		label = "Recycle Bin safety check"
+	case clean.ExecutionPhaseRecycleBinOperations:
+		label = "Moving to Recycle Bin"
+	case clean.ExecutionPhaseComplete:
+		label = "Completion"
+	}
+	return strings.Join([]string{
+		"Foal Clean",
+		"Executing confirmed categories through shared Clean…",
+		"Progress: " + label,
+		"Cancellation does not roll back completed Recycle Bin operations.",
+		"",
+	}, "\n")
+}
+
+func (m eagerCleanModel) resultContent() string {
+	return fmt.Sprintf(
+		"Foal Clean\nClean execution complete\nStatus: %s\nDeleted: %d\nSkipped: %d\nAffected bytes: %s\nEnter/Esc/b: menu · q: quit\n",
+		m.executionResult.Status,
+		m.executionResult.Totals.DeletedCount,
+		m.executionResult.Totals.SkippedCount,
+		cleanFormatBytes(m.executionResult.Totals.AffectedBytes),
+	)
 }
 
 func (m eagerCleanModel) checkbox(row eagerCategoryRow) string {
@@ -741,6 +1028,9 @@ func (m eagerCleanModel) footerHints() string {
 	case clean.EagerPreviewNoWorkDiagnostics:
 		return "No selectable cleanup found. Some categories were skipped or could not be measured.\n" + base
 	default:
+		if m.confirmationEnabled() {
+			return "Hints: enter confirm · up/down browse · space toggle · a select all · x clear · b/Esc back · q quit"
+		}
 		return base
 	}
 }

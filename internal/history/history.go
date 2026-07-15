@@ -19,6 +19,11 @@ type Recorder interface {
 type CommandParameters struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args,omitempty"`
+	// Optional path-free TUI provenance for confirmed exact Clean execution
+	// (ADR 0016). CLI sessions leave these empty and keep Args only.
+	Surface            string   `json:"surface,omitempty"`
+	SelectionMode      string   `json:"selection_mode,omitempty"`
+	SelectedCategories []string `json:"selected_categories,omitempty"`
 }
 
 type SessionRecord struct {

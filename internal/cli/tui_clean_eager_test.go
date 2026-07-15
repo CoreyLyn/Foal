@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/history"
 )
 
 func TestEagerCleanModelQueueIsCatalogDerived(t *testing.T) {
@@ -1259,6 +1260,380 @@ func assertNoSentinelLeak(t *testing.T, content string) {
 	} {
 		if strings.Contains(content, needle) {
 			t.Fatalf("sentinel %q leaked:\n%s", needle, content)
+		}
+	}
+}
+
+// markEagerQueueTerminal forces every row into a terminal path-free outcome.
+// When keepDefaultComplete is true, the first default stays complete+selected;
+// remaining rows become empty (auto-deselected).
+func markEagerQueueTerminal(model *eagerCleanModel, keepDefaultComplete bool) {
+	model.generation = 1
+	for i, row := range model.rows {
+		state := clean.CategoryPreviewEmpty
+		count := 0
+		var bytes int64
+		if keepDefaultComplete && i == 0 {
+			state = clean.CategoryPreviewComplete
+			count = 1
+			bytes = 42
+		}
+		model.applyObservation(eagerCategoryObservationMsg{
+			generation: 1,
+			observation: clean.CategoryPreviewObservation{
+				Identifier:     row.Identifier,
+				Label:          row.Label,
+				State:          state,
+				CandidateCount: count,
+				Bytes:          bytes,
+			},
+		})
+	}
+	model.finished = true
+}
+
+func TestEagerCleanEnterBlockedUntilTerminalAndNonEmpty(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	model.generation = 1
+
+	nav, cmd := model.handleKey("enter")
+	if nav != eagerPreviewNavNone || cmd != nil || model.phase != eagerPhasePreview {
+		t.Fatalf("enter while scanning opened confirmation: nav=%v cmd=%v phase=%v", nav, cmd, model.phase)
+	}
+
+	// All terminal but empty selection.
+	markEagerQueueTerminal(&model, true)
+	model.clearSelection()
+	nav, cmd = model.handleKey("enter")
+	if nav != eagerPreviewNavNone || cmd != nil || model.phase != eagerPhasePreview {
+		t.Fatalf("enter with empty selection opened confirmation: phase=%v", model.phase)
+	}
+	if model.confirmationEnabled() {
+		t.Fatal("empty selection must not enable confirmation")
+	}
+}
+
+func TestEagerCleanFirstEnterOpensConfirmationWithoutExecutionOrHistory(t *testing.T) {
+	calls := 0
+	original := runExactCleanSelection
+	runExactCleanSelection = func(context.Context, []string, clean.ProgressReporter) clean.Result {
+		calls++
+		return clean.Result{Status: "ok", Mode: "execute"}
+	}
+	t.Cleanup(func() { runExactCleanSelection = original })
+
+	model := newEagerCleanModel(100, 40)
+	markEagerQueueTerminal(&model, true)
+	// Select one opt-in so the confirmation list is non-trivial.
+	optInIndex := -1
+	for i, row := range model.rows {
+		if row.Eligibility == clean.CategoryEligibilityOptIn {
+			// Prefer a row we can mark complete and select.
+			model.rows[i].State = clean.CategoryPreviewComplete
+			model.rows[i].CandidateCount = 2
+			model.rows[i].Bytes = 100
+			model.rows[i].Selected = true
+			optInIndex = i
+			break
+		}
+	}
+	if optInIndex < 0 {
+		t.Fatal("catalog has no opt-in category")
+	}
+
+	nav, cmd := model.handleKey("enter")
+	if nav != eagerPreviewNavNone || cmd != nil {
+		t.Fatalf("first enter must not schedule execution: nav=%v cmd=%v", nav, cmd)
+	}
+	if model.phase != eagerPhaseConfirmation || calls != 0 {
+		t.Fatalf("phase=%v calls=%d, want confirmation with no execution", model.phase, calls)
+	}
+
+	content := model.content()
+	assertNoPath(t, content)
+	for _, want := range []string{
+		"Confirm cleanup",
+		"Selected categories:",
+		model.rows[0].Label,
+		model.rows[optInIndex].Label,
+		"Selected: 2 categories",
+		"fresh state",
+		"may differ",
+		"Recycle Bin",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("confirmation missing %q:\n%s", want, content)
+		}
+	}
+	// Unselected empty categories must not appear as selected lines.
+	for _, row := range model.rows {
+		if row.Selected {
+			continue
+		}
+		// Labels of unselected rows must not be listed under Selected categories.
+		// (They may still appear elsewhere; check the selected block only.)
+	}
+	selectedBlock := content
+	if idx := strings.Index(content, "Selected categories:"); idx >= 0 {
+		selectedBlock = content[idx:]
+		if end := strings.Index(selectedBlock, "\nSelected:"); end >= 0 {
+			selectedBlock = selectedBlock[:end]
+		}
+	}
+	for _, row := range model.rows {
+		if row.Selected {
+			if !strings.Contains(selectedBlock, row.Label) {
+				t.Fatalf("selected %q missing from confirmation list:\n%s", row.Label, selectedBlock)
+			}
+			continue
+		}
+		if strings.Contains(selectedBlock, "- "+row.Label) {
+			t.Fatalf("unselected %q listed in confirmation:\n%s", row.Label, selectedBlock)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("confirmation wrote/started execution %d times", calls)
+	}
+}
+
+func TestEagerCleanConfirmationEscapePreservesSelectionWithoutRescan(t *testing.T) {
+	scanStarts := 0
+	originalPreview := runEagerPreviewFn
+	runEagerPreviewFn = func(context.Context, clean.Options, func(clean.CategoryPreviewObservation)) error {
+		scanStarts++
+		return nil
+	}
+	t.Cleanup(func() { runEagerPreviewFn = originalPreview })
+
+	model := newEagerCleanModel(100, 40)
+	markEagerQueueTerminal(&model, true)
+	// Deselect default, select first opt-in for a distinctive selection.
+	model.rows[0].Selected = false
+	for i := range model.rows {
+		if model.rows[i].Eligibility == clean.CategoryEligibilityOptIn {
+			model.rows[i].State = clean.CategoryPreviewComplete
+			model.rows[i].CandidateCount = 1
+			model.rows[i].Bytes = 7
+			model.rows[i].Selected = true
+			break
+		}
+	}
+	before := append([]string(nil), model.selectedCategoryIDs()...)
+	if len(before) == 0 {
+		t.Fatal("expected non-empty selection")
+	}
+
+	_, _ = model.handleKey("enter")
+	if model.phase != eagerPhaseConfirmation {
+		t.Fatal("expected confirmation")
+	}
+	nav, cmd := model.handleKey("esc")
+	if nav != eagerPreviewNavNone || cmd != nil || model.phase != eagerPhasePreview {
+		t.Fatalf("escape must return to preview: nav=%v cmd=%v phase=%v", nav, cmd, model.phase)
+	}
+	after := model.selectedCategoryIDs()
+	if len(after) != len(before) {
+		t.Fatalf("selection changed: before=%v after=%v", before, after)
+	}
+	for i := range before {
+		if before[i] != after[i] {
+			t.Fatalf("selection order changed: before=%v after=%v", before, after)
+		}
+	}
+	// b also returns without rescanning.
+	_, _ = model.handleKey("enter")
+	nav, cmd = model.handleKey("b")
+	if nav != eagerPreviewNavNone || cmd != nil || model.phase != eagerPhasePreview {
+		t.Fatalf("b must return to preview: nav=%v phase=%v", nav, model.phase)
+	}
+	if scanStarts != 0 {
+		t.Fatalf("escape/b triggered %d rescans", scanStarts)
+	}
+	if model.canceled {
+		t.Fatal("returning from confirmation must not mark preview canceled")
+	}
+}
+
+func TestEagerCleanSecondEnterInvokesExactExecutionOnce(t *testing.T) {
+	var gotIDs []string
+	calls := 0
+	original := runExactCleanSelection
+	runExactCleanSelection = func(_ context.Context, selected []string, _ clean.ProgressReporter) clean.Result {
+		calls++
+		gotIDs = append([]string(nil), selected...)
+		return clean.Result{Status: "ok", Mode: "execute", Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 9}}
+	}
+	t.Cleanup(func() { runExactCleanSelection = original })
+
+	model := newEagerCleanModel(100, 40)
+	markEagerQueueTerminal(&model, true)
+	// Explicitly omit the default category from authorization.
+	model.rows[0].Selected = false
+	var optInID string
+	for i := range model.rows {
+		if model.rows[i].Eligibility == clean.CategoryEligibilityOptIn {
+			model.rows[i].State = clean.CategoryPreviewComplete
+			model.rows[i].CandidateCount = 1
+			model.rows[i].Bytes = 9
+			model.rows[i].Selected = true
+			optInID = model.rows[i].Identifier
+			break
+		}
+	}
+	if optInID == "" {
+		t.Fatal("need opt-in category")
+	}
+
+	_, cmd := model.handleKey("enter")
+	if model.phase != eagerPhaseConfirmation || cmd != nil {
+		t.Fatalf("first enter: phase=%v cmd=%v", model.phase, cmd)
+	}
+	nav, cmd := model.handleKey("enter")
+	if nav != eagerPreviewNavNone || cmd == nil {
+		t.Fatalf("second enter must schedule execution: nav=%v cmd=%v", nav, cmd)
+	}
+	if model.phase != eagerPhaseExecuting || !model.executionStarted {
+		t.Fatalf("phase=%v started=%v", model.phase, model.executionStarted)
+	}
+	if len(model.frozenCategories) != 1 || model.frozenCategories[0] != optInID {
+		t.Fatalf("frozen = %#v, want [%q]", model.frozenCategories, optInID)
+	}
+	// Default must not be frozen.
+	for _, id := range model.frozenCategories {
+		if id == model.rows[0].Identifier {
+			t.Fatalf("omitted default leaked into frozen plan: %#v", model.frozenCategories)
+		}
+	}
+
+	// Repeated Enter while executing cannot start another run.
+	_, second := model.handleKey("enter")
+	if second != nil || calls != 0 {
+		t.Fatalf("duplicate enter before cmd ran: second=%v calls=%d", second, calls)
+	}
+
+	// Drive the async handoff.
+	started := cmd().(eagerExactExecutionStartedMsg)
+	wait := model.applyExactExecutionStarted(started)
+	if wait == nil {
+		t.Fatal("expected wait command after start")
+	}
+	// Drain progress/result.
+	for model.phase == eagerPhaseExecuting {
+		msg := wait()
+		switch m := msg.(type) {
+		case eagerExactExecutionProgressMsg:
+			wait = model.applyExactExecutionProgress(m)
+		case eagerExactExecutedMsg:
+			model.applyExactExecuted(m)
+			wait = nil
+		default:
+			t.Fatalf("unexpected msg %T", msg)
+		}
+		if wait == nil {
+			break
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("shared clean calls = %d, want 1", calls)
+	}
+	if len(gotIDs) != 1 || gotIDs[0] != optInID {
+		t.Fatalf("executed IDs = %#v, want [%q]", gotIDs, optInID)
+	}
+	if model.phase != eagerPhaseResult {
+		t.Fatalf("phase = %v, want result", model.phase)
+	}
+	// Further Enter cannot re-execute.
+	_, again := model.handleKey("enter")
+	if again != nil || calls != 1 {
+		t.Fatalf("result enter re-executed: again=%v calls=%d", again, calls)
+	}
+}
+
+func TestRunExactCleanSelectionUsesPlanAndTUIProvenance(t *testing.T) {
+	var captured clean.Options
+	originalExecute := executeClean
+	executeClean = func(_ context.Context, opts clean.Options) clean.Result {
+		captured = opts
+		return clean.Result{Status: "ok", Mode: "execute"}
+	}
+	originalLoader := loadProtectionConfiguration
+	loadProtectionConfiguration = func() clean.ProtectionConfiguration {
+		return clean.ProtectionConfiguration{}
+	}
+	originalRecorder := newHistoryRecorder
+	newHistoryRecorder = func() (history.Recorder, error) { return &recordingHistoryRecorder{}, nil }
+	t.Cleanup(func() {
+		executeClean = originalExecute
+		loadProtectionConfiguration = originalLoader
+		newHistoryRecorder = originalRecorder
+	})
+
+	// Omit default; pass only crash_dumps and go-cache style opt-ins.
+	selected := []string{clean.DevCacheCategoryGo, clean.OpportunityCategoryCrashDumps}
+	result := runExactCleanSelection(context.Background(), selected, nil)
+	if result.Status != "ok" {
+		t.Fatalf("result = %#v", result)
+	}
+	if captured.Plan == nil || captured.Plan.Mode != clean.SelectionModeExact {
+		t.Fatalf("Plan = %#v, want exact", captured.Plan)
+	}
+	wantCats := []string{clean.OpportunityCategoryCrashDumps, clean.DevCacheCategoryGo}
+	if len(captured.Plan.Categories) != 2 ||
+		captured.Plan.Categories[0] != wantCats[0] ||
+		captured.Plan.Categories[1] != wantCats[1] {
+		t.Fatalf("plan categories = %#v, want catalog order %#v", captured.Plan.Categories, wantCats)
+	}
+	// Additive OptIn path must not be used as the authorization source.
+	if len(captured.OptIn) != 0 {
+		t.Fatalf("OptIn = %#v, exact TUI must authorize via Plan only", captured.OptIn)
+	}
+	cp := captured.CommandParameters
+	if cp.Surface != "tui" || cp.SelectionMode != "exact" {
+		t.Fatalf("provenance surface/mode = %#v", cp)
+	}
+	if len(cp.Args) != 0 {
+		t.Fatalf("synthetic CLI args = %#v", cp.Args)
+	}
+	if len(cp.SelectedCategories) != 2 ||
+		cp.SelectedCategories[0] != wantCats[0] ||
+		cp.SelectedCategories[1] != wantCats[1] {
+		t.Fatalf("selected_categories = %#v, want %#v", cp.SelectedCategories, wantCats)
+	}
+	for _, id := range cp.SelectedCategories {
+		if strings.ContainsAny(id, `/\`) || id == clean.DefaultCategoryFoalOwnedTempSandboxes {
+			t.Fatalf("bad provenance category %q", id)
+		}
+	}
+	if captured.DetailedListDir != "" {
+		t.Fatal("detailed list must not be attached for TUI execute")
+	}
+	if captured.HistoryRecorder == nil || captured.DetectRunningApplications == nil {
+		t.Fatal("history recorder and running detection required")
+	}
+}
+
+func TestRunExactCleanSelectionRejectsInvalidIdentifiersBeforeCleanup(t *testing.T) {
+	called := false
+	originalExecute := executeClean
+	executeClean = func(context.Context, clean.Options) clean.Result {
+		called = true
+		return clean.Result{Status: "ok"}
+	}
+	t.Cleanup(func() { executeClean = originalExecute })
+
+	for _, ids := range [][]string{
+		{"all"},
+		{"dev-caches"},
+		{`C:\Users\temp`},
+		{"not_a_category"},
+		{"administrator_only_caches"},
+	} {
+		result := runExactCleanSelection(context.Background(), ids, nil)
+		if called {
+			t.Fatalf("execute called for invalid %#v", ids)
+		}
+		if result.Status != "error" || len(result.Errors) == 0 || result.Errors[0].Code != "invalid_category_plan" {
+			t.Fatalf("ids=%v result=%#v", ids, result)
 		}
 	}
 }

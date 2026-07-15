@@ -197,6 +197,132 @@ func TestQueryReportsMalformedHistoryAsStructuredError(t *testing.T) {
 	}
 }
 
+func TestFileRecorderSerializesOptionalTUIProvenanceWithoutCLIArgs(t *testing.T) {
+	dir := t.TempDir()
+	recorder := history.NewFileRecorder(dir)
+	session := history.SessionRecord{
+		ID: "tui-exact",
+		Command: history.CommandParameters{
+			Command:            "clean",
+			Surface:            "tui",
+			SelectionMode:      "exact",
+			SelectedCategories: []string{"foal_owned_temp_sandboxes", "crash_dumps"},
+		},
+		Mode:      "execute",
+		StartedAt: time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC),
+		EndedAt:   time.Date(2026, 7, 15, 10, 0, 1, 0, time.UTC),
+		Aggregate: history.AggregateOutcomes{DeletedCount: 1, AffectedBytes: 8},
+	}
+	if err := recorder.Record(context.Background(), session, []history.ItemRecord{{
+		Path:   filepath.Join(dir, "deleted.tmp"),
+		Rule:   "crash_dumps",
+		Action: "move_to_recycle_bin",
+		Result: "deleted",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "tui-exact.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(raw)
+	for _, want := range []string{
+		`"surface":"tui"`,
+		`"selection_mode":"exact"`,
+		`"selected_categories":["foal_owned_temp_sandboxes","crash_dumps"]`,
+	} {
+		if !strings.Contains(encoded, want) {
+			t.Fatalf("encoded history missing %s:\n%s", want, encoded)
+		}
+	}
+	records := readHistoryRecords(t, filepath.Join(dir, "tui-exact.jsonl"))
+	if len(records) != 2 || records[0].Session == nil {
+		t.Fatalf("records = %#v", records)
+	}
+	// Session record must omit synthetic CLI args; item paths stay authoritative.
+	if len(records[0].Session.Command.Args) != 0 {
+		t.Fatalf("TUI provenance must not synthesize CLI args: %#v", records[0].Session.Command.Args)
+	}
+	if records[0].Session.Command.Surface != "tui" ||
+		records[0].Session.Command.SelectionMode != "exact" ||
+		len(records[0].Session.Command.SelectedCategories) != 2 {
+		t.Fatalf("session command = %#v", records[0].Session.Command)
+	}
+	if records[1].Item == nil || records[1].Item.Path == "" || records[1].Item.Result != "deleted" {
+		t.Fatalf("item-level history must remain authoritative: %#v", records[1].Item)
+	}
+	for _, id := range records[0].Session.Command.SelectedCategories {
+		if strings.ContainsAny(id, `/\`) {
+			t.Fatalf("selected category path-bearing: %q", id)
+		}
+	}
+	// Session JSON line must not invent CLI execute flags.
+	sessionLine := strings.SplitN(encoded, "\n", 2)[0]
+	for _, forbidden := range []string{`"args"`, "--opt-in", "--execute"} {
+		if strings.Contains(sessionLine, forbidden) {
+			t.Fatalf("session provenance contains %q:\n%s", forbidden, sessionLine)
+		}
+	}
+}
+
+func TestQueryReadsOlderHistoryWithoutTUIProvenanceAndCLIKeepsArgs(t *testing.T) {
+	dir := t.TempDir()
+	// Older session without surface/selection_mode/selected_categories.
+	older := `{"type":"session","session":{"id":"legacy","command_parameters":{"command":"clean","args":["clean","--execute"]},"started_at":"2026-06-03T09:00:00Z","ended_at":"2026-06-03T09:00:01Z","mode":"execute","aggregate_outcomes":{"candidate_count":0,"deleted_count":1,"skipped_count":0,"error_count":0,"candidate_bytes":0,"affected_bytes":4}}}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "legacy.jsonl"), []byte(older), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// CLI-shaped session with args and no TUI provenance.
+	cli := history.SessionRecord{
+		ID: "cli",
+		Command: history.CommandParameters{
+			Command: "clean",
+			Args:    []string{"clean", "--execute", "--opt-in", "crash_dumps"},
+		},
+		Mode:      "execute",
+		StartedAt: time.Date(2026, 7, 15, 11, 0, 0, 0, time.UTC),
+		EndedAt:   time.Date(2026, 7, 15, 11, 0, 1, 0, time.UTC),
+		Aggregate: history.AggregateOutcomes{DeletedCount: 1, AffectedBytes: 4},
+	}
+	if err := history.NewFileRecorder(dir).Record(context.Background(), cli, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	result := history.NewFileQuery(dir).Recent(context.Background())
+	if result.Status != "ok" || len(result.Sessions) != 2 {
+		t.Fatalf("result = %#v", result)
+	}
+	var legacy, cliSession *history.SessionResult
+	for i := range result.Sessions {
+		switch result.Sessions[i].ID {
+		case "legacy":
+			legacy = &result.Sessions[i]
+		case "cli":
+			cliSession = &result.Sessions[i]
+		}
+	}
+	if legacy == nil || cliSession == nil {
+		t.Fatalf("sessions = %#v", result.Sessions)
+	}
+	if legacy.Command.Surface != "" || legacy.Command.SelectionMode != "" || len(legacy.Command.SelectedCategories) != 0 {
+		t.Fatalf("legacy gained TUI fields: %#v", legacy.Command)
+	}
+	if len(legacy.Command.Args) != 2 || legacy.Command.Args[0] != "clean" {
+		t.Fatalf("legacy args = %#v", legacy.Command.Args)
+	}
+	if cliSession.Command.Surface != "" || len(cliSession.Command.Args) != 4 {
+		t.Fatalf("CLI session provenance/args broken: %#v", cliSession.Command)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "cli.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"surface"`) || strings.Contains(string(raw), `"selection_mode"`) {
+		t.Fatalf("CLI session must omit empty TUI provenance fields:\n%s", raw)
+	}
+}
+
 func readHistoryRecords(t *testing.T, path string) []history.Record {
 	t.Helper()
 
