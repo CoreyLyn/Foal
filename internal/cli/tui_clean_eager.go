@@ -185,6 +185,14 @@ type eagerExactExecutionProgressMsg struct {
 }
 type eagerExactExecutedMsg struct{ result clean.Result }
 
+// Minimum terminal geometry for a safe actionable/confirmable layout. Below
+// this, Clean replaces stage content with Terminal too small guidance rather
+// than truncating authorization or confirmation chrome.
+const (
+	eagerMinTerminalWidth  = 40
+	eagerMinTerminalHeight = 12
+)
+
 type eagerCleanModel struct {
 	generation   uint64
 	cancel       context.CancelFunc
@@ -202,14 +210,24 @@ type eagerCleanModel struct {
 	now          func() time.Time
 	nav          eagerPreviewNav
 
-	phase                   eagerCleanPhase
-	frozenCategories        []string
-	executionStarted        bool
-	executionResult         clean.Result
-	executionProgress       clean.ExecutionProgress
-	executionOutcomes       []clean.CategoryExecutionOutcome
-	cancellationRequested   bool
-	cancelExecution         context.CancelFunc
+	// viewportOffset is the first visible line of the scrollable body. Titles,
+	// progress, totals, diagnostics, cancellation status, and key hints stay
+	// fixed outside this window. There is no separate scroll mode.
+	viewportOffset int
+	// execFollowActive: when true, execution keeps the active category in view.
+	// Manual Up/Down pauses following for temporary inspection; following
+	// resumes only when a newly active category lies completely outside.
+	execFollowActive  bool
+	execTrackedActive int // last known active execution outcome index; -1 none
+
+	phase                 eagerCleanPhase
+	frozenCategories      []string
+	executionStarted      bool
+	executionResult       clean.Result
+	executionProgress     clean.ExecutionProgress
+	executionOutcomes     []clean.CategoryExecutionOutcome
+	cancellationRequested bool
+	cancelExecution       context.CancelFunc
 }
 
 func newEagerCleanModel(width, height int) eagerCleanModel {
@@ -227,11 +245,40 @@ func newEagerCleanModel(width, height int) eagerCleanModel {
 		})
 	}
 	return eagerCleanModel{
-		rows:        rows,
-		activeIndex: -1,
-		width:       width,
-		height:      height,
-		now:         time.Now,
+		rows:              rows,
+		activeIndex:       -1,
+		width:             width,
+		height:            height,
+		now:               time.Now,
+		execTrackedActive: -1,
+	}
+}
+
+// setSize applies a terminal resize. It preserves the focused preview row or
+// current viewport offset, and never changes category identity or authorization.
+func (m *eagerCleanModel) setSize(width, height int) {
+	m.width = width
+	m.height = height
+	m.reflowViewportAfterResize()
+}
+
+func (m *eagerCleanModel) reflowViewportAfterResize() {
+	if m.terminalTooSmall() {
+		return
+	}
+	switch m.phase {
+	case eagerPhasePreview:
+		if m.unavailable == nil {
+			m.ensurePreviewCursorVisible()
+		}
+	case eagerPhaseExecuting:
+		if m.execFollowActive {
+			m.ensureExecutionOutcomeVisible(m.executionActiveIndex())
+		} else {
+			m.clampViewportOffset()
+		}
+	default:
+		m.clampViewportOffset()
 	}
 }
 
@@ -257,6 +304,10 @@ func (m *eagerCleanModel) start() tea.Cmd {
 	m.executionProgress = clean.ExecutionProgress{}
 	m.executionOutcomes = nil
 	m.cancellationRequested = false
+	m.viewportOffset = 0
+	m.execFollowActive = false
+	m.execTrackedActive = -1
+	m.cursor = 0
 	for i := range m.rows {
 		m.rows[i].State = clean.CategoryPreviewWaiting
 		m.rows[i].CandidateCount = 0
@@ -580,12 +631,21 @@ func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 	case eagerPhaseExecuting:
 		// ADR 0014: only Ctrl+C requests cooperative cancel. Escape, b, and q
 		// are ignored; repeated Ctrl+C does not force exit. Stay attached until
-		// the final Result and normal History complete.
-		if key == "ctrl+c" {
+		// the final Result and normal History complete. Undersized terminals
+		// keep the same no-abandon rule.
+		switch key {
+		case "ctrl+c":
 			m.cancellationRequested = true
 			if m.cancelExecution != nil {
 				m.cancelExecution()
 			}
+		case "up", "k":
+			// Temporary inspection: pause active following without changing auth.
+			m.execFollowActive = false
+			m.scrollViewport(-1)
+		case "down", "j":
+			m.execFollowActive = false
+			m.scrollViewport(1)
 		}
 		return eagerPreviewNavNone, nil
 	case eagerPhaseResult:
@@ -599,6 +659,13 @@ func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 		case "enter", "esc", "b", "escape":
 			m.nav = eagerPreviewNavMenu
 			return m.nav, nil
+		case "up", "k":
+			// Non-selectable content: Up/Down only adjust viewport offset.
+			m.scrollViewport(-1)
+			return eagerPreviewNavNone, nil
+		case "down", "j":
+			m.scrollViewport(1)
+			return eagerPreviewNavNone, nil
 		default:
 			return eagerPreviewNavNone, nil
 		}
@@ -617,15 +684,24 @@ func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 		case "esc", "b", "escape":
 			// Preserve in-memory scan and selection; do not rescan.
 			m.phase = eagerPhasePreview
+			m.viewportOffset = 0
+			m.ensurePreviewCursorVisible()
 			return eagerPreviewNavNone, nil
 		case "enter":
 			return m.beginExactExecution()
+		case "up", "k":
+			// Non-selectable content: Up/Down only adjust viewport offset.
+			m.scrollViewport(-1)
+			return eagerPreviewNavNone, nil
+		case "down", "j":
+			m.scrollViewport(1)
+			return eagerPreviewNavNone, nil
 		default:
 			return eagerPreviewNavNone, nil
 		}
 	}
 
-	// Preview phase.
+	// Preview phase. Undersized terminals still honor return/quit keys.
 	switch key {
 	case "ctrl+c":
 		m.cancelPending()
@@ -645,15 +721,18 @@ func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 	case "enter":
 		if m.confirmationEnabled() {
 			m.phase = eagerPhaseConfirmation
+			m.viewportOffset = 0
 		}
 		return eagerPreviewNavNone, nil
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
+			m.ensurePreviewCursorVisible()
 		}
 	case "down", "j":
 		if m.cursor+1 < len(m.rows) {
 			m.cursor++
+			m.ensurePreviewCursorVisible()
 		}
 	case " ", "space":
 		// Toggle only; never returns a scan command.
@@ -702,6 +781,10 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 	m.phase = eagerPhaseExecuting
 	// Seed in-progress rows from the frozen exact selection only.
 	m.executionOutcomes = initialExecutionOutcomes(m.frozenCategories)
+	m.viewportOffset = 0
+	m.execFollowActive = true
+	m.execTrackedActive = -1
+	m.syncExecutionViewport()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelExecution = cancel
 	// Single command keeps the Bubble Tea handoff seam simple for tests and
@@ -749,6 +832,7 @@ func (m *eagerCleanModel) applyExactExecutionProgress(msg eagerExactExecutionPro
 			m.executionOutcomes[i].State = inProgress
 		}
 	}
+	m.syncExecutionViewport()
 	return waitEagerExactExecutionCmd(msg.stream)
 }
 
@@ -761,122 +845,391 @@ func (m *eagerCleanModel) applyExactExecuted(msg eagerExactExecutedMsg) {
 	// frozen selection. Item-level Result/History remain the source of truth.
 	m.executionOutcomes = clean.ProjectCategoryExecutionOutcomes(m.frozenCategories, msg.result)
 	m.phase = eagerPhaseResult
+	m.viewportOffset = 0
+	m.execFollowActive = false
+	m.execTrackedActive = -1
 	if m.cancelExecution != nil {
 		m.cancelExecution = nil
 	}
 }
 
 func (m eagerCleanModel) content() string {
+	if m.terminalTooSmall() {
+		return m.tooSmallContent()
+	}
 	if m.unavailable != nil {
 		return m.unavailableContent()
 	}
+
+	header := m.fixedHeaderLines()
+	footer := m.fixedFooterLines()
+	body := m.scrollableBodyLines()
+	// height <= 0 means unconstrained (deterministic model tests without a
+	// WindowSize). Otherwise body fills remaining rows under fixed chrome.
+	capacity := len(body)
+	if m.height > 0 {
+		capacity = m.height - len(header) - len(footer)
+		if capacity < 1 {
+			return m.tooSmallContent()
+		}
+	}
+	offset := m.clampedViewportOffset(len(body), capacity)
+	end := offset + capacity
+	if end > len(body) {
+		end = len(body)
+	}
+
+	parts := make([]string, 0, len(header)+capacity+len(footer))
+	parts = append(parts, header...)
+	if len(body) > 0 {
+		parts = append(parts, body[offset:end]...)
+	}
+	parts = append(parts, footer...)
+	return strings.Join(parts, "\n") + "\n"
+}
+
+// terminalTooSmall reports whether the terminal cannot host the minimum safe
+// fixed chrome plus one body line without truncating actionable layout.
+func (m eagerCleanModel) terminalTooSmall() bool {
+	if m.width > 0 && m.width < eagerMinTerminalWidth {
+		return true
+	}
+	if m.height <= 0 {
+		// Zero height is treated as unconstrained for pure model tests that
+		// only assert textual contracts; production always receives WindowSize.
+		return false
+	}
+	if m.height < eagerMinTerminalHeight {
+		return true
+	}
+	// Dynamic chrome may still exceed the floor on multi-line diagnostics.
+	headerN := len(m.fixedHeaderLines())
+	footerN := len(m.fixedFooterLines())
+	return m.height < headerN+footerN+1
+}
+
+func (m eagerCleanModel) tooSmallContent() string {
+	return strings.Join([]string{
+		"Terminal too small",
+		"Resize the terminal larger to continue using Clean.",
+		m.tooSmallHints(),
+	}, "\n") + "\n"
+}
+
+func (m eagerCleanModel) tooSmallHints() string {
+	if m.unavailable != nil {
+		return "Hints: Enter/Esc/b menu · q quit"
+	}
+	switch m.phase {
+	case eagerPhaseExecuting:
+		if m.cancellationRequested {
+			return "Waiting for final Result. Escape, b, and q are inactive."
+		}
+		return "Hints: Ctrl+C cancel · Escape/b/q inactive during execution"
+	case eagerPhaseResult:
+		return "Hints: Enter/Esc/b menu · q quit"
+	case eagerPhaseConfirmation:
+		return "Hints: b/Esc back · q quit"
+	default:
+		return "Hints: b/Esc back · q quit"
+	}
+}
+
+// fixedHeaderLines are titles and phase/progress fixed above the body.
+func (m eagerCleanModel) fixedHeaderLines() []string {
+	if m.unavailable != nil {
+		return []string{"Clean unavailable"}
+	}
 	switch m.phase {
 	case eagerPhaseConfirmation:
-		return m.confirmationContent()
+		return []string{"Foal Clean", "Confirm cleanup", ""}
 	case eagerPhaseExecuting:
-		return m.executingContent()
+		return []string{"Foal Clean", m.executionHeaderLine(), ""}
 	case eagerPhaseResult:
-		return m.resultContent()
+		return []string{"Foal Clean", "Cleanup result", ""}
+	default:
+		return []string{"Foal Clean", m.headerLine(), ""}
 	}
-
-	var builder strings.Builder
-	builder.WriteString("Foal Clean\n")
-	builder.WriteString(m.headerLine())
-	builder.WriteString("\n")
-
-	currentGroup := clean.ReportCategory("")
-	for i, row := range m.rows {
-		if row.ReportCategory != currentGroup {
-			currentGroup = row.ReportCategory
-			builder.WriteString(fmt.Sprintf("  %s\n", currentGroup))
-		}
-		cursor := " "
-		if i == m.cursor {
-			cursor = ">"
-		}
-		// Cursor (>) and checkbox ([x]/[ ]) stay independent of scan markers.
-		builder.WriteString(fmt.Sprintf("  %s %s %s %s\n", cursor, m.checkbox(row), m.rowMarker(row), m.rowLabel(row)))
-	}
-
-	builder.WriteString("\n")
-	builder.WriteString(m.selectionSummaryLine())
-	builder.WriteString("\n")
-	builder.WriteString(m.focusedDetailPanel())
-	builder.WriteString("\n")
-	builder.WriteString(m.footerHints())
-	return builder.String()
 }
 
-// confirmationContent lists only the selected exact categories and the latest
-// selected preview total. It never starts cleanup or writes History.
-func (m eagerCleanModel) confirmationContent() string {
-	var builder strings.Builder
-	builder.WriteString("Foal Clean\n")
-	builder.WriteString("Confirm cleanup\n")
-	builder.WriteString("\n")
-	builder.WriteString("Selected categories:\n")
-	for _, row := range m.rows {
-		if !row.Selected {
-			continue
+// fixedFooterLines hold totals, diagnostics, cancellation status, and key hints.
+func (m eagerCleanModel) fixedFooterLines() []string {
+	if m.unavailable != nil {
+		code := "unavailable"
+		message := "Clean cannot start."
+		if m.unavailable.Code != "" {
+			code = m.unavailable.Code
 		}
-		builder.WriteString(fmt.Sprintf("  - %s\n", row.Label))
+		if m.unavailable.Message != "" {
+			message = m.unavailable.Message
+		}
+		return []string{
+			fmt.Sprintf("Code: %s", code),
+			message,
+			"",
+			"Hints: Enter/Esc/b menu · q quit",
+		}
 	}
-	n, measured, _ := m.selectionTotals()
-	builder.WriteString("\n")
-	builder.WriteString(fmt.Sprintf("Selected: %d categories · %s\n", n, cleanFormatBytes(measured)))
-	builder.WriteString("Latest preview total only. Execution resolves fresh state; candidates or bytes may differ from preview.\n")
-	builder.WriteString("Successful cleanup moves items to the Recycle Bin.\n")
-	builder.WriteString("\n")
-	builder.WriteString("Enter: execute | b/Esc: back to preview\n")
-	return builder.String()
+	switch m.phase {
+	case eagerPhaseConfirmation:
+		n, measured, _ := m.selectionTotals()
+		return []string{
+			"",
+			fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured)),
+			"Latest preview total only. Execution resolves fresh state; candidates or bytes may differ from preview.",
+			"Successful cleanup moves items to the Recycle Bin.",
+			"",
+			"Enter: execute | b/Esc: back to preview",
+		}
+	case eagerPhaseExecuting:
+		lines := []string{""}
+		if m.cancellationRequested {
+			lines = append(lines, cancellationRequestedMessage)
+		}
+		lines = append(lines, m.executionFooterLine())
+		if m.cancellationRequested {
+			lines = append(lines, "Waiting for final Result. Escape, b, and q are inactive.")
+		} else {
+			lines = append(lines, "Hints: Ctrl+C cancel · Escape/b/q inactive during execution")
+		}
+		return lines
+	case eagerPhaseResult:
+		affected := m.executionResult.Totals.AffectedBytes
+		if affected == 0 {
+			affected = clean.SumExecutionAffectedBytes(m.executionOutcomes)
+		}
+		terminal := clean.CountTerminalExecutionOutcomes(m.executionOutcomes)
+		total := len(m.executionOutcomes)
+		return []string{
+			"",
+			fmt.Sprintf("Processed: %d/%d", terminal, total),
+			fmt.Sprintf("Affected bytes: %s", cleanFormatBytes(affected)),
+			"",
+			"Enter/Esc/b: menu · q: quit",
+		}
+	default:
+		lines := []string{"", m.selectionSummaryLine()}
+		lines = append(lines, strings.Split(m.focusedDetailPanel(), "\n")...)
+		lines = append(lines, strings.Split(m.footerHints(), "\n")...)
+		return lines
+	}
 }
 
-func (m eagerCleanModel) executingContent() string {
-	var builder strings.Builder
-	builder.WriteString("Foal Clean\n")
-	builder.WriteString(m.executionHeaderLine())
-	builder.WriteString("\n")
-	if m.cancellationRequested {
-		builder.WriteString(cancellationRequestedMessage)
-		builder.WriteString("\n")
+// scrollableBodyLines are the central content. Group headings travel with their
+// category rows; there is no independent heading freeze or scroll mode.
+func (m eagerCleanModel) scrollableBodyLines() []string {
+	lines := m.scrollableBodyEntries()
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = line.text
 	}
-	builder.WriteString("\n")
-	for _, outcome := range m.executionOutcomes {
-		builder.WriteString(fmt.Sprintf("  %s %s\n", m.executionRowMarker(outcome.State), m.executionRowLabel(outcome)))
-	}
-	builder.WriteString("\n")
-	builder.WriteString(m.executionFooterLine())
-	builder.WriteString("\n")
-	if m.cancellationRequested {
-		builder.WriteString("Waiting for final Result. Escape, b, and q are inactive.\n")
-	} else {
-		builder.WriteString("Hints: Ctrl+C cancel · Escape/b/q inactive during execution\n")
-	}
-	return builder.String()
+	return out
 }
 
-func (m eagerCleanModel) resultContent() string {
-	var builder strings.Builder
-	builder.WriteString("Foal Clean\n")
-	builder.WriteString("Cleanup result\n")
-	builder.WriteString("\n")
-	for _, outcome := range m.executionOutcomes {
-		builder.WriteString(fmt.Sprintf("  %s %s\n", m.executionRowMarker(outcome.State), m.executionRowLabel(outcome)))
+type eagerBodyLine struct {
+	text         string
+	rowIndex     int // preview row index; -1 when not a category row
+	outcomeIndex int // execution/result outcome index; -1 when not an outcome row
+}
+
+func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
+	if m.unavailable != nil {
+		return nil
 	}
-	builder.WriteString("\n")
-	// Prefer Result totals for affected bytes so item-level authority wins when
-	// projection and totals agree on successful Recycle Bin moves only.
-	affected := m.executionResult.Totals.AffectedBytes
-	if affected == 0 {
-		affected = clean.SumExecutionAffectedBytes(m.executionOutcomes)
+	switch m.phase {
+	case eagerPhaseConfirmation:
+		lines := []eagerBodyLine{{text: "Selected categories:", rowIndex: -1, outcomeIndex: -1}}
+		for _, row := range m.rows {
+			if !row.Selected {
+				continue
+			}
+			lines = append(lines, eagerBodyLine{
+				text:         fmt.Sprintf("  - %s", row.Label),
+				rowIndex:     -1,
+				outcomeIndex: -1,
+			})
+		}
+		return lines
+	case eagerPhaseExecuting, eagerPhaseResult:
+		lines := make([]eagerBodyLine, 0, len(m.executionOutcomes))
+		for i, outcome := range m.executionOutcomes {
+			lines = append(lines, eagerBodyLine{
+				text:         fmt.Sprintf("  %s %s", m.executionRowMarker(outcome.State), m.executionRowLabel(outcome)),
+				rowIndex:     -1,
+				outcomeIndex: i,
+			})
+		}
+		return lines
+	default:
+		lines := make([]eagerBodyLine, 0, len(m.rows)+4)
+		currentGroup := clean.ReportCategory("")
+		for i, row := range m.rows {
+			if row.ReportCategory != currentGroup {
+				currentGroup = row.ReportCategory
+				lines = append(lines, eagerBodyLine{
+					text:         fmt.Sprintf("  %s", currentGroup),
+					rowIndex:     -1,
+					outcomeIndex: -1,
+				})
+			}
+			cursor := " "
+			if i == m.cursor {
+				cursor = ">"
+			}
+			// Cursor (>) and checkbox ([x]/[ ]) stay independent of scan markers.
+			lines = append(lines, eagerBodyLine{
+				text:         fmt.Sprintf("  %s %s %s %s", cursor, m.checkbox(row), m.rowMarker(row), m.rowLabel(row)),
+				rowIndex:     i,
+				outcomeIndex: -1,
+			})
+		}
+		return lines
 	}
-	terminal := clean.CountTerminalExecutionOutcomes(m.executionOutcomes)
-	total := len(m.executionOutcomes)
-	builder.WriteString(fmt.Sprintf("Processed: %d/%d\n", terminal, total))
-	builder.WriteString(fmt.Sprintf("Affected bytes: %s\n", cleanFormatBytes(affected)))
-	builder.WriteString("\n")
-	builder.WriteString("Enter/Esc/b: menu · q: quit\n")
-	return builder.String()
+}
+
+func (m eagerCleanModel) bodyCapacity() int {
+	if m.terminalTooSmall() || m.height <= 0 {
+		if m.height <= 0 {
+			// Unconstrained: treat capacity as large enough for full body.
+			return len(m.scrollableBodyLines()) + 1
+		}
+		return 0
+	}
+	cap := m.height - len(m.fixedHeaderLines()) - len(m.fixedFooterLines())
+	if cap < 0 {
+		return 0
+	}
+	return cap
+}
+
+func (m eagerCleanModel) clampedViewportOffset(bodyLen, capacity int) int {
+	if capacity <= 0 || bodyLen <= 0 {
+		return 0
+	}
+	maxOffset := bodyLen - capacity
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	offset := m.viewportOffset
+	if offset < 0 {
+		return 0
+	}
+	if offset > maxOffset {
+		return maxOffset
+	}
+	return offset
+}
+
+func (m *eagerCleanModel) clampViewportOffset() {
+	cap := m.bodyCapacity()
+	bodyLen := len(m.scrollableBodyLines())
+	m.viewportOffset = m.clampedViewportOffset(bodyLen, cap)
+}
+
+func (m *eagerCleanModel) scrollViewport(delta int) {
+	if m.terminalTooSmall() {
+		return
+	}
+	m.viewportOffset += delta
+	m.clampViewportOffset()
+}
+
+func (m *eagerCleanModel) ensurePreviewCursorVisible() {
+	if m.unavailable != nil || len(m.rows) == 0 {
+		m.clampViewportOffset()
+		return
+	}
+	line := m.previewBodyLineForRow(m.cursor)
+	m.ensureBodyLineVisible(line)
+}
+
+func (m eagerCleanModel) previewBodyLineForRow(rowIndex int) int {
+	for i, line := range m.scrollableBodyEntries() {
+		if line.rowIndex == rowIndex {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *eagerCleanModel) ensureBodyLineVisible(lineIndex int) {
+	if lineIndex < 0 {
+		m.clampViewportOffset()
+		return
+	}
+	cap := m.bodyCapacity()
+	if cap <= 0 {
+		return
+	}
+	if lineIndex < m.viewportOffset {
+		m.viewportOffset = lineIndex
+	} else if lineIndex >= m.viewportOffset+cap {
+		m.viewportOffset = lineIndex - cap + 1
+	}
+	m.clampViewportOffset()
+}
+
+func (m eagerCleanModel) executionActiveIndex() int {
+	for i, outcome := range m.executionOutcomes {
+		if !clean.IsTerminalExecutionState(outcome.State) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m eagerCleanModel) executionOutcomeBodyLine(outcomeIndex int) int {
+	for i, line := range m.scrollableBodyEntries() {
+		if line.outcomeIndex == outcomeIndex {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *eagerCleanModel) ensureExecutionOutcomeVisible(outcomeIndex int) {
+	if outcomeIndex < 0 {
+		m.clampViewportOffset()
+		return
+	}
+	m.ensureBodyLineVisible(m.executionOutcomeBodyLine(outcomeIndex))
+}
+
+func (m eagerCleanModel) executionOutcomeCompletelyOutside(outcomeIndex int) bool {
+	line := m.executionOutcomeBodyLine(outcomeIndex)
+	if line < 0 {
+		return false
+	}
+	cap := m.bodyCapacity()
+	if cap <= 0 {
+		return true
+	}
+	offset := m.clampedViewportOffset(len(m.scrollableBodyLines()), cap)
+	return line < offset || line >= offset+cap
+}
+
+// syncExecutionViewport follows the active category by default and brings a
+// newly active category into view only when it is completely outside the
+// current viewport after temporary inspection.
+func (m *eagerCleanModel) syncExecutionViewport() {
+	if m.phase != eagerPhaseExecuting {
+		return
+	}
+	active := m.executionActiveIndex()
+	if active < 0 {
+		m.execTrackedActive = -1
+		return
+	}
+	newlyActive := active != m.execTrackedActive
+	m.execTrackedActive = active
+	if m.execFollowActive {
+		m.ensureExecutionOutcomeVisible(active)
+		return
+	}
+	if newlyActive && m.executionOutcomeCompletelyOutside(active) {
+		m.execFollowActive = true
+		m.ensureExecutionOutcomeVisible(active)
+	}
 }
 
 func (m eagerCleanModel) executionHeaderLine() string {
