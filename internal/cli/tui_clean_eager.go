@@ -15,9 +15,10 @@ import (
 // Category-first eager preview model for the Clean TUI. This surface delivers
 // path-free terminal outcomes, exact per-session cleanup selection with live
 // measured totals, focused diagnostics, unavailable and no-work classification,
-// a separate confirmation page, and a one-shot handoff into shared exact Clean
-// execution. Full progressive execution/result UI and root cutover remain later
-// tickets; this ticket freezes authorization and invokes shared Clean once.
+// a separate confirmation page, one-shot handoff into shared exact Clean
+// execution, observation-only path-free category progress, cooperative
+// cancellation (ADR 0014), and an authoritative path-free result page.
+// Root cutover remains a later ticket.
 
 var eagerPreviewSpinnerFrames = []string{"|", "/", "-", "\\"}
 
@@ -40,10 +41,12 @@ const (
 	eagerPhasePreview eagerCleanPhase = iota
 	eagerPhaseConfirmation
 	eagerPhaseExecuting
-	// Minimal terminal attachment so one-shot handoff is observable; full
-	// category result taxonomy belongs to the execution-progress ticket.
 	eagerPhaseResult
 )
+
+// cancellationRequestedMessage is shown after the first cooperative Ctrl+C
+// during active execution. Completed Recycle Bin moves are never rolled back.
+const cancellationRequestedMessage = "Cancellation requested. Completed Recycle Bin operations will not be rolled back."
 
 type eagerCategoryRow struct {
 	Identifier     string
@@ -199,12 +202,14 @@ type eagerCleanModel struct {
 	now          func() time.Time
 	nav          eagerPreviewNav
 
-	phase              eagerCleanPhase
-	frozenCategories   []string
-	executionStarted   bool
-	executionResult    clean.Result
-	executionProgress  clean.ExecutionProgress
-	cancelExecution    context.CancelFunc
+	phase                   eagerCleanPhase
+	frozenCategories        []string
+	executionStarted        bool
+	executionResult         clean.Result
+	executionProgress       clean.ExecutionProgress
+	executionOutcomes       []clean.CategoryExecutionOutcome
+	cancellationRequested   bool
+	cancelExecution         context.CancelFunc
 }
 
 func newEagerCleanModel(width, height int) eagerCleanModel {
@@ -250,6 +255,8 @@ func (m *eagerCleanModel) start() tea.Cmd {
 	m.executionStarted = false
 	m.executionResult = clean.Result{}
 	m.executionProgress = clean.ExecutionProgress{}
+	m.executionOutcomes = nil
+	m.cancellationRequested = false
 	for i := range m.rows {
 		m.rows[i].State = clean.CategoryPreviewWaiting
 		m.rows[i].CandidateCount = 0
@@ -388,7 +395,19 @@ func (m *eagerCleanModel) applyUnavailable(msg eagerPreviewUnavailableMsg) {
 }
 
 func (m *eagerCleanModel) applyTick(msg eagerPreviewTickMsg) tea.Cmd {
-	if msg.generation != m.generation || m.canceled || m.finished || m.unavailable != nil {
+	if msg.generation != m.generation || m.unavailable != nil {
+		return nil
+	}
+	// Preview ticks stop after cancel or scan finish; execution keeps the
+	// header spinner alive until the authoritative Result arrives.
+	switch m.phase {
+	case eagerPhaseExecuting:
+		// Active execution owns the frame until Result.
+	case eagerPhasePreview:
+		if m.canceled || m.finished {
+			return nil
+		}
+	default:
 		return nil
 	}
 	m.spinnerFrame = msg.frame
@@ -559,10 +578,11 @@ func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 
 	switch m.phase {
 	case eagerPhaseExecuting:
-		// Active execution owns input until the shared Result arrives. Full
-		// cancellation messaging belongs to the progress ticket; here we only
-		// request cooperative cancel and reject duplicate execution starts.
+		// ADR 0014: only Ctrl+C requests cooperative cancel. Escape, b, and q
+		// are ignored; repeated Ctrl+C does not force exit. Stay attached until
+		// the final Result and normal History complete.
 		if key == "ctrl+c" {
+			m.cancellationRequested = true
 			if m.cancelExecution != nil {
 				m.cancelExecution()
 			}
@@ -660,7 +680,7 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 	if err != nil {
 		// Selection is catalog-derived; reject before any cleanup work.
 		m.executionStarted = true
-		m.phase = eagerPhaseResult
+		m.frozenCategories = append([]string(nil), ids...)
 		m.executionResult = clean.Result{
 			Status: "error",
 			Mode:   "execute",
@@ -670,14 +690,42 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 				Recoverable: true,
 			}},
 		}
+		m.executionOutcomes = clean.ProjectCategoryExecutionOutcomes(m.frozenCategories, m.executionResult)
+		m.phase = eagerPhaseResult
 		return eagerPreviewNavNone, nil
 	}
 	m.frozenCategories = append([]string(nil), plan.Categories...)
 	m.executionStarted = true
+	m.cancellationRequested = false
+	m.executionOutcomes = nil
+	m.executionProgress = clean.ExecutionProgress{}
 	m.phase = eagerPhaseExecuting
+	// Seed in-progress rows from the frozen exact selection only.
+	m.executionOutcomes = initialExecutionOutcomes(m.frozenCategories)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelExecution = cancel
+	// Single command keeps the Bubble Tea handoff seam simple for tests and
+	// production; the header spinner advances on progress observations and ticks.
 	return eagerPreviewNavNone, executeExactCleanSelectionCmd(ctx, m.frozenCategories)
+}
+
+// initialExecutionOutcomes builds path-free in-progress rows for the frozen
+// selection. Authorization cannot change after this snapshot.
+func initialExecutionOutcomes(frozen []string) []clean.CategoryExecutionOutcome {
+	catalog := clean.CanonicalCleanupCategoryCatalog()
+	out := make([]clean.CategoryExecutionOutcome, 0, len(frozen))
+	for _, id := range frozen {
+		label := id
+		if summary, ok := catalog.Summary(id); ok {
+			label = summary.Label
+		}
+		out = append(out, clean.CategoryExecutionOutcome{
+			Identifier: id,
+			Label:      label,
+			State:      clean.InProgressExecutionState(""),
+		})
+	}
+	return out
 }
 
 func (m *eagerCleanModel) applyExactExecutionStarted(msg eagerExactExecutionStartedMsg) tea.Cmd {
@@ -692,6 +740,15 @@ func (m *eagerCleanModel) applyExactExecutionProgress(msg eagerExactExecutionPro
 		return nil
 	}
 	m.executionProgress = msg.progress
+	m.spinnerFrame++
+	// Observation-only: project the shared phase onto every selected row that
+	// is still in progress. Progress never authorizes work or changes Result.
+	inProgress := clean.InProgressExecutionState(msg.progress.Phase)
+	for i := range m.executionOutcomes {
+		if !clean.IsTerminalExecutionState(m.executionOutcomes[i].State) {
+			m.executionOutcomes[i].State = inProgress
+		}
+	}
 	return waitEagerExactExecutionCmd(msg.stream)
 }
 
@@ -700,6 +757,9 @@ func (m *eagerCleanModel) applyExactExecuted(msg eagerExactExecutedMsg) {
 		return
 	}
 	m.executionResult = msg.result
+	// Terminal outcomes come only from the authoritative final Result over the
+	// frozen selection. Item-level Result/History remain the source of truth.
+	m.executionOutcomes = clean.ProjectCategoryExecutionOutcomes(m.frozenCategories, msg.result)
 	m.phase = eagerPhaseResult
 	if m.cancelExecution != nil {
 		m.cancelExecution = nil
@@ -772,34 +832,128 @@ func (m eagerCleanModel) confirmationContent() string {
 }
 
 func (m eagerCleanModel) executingContent() string {
-	label := "Starting shared Clean execution"
-	switch m.executionProgress.Phase {
-	case clean.ExecutionPhaseScanning:
-		label = "Fresh scanning"
-	case clean.ExecutionPhaseRecycleBinSafety:
-		label = "Recycle Bin safety check"
-	case clean.ExecutionPhaseRecycleBinOperations:
-		label = "Moving to Recycle Bin"
-	case clean.ExecutionPhaseComplete:
-		label = "Completion"
+	var builder strings.Builder
+	builder.WriteString("Foal Clean\n")
+	builder.WriteString(m.executionHeaderLine())
+	builder.WriteString("\n")
+	if m.cancellationRequested {
+		builder.WriteString(cancellationRequestedMessage)
+		builder.WriteString("\n")
 	}
-	return strings.Join([]string{
-		"Foal Clean",
-		"Executing confirmed categories through shared Clean…",
-		"Progress: " + label,
-		"Cancellation does not roll back completed Recycle Bin operations.",
-		"",
-	}, "\n")
+	builder.WriteString("\n")
+	for _, outcome := range m.executionOutcomes {
+		builder.WriteString(fmt.Sprintf("  %s %s\n", m.executionRowMarker(outcome.State), m.executionRowLabel(outcome)))
+	}
+	builder.WriteString("\n")
+	builder.WriteString(m.executionFooterLine())
+	builder.WriteString("\n")
+	if m.cancellationRequested {
+		builder.WriteString("Waiting for final Result. Escape, b, and q are inactive.\n")
+	} else {
+		builder.WriteString("Hints: Ctrl+C cancel · Escape/b/q inactive during execution\n")
+	}
+	return builder.String()
 }
 
 func (m eagerCleanModel) resultContent() string {
-	return fmt.Sprintf(
-		"Foal Clean\nClean execution complete\nStatus: %s\nDeleted: %d\nSkipped: %d\nAffected bytes: %s\nEnter/Esc/b: menu · q: quit\n",
-		m.executionResult.Status,
-		m.executionResult.Totals.DeletedCount,
-		m.executionResult.Totals.SkippedCount,
-		cleanFormatBytes(m.executionResult.Totals.AffectedBytes),
-	)
+	var builder strings.Builder
+	builder.WriteString("Foal Clean\n")
+	builder.WriteString("Cleanup result\n")
+	builder.WriteString("\n")
+	for _, outcome := range m.executionOutcomes {
+		builder.WriteString(fmt.Sprintf("  %s %s\n", m.executionRowMarker(outcome.State), m.executionRowLabel(outcome)))
+	}
+	builder.WriteString("\n")
+	// Prefer Result totals for affected bytes so item-level authority wins when
+	// projection and totals agree on successful Recycle Bin moves only.
+	affected := m.executionResult.Totals.AffectedBytes
+	if affected == 0 {
+		affected = clean.SumExecutionAffectedBytes(m.executionOutcomes)
+	}
+	terminal := clean.CountTerminalExecutionOutcomes(m.executionOutcomes)
+	total := len(m.executionOutcomes)
+	builder.WriteString(fmt.Sprintf("Processed: %d/%d\n", terminal, total))
+	builder.WriteString(fmt.Sprintf("Affected bytes: %s\n", cleanFormatBytes(affected)))
+	builder.WriteString("\n")
+	builder.WriteString("Enter/Esc/b: menu · q: quit\n")
+	return builder.String()
+}
+
+func (m eagerCleanModel) executionHeaderLine() string {
+	spinner := eagerPreviewSpinnerFrames[m.spinnerFrame%len(eagerPreviewSpinnerFrames)]
+	return fmt.Sprintf("%s %s", spinner, sharedExecutionPhaseLabel(m.executionProgress.Phase))
+}
+
+func sharedExecutionPhaseLabel(phase clean.ExecutionPhase) string {
+	switch phase {
+	case clean.ExecutionPhaseScanning:
+		return "Fresh scanning"
+	case clean.ExecutionPhaseRecycleBinSafety:
+		return "Recycle Bin safety check"
+	case clean.ExecutionPhaseRecycleBinOperations:
+		return "Moving to Recycle Bin"
+	case clean.ExecutionPhaseComplete:
+		return "Completion"
+	default:
+		return "Fresh scanning"
+	}
+}
+
+func (m eagerCleanModel) executionFooterLine() string {
+	terminal := clean.CountTerminalExecutionOutcomes(m.executionOutcomes)
+	total := len(m.executionOutcomes)
+	// In-progress progress cannot invent successful move bytes; only the final
+	// Result (and its projection) contributes affected totals.
+	affected := int64(0)
+	if m.phase == eagerPhaseResult {
+		affected = m.executionResult.Totals.AffectedBytes
+		if affected == 0 {
+			affected = clean.SumExecutionAffectedBytes(m.executionOutcomes)
+		}
+	}
+	return fmt.Sprintf("Processed: %d/%d · Affected bytes: %s", terminal, total, cleanFormatBytes(affected))
+}
+
+func (m eagerCleanModel) executionRowMarker(state clean.CategoryExecutionState) string {
+	switch state {
+	case clean.CategoryExecutionRechecking, clean.CategoryExecutionReady, clean.CategoryExecutionCleaning:
+		return eagerPreviewSpinnerFrames[m.spinnerFrame%len(eagerPreviewSpinnerFrames)]
+	case clean.CategoryExecutionCleaned:
+		return "✓"
+	case clean.CategoryExecutionEmpty:
+		return "–"
+	case clean.CategoryExecutionSkipped:
+		return "⊘"
+	case clean.CategoryExecutionPartial, clean.CategoryExecutionFailed, clean.CategoryExecutionCanceled:
+		return "!"
+	default:
+		return "!"
+	}
+}
+
+func (m eagerCleanModel) executionRowLabel(outcome clean.CategoryExecutionOutcome) string {
+	switch outcome.State {
+	case clean.CategoryExecutionRechecking:
+		return outcome.Label + " · rechecking"
+	case clean.CategoryExecutionReady:
+		return outcome.Label + " · ready"
+	case clean.CategoryExecutionCleaning:
+		return outcome.Label + " · cleaning"
+	case clean.CategoryExecutionEmpty:
+		return outcome.Label + " · empty"
+	case clean.CategoryExecutionCleaned:
+		return fmt.Sprintf("%s · cleaned · %s", outcome.Label, cleanFormatBytes(outcome.AffectedBytes))
+	case clean.CategoryExecutionPartial:
+		return fmt.Sprintf("%s · partial · %s", outcome.Label, cleanFormatBytes(outcome.AffectedBytes))
+	case clean.CategoryExecutionSkipped:
+		return outcome.Label + " · skipped"
+	case clean.CategoryExecutionFailed:
+		return outcome.Label + " · failed"
+	case clean.CategoryExecutionCanceled:
+		return outcome.Label + " · canceled"
+	default:
+		return outcome.Label
+	}
 }
 
 func (m eagerCleanModel) checkbox(row eagerCategoryRow) string {
