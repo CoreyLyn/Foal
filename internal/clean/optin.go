@@ -20,9 +20,12 @@ type optInResolution struct {
 	// skipped holds path-backed items gated out by a running application
 	// (distinctive-process dev caches). Both modes surface these.
 	skipped []SkippedItem
-	// runningStates are the running-application states consulted for browser
-	// gating (pre and post). Both modes surface these, so a running browser
-	// is reported at execute as well as dry-run.
+	// runningStates are the scoped, deduplicated running-application states
+	// consulted by gates that participated in this plan (browser and/or
+	// Application-cache identities; developer-cache gates keep their own
+	// reporting policy and do not append shared-runtime noise here). Both
+	// modes surface these, so a running browser/editor is reported at
+	// execute as well as dry-run.
 	runningStates []RunningApplicationState
 	// diagnostics are recoverable errors: unknown browser process state,
 	// incomplete opted-in opportunity inspection, or browser catalog errors.
@@ -96,8 +99,9 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 	needsDistinctiveDetection := hasDetector && planNeedsDistinctiveProcessDetection(plan)
 	var devCachePreStates []RunningApplicationState
 	if needsDistinctiveDetection {
-		// Pre-states are used only for gating; they are not reported in
-		// RunningApplications (only browser states are).
+		// Pre-states are used only for gating; developer-cache gates keep
+		// current reporting policy and do not project shared-runtime or
+		// unrelated tool states into RunningApplications.
 		devCachePreStates = opts.DetectRunningApplications(ctx)
 	}
 	devCacheGate := runningGate{}
@@ -327,10 +331,9 @@ func resolveApplicationCacheOptInCandidates(ctx context.Context, opts Options, c
 
 	gate := runningGate{detect: opts.DetectRunningApplications}
 	preStates := opts.DetectRunningApplications(ctx)
-	// Surface the application state for this category (may already include
-	// browsers from other resolution paths).
+	// Surface only the application identity owned by this selected category.
 	if state, found := runningApplicationStateFor(preStates, application); found {
-		res.runningStates = append(res.runningStates, state)
+		res.runningStates = mergeRunningApplicationStates(res.runningStates, state)
 	}
 
 	outcome := gate.gateApplicationCache(ctx, application, preStates, func() applicationCacheDiscoveryResult {
@@ -349,7 +352,8 @@ func resolveApplicationCacheOptInCandidates(ctx context.Context, opts Options, c
 	}
 	if discovery.canceled || !outcome.postIdle {
 		if outcome.postState != nil {
-			res.runningStates = append(res.runningStates, *outcome.postState)
+			// Post-measurement supersedes pre-measurement for this identity.
+			res.runningStates = mergeRunningApplicationStates(res.runningStates, *outcome.postState)
 		}
 		if outcome.postDiagnostic != nil {
 			res.diagnostics = append(res.diagnostics, *outcome.postDiagnostic)
@@ -377,7 +381,12 @@ func resolveApplicationCacheOptInCandidates(ctx context.Context, opts Options, c
 func resolveBrowserOptInCandidates(ctx context.Context, opts Options, res *optInResolution) {
 	gate := runningGate{detect: opts.DetectRunningApplications}
 	preStates := opts.DetectRunningApplications(ctx)
-	res.runningStates = append(res.runningStates, preStates...)
+	// Report only supported browser identities gated by this path, even when
+	// the shared detector returns developer-tool or editor states.
+	res.runningStates = mergeRunningApplicationStates(
+		res.runningStates,
+		projectRunningApplicationStates(preStates, browserRunningApplicationIdentities()...)...,
+	)
 	for _, config := range browserCacheConfigs {
 		if localAppDataDir := browserCacheLocalAppDataDir(opts.BrowserCacheDiscoveryOptions); localAppDataDir != "" {
 			if suppressed, protectedRulePaths := browserDiscoverySuppressed(browserUserDataRoot(localAppDataDir, config), opts.Validator); suppressed {
@@ -408,7 +417,7 @@ func resolveBrowserOptInCandidates(ctx context.Context, opts Options, res *optIn
 		}
 		if !outcome.postIdle {
 			if outcome.postState != nil {
-				res.runningStates = append(res.runningStates, *outcome.postState)
+				res.runningStates = mergeRunningApplicationStates(res.runningStates, *outcome.postState)
 			}
 			if outcome.postDiagnostic != nil {
 				res.diagnostics = append(res.diagnostics, *outcome.postDiagnostic)

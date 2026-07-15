@@ -209,7 +209,7 @@ func ResolveCategory(ctx context.Context, opts Options, identifier string) (Cate
 		optIn := resolveOptInCandidates(ctx, opts, map[string]bool{canonicalID: true})
 		resolution.OptInCandidates = append(resolution.OptInCandidates, optIn.candidates...)
 		resolution.Skipped = append(resolution.Skipped, optIn.skipped...)
-		resolution.RunningStates = append(resolution.RunningStates, optIn.runningStates...)
+		resolution.RunningStates = mergeRunningApplicationStates(resolution.RunningStates, optIn.runningStates...)
 		resolution.Diagnostics = append(resolution.Diagnostics, optIn.diagnostics...)
 		resolution.SuppressedProtectionPaths = append(resolution.SuppressedProtectionPaths, optIn.suppressedProtectionPaths...)
 	default:
