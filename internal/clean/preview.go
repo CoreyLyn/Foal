@@ -293,8 +293,11 @@ func dryRun(ctx context.Context, opts Options) Result {
 
 func applyBrowserCacheReview(ctx context.Context, opts Options, result *Result) {
 	preStates := opts.DetectRunningApplications(ctx)
-	result.RunningApplications = append(result.RunningApplications, preStates...)
-	for _, state := range preStates {
+	// Scope to supported browser identities; shared detector noise stays out of
+	// running_applications and does not invent diagnostics for unrelated apps.
+	browserStates := projectRunningApplicationStates(preStates, browserRunningApplicationIdentities()...)
+	for _, state := range browserStates {
+		replaceRunningApplicationState(result, state)
 		if state.State == RunningApplicationStateUnknown {
 			result.Errors = append(result.Errors, runningApplicationUnknownIssue(state))
 		}
@@ -361,7 +364,7 @@ func applyOneBrowserCacheReview(ctx context.Context, opts Options, result *Resul
 func applyOptInResolution(result *Result, res optInResolution) {
 	result.OptInCandidates = append(result.OptInCandidates, res.candidates...)
 	result.Skipped = append(result.Skipped, res.skipped...)
-	result.RunningApplications = append(result.RunningApplications, res.runningStates...)
+	result.RunningApplications = mergeRunningApplicationStates(result.RunningApplications, res.runningStates...)
 	result.Errors = append(result.Errors, res.diagnostics...)
 	if len(res.suppressedProtectionPaths) > 0 {
 		suppressProtectionRules(result, res.suppressedProtectionPaths)
@@ -534,13 +537,7 @@ func runningApplicationStateFor(states []RunningApplicationState, application st
 }
 
 func replaceRunningApplicationState(result *Result, replacement RunningApplicationState) {
-	for index, state := range result.RunningApplications {
-		if state.Application == replacement.Application {
-			result.RunningApplications[index] = replacement
-			return
-		}
-	}
-	result.RunningApplications = append(result.RunningApplications, replacement)
+	result.RunningApplications = mergeRunningApplicationStates(result.RunningApplications, replacement)
 }
 
 func browserOpportunityProtected(validator pathsafe.Validator, opportunity Opportunity) bool {
@@ -621,7 +618,7 @@ func Execute(ctx context.Context, opts Options) Result {
 	optInPlan := planOptInSet(categoryPlan)
 	if len(optInPlan) > 0 {
 		resolution := resolveOptInCandidates(ctx, opts, optInPlan)
-		result.RunningApplications = append(result.RunningApplications, resolution.runningStates...)
+		result.RunningApplications = mergeRunningApplicationStates(result.RunningApplications, resolution.runningStates...)
 		result.Errors = append(result.Errors, resolution.diagnostics...)
 		result.Skipped = append(result.Skipped, resolution.skipped...)
 
