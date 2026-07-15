@@ -2183,3 +2183,449 @@ func TestEagerCleanExecutionCannotAlterFrozenAuthorization(t *testing.T) {
 		t.Fatalf("outcomes %#v", model.executionOutcomes)
 	}
 }
+
+func TestEagerCleanViewportPreviewFocusFollowsIncludingDisabled(t *testing.T) {
+	// Short body window so only a few category rows fit; chrome stays fixed.
+	model := newEagerCleanModel(80, 16)
+	model.generation = 1
+	// Disable the last few rows so focus can land on non-selectable diagnostics.
+	for i := range model.rows {
+		state := clean.CategoryPreviewComplete
+		count := 1
+		var bytes int64 = 1
+		if i >= len(model.rows)-3 {
+			state = clean.CategoryPreviewEmpty
+			count = 0
+			bytes = 0
+		}
+		model.applyObservation(eagerCategoryObservationMsg{
+			generation: 1,
+			observation: clean.CategoryPreviewObservation{
+				Identifier:     model.rows[i].Identifier,
+				Label:          model.rows[i].Label,
+				State:          state,
+				CandidateCount: count,
+				Bytes:          bytes,
+			},
+		})
+	}
+	model.finished = true
+
+	beforeAuth := append([]string(nil), model.selectedCategoryIDs()...)
+	// Drive the cursor to the last (disabled) row; viewport must follow.
+	for model.cursor < len(model.rows)-1 {
+		nav, cmd := model.handleKey("down")
+		if nav != eagerPreviewNavNone || cmd != nil {
+			t.Fatalf("down should only move focus: nav=%v cmd=%v", nav, cmd)
+		}
+	}
+	if model.cursor != len(model.rows)-1 {
+		t.Fatalf("cursor = %d, want last row", model.cursor)
+	}
+	if model.rowSelectable(model.rows[model.cursor]) {
+		t.Fatal("last row should be disabled/empty")
+	}
+	lastLabel := model.rows[model.cursor].Label
+	content := model.content()
+	if !strings.Contains(content, "Foal Clean") || !strings.Contains(content, "Selected:") {
+		t.Fatalf("fixed chrome missing:\n%s", content)
+	}
+	if !strings.Contains(content, "Focused: "+lastLabel) {
+		t.Fatalf("focused diagnostics must follow disabled row:\n%s", content)
+	}
+	if !strings.Contains(content, ">") || !strings.Contains(content, lastLabel) {
+		t.Fatalf("viewport must keep focused disabled row visible:\n%s", content)
+	}
+	// Group headings are body lines (scroll with rows), not a separate mode.
+	if strings.Contains(content, "scroll mode") {
+		t.Fatal("must not introduce a separate scroll mode")
+	}
+	afterAuth := model.selectedCategoryIDs()
+	if !stringSlicesEqual(beforeAuth, afterAuth) {
+		t.Fatalf("cursor movement changed auth: before=%v after=%v", beforeAuth, afterAuth)
+	}
+}
+
+func TestEagerCleanViewportConfirmationAndResultScrollOnly(t *testing.T) {
+	model := newEagerCleanModel(80, 14)
+	markEagerQueueTerminal(&model, true)
+	// Select many complete categories so confirmation body is long.
+	for i := range model.rows {
+		if i < 12 {
+			model.rows[i].State = clean.CategoryPreviewComplete
+			model.rows[i].CandidateCount = 1
+			model.rows[i].Bytes = 2
+			model.rows[i].Selected = true
+		}
+	}
+	before := append([]string(nil), model.selectedCategoryIDs()...)
+	nav, _ := model.handleKey("enter")
+	if nav != eagerPreviewNavNone || model.phase != eagerPhaseConfirmation {
+		t.Fatalf("enter confirmation: phase=%v", model.phase)
+	}
+	if model.viewportOffset != 0 {
+		t.Fatalf("confirmation starts at offset 0, got %d", model.viewportOffset)
+	}
+	nav, cmd := model.handleKey("down")
+	if nav != eagerPreviewNavNone || cmd != nil {
+		t.Fatalf("confirmation down: nav=%v cmd=%v", nav, cmd)
+	}
+	if model.viewportOffset < 1 {
+		t.Fatalf("confirmation down should increase viewport offset, got %d", model.viewportOffset)
+	}
+	// No row selection cursor in confirmation; authorization frozen for this page.
+	after := model.selectedCategoryIDs()
+	if !stringSlicesEqual(before, after) {
+		t.Fatalf("confirmation scroll changed selection: %v -> %v", before, after)
+	}
+	content := model.content()
+	if !strings.Contains(content, "Confirm cleanup") || !strings.Contains(content, "Selected:") {
+		t.Fatalf("confirmation chrome missing:\n%s", content)
+	}
+	if strings.Contains(content, ">") {
+		t.Fatalf("confirmation must not create row selection cursor:\n%s", content)
+	}
+
+	// Execute with a stub that returns mixed outcomes for a long result list.
+	original := runExactCleanSelection
+	runExactCleanSelection = func(_ context.Context, selected []string, reporter clean.ProgressReporter) clean.Result {
+		if reporter != nil {
+			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning})
+		}
+		deleted := make([]clean.DeletedItem, 0, len(selected))
+		for _, id := range selected {
+			deleted = append(deleted, clean.DeletedItem{Path: `C:\x`, Bytes: 1, Rule: id})
+		}
+		return clean.Result{
+			Status:  "ok",
+			Mode:    "execute",
+			Deleted: deleted,
+			Totals:  clean.Totals{DeletedCount: len(deleted), AffectedBytes: int64(len(deleted))},
+		}
+	}
+	t.Cleanup(func() { runExactCleanSelection = original })
+
+	frozen := append([]string(nil), model.selectedCategoryIDs()...)
+	_, cmd = model.handleKey("enter")
+	if cmd == nil || model.phase != eagerPhaseExecuting {
+		t.Fatalf("start exec: phase=%v", model.phase)
+	}
+	// Drain to result.
+	started := cmd().(eagerExactExecutionStartedMsg)
+	wait := model.applyExactExecutionStarted(started)
+	for model.phase == eagerPhaseExecuting {
+		msg := wait()
+		switch m := msg.(type) {
+		case eagerExactExecutionProgressMsg:
+			wait = model.applyExactExecutionProgress(m)
+		case eagerExactExecutedMsg:
+			model.applyExactExecuted(m)
+			wait = nil
+		default:
+			t.Fatalf("unexpected %T", msg)
+		}
+		if wait == nil {
+			break
+		}
+	}
+	if model.phase != eagerPhaseResult {
+		t.Fatalf("phase=%v", model.phase)
+	}
+	if !stringSlicesEqual(frozen, model.frozenCategories) {
+		t.Fatalf("frozen auth changed: %v -> %v", frozen, model.frozenCategories)
+	}
+	model.viewportOffset = 0
+	_, _ = model.handleKey("down")
+	_, _ = model.handleKey("down")
+	if model.viewportOffset < 1 {
+		t.Fatalf("result down should scroll offset, got %d", model.viewportOffset)
+	}
+	// Result scroll never re-authorizes or mutates frozen selection identity.
+	if !stringSlicesEqual(frozen, model.frozenCategories) {
+		t.Fatalf("result scroll changed frozen: %v", model.frozenCategories)
+	}
+	content = model.content()
+	if !strings.Contains(content, "Cleanup result") || !strings.Contains(content, "Processed:") {
+		t.Fatalf("result chrome missing:\n%s", content)
+	}
+	if strings.Contains(content, ">") {
+		t.Fatalf("result must not create selectable cursor:\n%s", content)
+	}
+}
+
+func TestEagerCleanViewportExecutionFollowAndTemporaryInspect(t *testing.T) {
+	// Compact height so body capacity stays small relative to a long outcome list.
+	model := newEagerCleanModel(80, 12)
+	model.phase = eagerPhaseExecuting
+	model.executionStarted = true
+	model.execFollowActive = true
+	model.execTrackedActive = -1
+	catalog := clean.EagerPreviewQueue()
+	n := len(catalog)
+	if n < 10 {
+		t.Fatalf("need a long catalog for scroll tests, got %d", n)
+	}
+	model.frozenCategories = make([]string, 0, n)
+	model.executionOutcomes = make([]clean.CategoryExecutionOutcome, 0, n)
+	for i := 0; i < n; i++ {
+		model.frozenCategories = append(model.frozenCategories, catalog[i].Identifier)
+		model.executionOutcomes = append(model.executionOutcomes, clean.CategoryExecutionOutcome{
+			Identifier: catalog[i].Identifier,
+			Label:      catalog[i].Label,
+			State:      clean.CategoryExecutionRechecking,
+		})
+	}
+	model.syncExecutionViewport()
+	if model.viewportOffset != 0 {
+		t.Fatalf("follow active (index 0) should keep offset near top, got %d", model.viewportOffset)
+	}
+	frozen := append([]string(nil), model.frozenCategories...)
+
+	// Temporary inspection scrolls without changing authorization.
+	_, _ = model.handleKey("down")
+	_, _ = model.handleKey("down")
+	_, _ = model.handleKey("down")
+	if model.execFollowActive {
+		t.Fatal("manual up/down must pause active following")
+	}
+	if model.viewportOffset < 1 {
+		t.Fatalf("inspection should move viewport, got %d", model.viewportOffset)
+	}
+	if !stringSlicesEqual(frozen, model.frozenCategories) {
+		t.Fatalf("inspection changed frozen auth")
+	}
+
+	// Make a late outcome the only non-terminal active category.
+	active := n - 1
+	for i := 0; i < active; i++ {
+		model.executionOutcomes[i].State = clean.CategoryExecutionCleaned
+		model.executionOutcomes[i].AffectedBytes = 1
+	}
+	// Pause following and pin the viewport to the top so the last row is outside.
+	model.execFollowActive = false
+	model.execTrackedActive = 0
+	model.viewportOffset = 0
+	model.clampViewportOffset()
+	if !model.executionOutcomeCompletelyOutside(active) {
+		t.Fatalf("precondition: active=%d line=%d cap=%d body=%d offset=%d should be outside",
+			active, model.executionOutcomeBodyLine(active), model.bodyCapacity(),
+			len(model.scrollableBodyLines()), model.viewportOffset)
+	}
+	model.syncExecutionViewport()
+	if !model.execFollowActive {
+		t.Fatal("newly active completely outside must resume following")
+	}
+	if model.executionOutcomeCompletelyOutside(active) {
+		t.Fatal("newly active must be brought into view")
+	}
+	if !stringSlicesEqual(frozen, model.frozenCategories) {
+		t.Fatalf("follow resume changed frozen auth")
+	}
+}
+
+func TestEagerCleanViewportResizePreservesFocusAndAuth(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	markEagerQueueTerminal(&model, true)
+	// Move focus mid-list.
+	for i := 0; i < 8; i++ {
+		_, _ = model.handleKey("down")
+	}
+	focusID := model.rows[model.cursor].Identifier
+	auth := append([]string(nil), model.selectedCategoryIDs()...)
+	offsetBefore := model.viewportOffset
+
+	model.setSize(70, 15)
+	if model.cursor >= len(model.rows) || model.rows[model.cursor].Identifier != focusID {
+		t.Fatalf("resize changed focused identity: cursor=%d", model.cursor)
+	}
+	if !stringSlicesEqual(auth, model.selectedCategoryIDs()) {
+		t.Fatalf("resize changed authorization")
+	}
+	content := model.content()
+	if !strings.Contains(content, model.rows[model.cursor].Label) {
+		t.Fatalf("resize must keep focused row visible:\n%s", content)
+	}
+	_ = offsetBefore
+
+	// Confirmation offset preservation.
+	model.setSize(100, 40)
+	_, _ = model.handleKey("enter")
+	if model.phase != eagerPhaseConfirmation {
+		t.Fatalf("phase=%v", model.phase)
+	}
+	_, _ = model.handleKey("down")
+	_, _ = model.handleKey("down")
+	off := model.viewportOffset
+	auth = append([]string(nil), model.selectedCategoryIDs()...)
+	model.setSize(80, 16)
+	if !stringSlicesEqual(auth, model.selectedCategoryIDs()) {
+		t.Fatal("confirmation resize changed auth")
+	}
+	// Offset is clamped, not cleared to invent selection.
+	if model.viewportOffset < 0 {
+		t.Fatalf("bad offset %d", model.viewportOffset)
+	}
+	_ = off
+}
+
+func TestEagerCleanViewportTerminalTooSmallStageKeys(t *testing.T) {
+	// Preview: too small still returns/quits; shows guidance.
+	model := newEagerCleanModel(80, 40)
+	model.generation = 1
+	model.setSize(20, 5)
+	content := model.content()
+	if !strings.Contains(content, "Terminal too small") {
+		t.Fatalf("expected too-small message:\n%s", content)
+	}
+	if !strings.Contains(content, "Resize") {
+		t.Fatalf("expected resize guidance:\n%s", content)
+	}
+	// Must not present a truncated actionable checklist.
+	if strings.Contains(content, "[x]") || strings.Contains(content, "[ ]") {
+		t.Fatalf("too-small must not show actionable checkboxes:\n%s", content)
+	}
+	nav, _ := model.handleKey("esc")
+	if nav != eagerPreviewNavMenu {
+		t.Fatalf("preview too-small esc -> menu, got %v", nav)
+	}
+
+	model = newEagerCleanModel(80, 40)
+	markEagerQueueTerminal(&model, true)
+	model.setSize(20, 5)
+	// Confirmation keys still work when undersized.
+	// confirmationEnabled checks phase/selection; size does not gate keys.
+	model.setSize(80, 40)
+	_, _ = model.handleKey("enter")
+	model.setSize(20, 5)
+	if model.phase != eagerPhaseConfirmation {
+		t.Fatalf("phase=%v", model.phase)
+	}
+	content = model.content()
+	if !strings.Contains(content, "Terminal too small") {
+		t.Fatalf("confirmation too small:\n%s", content)
+	}
+	nav, _ = model.handleKey("b")
+	if nav != eagerPreviewNavNone || model.phase != eagerPhasePreview {
+		t.Fatalf("confirmation too-small b should return preview: nav=%v phase=%v", nav, model.phase)
+	}
+
+	// Unavailable small terminal.
+	model = newEagerCleanModel(80, 40)
+	model.unavailable = &clean.EagerPreviewUnavailable{Code: "protection_config_failed", Message: "bad config"}
+	model.finished = true
+	model.setSize(10, 4)
+	content = model.content()
+	if !strings.Contains(content, "Terminal too small") {
+		t.Fatalf("unavailable too small:\n%s", content)
+	}
+	nav, _ = model.handleKey("q")
+	if nav != eagerPreviewNavQuit {
+		t.Fatalf("unavailable too-small q: %v", nav)
+	}
+
+	// Active execution: Escape/b/q ignored; Ctrl+C still cancels.
+	cancelCalls := 0
+	model = newEagerCleanModel(80, 40)
+	model.phase = eagerPhaseExecuting
+	model.executionStarted = true
+	model.executionOutcomes = []clean.CategoryExecutionOutcome{{
+		Identifier: "x", Label: "X", State: clean.CategoryExecutionRechecking,
+	}}
+	model.cancelExecution = func() { cancelCalls++ }
+	model.setSize(15, 6)
+	content = model.content()
+	if !strings.Contains(content, "Terminal too small") {
+		t.Fatalf("execution too small:\n%s", content)
+	}
+	if !strings.Contains(content, "Ctrl+C") {
+		t.Fatalf("execution too-small must expose cancel hint:\n%s", content)
+	}
+	for _, key := range []string{"esc", "escape", "b", "q"} {
+		nav, cmd := model.handleKey(key)
+		if nav != eagerPreviewNavNone || cmd != nil || model.phase != eagerPhaseExecuting {
+			t.Fatalf("execution too-small %q must be ignored: nav=%v phase=%v", key, nav, model.phase)
+		}
+	}
+	nav, _ = model.handleKey("ctrl+c")
+	if nav != eagerPreviewNavNone || !model.cancellationRequested || cancelCalls != 1 {
+		t.Fatalf("execution too-small ctrl+c: nav=%v cancel=%v calls=%d", nav, model.cancellationRequested, cancelCalls)
+	}
+
+	// Result too-small still returns.
+	model.phase = eagerPhaseResult
+	model.setSize(12, 5)
+	content = model.content()
+	if !strings.Contains(content, "Terminal too small") {
+		t.Fatalf("result too small:\n%s", content)
+	}
+	nav, _ = model.handleKey("enter")
+	if nav != eagerPreviewNavMenu {
+		t.Fatalf("result too-small enter: %v", nav)
+	}
+}
+
+func TestEagerCleanViewportLayoutKeepsChromeFixed(t *testing.T) {
+	model := newEagerCleanModel(80, 18)
+	model.generation = 1
+	for i := range model.rows {
+		model.applyObservation(eagerCategoryObservationMsg{
+			generation: 1,
+			observation: clean.CategoryPreviewObservation{
+				Identifier:     model.rows[i].Identifier,
+				Label:          model.rows[i].Label,
+				State:          clean.CategoryPreviewComplete,
+				CandidateCount: 1,
+				Bytes:          4,
+			},
+		})
+	}
+	model.finished = true
+	// Scroll deep into the list.
+	for i := 0; i < len(model.rows)-1; i++ {
+		_, _ = model.handleKey("down")
+	}
+	content := model.content()
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("too few lines:\n%s", content)
+	}
+	if lines[0] != "Foal Clean" {
+		t.Fatalf("title must stay top line: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "Scan complete") && !strings.Contains(lines[1], "Scanning") {
+		t.Fatalf("progress must stay under title: %q", lines[1])
+	}
+	// Footer anchors.
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Selected:") {
+		t.Fatal("selected totals missing")
+	}
+	if !strings.Contains(joined, "Focused:") {
+		t.Fatal("focused diagnostics missing")
+	}
+	if !strings.Contains(joined, "Hints:") {
+		t.Fatal("key hints missing")
+	}
+	// Title appears once at top, not re-scrolled in body.
+	titleCount := 0
+	for _, line := range lines {
+		if line == "Foal Clean" {
+			titleCount++
+		}
+	}
+	if titleCount != 1 {
+		t.Fatalf("title count=%d, want fixed once", titleCount)
+	}
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
