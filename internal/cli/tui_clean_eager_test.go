@@ -1637,3 +1637,549 @@ func TestRunExactCleanSelectionRejectsInvalidIdentifiersBeforeCleanup(t *testing
 		}
 	}
 }
+
+func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) {
+	var cancelCalls int
+	original := runExactCleanSelection
+	runExactCleanSelection = func(ctx context.Context, selected []string, reporter clean.ProgressReporter) clean.Result {
+		if reporter != nil {
+			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning})
+			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinSafety})
+			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinOperations})
+		}
+		select {
+		case <-ctx.Done():
+		default:
+		}
+		return clean.Result{
+			Status: "ok",
+			Mode:   "execute",
+			Deleted: []clean.DeletedItem{{
+				Path:  `C:\Users\me\AppData\Local\Temp\foal-sandbox`,
+				Bytes: 12,
+				Rule:  selected[0],
+			}},
+			Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 12},
+		}
+	}
+	t.Cleanup(func() { runExactCleanSelection = original })
+
+	model := newEagerCleanModel(100, 40)
+	markEagerQueueTerminal(&model, true)
+	// Select only the default; leave every other category unselected.
+	for i := range model.rows {
+		model.rows[i].Selected = i == 0
+	}
+	selectedID := model.rows[0].Identifier
+	selectedLabel := model.rows[0].Label
+	unselectedLabel := model.rows[1].Label
+
+	_, _ = model.handleKey("enter")
+	nav, cmd := model.handleKey("enter")
+	if nav != eagerPreviewNavNone || cmd == nil || model.phase != eagerPhaseExecuting {
+		t.Fatalf("start execution: nav=%v cmd=%v phase=%v", nav, cmd, model.phase)
+	}
+	if len(model.frozenCategories) != 1 || model.frozenCategories[0] != selectedID {
+		t.Fatalf("frozen = %#v", model.frozenCategories)
+	}
+	// Authorization is frozen: toggling selection no longer applies.
+	model.rows[0].Selected = false
+	model.rows[1].Selected = true
+
+	content := model.content()
+	if !strings.Contains(content, "Fresh scanning") {
+		t.Fatalf("header missing Fresh scanning:\n%s", content)
+	}
+	if !strings.Contains(content, selectedLabel) || !strings.Contains(content, "rechecking") {
+		t.Fatalf("selected in-progress row missing:\n%s", content)
+	}
+	if strings.Contains(content, unselectedLabel) {
+		t.Fatalf("unselected category leaked into execution view:\n%s", content)
+	}
+	if strings.Contains(content, "Processed: 0/1") == false {
+		t.Fatalf("processed must count terminal only (0/1):\n%s", content)
+	}
+	if strings.Contains(content, "%") {
+		for _, line := range strings.Split(content, "\n") {
+			if strings.Contains(line, "%") && (strings.Contains(line, "scanning") || strings.Contains(line, "Processed") || strings.Contains(line, "Fresh")) {
+				t.Fatalf("byte-derived percentage:\n%s", line)
+			}
+		}
+	}
+
+	// Drive progress projections through shared phases.
+	started := cmd().(eagerExactExecutionStartedMsg)
+	wait := model.applyExactExecutionStarted(started)
+	phases := []string{"Fresh scanning", "Recycle Bin safety check", "Moving to Recycle Bin"}
+	states := []string{"rechecking", "ready", "cleaning"}
+	for i := 0; i < 3; i++ {
+		msg := wait()
+		progress, ok := msg.(eagerExactExecutionProgressMsg)
+		if !ok {
+			t.Fatalf("msg %d = %T, want progress", i, msg)
+		}
+		wait = model.applyExactExecutionProgress(progress)
+		content = model.content()
+		if !strings.Contains(content, phases[i]) {
+			t.Fatalf("phase %q missing:\n%s", phases[i], content)
+		}
+		if !strings.Contains(content, states[i]) {
+			t.Fatalf("state %q missing:\n%s", states[i], content)
+		}
+		if strings.Contains(content, `C:\Users\me`) {
+			t.Fatalf("path leaked during progress:\n%s", content)
+		}
+	}
+	msg := wait()
+	executed, ok := msg.(eagerExactExecutedMsg)
+	if !ok {
+		t.Fatalf("final msg = %T", msg)
+	}
+	model.applyExactExecuted(executed)
+	if model.phase != eagerPhaseResult {
+		t.Fatalf("phase = %v", model.phase)
+	}
+	content = model.content()
+	if !strings.Contains(content, "cleaned") || !strings.Contains(content, selectedLabel) {
+		t.Fatalf("result cleaned missing:\n%s", content)
+	}
+	if !strings.Contains(content, "Processed: 1/1") {
+		t.Fatalf("processed terminal:\n%s", content)
+	}
+	if !strings.Contains(content, "Affected bytes:") {
+		t.Fatalf("affected bytes missing:\n%s", content)
+	}
+	if strings.Contains(content, `C:\Users\me`) || strings.Contains(content, "foal-sandbox") {
+		t.Fatalf("path leaked in result:\n%s", content)
+	}
+	// Frozen auth never expanded to the toggled unselected row.
+	if len(model.executionOutcomes) != 1 || model.executionOutcomes[0].Identifier != selectedID {
+		t.Fatalf("outcomes = %#v", model.executionOutcomes)
+	}
+	_ = cancelCalls
+}
+
+func TestEagerCleanExecutionTerminalOutcomesAndMixedPartial(t *testing.T) {
+	defaultID := clean.DefaultCategoryFoalOwnedTempSandboxes
+	optInID := clean.OpportunityCategoryCrashDumps
+	original := runExactCleanSelection
+	runExactCleanSelection = func(_ context.Context, selected []string, _ clean.ProgressReporter) clean.Result {
+		return clean.Result{
+			Status: "ok",
+			Mode:   "execute",
+			Deleted: []clean.DeletedItem{
+				{Path: `C:\Temp\ok`, Bytes: 8, Rule: defaultID},
+			},
+			Skipped: []clean.SkippedItem{
+				{
+					Path:   `C:\Temp\protected`,
+					Bytes:  3,
+					Rule:   defaultID,
+					Reason: clean.StructuredIssue{Code: "protected_path", Message: `protected C:\Temp\protected`},
+				},
+				{
+					Path:   `C:\Users\me\AppData\Local\CrashDumps\a.dmp`,
+					Rule:   optInID,
+					Reason: clean.StructuredIssue{Code: "protected_path", Message: "protected"},
+				},
+			},
+			Totals: clean.Totals{DeletedCount: 1, SkippedCount: 2, AffectedBytes: 8},
+		}
+	}
+	t.Cleanup(func() { runExactCleanSelection = original })
+
+	model := newEagerCleanModel(100, 40)
+	markEagerQueueTerminal(&model, true)
+	// Select default + crash_dumps.
+	for i := range model.rows {
+		id := model.rows[i].Identifier
+		model.rows[i].Selected = id == defaultID || id == optInID
+		if model.rows[i].Selected {
+			model.rows[i].State = clean.CategoryPreviewComplete
+			model.rows[i].CandidateCount = 1
+			model.rows[i].Bytes = 1
+		}
+	}
+	_, _ = model.handleKey("enter")
+	_, cmd := model.handleKey("enter")
+	started := cmd().(eagerExactExecutionStartedMsg)
+	wait := model.applyExactExecutionStarted(started)
+	for model.phase == eagerPhaseExecuting {
+		msg := wait()
+		switch m := msg.(type) {
+		case eagerExactExecutionProgressMsg:
+			wait = model.applyExactExecutionProgress(m)
+		case eagerExactExecutedMsg:
+			model.applyExactExecuted(m)
+			wait = nil
+		default:
+			t.Fatalf("unexpected %T", msg)
+		}
+		if wait == nil {
+			break
+		}
+	}
+	byID := map[string]clean.CategoryExecutionState{}
+	for _, outcome := range model.executionOutcomes {
+		byID[outcome.Identifier] = outcome.State
+	}
+	if byID[defaultID] != clean.CategoryExecutionPartial {
+		t.Fatalf("default outcome = %q, want partial", byID[defaultID])
+	}
+	if byID[optInID] != clean.CategoryExecutionSkipped {
+		t.Fatalf("opt-in outcome = %q, want skipped", byID[optInID])
+	}
+	content := model.content()
+	if !strings.Contains(content, "partial") || !strings.Contains(content, "skipped") {
+		t.Fatalf("mixed result content:\n%s", content)
+	}
+	if strings.Contains(content, `C:\Temp`) || strings.Contains(content, "CrashDumps") {
+		t.Fatalf("path leaked:\n%s", content)
+	}
+	if !strings.Contains(content, "Processed: 2/2") {
+		t.Fatalf("processed:\n%s", content)
+	}
+}
+
+func TestEagerCleanExecutionEmptyCleanedFailedCanceled(t *testing.T) {
+	cases := []struct {
+		name    string
+		result  clean.Result
+		want    clean.CategoryExecutionState
+		wantTxt string
+	}{
+		{
+			name:    "empty",
+			result:  clean.Result{Status: "ok", Mode: "execute"},
+			want:    clean.CategoryExecutionEmpty,
+			wantTxt: "empty",
+		},
+		{
+			name: "cleaned",
+			result: clean.Result{
+				Status:  "ok",
+				Deleted: []clean.DeletedItem{{Path: `C:\a`, Bytes: 2, Rule: clean.DefaultCategoryFoalOwnedTempSandboxes}},
+				Totals:  clean.Totals{DeletedCount: 1, AffectedBytes: 2},
+			},
+			want:    clean.CategoryExecutionCleaned,
+			wantTxt: "cleaned",
+		},
+		{
+			name: "failed",
+			result: clean.Result{
+				Status: "ok",
+				Skipped: []clean.SkippedItem{{
+					Path:   `C:\a`,
+					Rule:   clean.DefaultCategoryFoalOwnedTempSandboxes,
+					Reason: clean.StructuredIssue{Code: "delete_failed", Message: `failed C:\a`},
+				}},
+			},
+			want:    clean.CategoryExecutionFailed,
+			wantTxt: "failed",
+		},
+		{
+			name: "canceled",
+			result: clean.Result{
+				Status: "ok",
+				Skipped: []clean.SkippedItem{{
+					Path:   `C:\a`,
+					Rule:   clean.DefaultCategoryFoalOwnedTempSandboxes,
+					Reason: clean.StructuredIssue{Code: "context_canceled", Message: "context canceled"},
+				}},
+			},
+			want:    clean.CategoryExecutionCanceled,
+			wantTxt: "canceled",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			original := runExactCleanSelection
+			runExactCleanSelection = func(_ context.Context, selected []string, _ clean.ProgressReporter) clean.Result {
+				// Re-attribute items to the frozen selected id.
+				result := tc.result
+				for i := range result.Deleted {
+					result.Deleted[i].Rule = selected[0]
+				}
+				for i := range result.Skipped {
+					result.Skipped[i].Rule = selected[0]
+				}
+				return result
+			}
+			t.Cleanup(func() { runExactCleanSelection = original })
+
+			model := newEagerCleanModel(100, 40)
+			markEagerQueueTerminal(&model, true)
+			for i := range model.rows {
+				model.rows[i].Selected = i == 0
+			}
+			_, _ = model.handleKey("enter")
+			_, cmd := model.handleKey("enter")
+			started := cmd().(eagerExactExecutionStartedMsg)
+			wait := model.applyExactExecutionStarted(started)
+			for model.phase == eagerPhaseExecuting {
+				msg := wait()
+				switch m := msg.(type) {
+				case eagerExactExecutionProgressMsg:
+					wait = model.applyExactExecutionProgress(m)
+				case eagerExactExecutedMsg:
+					model.applyExactExecuted(m)
+					wait = nil
+				default:
+					t.Fatalf("unexpected %T", msg)
+				}
+				if wait == nil {
+					break
+				}
+			}
+			if len(model.executionOutcomes) != 1 || model.executionOutcomes[0].State != tc.want {
+				t.Fatalf("outcomes = %#v, want %q", model.executionOutcomes, tc.want)
+			}
+			content := model.content()
+			if !strings.Contains(content, tc.wantTxt) {
+				t.Fatalf("content missing %q:\n%s", tc.wantTxt, content)
+			}
+			if strings.Contains(content, `C:\`) {
+				t.Fatalf("path leaked:\n%s", content)
+			}
+		})
+	}
+}
+
+func TestEagerCleanActiveExecutionCancelKeysAndRepeatedCtrlC(t *testing.T) {
+	cancelCh := make(chan struct{})
+	original := runExactCleanSelection
+	runExactCleanSelection = func(ctx context.Context, selected []string, reporter clean.ProgressReporter) clean.Result {
+		if reporter != nil {
+			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinOperations})
+		}
+		<-ctx.Done()
+		return clean.Result{
+			Status: "ok",
+			Mode:   "execute",
+			Deleted: []clean.DeletedItem{{
+				Path:  `C:\done`,
+				Bytes: 4,
+				Rule:  selected[0],
+			}},
+			Skipped: []clean.SkippedItem{{
+				Path:   `C:\remaining`,
+				Rule:   selected[0],
+				Reason: clean.StructuredIssue{Code: "context_canceled", Message: "context canceled"},
+			}},
+			Totals: clean.Totals{DeletedCount: 1, SkippedCount: 1, AffectedBytes: 4},
+		}
+	}
+	t.Cleanup(func() { runExactCleanSelection = original })
+
+	model := newEagerCleanModel(100, 40)
+	markEagerQueueTerminal(&model, true)
+	for i := range model.rows {
+		model.rows[i].Selected = i == 0
+	}
+	_, _ = model.handleKey("enter")
+	_, cmd := model.handleKey("enter")
+	started := cmd().(eagerExactExecutionStartedMsg)
+	// Capture cancel so repeated Ctrl+C can be observed without force exit.
+	cancelCalls := 0
+	baseCancel := model.cancelExecution
+	model.cancelExecution = func() {
+		cancelCalls++
+		if baseCancel != nil {
+			baseCancel()
+		}
+		select {
+		case <-cancelCh:
+		default:
+			close(cancelCh)
+		}
+	}
+
+	// Escape / b / q ignored during active execution.
+	for _, key := range []string{"esc", "escape", "b", "q"} {
+		nav, next := model.handleKey(key)
+		if nav != eagerPreviewNavNone || next != nil || model.phase != eagerPhaseExecuting {
+			t.Fatalf("key %q must be ignored: nav=%v phase=%v", key, nav, model.phase)
+		}
+	}
+	if model.cancellationRequested {
+		t.Fatal("ignored keys must not request cancellation")
+	}
+
+	nav, next := model.handleKey("ctrl+c")
+	if nav != eagerPreviewNavNone || next != nil {
+		t.Fatalf("ctrl+c nav=%v next=%v", nav, next)
+	}
+	if !model.cancellationRequested || cancelCalls < 1 {
+		t.Fatalf("cancel requested=%v calls=%d", model.cancellationRequested, cancelCalls)
+	}
+	content := model.content()
+	if !strings.Contains(content, cancellationRequestedMessage) {
+		t.Fatalf("cancellation message missing:\n%s", content)
+	}
+	if strings.Contains(content, "roll back") && !strings.Contains(content, "will not be rolled back") {
+		t.Fatalf("must not claim rollback:\n%s", content)
+	}
+
+	// Repeated Ctrl+C does not force exit.
+	for i := 0; i < 3; i++ {
+		nav, next = model.handleKey("ctrl+c")
+		if nav != eagerPreviewNavNone || next != nil || model.phase != eagerPhaseExecuting {
+			t.Fatalf("repeated ctrl+c force-exited: nav=%v phase=%v", nav, model.phase)
+		}
+	}
+
+	// Still attached: drain to final Result.
+	wait := model.applyExactExecutionStarted(started)
+	for model.phase == eagerPhaseExecuting {
+		msg := wait()
+		switch m := msg.(type) {
+		case eagerExactExecutionProgressMsg:
+			wait = model.applyExactExecutionProgress(m)
+		case eagerExactExecutedMsg:
+			model.applyExactExecuted(m)
+			wait = nil
+		default:
+			t.Fatalf("unexpected %T", msg)
+		}
+		if wait == nil {
+			break
+		}
+	}
+	if model.phase != eagerPhaseResult {
+		t.Fatalf("phase = %v after cancel", model.phase)
+	}
+	if len(model.executionOutcomes) != 1 || model.executionOutcomes[0].State != clean.CategoryExecutionPartial {
+		// One success + canceled remainder is partial; completed moves stay counted.
+		t.Fatalf("cancel outcome = %#v", model.executionOutcomes)
+	}
+	if model.executionOutcomes[0].AffectedBytes != 4 {
+		t.Fatalf("completed moves must remain: %#v", model.executionOutcomes[0])
+	}
+	content = model.content()
+	if strings.Contains(content, "rolled back") {
+		t.Fatalf("result must not claim rollback:\n%s", content)
+	}
+	if strings.Contains(content, `C:\done`) || strings.Contains(content, `C:\remaining`) {
+		t.Fatalf("path leaked after cancel:\n%s", content)
+	}
+}
+
+func TestEagerCleanPreviewCtrlCStillInterrupts(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	cancelCalled := false
+	model.cancel = func() { cancelCalled = true }
+	nav, _ := model.handleKey("ctrl+c")
+	if nav != eagerPreviewNavInterrupt || !cancelCalled || !model.canceled {
+		t.Fatalf("preview ctrl+c: nav=%v canceled=%v cancelCalled=%v", nav, model.canceled, cancelCalled)
+	}
+}
+
+func TestEagerCleanResultKeysAndStartDiscardsStaleSession(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	markEagerQueueTerminal(&model, true)
+	model.phase = eagerPhaseResult
+	model.executionStarted = true
+	model.frozenCategories = []string{model.rows[0].Identifier}
+	model.executionOutcomes = []clean.CategoryExecutionOutcome{{
+		Identifier:    model.rows[0].Identifier,
+		Label:         model.rows[0].Label,
+		State:         clean.CategoryExecutionCleaned,
+		AffectedBytes: 9,
+	}}
+	model.executionResult = clean.Result{Status: "ok", Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 9}}
+
+	content := model.content()
+	if !strings.Contains(content, "Cleanup result") || !strings.Contains(content, "cleaned") {
+		t.Fatalf("result page:\n%s", content)
+	}
+
+	for _, key := range []string{"enter", "esc", "b"} {
+		model.nav = eagerPreviewNavNone
+		nav, _ := model.handleKey(key)
+		if nav != eagerPreviewNavMenu {
+			t.Fatalf("key %q nav=%v, want menu", key, nav)
+		}
+	}
+	model.nav = eagerPreviewNavNone
+	nav, _ := model.handleKey("q")
+	if nav != eagerPreviewNavQuit {
+		t.Fatalf("q nav=%v", nav)
+	}
+
+	// Re-entering Clean via start discards stale preview/selection/result.
+	original := buildEagerPreviewOptions
+	buildEagerPreviewOptions = func() clean.Options { return clean.Options{} }
+	t.Cleanup(func() { buildEagerPreviewOptions = original })
+	originalPreview := runEagerPreviewFn
+	runEagerPreviewFn = func(context.Context, clean.Options, func(clean.CategoryPreviewObservation)) error {
+		return nil
+	}
+	t.Cleanup(func() { runEagerPreviewFn = originalPreview })
+
+	_ = model.start()
+	if model.phase != eagerPhasePreview || model.executionStarted || len(model.frozenCategories) != 0 {
+		t.Fatalf("start did not discard session: phase=%v started=%v frozen=%v", model.phase, model.executionStarted, model.frozenCategories)
+	}
+	if len(model.executionOutcomes) != 0 {
+		t.Fatalf("stale outcomes retained: %#v", model.executionOutcomes)
+	}
+	// Defaults re-selected; opt-ins cleared.
+	if !model.rows[0].Selected {
+		t.Fatal("default must start selected on new session")
+	}
+}
+
+func TestEagerCleanExecutionCannotAlterFrozenAuthorization(t *testing.T) {
+	var got []string
+	original := runExactCleanSelection
+	runExactCleanSelection = func(_ context.Context, selected []string, _ clean.ProgressReporter) clean.Result {
+		got = append([]string(nil), selected...)
+		return clean.Result{Status: "ok", Mode: "execute"}
+	}
+	t.Cleanup(func() { runExactCleanSelection = original })
+
+	model := newEagerCleanModel(100, 40)
+	markEagerQueueTerminal(&model, true)
+	// Exact selection: only opt-in, not default.
+	model.rows[0].Selected = false
+	var optIn string
+	for i := range model.rows {
+		if model.rows[i].Eligibility == clean.CategoryEligibilityOptIn {
+			model.rows[i].State = clean.CategoryPreviewComplete
+			model.rows[i].CandidateCount = 1
+			model.rows[i].Bytes = 1
+			model.rows[i].Selected = true
+			optIn = model.rows[i].Identifier
+			break
+		}
+	}
+	_, _ = model.handleKey("enter")
+	_, cmd := model.handleKey("enter")
+	// Mutate live selection after freeze — must not affect execution.
+	model.selectAllSelectable()
+	model.rows[0].Selected = true
+
+	started := cmd().(eagerExactExecutionStartedMsg)
+	wait := model.applyExactExecutionStarted(started)
+	for model.phase == eagerPhaseExecuting {
+		msg := wait()
+		switch m := msg.(type) {
+		case eagerExactExecutionProgressMsg:
+			wait = model.applyExactExecutionProgress(m)
+		case eagerExactExecutedMsg:
+			model.applyExactExecuted(m)
+			wait = nil
+		default:
+			t.Fatalf("unexpected %T", msg)
+		}
+		if wait == nil {
+			break
+		}
+	}
+	if len(got) != 1 || got[0] != optIn {
+		t.Fatalf("executed %#v, want [%q]", got, optIn)
+	}
+	if len(model.executionOutcomes) != 1 || model.executionOutcomes[0].Identifier != optIn {
+		t.Fatalf("outcomes %#v", model.executionOutcomes)
+	}
+}
