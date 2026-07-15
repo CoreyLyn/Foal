@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -28,7 +27,7 @@ var mainMenuItems = []mainMenuItem{
 	{
 		title:       "Clean",
 		command:     "clean",
-		description: "Browse conservative clean preview data from the existing dry-run read model.",
+		description: "Measure cleanup categories, form an exact selection, and confirm Recycle Bin cleanup.",
 		selection:   "",
 	},
 	{
@@ -67,7 +66,7 @@ type rootModel struct {
 	screen   tuiScreen
 	selected int
 	notice   string
-	clean    cleanModel
+	clean    eagerCleanModel
 	viewer   viewerModel
 	width    int
 	height   int
@@ -90,27 +89,49 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clean.setSize(msg.Width, msg.Height)
 		m.viewer.setSize(msg.Width, msg.Height)
 		return m, nil
-	case cleanPreviewLoadedMsg:
-		if m.screen == screenCleanPreview {
-			m.clean.applyLoaded(msg)
+	case eagerPreviewStartedMsg:
+		if m.screen != screenCleanPreview {
+			return m, nil
 		}
+		return m, m.clean.applyStarted(msg)
+	case eagerCategoryObservationMsg:
+		if m.screen != screenCleanPreview {
+			return m, nil
+		}
+		m.clean.applyObservation(msg)
+		return m, m.clean.continuePreviewWait(msg.generation)
+	case eagerPreviewFinishedMsg:
+		if m.screen != screenCleanPreview {
+			return m, nil
+		}
+		m.clean.applyFinished(msg)
 		return m, nil
-	case cleanExecutedMsg:
-		if m.screen == screenCleanPreview && m.clean.executionState == cleanExecutionRunning {
-			m.clean.executionResult = msg.result
-			m.clean.executionState = cleanExecutionResult
+	case eagerPreviewUnavailableMsg:
+		if m.screen != screenCleanPreview {
+			return m, nil
 		}
+		m.clean.applyUnavailable(msg)
 		return m, nil
-	case cleanExecutionStartedMsg:
-		if m.screen == screenCleanPreview && m.clean.executionState == cleanExecutionRunning {
-			return m, waitCleanExecutionCmd(msg.stream)
+	case eagerPreviewTickMsg:
+		if m.screen != screenCleanPreview {
+			return m, nil
 		}
-		return m, nil
-	case cleanExecutionProgressMsg:
-		if m.screen == screenCleanPreview && m.clean.executionState == cleanExecutionRunning {
-			m.clean.executionProgress = msg.progress
-			return m, waitCleanExecutionCmd(msg.stream)
+		return m, m.clean.applyTick(msg)
+	case eagerExactExecutionStartedMsg:
+		if m.screen != screenCleanPreview {
+			return m, nil
 		}
+		return m, m.clean.applyExactExecutionStarted(msg)
+	case eagerExactExecutionProgressMsg:
+		if m.screen != screenCleanPreview {
+			return m, nil
+		}
+		return m, m.clean.applyExactExecutionProgress(msg)
+	case eagerExactExecutedMsg:
+		if m.screen != screenCleanPreview {
+			return m, nil
+		}
+		m.clean.applyExactExecuted(msg)
 		return m, nil
 	case viewerLoadedMsg:
 		m.viewer.applyLoaded(msg)
@@ -142,9 +163,10 @@ func (m rootModel) updateMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		switch mainMenuItems[m.selected].command {
 		case "clean":
+			// Primary Clean surface is category-first eager preview only.
 			m.screen = screenCleanPreview
-			m.clean = newCleanModel(m.width, m.height)
-			return m, m.clean.startLoad(false)
+			m.clean = newEagerCleanModel(m.width, m.height)
+			return m, m.clean.start()
 		case "uninstall", "status", "history":
 			command := mainMenuItems[m.selected].command
 			m.screen = screenViewer
@@ -159,56 +181,18 @@ func (m rootModel) updateMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m rootModel) updateCleanPreviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.clean.executionState == cleanExecutionConfirmation {
-		switch msg.String() {
-		case "b", "esc":
-			m.clean.executionState = cleanExecutionPreview
-			return m, nil
-		case "enter":
-			m.clean.executionState = cleanExecutionRunning
-			ctx, cancel := context.WithCancel(context.Background())
-			m.clean.cancelExecution = cancel
-			return m, executeCleanSelectionCmd(ctx, m.clean.selectedCategoryIDs())
-		default:
-			return m, nil
-		}
-	}
-	if m.clean.executionState == cleanExecutionRunning {
-		if msg.String() == "ctrl+c" {
-			if m.clean.cancelExecution != nil {
-				m.clean.cancelExecution()
-			}
-			return m, nil
-		}
-		return m, nil
-	}
-	if m.clean.executionState == cleanExecutionResult {
-		switch msg.String() {
-		case "b":
-			m.clean.executionState = cleanExecutionPreview
-			return m, nil
-		case "q", "esc":
-			return m, tea.Quit
-		default:
-			return m, nil
-		}
-	}
-	switch msg.String() {
-	case "ctrl+c":
-		m.clean.cancelPendingLoad()
-		return m, tea.Interrupt
-	case "q", "esc":
-		m.clean.cancelPendingLoad()
-		return m, tea.Quit
-	case "b":
-		m.clean.cancelPendingLoad()
+	nav, cmd := m.clean.handleKey(msg.String())
+	switch nav {
+	case eagerPreviewNavMenu:
 		m.screen = screenMenu
 		m.notice = ""
 		return m, nil
-	case "r":
-		return m, m.clean.startLoad(true)
+	case eagerPreviewNavQuit:
+		return m, tea.Quit
+	case eagerPreviewNavInterrupt:
+		return m, tea.Interrupt
 	}
-	return m, m.clean.handleKey(msg.String())
+	return m, cmd
 }
 
 func (m rootModel) updateViewerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

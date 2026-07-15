@@ -43,7 +43,7 @@ func TestEagerCleanModelStartRendersFullQueueImmediately(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("start must return commands without another user action")
 	}
-	if model.generation != 1 || model.startedAt != fixed {
+	if model.generation == 0 || model.startedAt != fixed {
 		t.Fatalf("generation/start = %d %#v", model.generation, model.startedAt)
 	}
 

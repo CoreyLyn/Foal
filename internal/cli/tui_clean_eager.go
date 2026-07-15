@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -12,13 +13,18 @@ import (
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
-// Category-first eager preview model for the Clean TUI. This surface delivers
-// path-free terminal outcomes, exact per-session cleanup selection with live
-// measured totals, focused diagnostics, unavailable and no-work classification,
-// a separate confirmation page, one-shot handoff into shared exact Clean
-// execution, observation-only path-free category progress, cooperative
-// cancellation (ADR 0014), and an authoritative path-free result page.
-// Root cutover remains a later ticket.
+// nextEagerGeneration assigns unique Clean session generations so stale stream
+// messages from a canceled or superseded session cannot mutate a later model
+// that happens to reuse a small per-model counter.
+var nextEagerGeneration atomic.Uint64
+
+// Category-first eager preview model for the Clean TUI. This is the primary
+// Clean surface after cutover: path-free terminal outcomes, exact per-session
+// cleanup selection with live measured totals, focused diagnostics, unavailable
+// and no-work classification, a separate confirmation page, one-shot handoff
+// into shared exact Clean execution, observation-only path-free category
+// progress, cooperative cancellation (ADR 0014), and an authoritative path-free
+// result page. The first slice exposes no retry or rescan action.
 
 var eagerPreviewSpinnerFrames = []string{"|", "/", "-", "\\"}
 
@@ -210,6 +216,11 @@ type eagerCleanModel struct {
 	now          func() time.Time
 	nav          eagerPreviewNav
 
+	// previewStream is the active eager observation stream for the current
+	// generation. Root continues wait cmds from this handle so observations
+	// need not re-embed the stream. Cleared on finish, cancel, or unavailable.
+	previewStream *eagerPreviewStream
+
 	// viewportOffset is the first visible line of the scrollable body. Titles,
 	// progress, totals, diagnostics, cancellation status, and key hints stay
 	// fixed outside this window. There is no separate scroll mode.
@@ -288,7 +299,7 @@ func (m *eagerCleanModel) start() tea.Cmd {
 		m.cancelExecution()
 		m.cancelExecution = nil
 	}
-	m.generation++
+	m.generation = nextEagerGeneration.Add(1)
 	m.finished = false
 	m.canceled = false
 	m.completed = 0
@@ -297,6 +308,7 @@ func (m *eagerCleanModel) start() tea.Cmd {
 	m.startedAt = m.now()
 	m.nav = eagerPreviewNavNone
 	m.unavailable = nil
+	m.previewStream = nil
 	m.phase = eagerPhasePreview
 	m.frozenCategories = nil
 	m.executionStarted = false
@@ -308,15 +320,19 @@ func (m *eagerCleanModel) start() tea.Cmd {
 	m.execFollowActive = false
 	m.execTrackedActive = -1
 	m.cursor = 0
-	for i := range m.rows {
-		m.rows[i].State = clean.CategoryPreviewWaiting
-		m.rows[i].CandidateCount = 0
-		m.rows[i].Bytes = 0
-		m.rows[i].ExcludedSiblingCount = 0
-		m.rows[i].ReasonCode = ""
-		m.rows[i].SafetyNote = ""
-		// Fresh session defaults: defaults selected, opt-ins cleared.
-		m.rows[i].Selected = m.rows[i].Eligibility == clean.CategoryEligibilityDefault
+	// Rebuild catalog-derived rows for a fresh session so queue growth/order
+	// stays aligned with the shared catalog without a second TUI registry.
+	queue := clean.EagerPreviewQueue()
+	m.rows = make([]eagerCategoryRow, 0, len(queue))
+	for _, summary := range queue {
+		m.rows = append(m.rows, eagerCategoryRow{
+			Identifier:     summary.Identifier,
+			Label:          summary.Label,
+			ReportCategory: summary.ReportCategory,
+			Eligibility:    summary.Eligibility,
+			State:          clean.CategoryPreviewWaiting,
+			Selected:       summary.Eligibility == clean.CategoryEligibilityDefault,
+		})
 	}
 
 	opts := buildEagerPreviewOptions()
@@ -341,6 +357,27 @@ func (m *eagerCleanModel) cancelPending() {
 		m.cancel()
 		m.cancel = nil
 	}
+	m.previewStream = nil
+}
+
+// applyStarted records the live observation stream for the current generation
+// and returns the first wait command. Stale generations are ignored.
+func (m *eagerCleanModel) applyStarted(msg eagerPreviewStartedMsg) tea.Cmd {
+	if msg.generation != m.generation || m.canceled || m.unavailable != nil {
+		return nil
+	}
+	m.previewStream = msg.stream
+	return waitEagerPreviewCmd(msg.generation, msg.stream)
+}
+
+// continuePreviewWait returns the next stream wait when a generation still owns
+// an active stream. Root calls this after each observation so path-free
+// projections keep arriving without re-embedding the stream in every message.
+func (m *eagerCleanModel) continuePreviewWait(generation uint64) tea.Cmd {
+	if generation != m.generation || m.previewStream == nil || m.canceled || m.unavailable != nil || m.finished {
+		return nil
+	}
+	return waitEagerPreviewCmd(generation, m.previewStream)
 }
 
 func startEagerPreviewCmd(ctx context.Context, generation uint64, opts clean.Options) tea.Cmd {
@@ -431,6 +468,7 @@ func (m *eagerCleanModel) applyFinished(msg eagerPreviewFinishedMsg) {
 	m.canceled = m.canceled || msg.canceled
 	m.activeIndex = -1
 	m.cancel = nil
+	m.previewStream = nil
 }
 
 func (m *eagerCleanModel) applyUnavailable(msg eagerPreviewUnavailableMsg) {

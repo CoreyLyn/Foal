@@ -1,6 +1,6 @@
 # Plan: Clean TUI category-first interaction
 
-A design note maintained during the Clean TUI grilling session. The interaction replaces the current whole-report loading cycle with a category-first preview while preserving Foal's shared Clean safety model.
+A design note maintained during the Clean TUI grilling session. The interaction is the implemented primary Clean TUI surface (cutover complete): category-first eager preview replaces the old whole-report loading cycle while preserving Foal's shared Clean safety model.
 
 ## Goal
 
