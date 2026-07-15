@@ -37,6 +37,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"bun-cache",
 		"playwright-browsers",
 		"puppeteer-browsers",
+		"electron-cache",
 		"administrator_only_caches",
 	}
 	gotIdentifiers := make([]string, 0, len(summaries))
@@ -167,6 +168,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryBun,
 		clean.DevCacheCategoryPlaywright,
 		clean.DevCacheCategoryPuppeteerBrowsers,
+		clean.DevCacheCategoryElectron,
 	}
 	wantDeveloperToolsOptIn := append(
 		[]string{clean.OpportunityCategoryVSCodeCache, clean.OpportunityCategoryCursorCache},
@@ -209,6 +211,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryBun:                 clean.RunningApplicationPolicyDistinctiveProcessIdle,
 		clean.DevCacheCategoryPlaywright:          clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryPuppeteerBrowsers:   clean.RunningApplicationPolicySharedRuntime,
+		clean.DevCacheCategoryElectron:            clean.RunningApplicationPolicySharedRuntime,
 	}
 	for id, wantPolicy := range policies {
 		summary, ok := catalog.Summary(id)
@@ -231,6 +234,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		"NPM_CONFIG_CACHE", "GOCACHE", "PIP_CACHE_DIR", "CARGO_HOME",
 		"NUGET_HTTP_CACHE_PATH", "NUGET_PACKAGES", "COREPACK_HOME", "UV_CACHE_DIR",
 		"BUN_INSTALL_CACHE_DIR", "PLAYWRIGHT_BROWSERS_PATH", "PUPPETEER_CACHE_DIR",
+		"electron_config_cache",
 		"go.exe", "cargo.exe", "dotnet.exe", "nuget.exe", "node.exe", "python.exe",
 		"uv.exe", "uvx.exe", "bun.exe", "bunx.exe", "Code.exe", "Cursor.exe",
 		"resolvePaths", "lookupEnv", "LOCALAPPDATA", "APPDATA", "ms-playwright",

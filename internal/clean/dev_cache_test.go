@@ -28,6 +28,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryBun,
 			clean.DevCacheCategoryPlaywright,
 			clean.DevCacheCategoryPuppeteerBrowsers,
+			clean.DevCacheCategoryElectron,
 			clean.OpportunityCategoryVSCodeCache,
 			clean.OpportunityCategoryCursorCache,
 		}
@@ -36,8 +37,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"dev-caches\"", cat)
 			}
 		}
-		if len(enabled) != 13 {
-			t.Fatalf("expected 13 enabled developer-tools categories, got %d", len(enabled))
+		if len(enabled) != 14 {
+			t.Fatalf("expected 14 enabled developer-tools categories, got %d", len(enabled))
 		}
 		// Verify valid names include dev categories and dev-caches
 		found := make(map[string]bool)
@@ -83,6 +84,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryBun,
 			clean.DevCacheCategoryPlaywright,
 			clean.DevCacheCategoryPuppeteerBrowsers,
+			clean.DevCacheCategoryElectron,
 		}
 		for _, cat := range expectedOpportunities {
 			if !enabled[cat] {
@@ -94,8 +96,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"all\"", cat)
 			}
 		}
-		if len(enabled) != 10+11 {
-			t.Fatalf("expected 21 enabled categories (10+11), got %d", len(enabled))
+		if len(enabled) != 10+12 {
+			t.Fatalf("expected 22 enabled categories (10+12), got %d", len(enabled))
 		}
 	})
 
@@ -112,6 +114,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryBun,
 			clean.DevCacheCategoryPlaywright,
 			clean.DevCacheCategoryPuppeteerBrowsers,
+			clean.DevCacheCategoryElectron,
 		}
 		for _, cat := range devCaches {
 			t.Run(cat, func(t *testing.T) {
@@ -194,6 +197,7 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryCorepack,
 			clean.DevCacheCategoryUV,
 			clean.DevCacheCategoryBun,
+			clean.DevCacheCategoryElectron,
 		}
 		for _, cat := range wholeRootCaches {
 			cachePath := filepath.Join(root, cat)
@@ -244,10 +248,10 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			DiscoverReviewSuggestions: noReviewSuggestions,
 		})
 
-		// 9 whole-root + 1 playwright install child + 1 puppeteer install child
+		// 10 whole-root + 1 playwright install child + 1 puppeteer install child
 		// (vscode/cursor need detector).
-		if len(result.OptInCandidates) != 11 {
-			t.Fatalf("expected 11 opt-in candidates, got %d: %#v", len(result.OptInCandidates), result.OptInCandidates)
+		if len(result.OptInCandidates) != 12 {
+			t.Fatalf("expected 12 opt-in candidates, got %d: %#v", len(result.OptInCandidates), result.OptInCandidates)
 		}
 	})
 
@@ -496,6 +500,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryCorepack,
 			clean.DevCacheCategoryUV,
 			clean.DevCacheCategoryBun,
+			clean.DevCacheCategoryElectron,
 		}
 		for _, cat := range wholeRootCaches {
 			cachePath := filepath.Join(root, cat)
@@ -551,13 +556,13 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}},
 		})
 
-		// 9 whole-root + 1 playwright install child + 1 puppeteer install child
-		if len(adapter.paths) != 11 {
-			t.Fatalf("expected 11 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
+		// 10 whole-root + 1 playwright install child + 1 puppeteer install child
+		if len(adapter.paths) != 12 {
+			t.Fatalf("expected 12 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
 		}
 
-		if result.Totals.OptInDeletedCount != 11 {
-			t.Fatalf("expected OptInDeletedCount 11, got %d", result.Totals.OptInDeletedCount)
+		if result.Totals.OptInDeletedCount != 12 {
+			t.Fatalf("expected OptInDeletedCount 12, got %d", result.Totals.OptInDeletedCount)
 		}
 	})
 

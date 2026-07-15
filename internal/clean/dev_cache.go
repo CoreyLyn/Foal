@@ -210,6 +210,23 @@ func resolvePlaywrightBrowserPaths(deps devCachePathDependencies) []string {
 	return nil
 }
 
+func resolveElectronCachePaths(deps devCachePathDependencies) []string {
+	// electron: non-blank electron_config_cache -> %LOCALAPPDATA%\electron\Cache.
+	// Blank/whitespace override falls back to the Windows default. Whole-root only:
+	// never scan legacy ~\.electron, CWD, repositories, node_modules, package
+	// manifests, registry data, installed Electron apps, or project configuration.
+	// Execute never invokes Electron, npm, npx, or package-manager commands.
+	if path, ok := deps.lookupEnv("electron_config_cache"); ok {
+		if trimmed := strings.TrimSpace(path); trimmed != "" {
+			return []string{trimmed}
+		}
+	}
+	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
+		return []string{deps.joinPath(localAppData, "electron", "Cache")}
+	}
+	return nil
+}
+
 // devCacheCategories returns the list of all dev cache categories.
 func devCacheCategories() []string {
 	return developerCacheCategoryIDs()

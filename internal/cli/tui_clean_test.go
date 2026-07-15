@@ -298,7 +298,9 @@ func TestCleanCategoryKeyboardActionsRenderPreviewOnlySelection(t *testing.T) {
 func loadedReportFirstCleanModel(t *testing.T) cleanModel {
 	t.Helper()
 	stubCleanPreviewDryRun(t)
-	model := newCleanModel(240, 80)
+	// Height must fit the full report-first body including every catalog opt-in
+	// row and the bottom Summary compact totals line.
+	model := newCleanModel(240, 90)
 	msg := loadCleanPreviewCmd(context.Background(), 1)().(cleanPreviewLoadedMsg)
 	model.loadGeneration = 1
 	model.applyLoaded(msg)

@@ -2038,6 +2038,7 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.DevCacheCategoryBun,
 		clean.DevCacheCategoryPlaywright,
 		clean.DevCacheCategoryPuppeteerBrowsers,
+		clean.DevCacheCategoryElectron,
 	}
 	want := append(expectedOpportunities, expectedDevCaches...)
 	if len(capturedOpts.OptIn) != len(want) {
@@ -2090,6 +2091,7 @@ func TestCleanOptInInvalidName(t *testing.T) {
 		"bun-cache",
 		"playwright-browsers",
 		"puppeteer-browsers",
+		"electron-cache",
 		"dev-caches",
 		"all",
 	}
