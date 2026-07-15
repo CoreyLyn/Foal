@@ -11,10 +11,11 @@ import (
 	"github.com/CoreyLyn/Foal/internal/clean"
 )
 
-// Category-first eager preview model for the Clean TUI. This ticket delivers
-// path-free terminal outcomes, focused diagnostics, unavailable and no-work
-// classification, and confirmation-gate readiness. Selection, confirm/execute,
-// and root cutover remain later tickets.
+// Category-first eager preview model for the Clean TUI. This surface delivers
+// path-free terminal outcomes, exact per-session cleanup selection with live
+// measured totals, focused diagnostics, unavailable and no-work classification,
+// and confirmation-gate readiness. Confirm/execute and root cutover remain
+// later tickets.
 
 var eagerPreviewSpinnerFrames = []string{"|", "/", "-", "\\"}
 
@@ -31,11 +32,15 @@ const (
 )
 
 type eagerCategoryRow struct {
-	Identifier           string
-	Label                string
-	ReportCategory       clean.ReportCategory
-	Eligibility          clean.CategoryEligibility
-	State                clean.CategoryPreviewState
+	Identifier     string
+	Label          string
+	ReportCategory clean.ReportCategory
+	Eligibility    clean.CategoryEligibility
+	State          clean.CategoryPreviewState
+	// Selected is session-only cleanup authorization. Independent of cursor.
+	// Defaults start true; opt-ins start false. Non-selectable terminal
+	// outcomes clear and disable the row for the rest of the session.
+	Selected             bool
 	CandidateCount       int
 	Bytes                int64
 	ExcludedSiblingCount int
@@ -113,6 +118,8 @@ func newEagerCleanModel(width, height int) eagerCleanModel {
 			ReportCategory: summary.ReportCategory,
 			Eligibility:    summary.Eligibility,
 			State:          clean.CategoryPreviewWaiting,
+			// ADR 0013: defaults start selected but remain removable; opt-ins do not.
+			Selected: summary.Eligibility == clean.CategoryEligibilityDefault,
 		})
 	}
 	return eagerCleanModel{
@@ -142,6 +149,8 @@ func (m *eagerCleanModel) start() tea.Cmd {
 		m.rows[i].ExcludedSiblingCount = 0
 		m.rows[i].ReasonCode = ""
 		m.rows[i].SafetyNote = ""
+		// Fresh session defaults: defaults selected, opt-ins cleared.
+		m.rows[i].Selected = m.rows[i].Eligibility == clean.CategoryEligibilityDefault
 	}
 
 	opts := buildEagerPreviewOptions()
@@ -231,6 +240,10 @@ func (m *eagerCleanModel) applyObservation(msg eagerCategoryObservationMsg) {
 	row.ExcludedSiblingCount = msg.observation.ExcludedSiblingCount
 	row.ReasonCode = msg.observation.ReasonCode
 	row.SafetyNote = msg.observation.SafetyNote
+	// Empty, skipped, incomplete, and failed cannot remain authorized.
+	if !clean.SelectablePreviewOutcome(row.State) {
+		row.Selected = false
+	}
 	switch msg.observation.State {
 	case clean.CategoryPreviewScanning:
 		m.activeIndex = index
@@ -297,13 +310,13 @@ func (m eagerCleanModel) allCategoriesTerminal() bool {
 	return true
 }
 
-// confirmationEnabled is the #188 gate half: scan completeness. Selection
-// non-emptiness is enforced by the selection ticket.
+// confirmationEnabled requires every scannable category terminal and a
+// non-empty exact selection. Does not open confirmation itself (ticket #190).
 func (m eagerCleanModel) confirmationEnabled() bool {
-	return m.unavailable == nil && !m.canceled && m.allCategoriesTerminal()
+	return m.unavailable == nil && !m.canceled && m.allCategoriesTerminal() && m.selectedCount() > 0
 }
 
-// noWorkState classifies finished zero-selection presentation for #189.
+// noWorkState classifies finished zero-selection presentation.
 func (m eagerCleanModel) noWorkState() clean.EagerPreviewNoWorkState {
 	if m.unavailable != nil || m.canceled {
 		return clean.EagerPreviewNoWorkNone
@@ -317,9 +330,89 @@ func (m eagerCleanModel) noWorkState() clean.EagerPreviewNoWorkState {
 			Bytes:          row.Bytes,
 		}
 	}
-	// Selection is owned by #189; this ticket reports the empty-selection case
-	// only (selectedCount == 0).
-	return clean.ClassifyEagerPreviewNoWork(observations, 0)
+	return clean.ClassifyEagerPreviewNoWork(observations, m.selectedCount())
+}
+
+// selectedCount returns how many categories are currently authorized.
+func (m eagerCleanModel) selectedCount() int {
+	n := 0
+	for _, row := range m.rows {
+		if row.Selected {
+			n++
+		}
+	}
+	return n
+}
+
+// selectedCategoryIDs returns canonical identifiers in stable display/scan
+// order. Contains only selected default or opt-in identifiers — no aliases,
+// group tokens, permission notices, review evidence, or paths.
+func (m eagerCleanModel) selectedCategoryIDs() []string {
+	ids := make([]string, 0, len(m.rows))
+	for _, row := range m.rows {
+		if row.Selected {
+			ids = append(ids, row.Identifier)
+		}
+	}
+	return ids
+}
+
+// selectionTotals returns selected category count, safely measured bytes for
+// complete/partial selected rows, and selected waiting/scanning pending count.
+// Unfinished, empty, skipped, incomplete, and failed work contributes no bytes.
+func (m eagerCleanModel) selectionTotals() (categories int, measuredBytes int64, pending int) {
+	for _, row := range m.rows {
+		if !row.Selected {
+			continue
+		}
+		categories++
+		switch row.State {
+		case clean.CategoryPreviewWaiting, clean.CategoryPreviewScanning:
+			pending++
+		case clean.CategoryPreviewComplete, clean.CategoryPreviewPartial:
+			measuredBytes += row.Bytes
+		}
+	}
+	return categories, measuredBytes, pending
+}
+
+// rowSelectable reports whether Space may toggle the row. Waiting, scanning,
+// complete, and partial are selectable; disabled terminal outcomes are not.
+func (m eagerCleanModel) rowSelectable(row eagerCategoryRow) bool {
+	return clean.SelectablePreviewOutcome(row.State)
+}
+
+// toggleFocusedSelection toggles the focused row when selectable. Never
+// restarts scanning and never mutates disabled diagnostics.
+func (m *eagerCleanModel) toggleFocusedSelection() {
+	if m.unavailable != nil || len(m.rows) == 0 {
+		return
+	}
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return
+	}
+	if !m.rowSelectable(m.rows[m.cursor]) {
+		return
+	}
+	m.rows[m.cursor].Selected = !m.rows[m.cursor].Selected
+}
+
+// selectAllSelectable authorizes every currently selectable waiting, scanning,
+// complete, or partial category. Permission notices are not in the queue;
+// disabled terminal rows stay excluded.
+func (m *eagerCleanModel) selectAllSelectable() {
+	for i := range m.rows {
+		if m.rowSelectable(m.rows[i]) {
+			m.rows[i].Selected = true
+		}
+	}
+}
+
+// clearSelection clears every selection, including default categories.
+func (m *eagerCleanModel) clearSelection() {
+	for i := range m.rows {
+		m.rows[i].Selected = false
+	}
 }
 
 // focusedRow returns the cursor row when browsing the category list.
@@ -333,9 +426,10 @@ func (m eagerCleanModel) focusedRow() (eagerCategoryRow, bool) {
 	return m.rows[m.cursor], true
 }
 
-// handleKey processes category-first keys. Browsing never restarts the queue.
-// Escape/b request menu; q quits; Ctrl+C is interrupt. Enter on unavailable
-// returns to the menu (no confirmation surface exists here).
+// handleKey processes category-first keys. Browsing and selection never restart
+// the queue, write History, or call execution. Escape/b request menu; q quits;
+// Ctrl+C is interrupt. Enter on unavailable returns to the menu. Confirmation
+// Enter is owned by the next ticket; this ticket only tracks readiness.
 func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 	if m.unavailable != nil {
 		switch key {
@@ -377,6 +471,13 @@ func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 		if m.cursor+1 < len(m.rows) {
 			m.cursor++
 		}
+	case " ", "space":
+		// Toggle only; never returns a scan command.
+		m.toggleFocusedSelection()
+	case "a":
+		m.selectAllSelectable()
+	case "x":
+		m.clearSelection()
 	}
 	return eagerPreviewNavNone, nil
 }
@@ -401,14 +502,35 @@ func (m eagerCleanModel) content() string {
 		if i == m.cursor {
 			cursor = ">"
 		}
-		builder.WriteString(fmt.Sprintf("  %s %s %s\n", cursor, m.rowMarker(row), m.rowLabel(row)))
+		// Cursor (>) and checkbox ([x]/[ ]) stay independent of scan markers.
+		builder.WriteString(fmt.Sprintf("  %s %s %s %s\n", cursor, m.checkbox(row), m.rowMarker(row), m.rowLabel(row)))
 	}
 
+	builder.WriteString("\n")
+	builder.WriteString(m.selectionSummaryLine())
 	builder.WriteString("\n")
 	builder.WriteString(m.focusedDetailPanel())
 	builder.WriteString("\n")
 	builder.WriteString(m.footerHints())
 	return builder.String()
+}
+
+func (m eagerCleanModel) checkbox(row eagerCategoryRow) string {
+	if row.Selected {
+		return "[x]"
+	}
+	return "[ ]"
+}
+
+// selectionSummaryLine shows live selected totals. Unfinished selected work is
+// pending, never guessed as zero bytes. After every selected category is
+// terminal the line collapses to count and measured total.
+func (m eagerCleanModel) selectionSummaryLine() string {
+	n, measured, pending := m.selectionTotals()
+	if pending > 0 {
+		return fmt.Sprintf("Selected: %d categories · %s measured · %d pending", n, cleanFormatBytes(measured), pending)
+	}
+	return fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured))
 }
 
 func (m eagerCleanModel) unavailableContent() string {
@@ -606,14 +728,14 @@ func pathFreeReasonExplanation(code string) string {
 }
 
 func (m eagerCleanModel) footerHints() string {
-	const base = "Hints: up/down browse · b/Esc back · q quit"
+	const base = "Hints: up/down browse · space toggle · a select all · x clear · b/Esc back · q quit"
 	if !m.allCategoriesTerminal() {
 		return base
 	}
-	// Distinct zero-authorization messages for finished scans with nothing
-	// selectable. Need-selection copy is owned by the selection ticket once
-	// defaults and toggles exist; only all-empty and diagnostic-only surface here.
+	// Distinct zero-authorization messages; none call execution or write History.
 	switch m.noWorkState() {
+	case clean.EagerPreviewNoWorkNeedSelection:
+		return "Select at least one category to continue.\n" + base
 	case clean.EagerPreviewNoWorkAllEmpty:
 		return "Nothing to clean.\n" + base
 	case clean.EagerPreviewNoWorkDiagnostics:

@@ -343,8 +343,16 @@ func TestEagerCleanModelNoWorkStatesRemainDistinct(t *testing.T) {
 			},
 		})
 	}
+	// User cleared the surviving selectable default; empty selection is distinct.
+	needSelection.clearSelection()
 	if needSelection.noWorkState() != clean.EagerPreviewNoWorkNeedSelection {
 		t.Fatalf("need selection = %q", needSelection.noWorkState())
+	}
+	if !strings.Contains(needSelection.content(), "Select at least one category to continue.") {
+		t.Fatalf("need-selection message missing:\n%s", needSelection.content())
+	}
+	if needSelection.confirmationEnabled() {
+		t.Fatal("empty selection must not enable confirmation")
 	}
 }
 
@@ -760,6 +768,448 @@ func TestEagerPreviewCancelStopsFurtherMutations(t *testing.T) {
 			t.Fatalf("unexpected %T", msg)
 		}
 	}
+}
+
+func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	queue := clean.EagerPreviewQueue()
+	if len(queue) < 2 {
+		t.Fatal("need default and opt-in rows")
+	}
+
+	defaults := 0
+	optIns := 0
+	for i, row := range model.rows {
+		switch row.Eligibility {
+		case clean.CategoryEligibilityDefault:
+			defaults++
+			if !row.Selected {
+				t.Fatalf("default %q must start selected", row.Identifier)
+			}
+		case clean.CategoryEligibilityOptIn:
+			optIns++
+			if row.Selected {
+				t.Fatalf("opt-in %q must start unselected", row.Identifier)
+			}
+		default:
+			t.Fatalf("queue row eligibility = %q", row.Eligibility)
+		}
+		// Selection IDs are canonical catalog identifiers only.
+		if row.Identifier != queue[i].Identifier {
+			t.Fatalf("non-canonical id %q", row.Identifier)
+		}
+	}
+	if defaults == 0 || optIns == 0 {
+		t.Fatalf("defaults=%d optIns=%d", defaults, optIns)
+	}
+	if model.selectedCount() != defaults {
+		t.Fatalf("selectedCount = %d, want %d defaults", model.selectedCount(), defaults)
+	}
+	for _, id := range model.selectedCategoryIDs() {
+		if strings.Contains(id, `\`) || strings.Contains(id, "/") || strings.Contains(id, " ") {
+			t.Fatalf("selection id looks path-bearing or alias-like: %q", id)
+		}
+		if id == "dev-caches" || id == "all" {
+			t.Fatalf("group token in selection: %q", id)
+		}
+	}
+
+	// Cursor movement never changes selection.
+	before := append([]bool(nil), selectedFlags(model)...)
+	_, cmd := model.handleKey("down")
+	if cmd != nil {
+		t.Fatal("browse must not schedule a scan command")
+	}
+	_, _ = model.handleKey("down")
+	_, _ = model.handleKey("up")
+	if !equalBools(before, selectedFlags(model)) {
+		t.Fatal("cursor movement changed selection")
+	}
+	content := model.content()
+	if !strings.Contains(content, "[x]") || !strings.Contains(content, "[ ]") {
+		t.Fatalf("checkbox markers missing:\n%s", content)
+	}
+	if !strings.Contains(content, ">") {
+		t.Fatalf("cursor missing:\n%s", content)
+	}
+}
+
+func TestEagerCleanModelSpaceTogglesSelectableDuringScan(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	model.generation = 1
+	queue := clean.EagerPreviewQueue()
+	// Row 0 is default (selected, waiting); select an opt-in waiting row.
+	optInIndex := -1
+	for i, row := range model.rows {
+		if row.Eligibility == clean.CategoryEligibilityOptIn {
+			optInIndex = i
+			break
+		}
+	}
+	if optInIndex < 0 {
+		t.Fatal("no opt-in row")
+	}
+	genBefore := model.generation
+	activeBefore := model.activeIndex
+
+	model.cursor = optInIndex
+	nav, cmd := model.handleKey(" ")
+	if nav != eagerPreviewNavNone || cmd != nil {
+		t.Fatalf("space nav=%v cmd=%v", nav, cmd)
+	}
+	if !model.rows[optInIndex].Selected {
+		t.Fatal("space must select waiting opt-in")
+	}
+	if model.generation != genBefore || model.activeIndex != activeBefore {
+		t.Fatal("selection restarted or reprioritized the scan")
+	}
+
+	// Space again clears provisional selection.
+	_, cmd = model.handleKey(" ")
+	if cmd != nil || model.rows[optInIndex].Selected {
+		t.Fatalf("space toggle clear failed selected=%v cmd=%v", model.rows[optInIndex].Selected, cmd)
+	}
+
+	// Scanning row remains provisionally selectable.
+	model.applyObservation(eagerCategoryObservationMsg{
+		generation: 1,
+		observation: clean.CategoryPreviewObservation{
+			Identifier: queue[optInIndex].Identifier,
+			State:      clean.CategoryPreviewScanning,
+		},
+	})
+	model.cursor = optInIndex
+	_, cmd = model.handleKey(" ")
+	if cmd != nil || !model.rows[optInIndex].Selected {
+		t.Fatalf("scanning toggle selected=%v cmd=%v", model.rows[optInIndex].Selected, cmd)
+	}
+	// Active scan row must still be scanning after selection.
+	if model.rows[optInIndex].State != clean.CategoryPreviewScanning {
+		t.Fatal("selection altered scan state")
+	}
+}
+
+func TestEagerCleanModelTerminalAutoClearAndPartialPreservation(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	model.generation = 1
+	queue := clean.EagerPreviewQueue()
+	if len(queue) < 5 {
+		t.Fatal("need enough rows for terminal outcomes")
+	}
+
+	// Select several rows provisionally, including defaults already selected.
+	for i := 0; i < 5; i++ {
+		model.rows[i].Selected = true
+	}
+
+	terminalCases := []struct {
+		state    clean.CategoryPreviewState
+		count    int
+		bytes    int64
+		wantSel  bool
+		excluded int
+	}{
+		{clean.CategoryPreviewComplete, 1, 0, true, 0},   // zero-byte complete stays
+		{clean.CategoryPreviewPartial, 2, 4096, true, 1}, // partial stays with safe bytes
+		{clean.CategoryPreviewEmpty, 0, 0, false, 0},
+		{clean.CategoryPreviewSkipped, 0, 0, false, 1},
+		{clean.CategoryPreviewFailed, 0, 0, false, 0},
+	}
+	for i, tc := range terminalCases {
+		model.applyObservation(eagerCategoryObservationMsg{
+			generation: 1,
+			observation: clean.CategoryPreviewObservation{
+				Identifier:           queue[i].Identifier,
+				Label:                queue[i].Label,
+				State:                tc.state,
+				CandidateCount:       tc.count,
+				Bytes:                tc.bytes,
+				ExcludedSiblingCount: tc.excluded,
+				ReasonCode:           clean.PreviewReasonProtected,
+			},
+		})
+		if model.rows[i].Selected != tc.wantSel {
+			t.Fatalf("%s selected=%v want %v", tc.state, model.rows[i].Selected, tc.wantSel)
+		}
+	}
+
+	// Space on disabled skipped row changes nothing; diagnostic remains.
+	model.cursor = 3
+	before := model.rows[3].Selected
+	_, cmd := model.handleKey(" ")
+	if cmd != nil || model.rows[3].Selected != before {
+		t.Fatalf("disabled space mutated selection cmd=%v", cmd)
+	}
+	model.cursor = 3
+	content := model.content()
+	if !strings.Contains(content, "Skipped") {
+		t.Fatalf("disabled diagnostic missing:\n%s", content)
+	}
+
+	// Incomplete also auto-clears.
+	model.rows[4].Selected = true
+	model.applyObservation(eagerCategoryObservationMsg{
+		generation: 1,
+		observation: clean.CategoryPreviewObservation{
+			Identifier: queue[4].Identifier,
+			State:      clean.CategoryPreviewIncomplete,
+			ReasonCode: clean.PreviewReasonInspectionLimit,
+		},
+	})
+	if model.rows[4].Selected {
+		t.Fatal("incomplete must clear selection")
+	}
+}
+
+func TestEagerCleanModelBulkSelectAndClear(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	model.generation = 1
+	queue := clean.EagerPreviewQueue()
+
+	// Mix of selectable and disabled terminal rows.
+	model.applyObservation(eagerCategoryObservationMsg{
+		generation: 1,
+		observation: clean.CategoryPreviewObservation{
+			Identifier:     queue[0].Identifier,
+			State:          clean.CategoryPreviewComplete,
+			CandidateCount: 1,
+			Bytes:          100,
+		},
+	})
+	model.applyObservation(eagerCategoryObservationMsg{
+		generation: 1,
+		observation: clean.CategoryPreviewObservation{
+			Identifier: queue[1].Identifier,
+			State:      clean.CategoryPreviewEmpty,
+		},
+	})
+	model.applyObservation(eagerCategoryObservationMsg{
+		generation: 1,
+		observation: clean.CategoryPreviewObservation{
+			Identifier: queue[2].Identifier,
+			State:      clean.CategoryPreviewSkipped,
+			ReasonCode: clean.PreviewReasonProtected,
+		},
+	})
+	// Remaining stay waiting (selectable).
+
+	genBefore := model.generation
+	nav, cmd := model.handleKey("a")
+	if nav != eagerPreviewNavNone || cmd != nil {
+		t.Fatalf("a nav=%v cmd=%v", nav, cmd)
+	}
+	if model.generation != genBefore {
+		t.Fatal("bulk select restarted scan")
+	}
+	for _, row := range model.rows {
+		switch row.State {
+		case clean.CategoryPreviewEmpty, clean.CategoryPreviewSkipped,
+			clean.CategoryPreviewIncomplete, clean.CategoryPreviewFailed:
+			if row.Selected {
+				t.Fatalf("disabled %s %q selected by a", row.State, row.Identifier)
+			}
+		default:
+			if !row.Selected {
+				t.Fatalf("selectable %s %q not selected by a", row.State, row.Identifier)
+			}
+		}
+	}
+
+	nav, cmd = model.handleKey("x")
+	if nav != eagerPreviewNavNone || cmd != nil {
+		t.Fatalf("x nav=%v cmd=%v", nav, cmd)
+	}
+	if model.selectedCount() != 0 {
+		t.Fatalf("x left %d selected", model.selectedCount())
+	}
+	// Defaults are also cleared — exact selection, not additive CLI defaults.
+	for _, row := range model.rows {
+		if row.Selected {
+			t.Fatalf("default/opt-in still selected after x: %q", row.Identifier)
+		}
+	}
+	if model.generation != genBefore {
+		t.Fatal("bulk clear restarted scan")
+	}
+}
+
+func TestEagerCleanModelSelectionTotalsMeasuredAndPending(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	model.generation = 1
+	queue := clean.EagerPreviewQueue()
+	if len(queue) < 4 {
+		t.Fatal("need several rows")
+	}
+
+	// Clear then select a controlled set.
+	model.clearSelection()
+	model.rows[0].Selected = true // will complete with bytes
+	model.rows[1].Selected = true // will be partial
+	model.rows[2].Selected = true // remains waiting -> pending
+	model.rows[3].Selected = true // scanning -> pending
+
+	model.applyObservation(eagerCategoryObservationMsg{
+		generation: 1,
+		observation: clean.CategoryPreviewObservation{
+			Identifier:     queue[0].Identifier,
+			State:          clean.CategoryPreviewComplete,
+			CandidateCount: 1,
+			Bytes:          2048,
+		},
+	})
+	model.applyObservation(eagerCategoryObservationMsg{
+		generation: 1,
+		observation: clean.CategoryPreviewObservation{
+			Identifier:           queue[1].Identifier,
+			State:                clean.CategoryPreviewPartial,
+			CandidateCount:       1,
+			Bytes:                1024,
+			ExcludedSiblingCount: 2,
+		},
+	})
+	model.applyObservation(eagerCategoryObservationMsg{
+		generation: 1,
+		observation: clean.CategoryPreviewObservation{
+			Identifier: queue[3].Identifier,
+			State:      clean.CategoryPreviewScanning,
+		},
+	})
+
+	n, measured, pending := model.selectionTotals()
+	if n != 4 {
+		t.Fatalf("categories = %d, want 4", n)
+	}
+	if measured != 2048+1024 {
+		t.Fatalf("measured = %d, want 3072", measured)
+	}
+	if pending != 2 {
+		t.Fatalf("pending = %d, want 2", pending)
+	}
+	content := model.content()
+	if !strings.Contains(content, "Selected: 4 categories · 3 KB measured · 2 pending") {
+		t.Fatalf("pending summary missing:\n%s", content)
+	}
+
+	// Zero-byte complete contributes 0 bytes but stays in count.
+	model.clearSelection()
+	model.rows[0].Selected = true
+	model.rows[0].State = clean.CategoryPreviewComplete
+	model.rows[0].Bytes = 0
+	model.rows[0].CandidateCount = 1
+	n, measured, pending = model.selectionTotals()
+	if n != 1 || measured != 0 || pending != 0 {
+		t.Fatalf("zero-byte complete totals n=%d measured=%d pending=%d", n, measured, pending)
+	}
+	content = model.content()
+	if !strings.Contains(content, "Selected: 1 categories · 0 KB") {
+		t.Fatalf("collapsed summary missing:\n%s", content)
+	}
+	if strings.Contains(content, "pending") {
+		t.Fatalf("pending must collapse when selection is terminal:\n%s", content)
+	}
+
+	// Unselected complete bytes never enter the total.
+	model.rows[1].State = clean.CategoryPreviewComplete
+	model.rows[1].Bytes = 99999
+	model.rows[1].Selected = false
+	_, measured, _ = model.selectionTotals()
+	if measured != 0 {
+		t.Fatalf("unselected bytes leaked into total: %d", measured)
+	}
+}
+
+func TestEagerCleanModelConfirmationRequiresNonEmptySelection(t *testing.T) {
+	model := newEagerCleanModel(80, 24)
+	model.generation = 1
+	queue := clean.EagerPreviewQueue()
+	for i, summary := range queue {
+		state := clean.CategoryPreviewEmpty
+		count := 0
+		var bytes int64
+		if i == 0 {
+			state = clean.CategoryPreviewComplete
+			count = 1
+			bytes = 10
+		}
+		model.applyObservation(eagerCategoryObservationMsg{
+			generation: 1,
+			observation: clean.CategoryPreviewObservation{
+				Identifier:     summary.Identifier,
+				Label:          summary.Label,
+				State:          state,
+				CandidateCount: count,
+				Bytes:          bytes,
+			},
+		})
+	}
+	// First default complete remains selected -> confirmation ready.
+	if !model.confirmationEnabled() || model.selectedCount() != 1 {
+		t.Fatalf("want ready selection: enabled=%v count=%d", model.confirmationEnabled(), model.selectedCount())
+	}
+	model.clearSelection()
+	if model.confirmationEnabled() {
+		t.Fatal("empty selection must block confirmation")
+	}
+	if model.noWorkState() != clean.EagerPreviewNoWorkNeedSelection {
+		t.Fatalf("noWork = %q", model.noWorkState())
+	}
+}
+
+func TestEagerCleanModelSelectionNeverInvokesExecutionOrHistory(t *testing.T) {
+	original := runEagerPreviewFn
+	var scanStarts int
+	runEagerPreviewFn = func(ctx context.Context, opts clean.Options, emit func(clean.CategoryPreviewObservation)) error {
+		scanStarts++
+		if opts.HistoryRecorder != nil || opts.DetailedListDir != "" || opts.RecycleBinAdapter != nil {
+			t.Fatalf("side-effect options present: %#v", opts)
+		}
+		return nil
+	}
+	t.Cleanup(func() { runEagerPreviewFn = original })
+
+	model := newEagerCleanModel(100, 40)
+	// Drive selection without start(); keys must not call the preview seam.
+	_, cmd := model.handleKey("a")
+	if cmd != nil {
+		t.Fatal("select-all scheduled a command")
+	}
+	_, cmd = model.handleKey("x")
+	if cmd != nil {
+		t.Fatal("clear scheduled a command")
+	}
+	model.cursor = 0
+	_, cmd = model.handleKey(" ")
+	if cmd != nil {
+		t.Fatal("space scheduled a command")
+	}
+	if scanStarts != 0 {
+		t.Fatalf("selection started %d scans", scanStarts)
+	}
+	// No retry/rescan key: 'r' is a no-op with no command.
+	_, cmd = model.handleKey("r")
+	if cmd != nil {
+		t.Fatal("r must not rescan in the first slice")
+	}
+}
+
+func selectedFlags(model eagerCleanModel) []bool {
+	out := make([]bool, len(model.rows))
+	for i, row := range model.rows {
+		out[i] = row.Selected
+	}
+	return out
+}
+
+func equalBools(a, b []bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestEagerCleanModelNeverRendersSentinelPaths(t *testing.T) {
