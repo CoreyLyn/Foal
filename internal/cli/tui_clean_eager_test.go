@@ -33,6 +33,11 @@ func TestEagerCleanModelStartRendersFullQueueImmediately(t *testing.T) {
 	model := newEagerCleanModel(120, 40)
 	fixed := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	model.now = func() time.Time { return fixed }
+
+	original := buildEagerPreviewOptions
+	buildEagerPreviewOptions = func() clean.Options { return clean.Options{} }
+	t.Cleanup(func() { buildEagerPreviewOptions = original })
+
 	cmd := model.start()
 	if cmd == nil {
 		t.Fatal("start must return commands without another user action")
@@ -44,6 +49,9 @@ func TestEagerCleanModelStartRendersFullQueueImmediately(t *testing.T) {
 	content := model.content()
 	if !strings.Contains(content, "Scanning 1/") {
 		t.Fatalf("header missing Scanning n/N:\n%s", content)
+	}
+	if !strings.Contains(content, "Confirmation available after scan completes") {
+		t.Fatalf("header missing confirmation gate notice:\n%s", content)
 	}
 	for _, line := range strings.Split(content, "\n") {
 		if strings.Contains(line, "Scanning") && strings.Contains(line, "%") {
@@ -59,6 +67,9 @@ func TestEagerCleanModelStartRendersFullQueueImmediately(t *testing.T) {
 		if !strings.Contains(content, group) {
 			t.Fatalf("group %q missing:\n%s", group, content)
 		}
+	}
+	if !strings.Contains(content, "Focused:") {
+		t.Fatalf("focused detail panel missing:\n%s", content)
 	}
 }
 
@@ -125,35 +136,274 @@ func TestEagerCleanModelStreamsOneCategoryAtATime(t *testing.T) {
 	assertNoPath(t, content)
 }
 
-func TestEagerCleanModelEmptyAndConservativeDisabledRenderPathFree(t *testing.T) {
+func TestEagerCleanModelRendersEveryTerminalMarkerAndFocusedDiagnostic(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	model.generation = 1
+	model.startedAt = time.Now()
+	queue := clean.EagerPreviewQueue()
+	if len(queue) < 6 {
+		t.Fatalf("need at least 6 queue rows, got %d", len(queue))
+	}
+
+	cases := []struct {
+		state    clean.CategoryPreviewState
+		count    int
+		bytes    int64
+		excluded int
+		reason   string
+		note     string
+		marker   string
+		rowText  string
+		detail   string
+	}{
+		{clean.CategoryPreviewComplete, 1, 0, 0, "", "", "✓", "item(s)", "Complete · 1 item(s) · 0 KB"},
+		{clean.CategoryPreviewPartial, 2, 4096, 3, clean.PreviewReasonProtected, "shared safety", "!", "partial", "3 excluded"},
+		{clean.CategoryPreviewEmpty, 0, 0, 0, clean.PreviewReasonEmpty, "", "–", "empty", "Empty · no candidates found"},
+		{clean.CategoryPreviewSkipped, 0, 0, 1, clean.PreviewReasonProtected, "", "⊘", "skipped", "protected by Protection rules"},
+		{clean.CategoryPreviewIncomplete, 0, 0, 0, clean.PreviewReasonInspectionLimit, "", "!", "incomplete", "inspection limit exceeded"},
+		{clean.CategoryPreviewFailed, 0, 0, 0, clean.PreviewReasonInspectionFailed, "", "!", "failed", "measurement failed"},
+	}
+	for i, tc := range cases {
+		model.applyObservation(eagerCategoryObservationMsg{
+			generation: 1,
+			observation: clean.CategoryPreviewObservation{
+				Identifier:           queue[i].Identifier,
+				Label:                queue[i].Label,
+				State:                tc.state,
+				CandidateCount:       tc.count,
+				Bytes:                tc.bytes,
+				ExcludedSiblingCount: tc.excluded,
+				ReasonCode:           tc.reason,
+				SafetyNote:           tc.note,
+			},
+		})
+	}
+
+	// Focus each terminal row and assert marker + contextual panel.
+	for i, tc := range cases {
+		model.cursor = i
+		content := model.content()
+		if !strings.Contains(content, tc.marker) {
+			t.Fatalf("marker %q missing for %s:\n%s", tc.marker, tc.state, content)
+		}
+		if !strings.Contains(content, tc.rowText) {
+			t.Fatalf("row text %q missing for %s:\n%s", tc.rowText, tc.state, content)
+		}
+		if !strings.Contains(content, "Focused: "+queue[i].Label) {
+			t.Fatalf("focused label missing for %s:\n%s", tc.state, content)
+		}
+		if !strings.Contains(content, tc.detail) {
+			t.Fatalf("detail %q missing for %s:\n%s", tc.detail, tc.state, content)
+		}
+		if tc.note != "" && !strings.Contains(content, "Safety: "+tc.note) {
+			t.Fatalf("safety note missing for %s:\n%s", tc.state, content)
+		}
+		assertNoPath(t, content)
+		assertNoSentinelLeak(t, content)
+	}
+
+	if model.confirmationEnabled() {
+		t.Fatal("confirmation must stay disabled while categories remain non-terminal")
+	}
+}
+
+func TestEagerCleanModelDisabledRowsRemainFocusable(t *testing.T) {
 	model := newEagerCleanModel(100, 40)
 	model.generation = 1
 	queue := clean.EagerPreviewQueue()
-
 	model.applyObservation(eagerCategoryObservationMsg{
 		generation: 1,
 		observation: clean.CategoryPreviewObservation{
-			Identifier: queue[0].Identifier,
-			Label:      queue[0].Label,
-			State:      clean.CategoryPreviewEmpty,
+			Identifier:           queue[0].Identifier,
+			Label:                queue[0].Label,
+			State:                clean.CategoryPreviewSkipped,
+			ReasonCode:           clean.PreviewReasonProtected,
+			ExcludedSiblingCount: 2,
 		},
 	})
-	model.applyObservation(eagerCategoryObservationMsg{
-		generation: 1,
-		observation: clean.CategoryPreviewObservation{
-			Identifier: queue[1].Identifier,
-			Label:      queue[1].Label,
-			State:      clean.CategoryPreviewFailed,
-		},
-	})
+	model.cursor = 0
 	content := model.content()
-	if !strings.Contains(content, "–") || !strings.Contains(content, "empty") {
-		t.Fatalf("empty render:\n%s", content)
+	if !strings.Contains(content, "Focused: "+queue[0].Label) {
+		t.Fatalf("disabled row not focused:\n%s", content)
 	}
-	if !strings.Contains(content, "!") || !strings.Contains(content, "unavailable") {
-		t.Fatalf("conservative disabled render:\n%s", content)
+	if !strings.Contains(content, "Skipped") || !strings.Contains(content, "2 excluded") {
+		t.Fatalf("disabled diagnostic missing:\n%s", content)
+	}
+	// Cursor can still move onto later waiting rows.
+	nav, _ := model.handleKey("down")
+	if nav != eagerPreviewNavNone || model.cursor != 1 {
+		t.Fatalf("nav=%v cursor=%d", nav, model.cursor)
+	}
+	content = model.content()
+	if !strings.Contains(content, "Focused: "+queue[1].Label) {
+		t.Fatalf("cursor did not follow to next row:\n%s", content)
+	}
+}
+
+func TestEagerCleanModelConfirmationRequiresAllTerminal(t *testing.T) {
+	model := newEagerCleanModel(80, 24)
+	model.generation = 1
+	queue := clean.EagerPreviewQueue()
+	if model.confirmationEnabled() || model.allCategoriesTerminal() {
+		t.Fatal("initial waiting queue must not enable confirmation")
+	}
+	for i, summary := range queue {
+		state := clean.CategoryPreviewEmpty
+		if i == 0 {
+			state = clean.CategoryPreviewComplete
+		}
+		model.applyObservation(eagerCategoryObservationMsg{
+			generation: 1,
+			observation: clean.CategoryPreviewObservation{
+				Identifier:     summary.Identifier,
+				Label:          summary.Label,
+				State:          state,
+				CandidateCount: map[bool]int{true: 1, false: 0}[i == 0],
+				Bytes:          map[bool]int64{true: 10, false: 0}[i == 0],
+			},
+		})
+	}
+	if !model.allCategoriesTerminal() || !model.confirmationEnabled() {
+		t.Fatal("full terminal queue should enable confirmation gate")
+	}
+	// Leave one non-terminal.
+	model.rows[len(model.rows)-1].State = clean.CategoryPreviewScanning
+	if model.confirmationEnabled() {
+		t.Fatal("scanning row must block confirmation")
+	}
+}
+
+func TestEagerCleanModelNoWorkStatesRemainDistinct(t *testing.T) {
+	queue := clean.EagerPreviewQueue()
+
+	allEmpty := newEagerCleanModel(80, 24)
+	allEmpty.generation = 1
+	for _, summary := range queue {
+		allEmpty.applyObservation(eagerCategoryObservationMsg{
+			generation: 1,
+			observation: clean.CategoryPreviewObservation{
+				Identifier: summary.Identifier,
+				Label:      summary.Label,
+				State:      clean.CategoryPreviewEmpty,
+			},
+		})
+	}
+	if allEmpty.noWorkState() != clean.EagerPreviewNoWorkAllEmpty {
+		t.Fatalf("all empty = %q", allEmpty.noWorkState())
+	}
+	if !strings.Contains(allEmpty.content(), "Nothing to clean.") {
+		t.Fatalf("all-empty message missing:\n%s", allEmpty.content())
+	}
+
+	diagnostics := newEagerCleanModel(80, 24)
+	diagnostics.generation = 1
+	for i, summary := range queue {
+		state := clean.CategoryPreviewEmpty
+		if i == 0 {
+			state = clean.CategoryPreviewSkipped
+		}
+		if i == 1 {
+			state = clean.CategoryPreviewFailed
+		}
+		diagnostics.applyObservation(eagerCategoryObservationMsg{
+			generation: 1,
+			observation: clean.CategoryPreviewObservation{
+				Identifier: summary.Identifier,
+				Label:      summary.Label,
+				State:      state,
+			},
+		})
+	}
+	if diagnostics.noWorkState() != clean.EagerPreviewNoWorkDiagnostics {
+		t.Fatalf("diagnostics = %q", diagnostics.noWorkState())
+	}
+	if !strings.Contains(diagnostics.content(), "No selectable cleanup found") {
+		t.Fatalf("diagnostics message missing:\n%s", diagnostics.content())
+	}
+
+	needSelection := newEagerCleanModel(80, 24)
+	needSelection.generation = 1
+	for i, summary := range queue {
+		state := clean.CategoryPreviewEmpty
+		count := 0
+		var bytes int64
+		if i == 0 {
+			state = clean.CategoryPreviewComplete
+			count = 1
+			bytes = 4
+		}
+		needSelection.applyObservation(eagerCategoryObservationMsg{
+			generation: 1,
+			observation: clean.CategoryPreviewObservation{
+				Identifier:     summary.Identifier,
+				Label:          summary.Label,
+				State:          state,
+				CandidateCount: count,
+				Bytes:          bytes,
+			},
+		})
+	}
+	if needSelection.noWorkState() != clean.EagerPreviewNoWorkNeedSelection {
+		t.Fatalf("need selection = %q", needSelection.noWorkState())
+	}
+}
+
+func TestEagerCleanModelUnavailableFromProtectionFailure(t *testing.T) {
+	original := buildEagerPreviewOptions
+	buildEagerPreviewOptions = func() clean.Options {
+		return clean.Options{
+			ProtectionLoadError: &clean.StructuredIssue{
+				Code:    clean.PreviewReasonProtectionConfigFailed,
+				Message: `open C:\Users\corey\AppData\Roaming\Foal\protection.txt: access denied`,
+				Path:    `C:\Users\corey\AppData\Roaming\Foal\protection.txt`,
+			},
+		}
+	}
+	t.Cleanup(func() { buildEagerPreviewOptions = original })
+
+	model := newEagerCleanModel(100, 40)
+	cmd := model.start()
+	if cmd != nil {
+		t.Fatal("unavailable start must not schedule category scan commands")
+	}
+	if model.unavailable == nil || model.unavailable.Code != clean.PreviewReasonProtectionConfigFailed {
+		t.Fatalf("unavailable = %#v", model.unavailable)
+	}
+	if len(model.rows) != 0 {
+		t.Fatalf("unavailable must clear category queue, rows=%d", len(model.rows))
+	}
+	if model.confirmationEnabled() {
+		t.Fatal("unavailable must not enable confirmation")
+	}
+	content := model.content()
+	if !strings.Contains(content, "Clean unavailable") {
+		t.Fatalf("title missing:\n%s", content)
+	}
+	if !strings.Contains(content, clean.PreviewReasonProtectionConfigFailed) {
+		t.Fatalf("stable code missing:\n%s", content)
 	}
 	assertNoPath(t, content)
+	assertNoSentinelLeak(t, content)
+
+	nav, _ := model.handleKey("enter")
+	if nav != eagerPreviewNavMenu {
+		t.Fatalf("enter nav = %v", nav)
+	}
+	model.nav = eagerPreviewNavNone
+	nav, _ = model.handleKey("esc")
+	if nav != eagerPreviewNavMenu {
+		t.Fatalf("esc nav = %v", nav)
+	}
+	model.nav = eagerPreviewNavNone
+	nav, _ = model.handleKey("b")
+	if nav != eagerPreviewNavMenu {
+		t.Fatalf("b nav = %v", nav)
+	}
+	model.nav = eagerPreviewNavNone
+	nav, _ = model.handleKey("q")
+	if nav != eagerPreviewNavQuit {
+		t.Fatalf("q nav = %v", nav)
+	}
 }
 
 func TestEagerCleanModelNavigationDoesNotRestartQueue(t *testing.T) {
@@ -337,7 +587,6 @@ func TestEagerPreviewStreamUsesSharedSeamWithoutSideEffects(t *testing.T) {
 			Eligibility:    first.Eligibility,
 			State:          clean.CategoryPreviewScanning,
 		})
-		// Shared projection keeps resolution paths out of the stream.
 		emit(clean.ProjectCategoryPreview(clean.CategoryResolution{
 			Identifier:  first.Identifier,
 			Eligibility: first.Eligibility,
@@ -423,6 +672,9 @@ func TestEagerPreviewFinishedAfterFullQueue(t *testing.T) {
 			if !strings.Contains(content, "Scan complete") {
 				t.Fatalf("content:\n%s", content)
 			}
+			if !strings.Contains(content, "Nothing to clean.") {
+				t.Fatalf("all-empty finished message missing:\n%s", content)
+			}
 			assertNoPath(t, content)
 			return
 		default:
@@ -449,7 +701,6 @@ func TestEagerPreviewCancelStopsFurtherMutations(t *testing.T) {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		// Should not be applied after cancel even if emitted.
 		emit(clean.CategoryPreviewObservation{
 			Identifier:     first.Identifier,
 			Label:          first.Label,
@@ -511,11 +762,53 @@ func TestEagerPreviewCancelStopsFurtherMutations(t *testing.T) {
 	}
 }
 
+func TestEagerCleanModelNeverRendersSentinelPaths(t *testing.T) {
+	model := newEagerCleanModel(100, 40)
+	model.generation = 1
+	queue := clean.EagerPreviewQueue()
+	model.applyObservation(eagerCategoryObservationMsg{
+		generation: 1,
+		observation: clean.ProjectCategoryPreview(clean.CategoryResolution{
+			Identifier:  queue[0].Identifier,
+			Eligibility: queue[0].Eligibility,
+			Candidates: []clean.CandidatePreview{{
+				Path:  `C:\Users\private\sentinel-candidate`,
+				Bytes: 12,
+			}},
+			SuppressedProtectionPaths: []string{`C:\Users\private\sentinel-protected`},
+			Diagnostics: []clean.StructuredIssue{{
+				Code:    clean.PreviewReasonInspectionFailed,
+				Message: `open C:\Users\private\sentinel-error: boom`,
+				Path:    `C:\Users\private\sentinel-error`,
+			}},
+		}),
+	})
+	model.cursor = 0
+	content := model.content()
+	assertNoPath(t, content)
+	assertNoSentinelLeak(t, content)
+	if !strings.Contains(content, "partial") && !strings.Contains(content, "Partial") {
+		t.Fatalf("expected partial projection:\n%s", content)
+	}
+}
+
 func assertNoPath(t *testing.T, content string) {
 	t.Helper()
 	for _, needle := range []string{`C:\`, `\\?\`, "/Users/", "AppData\\Local"} {
 		if strings.Contains(content, needle) {
 			t.Fatalf("path-like content %q in:\n%s", needle, content)
+		}
+	}
+}
+
+func assertNoSentinelLeak(t *testing.T, content string) {
+	t.Helper()
+	for _, needle := range []string{
+		"sentinel-candidate", "sentinel-protected", "sentinel-error",
+		"protection.txt", "private\\",
+	} {
+		if strings.Contains(content, needle) {
+			t.Fatalf("sentinel %q leaked:\n%s", needle, content)
 		}
 	}
 }
