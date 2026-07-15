@@ -200,6 +200,9 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 		for _, opportunity := range discovery.Opportunities {
 			opportunity.Category = normalizedOpportunityCategory(opportunity.Category)
 			if opts.Validator.IsUserProtected(opportunity.Path) {
+				// Retain path-free exclusion evidence for eager preview; the
+				// protected path itself never leaves ProjectCategoryPreview.
+				res.suppressedProtectionPaths = append(res.suppressedProtectionPaths, opportunity.Path)
 				continue
 			}
 			candidate := OptInCandidate{
@@ -218,6 +221,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 		for _, incomplete := range discovery.Incomplete {
 			incomplete.Category = normalizedOpportunityCategory(incomplete.Category)
 			if opts.Validator.IsUserProtected(incomplete.Path) {
+				res.suppressedProtectionPaths = append(res.suppressedProtectionPaths, incomplete.Path)
 				continue
 			}
 			res.diagnostics = append(res.diagnostics, incomplete.Reason)
