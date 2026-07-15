@@ -136,6 +136,11 @@ const playwrightBrowsersOptInImpactNotice = "Opt-in Playwright browser cleanup r
 // does not stop Node, Python, Chrome, or Firefox processes.
 const puppeteerBrowsersOptInImpactNotice = "Opt-in Puppeteer browser cleanup reclaims re-downloadable browser installations. Offline workflows may need those browsers again, and active automation can cause cleanup failure. Foal does not stop Node, Python, Chrome, or Firefox processes."
 
+// electronCacheOptInImpactNotice is shown when electron-cache is an Opt-in
+// candidate. Cached Electron binaries may need to be downloaded again; offline
+// and custom-cache workflows may be affected. Foal does not stop Electron/Node.
+const electronCacheOptInImpactNotice = "Opt-in Electron cache cleanup may require re-downloading cached Electron binaries. Offline and custom-cache workflows may be affected."
+
 // applicationCacheCachedExtensionVSIXsImpactNotice is shown when an Application
 // cache CachedExtensionVSIXs root is observed or selected. Installed extensions
 // and settings are never selected for any editor category.
@@ -224,7 +229,7 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasUVOptIn, hasBunOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasApplicationCacheVSIX bool
+	var hasUVOptIn, hasBunOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasApplicationCacheVSIX bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case DevCacheCategoryUV:
@@ -235,6 +240,8 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			hasPlaywrightOptIn = true
 		case DevCacheCategoryPuppeteerBrowsers:
 			hasPuppeteerOptIn = true
+		case DevCacheCategoryElectron:
+			hasElectronOptIn = true
 		default:
 			if isApplicationCacheCategory(candidate.Category) && isCachedExtensionVSIXsPath(candidate.Path) {
 				hasApplicationCacheVSIX = true
@@ -269,6 +276,12 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
 			Message: puppeteerBrowsersOptInImpactNotice,
+		})
+	}
+	if hasElectronOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: electronCacheOptInImpactNotice,
 		})
 	}
 	if hasApplicationCacheVSIX {

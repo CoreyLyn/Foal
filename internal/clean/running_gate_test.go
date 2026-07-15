@@ -7,7 +7,7 @@ import (
 )
 
 func TestDevCacheGateTier(t *testing.T) {
-	for _, c := range []string{DevCacheCategoryNPM, DevCacheCategoryPip, DevCacheCategoryCorepack, DevCacheCategoryPlaywright} {
+	for _, c := range []string{DevCacheCategoryNPM, DevCacheCategoryPip, DevCacheCategoryCorepack, DevCacheCategoryPlaywright, DevCacheCategoryElectron} {
 		if got := devCacheGateTier(c); got != runningGateTierNone {
 			t.Errorf("devCacheGateTier(%q) = %v, want none", c, got)
 		}
@@ -28,6 +28,9 @@ func TestPlanNeedsDistinctiveProcessDetection(t *testing.T) {
 	}
 	if planNeedsDistinctiveProcessDetection(map[string]bool{DevCacheCategoryPlaywright: true}) {
 		t.Fatal("playwright-browsers shared-runtime must not trigger process detection")
+	}
+	if planNeedsDistinctiveProcessDetection(map[string]bool{DevCacheCategoryElectron: true}) {
+		t.Fatal("electron-cache shared-runtime must not trigger process detection")
 	}
 	if !planNeedsDistinctiveProcessDetection(map[string]bool{DevCacheCategoryGo: true}) {
 		t.Fatal("go-cache should need distinctive-process detection")

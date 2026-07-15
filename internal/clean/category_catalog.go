@@ -377,6 +377,14 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		discoverPuppeteerBrowserChildren,
 		nil,
 	),
+	// Electron download cache: whole-root under env/default only. Shared-runtime
+	// (Node/Electron hosts are not attributable). No Review suggestion probe —
+	// Foal owns Recycle Bin reclaim and does not invent an Electron cleanup command.
+	developerCacheEntry(
+		categoryDefinition(DevCacheCategoryElectron, "Electron cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		resolveElectronCachePaths,
+		nil,
+	),
 	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable)},
 }
 

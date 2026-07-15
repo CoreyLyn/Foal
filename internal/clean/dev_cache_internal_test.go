@@ -501,6 +501,74 @@ func TestDevCachePathResolution(t *testing.T) {
 	})
 }
 
+func TestResolveElectronCachePaths(t *testing.T) {
+	t.Run("env-wins: electron uses non-empty electron_config_cache only when set", func(t *testing.T) {
+		deps := devCachePathDependencies{
+			lookupEnv: func(key string) (string, bool) {
+				if key == "electron_config_cache" {
+					return `C:\custom\electron-cache`, true
+				}
+				if key == "LOCALAPPDATA" {
+					return `C:\Users\test\AppData\Local`, true
+				}
+				return "", false
+			},
+			joinPath: func(parts ...string) string {
+				return strings.Join(parts, `\`)
+			},
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryElectron, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path, got %d", len(paths))
+		}
+		if paths[0] != `C:\custom\electron-cache` {
+			t.Errorf("expected env path, got %q", paths[0])
+		}
+
+		// Whitespace-only electron_config_cache falls through to Windows default.
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "electron_config_cache" {
+				return "   ", true
+			}
+			if key == "LOCALAPPDATA" {
+				return `C:\Users\test\AppData\Local`, true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryElectron, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 default path after blank electron_config_cache, got %d", len(paths))
+		}
+		if paths[0] != `C:\Users\test\AppData\Local\electron\Cache` {
+			t.Errorf("expected default path, got %q", paths[0])
+		}
+
+		// Env not set: Local AppData electron\Cache.
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "LOCALAPPDATA" {
+				return `C:\Users\test\AppData\Local`, true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryElectron, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path, got %d", len(paths))
+		}
+		if paths[0] != `C:\Users\test\AppData\Local\electron\Cache` {
+			t.Errorf("expected default path, got %q", paths[0])
+		}
+
+		// Missing LOCALAPPDATA: no candidate root.
+		deps.lookupEnv = func(key string) (string, bool) {
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryElectron, deps)
+		if len(paths) != 0 {
+			t.Fatalf("expected 0 paths when no resolution, got %d", len(paths))
+		}
+	})
+}
+
 func TestResolvePlaywrightBrowserPaths(t *testing.T) {
 	baseDeps := devCachePathDependencies{
 		lookupEnv: func(string) (string, bool) { return "", false },

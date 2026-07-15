@@ -30,6 +30,7 @@ const (
 	DevCacheCategoryBun                 = "bun-cache"
 	DevCacheCategoryPlaywright          = "playwright-browsers"
 	DevCacheCategoryPuppeteerBrowsers   = "puppeteer-browsers"
+	DevCacheCategoryElectron            = "electron-cache"
 	DevCacheCategoryAll                 = "dev-caches"
 )
 
