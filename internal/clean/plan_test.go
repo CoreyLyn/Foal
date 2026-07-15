@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
+	"github.com/CoreyLyn/Foal/internal/history"
 )
 
 func TestCompileAdditiveCategoryPlanIncludesDefaultsAndOptIns(t *testing.T) {
@@ -260,6 +262,107 @@ func TestResolveCategoryRejectsNonScannableIdentifiers(t *testing.T) {
 			t.Fatalf("ResolveCategory(%q) error = nil", id)
 		}
 	}
+}
+
+func TestExecuteExactPlanRecordsTUIProvenanceWithoutPreviewPaths(t *testing.T) {
+	root := t.TempDir()
+	defaultCandidate := filepath.Join(root, "default.tmp")
+	optInPath := filepath.Join(root, "crash")
+	if err := os.WriteFile(defaultCandidate, []byte("default"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(optInPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(optInPath, "dump.dmp"), []byte("dmp!"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Preview measures both default and crash_dumps; execute freezes only crash_dumps.
+	previewCalls := 0
+	discover := func(context.Context) clean.OpportunityDiscoveryResult {
+		previewCalls++
+		return clean.OpportunityDiscoveryResult{
+			Opportunities: []clean.Opportunity{{
+				Category: clean.OpportunityCategoryCrashDumps,
+				Path:     optInPath,
+				Bytes:    4,
+			}},
+		}
+	}
+	previewOpts := clean.Options{
+		Rules: []clean.Rule{{
+			ID:             clean.DefaultCategoryFoalOwnedTempSandboxes,
+			DefaultEnabled: true,
+			CandidatePaths: []string{defaultCandidate},
+		}},
+		DiscoverOpportunities: discover,
+		OptIn:                 []string{clean.OpportunityCategoryCrashDumps},
+	}
+	preview := clean.DryRun(context.Background(), previewOpts)
+	if len(preview.Candidates) != 1 || len(preview.OptInCandidates) != 1 {
+		t.Fatalf("preview = candidates=%#v opt-in=%#v", preview.Candidates, preview.OptInCandidates)
+	}
+
+	// Fresh discovery can differ from preview (empty this time).
+	discoverExecute := func(context.Context) clean.OpportunityDiscoveryResult {
+		return clean.OpportunityDiscoveryResult{}
+	}
+	plan, err := clean.CompileExactCategoryPlan([]string{clean.OpportunityCategoryCrashDumps})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingHistoryRecorder{}
+	adapter := &recordingRecycleBinAdapter{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Plan:              &plan,
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   recorder,
+		CommandParameters: history.CommandParameters{
+			Command:            "clean",
+			Surface:            "tui",
+			SelectionMode:      string(clean.SelectionModeExact),
+			SelectedCategories: append([]string(nil), plan.Categories...),
+		},
+		Rules: []clean.Rule{{
+			ID:             clean.DefaultCategoryFoalOwnedTempSandboxes,
+			DefaultEnabled: true,
+			CandidatePaths: []string{defaultCandidate},
+		}},
+		DiscoverOpportunities: discoverExecute,
+	})
+
+	if result.Totals.DeletedCount != 0 || len(adapter.paths) != 0 {
+		t.Fatalf("stale preview executed: totals=%#v paths=%v", result.Totals, adapter.paths)
+	}
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("sessions = %#v", recorder.sessions)
+	}
+	cmd := recorder.sessions[0].Command
+	if cmd.Surface != "tui" || cmd.SelectionMode != "exact" {
+		t.Fatalf("command = %#v", cmd)
+	}
+	if len(cmd.Args) != 0 {
+		t.Fatalf("synthetic args = %#v", cmd.Args)
+	}
+	if len(cmd.SelectedCategories) != 1 || cmd.SelectedCategories[0] != clean.OpportunityCategoryCrashDumps {
+		t.Fatalf("selected_categories = %#v", cmd.SelectedCategories)
+	}
+	for _, id := range cmd.SelectedCategories {
+		if id == clean.DefaultCategoryFoalOwnedTempSandboxes {
+			t.Fatal("omitted default recorded in provenance")
+		}
+		if strings.ContainsAny(id, `/\`) || id == optInPath || id == defaultCandidate {
+			t.Fatalf("path leaked into provenance: %q", id)
+		}
+	}
+	// Default candidate path must not appear as authorized execution.
+	for _, path := range adapter.paths {
+		if path == defaultCandidate {
+			t.Fatal("default candidate cleaned under exact omit")
+		}
+	}
+	_ = previewCalls
 }
 
 func TestExecuteExactPlanOmitsDefaultCandidates(t *testing.T) {
