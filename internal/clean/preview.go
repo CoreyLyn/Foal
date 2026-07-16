@@ -56,7 +56,24 @@ type RecycleBinCapacityProbe func(path string) (RecycleBinVolumeConfig, error)
 // DevCachePathResolver resolves paths for a developer tool cache.
 // The category is one of the DevCacheCategory* constants.
 // Returns empty slice if no paths can be resolved from env vars/defaults.
+// Prefer DevCacheRootScopeResolver when product-scoped application identities
+// must be associated with roots; path-only resolution keeps Application empty.
 type DevCachePathResolver func(category string) []string
+
+// DevCacheRootScope is one resolved developer-cache root for a category.
+// Path is required. Application optionally associates the root with one logical
+// application identity for product-scoped idle-before-and-after gating. Empty
+// Application keeps category-wide distinctive-process (or shared-runtime) policy.
+// Public Clean results remain category-based; product identity is internal only.
+type DevCacheRootScope struct {
+	Path        string
+	Application string
+}
+
+// DevCacheRootScopeResolver injects product-aware root scopes for tests and
+// future catalog-owned multi-product categories. When non-nil, it replaces
+// DevCachePathResolver for root discovery on that run.
+type DevCacheRootScopeResolver func(category string) []DevCacheRootScope
 
 // DevCacheChildDiscoverer is defined in structured_dev_cache.go.
 
@@ -106,6 +123,9 @@ type Options struct {
 	Plan                    *CategoryPlan
 	RecycleBinCapacityProbe RecycleBinCapacityProbe
 	DevCachePathResolver    DevCachePathResolver
+	// DevCacheRootScopeResolver injects product-scoped root scopes. When set,
+	// it takes precedence over DevCachePathResolver. Production leaves it nil.
+	DevCacheRootScopeResolver DevCacheRootScopeResolver
 	// DevCacheChildDiscoverer overrides catalog-owned structured child discovery
 	// for tests. Production leaves it nil so categories use private catalog policy.
 	DevCacheChildDiscoverer DevCacheChildDiscoverer

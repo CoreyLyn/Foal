@@ -3,6 +3,7 @@ package clean
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // runningGate centralizes running-application gating: the tier table (which
@@ -87,12 +88,22 @@ type devCacheGateOutcome struct {
 	// or missing required state on the pre- or post-check. nil when proceed is
 	// true or when measurement failed without a gate skip.
 	skipReason *StructuredIssue
+	// postStates is the post-measurement detector snapshot when a post re-check
+	// ran. Callers may project product-scoped identities from it; nil when the
+	// post re-check did not run.
+	postStates []RunningApplicationState
 }
 
 // appsIdleForDevCache reports whether every application tied to the category is
 // idle in states. Missing state, running, and unknown all fail closed.
 func appsIdleForDevCache(category, path string, states []RunningApplicationState) (bool, *StructuredIssue) {
-	apps := devCacheCategoryToApplications(category)
+	return appsIdleForApplications(devCacheCategoryToApplications(category), path, category, states)
+}
+
+// appsIdleForApplications reports whether every listed application is idle in
+// states. Missing state, running, and unknown all fail closed. Used by both
+// category-wide distinctive-process gates and product-scoped root gates.
+func appsIdleForApplications(apps []string, path, category string, states []RunningApplicationState) (bool, *StructuredIssue) {
 	for _, app := range apps {
 		state, ok := runningApplicationStateFor(states, app)
 		if !ok || state.State == RunningApplicationStateRunning || state.State == RunningApplicationStateUnknown {
@@ -103,8 +114,24 @@ func appsIdleForDevCache(category, path string, states []RunningApplicationState
 	return true, nil
 }
 
+// gateApplicationsForDevCacheScope selects the applications and whether
+// idle-before-and-after gating applies for one resolved root scope.
+//
+// Product-scoped roots (non-empty Application) always use before/after for that
+// single identity. Unscoped roots keep category-wide distinctive-process policy
+// or shared-runtime none-tier behavior.
+func gateApplicationsForDevCacheScope(category string, scope DevCacheRootScope) (apps []string, useGate bool) {
+	if app := strings.TrimSpace(scope.Application); app != "" {
+		return []string{app}, true
+	}
+	if devCacheGateTier(category) == runningGateTierBeforeAfter {
+		return devCacheCategoryToApplications(category), true
+	}
+	return nil, false
+}
+
 // gateDevCacheRoot applies the developer-cache running-application gate around
-// an injected measurement for one resolved root.
+// an injected measurement for one resolved root using category-wide applications.
 //
 // None-tier categories measure immediately with no process check.
 // Before/after-tier categories require all related applications idle in
@@ -118,6 +145,24 @@ func (g runningGate) gateDevCacheRoot(
 	measure func() (int64, error),
 ) devCacheGateOutcome {
 	if devCacheGateTier(category) == runningGateTierNone {
+		return g.gateDevCacheApplications(ctx, category, path, nil, false, preStates, measure)
+	}
+	return g.gateDevCacheApplications(ctx, category, path, devCacheCategoryToApplications(category), true, preStates, measure)
+}
+
+// gateDevCacheApplications applies pre/measure/post gating for an explicit
+// application list. When useGate is false the measurement runs immediately.
+// postStates are returned when a post re-check ran so callers can project the
+// latest authoritative observation for product-scoped identities.
+func (g runningGate) gateDevCacheApplications(
+	ctx context.Context,
+	category, path string,
+	apps []string,
+	useGate bool,
+	preStates []RunningApplicationState,
+	measure func() (int64, error),
+) devCacheGateOutcome {
+	if !useGate {
 		bytes, err := measure()
 		if err != nil {
 			return devCacheGateOutcome{measureErr: err}
@@ -125,7 +170,7 @@ func (g runningGate) gateDevCacheRoot(
 		return devCacheGateOutcome{proceed: true, bytes: bytes}
 	}
 
-	if idle, reason := appsIdleForDevCache(category, path, preStates); !idle {
+	if idle, reason := appsIdleForApplications(apps, path, category, preStates); !idle {
 		return devCacheGateOutcome{skipReason: reason}
 	}
 
@@ -140,11 +185,11 @@ func (g runningGate) gateDevCacheRoot(
 	if g.detect != nil {
 		postStates = g.detect(ctx)
 	}
-	if idle, reason := appsIdleForDevCache(category, path, postStates); !idle {
+	if idle, reason := appsIdleForApplications(apps, path, category, postStates); !idle {
 		// Discard the successful measurement: no candidate bytes.
-		return devCacheGateOutcome{skipReason: reason}
+		return devCacheGateOutcome{skipReason: reason, postStates: postStates}
 	}
-	return devCacheGateOutcome{proceed: true, bytes: bytes}
+	return devCacheGateOutcome{proceed: true, bytes: bytes, postStates: postStates}
 }
 
 // devToolRunningSkipIssue builds the skip reason for a dev cache gated out by a

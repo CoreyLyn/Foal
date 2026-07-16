@@ -95,35 +95,40 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 	hasDetector := opts.DetectRunningApplications != nil
 	// Distinctive-process developer caches need a pre-measurement snapshot and
 	// a post-measurement re-check. Shared-runtime selections alone must not
-	// trigger developer-tool detection (ADR-0008 attribution policy).
+	// trigger developer-tool detection (ADR-0008 attribution policy). Product-
+	// scoped roots may also require detection; load lazily on first gated root.
 	needsDistinctiveDetection := hasDetector && planNeedsDistinctiveProcessDetection(plan)
 	var devCachePreStates []RunningApplicationState
-	if needsDistinctiveDetection {
-		// Pre-states are used only for gating; developer-cache gates keep
-		// current reporting policy and do not project shared-runtime or
-		// unrelated tool states into RunningApplications.
-		devCachePreStates = opts.DetectRunningApplications(ctx)
-	}
+	devCacheDetectLoaded := false
 	devCacheGate := runningGate{}
-	if needsDistinctiveDetection {
+	ensureDevCacheDetection := func() {
+		if !hasDetector || devCacheDetectLoaded {
+			return
+		}
+		// Pre-states gate distinctive and product-scoped roots. Category-wide
+		// distinctive gates keep current reporting policy (no projection into
+		// RunningApplications). Product-scoped gates project only their identities.
+		devCachePreStates = opts.DetectRunningApplications(ctx)
 		devCacheGate.detect = opts.DetectRunningApplications
+		devCacheDetectLoaded = true
+	}
+	if needsDistinctiveDetection {
+		ensureDevCacheDetection()
 	}
 
-	resolveDevCache := opts.DevCachePathResolver
-	if resolveDevCache == nil {
-		resolveDevCache = ResolveDevCachePaths
-	}
-
-	// Developer-tool caches. Each root is gated and measured independently so
-	// discarding one root never authorizes or double-counts another. Categories
-	// with a structured child discovery policy (or injected structured mode)
+	// Developer-tool caches. Each root scope is gated and measured independently
+	// so discarding one scope never authorizes or double-counts another.
+	// Categories with structured child discovery (or injected structured mode)
 	// never treat the root as a candidate; each surviving child is independent.
+	// Product-scoped scopes (non-empty Application) apply idle-before-and-after
+	// only for that logical application identity.
 	for _, category := range developerCacheCategoryIDs() {
 		if !plan[category] {
 			continue
 		}
-		paths := normalizeAndDeduplicatePaths(resolveDevCache(category))
-		for _, path := range paths {
+		scopes := resolveDevCacheRootScopes(opts, category)
+		for _, scope := range scopes {
+			path := scope.Path
 			if path == "" {
 				continue
 			}
@@ -137,20 +142,35 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 				continue
 			}
 
+			apps, useGate := gateApplicationsForDevCacheScope(category, scope)
+			productScoped := scope.Application != ""
+			if useGate && hasDetector {
+				ensureDevCacheDetection()
+			}
+			// Product-scoped and category-wide distinctive gates require a loaded
+			// detector snapshot when a detector is present. Without a detector,
+			// shared-runtime and test paths measure directly (fail open only for
+			// process state; protection/validation still apply).
+			applyGate := useGate && hasDetector && devCacheDetectLoaded
+
 			children, structured := resolveDevCacheChildCandidates(ctx, opts, category, path)
 			if structured {
-				resolveStructuredDevCacheRoot(ctx, opts, &res, category, path, children, needsDistinctiveDetection, devCacheGate, devCachePreStates)
+				resolveStructuredDevCacheRoot(ctx, opts, &res, category, scope, children, apps, applyGate, productScoped, devCacheGate, devCachePreStates)
 				continue
 			}
 
 			// Whole-root mode: the resolved root is the single candidate.
-			// Without a detector, tests and shared-runtime-only paths measure
-			// directly. Distinctive-process categories with a detector always
-			// go through pre/measure/post so Dry-run and Execute share results.
-			if needsDistinctiveDetection && devCacheGateTier(category) == runningGateTierBeforeAfter {
-				outcome := devCacheGate.gateDevCacheRoot(ctx, category, path, devCachePreStates, func() (int64, error) {
+			if applyGate {
+				if productScoped {
+					// Project pre observation for product identity (scoped, latest).
+					recordProductScopedRunningStates(&res, apps, devCachePreStates)
+				}
+				outcome := devCacheGate.gateDevCacheApplications(ctx, category, path, apps, true, devCachePreStates, func() (int64, error) {
 					return measureBytes(ctx, path)
 				})
+				if productScoped && len(outcome.postStates) > 0 {
+					recordProductScopedRunningStates(&res, apps, outcome.postStates)
+				}
 				if outcome.measureErr != nil {
 					if ctx.Err() != nil {
 						res.diagnostics = append(res.diagnostics, issue("context_canceled", ctx.Err().Error(), true, path, category))
@@ -250,23 +270,30 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 }
 
 // resolveStructuredDevCacheRoot discovers and measures independent child
-// candidates under one resolved developer-cache root. Distinctive-process
-// categories require idle before discovery and after measurement; a post-gate
-// failure discards every child from this root without authorizing siblings
-// under other roots.
+// candidates under one resolved developer-cache root scope. When applyGate is
+// true, apps must be idle before discovery and again after measurement; a
+// post-gate failure discards every child from this scope without authorizing
+// siblings under other scopes. Product-scoped gates project only their
+// application identities into runningStates.
 func resolveStructuredDevCacheRoot(
 	ctx context.Context,
 	opts Options,
 	res *optInResolution,
-	category, root string,
+	category string,
+	scope DevCacheRootScope,
 	children []string,
-	needsDistinctiveDetection bool,
+	apps []string,
+	applyGate bool,
+	productScoped bool,
 	devCacheGate runningGate,
 	devCachePreStates []RunningApplicationState,
 ) {
-	useDistinctive := needsDistinctiveDetection && devCacheGateTier(category) == runningGateTierBeforeAfter
-	if useDistinctive {
-		if idle, reason := appsIdleForDevCache(category, root, devCachePreStates); !idle {
+	root := scope.Path
+	if applyGate {
+		if productScoped {
+			recordProductScopedRunningStates(res, apps, devCachePreStates)
+		}
+		if idle, reason := appsIdleForApplications(apps, root, category, devCachePreStates); !idle {
 			if reason != nil {
 				res.skipped = append(res.skipped, SkippedItem{
 					Path:   root,
@@ -285,15 +312,18 @@ func resolveStructuredDevCacheRoot(
 		return
 	}
 
-	if !useDistinctive {
+	if !applyGate {
 		return
 	}
 	var postStates []RunningApplicationState
 	if devCacheGate.detect != nil {
 		postStates = devCacheGate.detect(ctx)
 	}
-	if idle, reason := appsIdleForDevCache(category, root, postStates); !idle {
-		// Discard all children measured under this root.
+	if productScoped {
+		recordProductScopedRunningStates(res, apps, postStates)
+	}
+	if idle, reason := appsIdleForApplications(apps, root, category, postStates); !idle {
+		// Discard all children measured under this root scope.
 		res.candidates = res.candidates[:start]
 		if reason != nil {
 			res.skipped = append(res.skipped, SkippedItem{
@@ -302,6 +332,20 @@ func resolveStructuredDevCacheRoot(
 				Rule:   category,
 				Reason: *reason,
 			})
+		}
+	}
+}
+
+// recordProductScopedRunningStates projects product-scoped application
+// observations into the resolution. Match is by canonical identity only;
+// later observations replace earlier ones in place without reordering.
+func recordProductScopedRunningStates(res *optInResolution, apps []string, states []RunningApplicationState) {
+	if res == nil || len(apps) == 0 || len(states) == 0 {
+		return
+	}
+	for _, app := range apps {
+		if state, found := runningApplicationStateFor(states, app); found {
+			res.runningStates = mergeRunningApplicationStates(res.runningStates, state)
 		}
 	}
 }

@@ -224,9 +224,16 @@ type categoryCatalogEntry struct {
 	fixedLocalAppDataPath []string
 	runningApplications   []string
 	// resolvePaths resolves env/default roots for a developer-cache category.
-	// Required when developerCache is true; ignored otherwise. Root resolution
-	// never authorizes deletion by itself.
+	// Required when developerCache is true unless resolveRootScopes is set;
+	// ignored when resolveRootScopes is non-nil. Root resolution never
+	// authorizes deletion by itself.
 	resolvePaths func(devCachePathDependencies) []string
+	// resolveRootScopes optionally returns product-scoped roots for a
+	// developer-cache category. When set, each scope may associate a logical
+	// application identity for independent idle-before-and-after gating. When
+	// nil, resolvePaths produces scopes with empty Application (category-wide
+	// gate). Public Clean stays category-based.
+	resolveRootScopes func(devCachePathDependencies) []DevCacheRootScope
 	// discoverChildren is an optional structured child candidate discovery
 	// policy. When nil, each resolved root is one Opt-in candidate (whole-root
 	// mode). When set, Foal discovers independent child candidates under each
@@ -479,8 +486,8 @@ func validateDeveloperCacheRegistry(
 			continue
 		}
 		id := entry.definition.Identifier
-		if entry.resolvePaths == nil {
-			return fmt.Errorf("developer-cache category %q is missing a path resolver", id)
+		if entry.resolvePaths == nil && entry.resolveRootScopes == nil {
+			return fmt.Errorf("developer-cache category %q is missing a path or root-scope resolver", id)
 		}
 		for _, tool := range entry.reviewSuggestionTools {
 			tool = strings.TrimSpace(tool)
