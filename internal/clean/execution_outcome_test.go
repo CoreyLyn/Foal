@@ -61,10 +61,10 @@ func TestProjectCategoryExecutionOutcomesCleanedFullSuccess(t *testing.T) {
 		Status: "ok",
 		Mode:   "execute",
 		Deleted: []clean.DeletedItem{
-			{Path: `C:\Users\me\AppData\Local\Temp\foal-a`, Bytes: 10, Rule: id},
-			{Path: `C:\Users\me\AppData\Local\Temp\foal-b`, Bytes: 20, Rule: id},
+			{Path: `C:\Users\me\AppData\Local\Temp\foal-a`, Bytes: 10, Rule: id, Action: string(clean.DeletionActionMoveToRecycleBin)},
+			{Path: `C:\Users\me\AppData\Local\Temp\foal-b`, Bytes: 20, Rule: id, Action: string(clean.DeletionActionMoveToRecycleBin)},
 		},
-		Totals: clean.Totals{DeletedCount: 2, AffectedBytes: 30},
+		Totals: clean.Totals{DeletedCount: 2, AffectedBytes: 30, RecycleBinMovedBytes: 30},
 	}
 	outcomes := clean.ProjectCategoryExecutionOutcomes([]string{id}, result)
 	if len(outcomes) != 1 || outcomes[0].State != clean.CategoryExecutionCleaned {
@@ -73,7 +73,98 @@ func TestProjectCategoryExecutionOutcomesCleanedFullSuccess(t *testing.T) {
 	if outcomes[0].AffectedBytes != 30 || outcomes[0].DeletedCount != 2 {
 		t.Fatalf("bytes/count = %#v", outcomes[0])
 	}
+	if outcomes[0].RecycleBinMovedBytes != 30 || outcomes[0].PermanentlyDeletedBytes != 0 {
+		t.Fatalf("split bytes = %#v", outcomes[0])
+	}
 	assertOutcomePathFree(t, outcomes, `C:\Users\me`)
+}
+
+func TestProjectCategoryExecutionOutcomesSplitsMixedActions(t *testing.T) {
+	recycleID := clean.DefaultCategoryFoalOwnedTempSandboxes
+	permanentID := clean.DevCacheCategoryGo
+	result := clean.Result{
+		Status: "ok",
+		Mode:   "execute",
+		Deleted: []clean.DeletedItem{
+			{Path: `C:\Temp\a`, Bytes: 5, Rule: recycleID, Action: string(clean.DeletionActionMoveToRecycleBin)},
+			{Path: `C:\Cache\b`, Bytes: 7, Rule: permanentID, Action: string(clean.DeletionActionDeletePermanently)},
+		},
+		Totals: clean.Totals{
+			DeletedCount:            2,
+			RecycleBinMovedBytes:    5,
+			PermanentlyDeletedBytes: 7,
+			AffectedBytes:           12,
+		},
+	}
+	outcomes := clean.ProjectCategoryExecutionOutcomes([]string{recycleID, permanentID}, result)
+	if len(outcomes) != 2 {
+		t.Fatalf("outcomes = %#v", outcomes)
+	}
+	byID := map[string]clean.CategoryExecutionOutcome{}
+	for _, outcome := range outcomes {
+		byID[outcome.Identifier] = outcome
+	}
+	if byID[recycleID].RecycleBinMovedBytes != 5 || byID[recycleID].PermanentlyDeletedBytes != 0 || byID[recycleID].AffectedBytes != 5 {
+		t.Fatalf("recycle outcome = %#v", byID[recycleID])
+	}
+	if byID[permanentID].PermanentlyDeletedBytes != 7 || byID[permanentID].RecycleBinMovedBytes != 0 || byID[permanentID].AffectedBytes != 7 {
+		t.Fatalf("permanent outcome = %#v", byID[permanentID])
+	}
+	if clean.SumExecutionRecycleBinMovedBytes(outcomes) != 5 {
+		t.Fatalf("sum recycle = %d", clean.SumExecutionRecycleBinMovedBytes(outcomes))
+	}
+	if clean.SumExecutionPermanentlyDeletedBytes(outcomes) != 7 {
+		t.Fatalf("sum permanent = %d", clean.SumExecutionPermanentlyDeletedBytes(outcomes))
+	}
+	if clean.SumExecutionAffectedBytes(outcomes) != 12 {
+		t.Fatalf("sum affected = %d", clean.SumExecutionAffectedBytes(outcomes))
+	}
+	assertOutcomePathFree(t, outcomes, `C:\Temp`, `C:\Cache`)
+}
+
+func TestResultHasPermanentPartialRisk(t *testing.T) {
+	if clean.ResultHasPermanentPartialRisk(clean.Result{Status: "ok"}) {
+		t.Fatal("empty result must not claim partial risk")
+	}
+	failed := clean.Result{
+		Failed: []clean.FailedItem{{
+			Path:          `C:\Cache\x`,
+			Bytes:         4,
+			Rule:          "go-cache",
+			PlannedAction: string(clean.DeletionActionDeletePermanently),
+			Action:        string(clean.DeletionActionDeletePermanently),
+			Reason:        clean.StructuredIssue{Code: "permanent_delete_failed", Message: `may already be permanently deleted under C:\Cache\x`},
+		}},
+	}
+	if !clean.ResultHasPermanentPartialRisk(failed) {
+		t.Fatal("permanent_delete_failed must signal partial risk")
+	}
+	canceled := clean.Result{
+		Skipped: []clean.SkippedItem{{
+			Path:          `C:\Cache\y`,
+			Rule:          "go-cache",
+			PlannedAction: string(clean.DeletionActionDeletePermanently),
+			Reason: clean.StructuredIssue{
+				Code:    "context_canceled",
+				Message: "context canceled; some content may already be permanently deleted",
+			},
+		}},
+	}
+	if !clean.ResultHasPermanentPartialRisk(canceled) {
+		t.Fatal("permanent cancel with partial risk must signal")
+	}
+	// Untouched cancel without partial-risk wording is not a partial mutation warning.
+	untouched := clean.Result{
+		Skipped: []clean.SkippedItem{{
+			Path:          `C:\Cache\z`,
+			Rule:          "go-cache",
+			PlannedAction: string(clean.DeletionActionDeletePermanently),
+			Reason:        clean.StructuredIssue{Code: "context_canceled", Message: "context canceled"},
+		}},
+	}
+	if clean.ResultHasPermanentPartialRisk(untouched) {
+		t.Fatal("untouched cancel must not claim partial risk")
+	}
 }
 
 func TestProjectCategoryExecutionOutcomesPartialMixedSuccessAndExclusion(t *testing.T) {

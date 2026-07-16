@@ -1316,7 +1316,7 @@ func TestEagerCleanEnterBlockedUntilTerminalAndNonEmpty(t *testing.T) {
 func TestEagerCleanFirstEnterOpensConfirmationWithoutExecutionOrHistory(t *testing.T) {
 	calls := 0
 	original := runExactCleanSelection
-	runExactCleanSelection = func(context.Context, []string, clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(context.Context, []string, bool, clean.ProgressReporter) clean.Result {
 		calls++
 		return clean.Result{Status: "ok", Mode: "execute"}
 	}
@@ -1353,32 +1353,31 @@ func TestEagerCleanFirstEnterOpensConfirmationWithoutExecutionOrHistory(t *testi
 	assertNoPath(t, content)
 	for _, want := range []string{
 		"Confirm cleanup",
-		"Selected categories:",
+		"Recycle Bin",
 		model.rows[0].Label,
 		model.rows[optInIndex].Label,
 		"Selected: 2 categories",
 		"fresh state",
 		"may differ",
-		"Recycle Bin",
+		"cannot introduce a deletion action type",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("confirmation missing %q:\n%s", want, content)
 		}
 	}
-	// Unselected empty categories must not appear as selected lines.
-	for _, row := range model.rows {
-		if row.Selected {
-			continue
-		}
-		// Labels of unselected rows must not be listed under Selected categories.
-		// (They may still appear elsewhere; check the selected block only.)
+	// Production queue remains Recycle Bin-only for this test.
+	if strings.Contains(content, "Permanent deletion is irreversible") {
+		t.Fatalf("recycle-only confirmation must not show permanent irreversible warning:\n%s", content)
 	}
+	// Unselected empty categories must not appear as selected lines.
 	selectedBlock := content
-	if idx := strings.Index(content, "Selected categories:"); idx >= 0 {
+	if idx := strings.Index(content, "Permanent deletion"); idx >= 0 {
 		selectedBlock = content[idx:]
-		if end := strings.Index(selectedBlock, "\nSelected:"); end >= 0 {
-			selectedBlock = selectedBlock[:end]
-		}
+	} else if idx := strings.Index(content, "Recycle Bin ·"); idx >= 0 {
+		selectedBlock = content[idx:]
+	}
+	if end := strings.Index(selectedBlock, "\nSelected:"); end >= 0 {
+		selectedBlock = selectedBlock[:end]
 	}
 	for _, row := range model.rows {
 		if row.Selected {
@@ -1458,7 +1457,7 @@ func TestEagerCleanSecondEnterInvokesExactExecutionOnce(t *testing.T) {
 	var gotIDs []string
 	calls := 0
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ clean.ProgressReporter) clean.Result {
 		calls++
 		gotIDs = append([]string(nil), selected...)
 		return clean.Result{Status: "ok", Mode: "execute", Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 9}}
@@ -1569,8 +1568,9 @@ func TestRunExactCleanSelectionUsesPlanAndTUIProvenance(t *testing.T) {
 	})
 
 	// Omit default; pass only crash_dumps and go-cache style opt-ins.
+	// Production catalog is still Recycle Bin-only, so permanent auth stays false.
 	selected := []string{clean.DevCacheCategoryGo, clean.OpportunityCategoryCrashDumps}
-	result := runExactCleanSelection(context.Background(), selected, nil)
+	result := runExactCleanSelection(context.Background(), selected, false, nil)
 	if result.Status != "ok" {
 		t.Fatalf("result = %#v", result)
 	}
@@ -1586,6 +1586,9 @@ func TestRunExactCleanSelectionUsesPlanAndTUIProvenance(t *testing.T) {
 	// Additive OptIn path must not be used as the authorization source.
 	if len(captured.OptIn) != 0 {
 		t.Fatalf("OptIn = %#v, exact TUI must authorize via Plan only", captured.OptIn)
+	}
+	if captured.AllowPermanentDeletion {
+		t.Fatal("recycle-only TUI selection must not set AllowPermanentDeletion")
 	}
 	cp := captured.CommandParameters
 	if cp.Surface != "tui" || cp.SelectionMode != "exact" {
@@ -1610,6 +1613,15 @@ func TestRunExactCleanSelectionUsesPlanAndTUIProvenance(t *testing.T) {
 	if captured.HistoryRecorder == nil || captured.DetectRunningApplications == nil {
 		t.Fatal("history recorder and running detection required")
 	}
+
+	// Permanent authorization is passed directly, never via fabricated CLI args.
+	_ = runExactCleanSelection(context.Background(), selected, true, nil)
+	if !captured.AllowPermanentDeletion {
+		t.Fatal("allowPermanent handoff must set AllowPermanentDeletion")
+	}
+	if len(captured.CommandParameters.Args) != 0 {
+		t.Fatalf("must not synthesize --allow-permanent args: %#v", captured.CommandParameters.Args)
+	}
 }
 
 func TestRunExactCleanSelectionRejectsInvalidIdentifiersBeforeCleanup(t *testing.T) {
@@ -1628,7 +1640,7 @@ func TestRunExactCleanSelectionRejectsInvalidIdentifiersBeforeCleanup(t *testing
 		{"not_a_category"},
 		{"administrator_only_caches"},
 	} {
-		result := runExactCleanSelection(context.Background(), ids, nil)
+		result := runExactCleanSelection(context.Background(), ids, false, nil)
 		if called {
 			t.Fatalf("execute called for invalid %#v", ids)
 		}
@@ -1641,7 +1653,7 @@ func TestRunExactCleanSelectionRejectsInvalidIdentifiersBeforeCleanup(t *testing
 func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) {
 	var cancelCalls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(ctx context.Context, selected []string, reporter clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
 		if reporter != nil {
 			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning})
 			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinSafety})
@@ -1746,8 +1758,15 @@ func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) 
 	if !strings.Contains(content, "Processed: 1/1") {
 		t.Fatalf("processed terminal:\n%s", content)
 	}
-	if !strings.Contains(content, "Affected bytes:") {
-		t.Fatalf("affected bytes missing:\n%s", content)
+	for _, want := range []string{"Affected (processed):", "Recycle Bin moved:", "Permanently deleted:"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("result totals missing %q:\n%s", want, content)
+		}
+	}
+	for _, banned := range []string{"freed", "reclaimed disk", "space reclaimed"} {
+		if strings.Contains(strings.ToLower(content), banned) {
+			t.Fatalf("must not label aggregate as freed/reclaimed (%q):\n%s", banned, content)
+		}
 	}
 	if strings.Contains(content, `C:\Users\me`) || strings.Contains(content, "foal-sandbox") {
 		t.Fatalf("path leaked in result:\n%s", content)
@@ -1763,7 +1782,7 @@ func TestEagerCleanExecutionTerminalOutcomesAndMixedPartial(t *testing.T) {
 	defaultID := clean.DefaultCategoryFoalOwnedTempSandboxes
 	optInID := clean.OpportunityCategoryCrashDumps
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ clean.ProgressReporter) clean.Result {
 		return clean.Result{
 			Status: "ok",
 			Mode:   "execute",
@@ -1894,7 +1913,7 @@ func TestEagerCleanExecutionEmptyCleanedFailedCanceled(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			original := runExactCleanSelection
-			runExactCleanSelection = func(_ context.Context, selected []string, _ clean.ProgressReporter) clean.Result {
+			runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ clean.ProgressReporter) clean.Result {
 				// Re-attribute items to the frozen selected id.
 				result := tc.result
 				for i := range result.Deleted {
@@ -1948,7 +1967,7 @@ func TestEagerCleanExecutionEmptyCleanedFailedCanceled(t *testing.T) {
 func TestEagerCleanActiveExecutionCancelKeysAndRepeatedCtrlC(t *testing.T) {
 	cancelCh := make(chan struct{})
 	original := runExactCleanSelection
-	runExactCleanSelection = func(ctx context.Context, selected []string, reporter clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
 		if reporter != nil {
 			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinOperations})
 		}
@@ -2132,7 +2151,7 @@ func TestEagerCleanResultKeysAndStartDiscardsStaleSession(t *testing.T) {
 func TestEagerCleanExecutionCannotAlterFrozenAuthorization(t *testing.T) {
 	var got []string
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ clean.ProgressReporter) clean.Result {
 		got = append([]string(nil), selected...)
 		return clean.Result{Status: "ok", Mode: "execute"}
 	}
@@ -2288,7 +2307,7 @@ func TestEagerCleanViewportConfirmationAndResultScrollOnly(t *testing.T) {
 
 	// Execute with a stub that returns mixed outcomes for a long result list.
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, reporter clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
 		if reporter != nil {
 			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning})
 		}
@@ -2628,4 +2647,404 @@ func stringSlicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// injectedMixedActionSummaries uses real catalog identifiers so exact-plan
+// compilation succeeds, while injecting planned actions that production has
+// not activated yet (still Recycle Bin-only on the live catalog).
+func injectedMixedActionSummaries() []clean.CleanupCategorySummary {
+	return []clean.CleanupCategorySummary{
+		{
+			Identifier:     clean.DefaultCategoryFoalOwnedTempSandboxes,
+			Label:          "Foal-owned temp sandboxes",
+			ReportCategory: clean.ReportCategoryUserEssentials,
+			Eligibility:    clean.CategoryEligibilityDefault,
+			PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+		},
+		{
+			Identifier:     clean.DevCacheCategoryGo,
+			Label:          "Go cache",
+			ReportCategory: clean.ReportCategoryDeveloperTools,
+			Eligibility:    clean.CategoryEligibilityOptIn,
+			PlannedAction:  clean.DeletionActionDeletePermanently,
+		},
+		{
+			Identifier:     clean.OpportunityCategoryUserTemp,
+			Label:          "User temp",
+			ReportCategory: clean.ReportCategoryUserEssentials,
+			Eligibility:    clean.CategoryEligibilityOptIn,
+			PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+		},
+		{
+			Identifier:     clean.DevCacheCategoryNPM,
+			Label:          "npm cache",
+			ReportCategory: clean.ReportCategoryDeveloperTools,
+			Eligibility:    clean.CategoryEligibilityOptIn,
+			PlannedAction:  clean.DeletionActionDeletePermanently,
+		},
+	}
+}
+
+func TestEagerCleanInitialSelectionDerivedFromInjectedSummaries(t *testing.T) {
+	summaries := injectedMixedActionSummaries()
+	model := newEagerCleanModelFromSummaries(summaries, 100, 40)
+	if len(model.rows) != len(summaries) {
+		t.Fatalf("rows = %d", len(model.rows))
+	}
+	want := map[string]bool{
+		clean.DefaultCategoryFoalOwnedTempSandboxes: true,
+		clean.DevCacheCategoryGo:                    true,
+		clean.OpportunityCategoryUserTemp:           false,
+		clean.DevCacheCategoryNPM:                   true,
+	}
+	for _, row := range model.rows {
+		if row.Selected != want[row.Identifier] {
+			t.Fatalf("%s selected=%v, want %v", row.Identifier, row.Selected, want[row.Identifier])
+		}
+		if row.PlannedAction != summariesWantAction(summaries, row.Identifier) {
+			t.Fatalf("%s planned action not carried on row", row.Identifier)
+		}
+	}
+	if model.selectedCount() != 3 {
+		t.Fatalf("selectedCount = %d, want 3", model.selectedCount())
+	}
+
+	// Users may clear any initial selection / select Recycle Bin opt-ins.
+	for i, row := range model.rows {
+		if row.Identifier == clean.DevCacheCategoryGo {
+			model.rows[i].Selected = false
+		}
+		if row.Identifier == clean.OpportunityCategoryUserTemp {
+			model.rows[i].Selected = true
+		}
+	}
+	wantIDs := []string{
+		clean.DefaultCategoryFoalOwnedTempSandboxes,
+		clean.OpportunityCategoryUserTemp,
+		clean.DevCacheCategoryNPM,
+	}
+	if !stringSlicesEqual(model.selectedCategoryIDs(), wantIDs) {
+		t.Fatalf("after user edit ids=%v want %v", model.selectedCategoryIDs(), wantIDs)
+	}
+
+	// Clearing all does not change rule actions.
+	model.clearSelection()
+	if model.selectedCount() != 0 {
+		t.Fatal("clear all failed")
+	}
+	for _, row := range model.rows {
+		if row.Selected {
+			t.Fatalf("selected after clear: %q", row.Identifier)
+		}
+		if row.PlannedAction != summariesWantAction(summaries, row.Identifier) {
+			t.Fatalf("clear mutated action for %q", row.Identifier)
+		}
+	}
+	// Production catalog still starts defaults only (Recycle Bin-only actions).
+	prod := newEagerCleanModel(80, 24)
+	for _, row := range prod.rows {
+		wantDefault := row.Eligibility == clean.CategoryEligibilityDefault
+		if row.Selected != wantDefault {
+			t.Fatalf("production %q selected=%v, want default-only %v", row.Identifier, row.Selected, wantDefault)
+		}
+		if row.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+			t.Fatalf("production %q action = %q (must remain recycle bin)", row.Identifier, row.PlannedAction)
+		}
+	}
+}
+
+func summariesWantAction(summaries []clean.CleanupCategorySummary, id string) clean.DeletionAction {
+	for _, s := range summaries {
+		if s.Identifier == id {
+			return s.PlannedAction
+		}
+	}
+	return ""
+}
+
+func TestEagerCleanConfirmationGroupsMixedActionsAndHandoff(t *testing.T) {
+	defaultID := clean.DefaultCategoryFoalOwnedTempSandboxes
+	permanentID := clean.DevCacheCategoryGo
+	var gotSelected []string
+	var gotAllow bool
+	var calls int
+	original := runExactCleanSelection
+	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ clean.ProgressReporter) clean.Result {
+		calls++
+		gotSelected = append([]string(nil), selected...)
+		gotAllow = allowPermanent
+		return clean.Result{
+			Status: "ok",
+			Mode:   "execute",
+			Deleted: []clean.DeletedItem{
+				{Path: `C:\Temp\a`, Bytes: 4, Rule: defaultID, Action: string(clean.DeletionActionMoveToRecycleBin)},
+				{Path: `C:\Cache\b`, Bytes: 8, Rule: permanentID, Action: string(clean.DeletionActionDeletePermanently)},
+			},
+			Totals: clean.Totals{
+				DeletedCount:            2,
+				RecycleBinMovedBytes:    4,
+				PermanentlyDeletedBytes: 8,
+				AffectedBytes:           12,
+			},
+		}
+	}
+	t.Cleanup(func() { runExactCleanSelection = original })
+
+	model := newEagerCleanModelFromSummaries(injectedMixedActionSummaries(), 100, 40)
+	// Terminal complete rows for selected categories; empty/skipped for the rest.
+	for i := range model.rows {
+		id := model.rows[i].Identifier
+		switch id {
+		case defaultID:
+			model.rows[i].State = clean.CategoryPreviewComplete
+			model.rows[i].CandidateCount = 1
+			model.rows[i].Bytes = 4
+			model.rows[i].Selected = true
+		case permanentID:
+			model.rows[i].State = clean.CategoryPreviewComplete
+			model.rows[i].CandidateCount = 2
+			model.rows[i].Bytes = 8
+			model.rows[i].Selected = true
+			model.rows[i].SafetyNote = "Rebuilds indexes after cleanup."
+		case clean.DevCacheCategoryNPM:
+			// Empty terminal auto-disables selection.
+			model.rows[i].State = clean.CategoryPreviewEmpty
+			model.rows[i].Selected = false
+		case clean.OpportunityCategoryUserTemp:
+			model.rows[i].State = clean.CategoryPreviewSkipped
+			model.rows[i].ReasonCode = clean.PreviewReasonProtected
+			model.rows[i].Selected = false
+		}
+	}
+	model.finished = true
+	model.generation = 1
+
+	for _, row := range model.rows {
+		if (row.State == clean.CategoryPreviewEmpty || row.State == clean.CategoryPreviewSkipped) && row.Selected {
+			t.Fatalf("non-selectable terminal still selected: %#v", row)
+		}
+	}
+	if model.selectedCount() != 2 {
+		t.Fatalf("selectedCount = %d, want 2", model.selectedCount())
+	}
+	if !model.confirmationEnabled() {
+		t.Fatal("confirmation should be enabled")
+	}
+
+	_, cmd := model.handleKey("enter")
+	if cmd != nil || model.phase != eagerPhaseConfirmation {
+		t.Fatalf("first enter: phase=%v cmd=%v", model.phase, cmd)
+	}
+	content := model.content()
+	assertNoPath(t, content)
+	for _, want := range []string{
+		"Permanent deletion · 1 categories · 2 item(s)",
+		"Recycle Bin · 1 categories · 1 item(s)",
+		"Go cache · 2 item(s) · <1 KB · Permanent deletion",
+		"Foal-owned temp sandboxes · 1 item(s) · <1 KB · Recycle Bin",
+		"Impact: Rebuilds indexes after cleanup.",
+		"Permanent deletion is irreversible",
+		"cannot introduce a deletion action type",
+		"Recycle Bin items are moved",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("confirmation missing %q:\n%s", want, content)
+		}
+	}
+	// No per-category deletion-method toggle chrome.
+	for _, banned := range []string{"toggle action", "change method", "deletion method"} {
+		if strings.Contains(strings.ToLower(content), banned) {
+			t.Fatalf("presentation action toggle leaked: %q", banned)
+		}
+	}
+	// Unselected rows not listed under action groups.
+	if strings.Contains(content, "User temp") || strings.Contains(content, "npm cache") {
+		t.Fatalf("unselected category listed:\n%s", content)
+	}
+	if calls != 0 {
+		t.Fatal("confirmation must not execute")
+	}
+
+	// Second Enter freezes and hands off exact IDs + permanent auth.
+	nav, cmd := model.handleKey("enter")
+	if nav != eagerPreviewNavNone || cmd == nil {
+		t.Fatalf("second enter: nav=%v cmd=%v", nav, cmd)
+	}
+	if !model.frozenAllowPermanent {
+		t.Fatal("frozen permanent authorization missing")
+	}
+	if !stringSlicesEqual(model.frozenCategories, []string{defaultID, permanentID}) {
+		t.Fatalf("frozen = %#v", model.frozenCategories)
+	}
+	// Drive handoff.
+	started := cmd().(eagerExactExecutionStartedMsg)
+	wait := model.applyExactExecutionStarted(started)
+	for model.phase == eagerPhaseExecuting {
+		msg := wait()
+		switch m := msg.(type) {
+		case eagerExactExecutionProgressMsg:
+			wait = model.applyExactExecutionProgress(m)
+		case eagerExactExecutedMsg:
+			model.applyExactExecuted(m)
+			wait = nil
+		default:
+			t.Fatalf("unexpected %T", msg)
+		}
+		if wait == nil {
+			break
+		}
+	}
+	if calls != 1 || !gotAllow {
+		t.Fatalf("calls=%d allow=%v", calls, gotAllow)
+	}
+	if !stringSlicesEqual(gotSelected, []string{defaultID, permanentID}) {
+		t.Fatalf("handoff selected=%v", gotSelected)
+	}
+	if model.phase != eagerPhaseResult {
+		t.Fatalf("phase=%v", model.phase)
+	}
+	content = model.content()
+	assertNoPath(t, content)
+	for _, want := range []string{
+		"Recycle Bin moved:",
+		"Permanently deleted:",
+		"Affected (processed):",
+		"cleaned",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("result missing %q:\n%s", want, content)
+		}
+	}
+	for _, banned := range []string{"freed space", "reclaimed disk", "space freed"} {
+		if strings.Contains(strings.ToLower(content), banned) {
+			t.Fatalf("banned wording %q:\n%s", banned, content)
+		}
+	}
+	// No direct deletion collaborator in TUI path (only injected result).
+	if strings.Contains(content, `C:\Temp`) || strings.Contains(content, `C:\Cache`) {
+		t.Fatalf("path leak in result:\n%s", content)
+	}
+}
+
+func TestEagerCleanResultProjectsMixedOutcomesAndPartialRisk(t *testing.T) {
+	defaultID := clean.DefaultCategoryFoalOwnedTempSandboxes
+	permanentID := clean.DevCacheCategoryGo
+	original := runExactCleanSelection
+	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ clean.ProgressReporter) clean.Result {
+		if !allowPermanent {
+			t.Fatal("mixed permanent selection must authorize permanent")
+		}
+		return clean.Result{
+			Status: "partial",
+			Mode:   "execute",
+			Deleted: []clean.DeletedItem{
+				{Path: `C:\Temp\ok`, Bytes: 3, Rule: defaultID, Action: string(clean.DeletionActionMoveToRecycleBin)},
+			},
+			Failed: []clean.FailedItem{{
+				Path:          `C:\Cache\fail`,
+				Bytes:         9,
+				Rule:          permanentID,
+				PlannedAction: string(clean.DeletionActionDeletePermanently),
+				Action:        string(clean.DeletionActionDeletePermanently),
+				Reason: clean.StructuredIssue{
+					Code:    "permanent_delete_failed",
+					Message: `may already be permanently deleted under C:\Cache\fail`,
+				},
+			}},
+			Skipped: []clean.SkippedItem{{
+				Path:   `C:\Temp\skip`,
+				Rule:   defaultID,
+				Reason: clean.StructuredIssue{Code: "protected_path", Message: `protected C:\Temp\skip`},
+			}},
+			Totals: clean.Totals{
+				DeletedCount:            1,
+				SkippedCount:            1,
+				RecycleBinMovedBytes:    3,
+				PermanentlyDeletedBytes: 0,
+				AffectedBytes:           3,
+			},
+		}
+	}
+	t.Cleanup(func() { runExactCleanSelection = original })
+
+	model := newEagerCleanModelFromSummaries(injectedMixedActionSummaries(), 100, 40)
+	for i := range model.rows {
+		id := model.rows[i].Identifier
+		if id == defaultID || id == permanentID {
+			model.rows[i].Selected = true
+			model.rows[i].State = clean.CategoryPreviewComplete
+			model.rows[i].CandidateCount = 1
+			model.rows[i].Bytes = 1
+			continue
+		}
+		model.rows[i].Selected = false
+		model.rows[i].State = clean.CategoryPreviewEmpty
+	}
+	model.finished = true
+	_, _ = model.handleKey("enter")
+	_, cmd := model.handleKey("enter")
+	started := cmd().(eagerExactExecutionStartedMsg)
+	wait := model.applyExactExecutionStarted(started)
+	for model.phase == eagerPhaseExecuting {
+		msg := wait()
+		switch m := msg.(type) {
+		case eagerExactExecutionProgressMsg:
+			wait = model.applyExactExecutionProgress(m)
+		case eagerExactExecutedMsg:
+			model.applyExactExecuted(m)
+			wait = nil
+		default:
+			t.Fatalf("unexpected %T", msg)
+		}
+		if wait == nil {
+			break
+		}
+	}
+	byID := map[string]clean.CategoryExecutionOutcome{}
+	for _, outcome := range model.executionOutcomes {
+		byID[outcome.Identifier] = outcome
+	}
+	if byID[defaultID].State != clean.CategoryExecutionPartial {
+		t.Fatalf("recycle state = %q", byID[defaultID].State)
+	}
+	if byID[permanentID].State != clean.CategoryExecutionFailed {
+		t.Fatalf("permanent state = %q", byID[permanentID].State)
+	}
+	content := model.content()
+	assertNoPath(t, content)
+	if !strings.Contains(content, "partial") || !strings.Contains(content, "failed") {
+		t.Fatalf("mixed outcomes missing:\n%s", content)
+	}
+	if !strings.Contains(content, clean.PermanentPartialRiskWarning) {
+		t.Fatalf("partial-risk warning missing:\n%s", content)
+	}
+	if strings.Contains(content, `C:\Cache`) || strings.Contains(content, "may already be permanently deleted under") {
+		t.Fatalf("raw path-bearing failure message leaked:\n%s", content)
+	}
+	if !strings.Contains(content, "Recycle Bin moved:") || !strings.Contains(content, "Permanently deleted:") {
+		t.Fatalf("split totals missing:\n%s", content)
+	}
+}
+
+func TestEagerCleanNoPresentationOwnedActionMap(t *testing.T) {
+	model := newEagerCleanModelFromSummaries(injectedMixedActionSummaries(), 80, 24)
+	// Space toggles selection only; never flips planned action.
+	for i := range model.rows {
+		before := model.rows[i].PlannedAction
+		model.cursor = i
+		if model.rowSelectable(model.rows[i]) {
+			_, _ = model.handleKey(" ")
+		}
+		if model.rows[i].PlannedAction != before {
+			t.Fatalf("toggle changed planned action for %q", model.rows[i].Identifier)
+		}
+	}
+	// select all / clear leave actions intact.
+	model.selectAllSelectable()
+	model.clearSelection()
+	for i, summary := range injectedMixedActionSummaries() {
+		if model.rows[i].PlannedAction != summary.PlannedAction {
+			t.Fatalf("bulk select/clear mutated action for %q", summary.Identifier)
+		}
+	}
 }

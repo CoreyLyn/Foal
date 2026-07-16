@@ -384,7 +384,7 @@ func TestPrimaryCleanConfirmationExecutionResultPathFree(t *testing.T) {
 	stubInstantEagerPreview(t)
 
 	originalExec := runExactCleanSelection
-	runExactCleanSelection = func(ctx context.Context, selected []string, reporter clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
 		if len(selected) == 0 {
 			t.Fatal("empty selection")
 		}
@@ -439,7 +439,7 @@ func TestPrimaryCleanConfirmationExecutionResultPathFree(t *testing.T) {
 	result := model.content()
 	assertNoPath(t, result)
 	assertNoSentinelLeak(t, result)
-	for _, want := range []string{"Affected bytes", "cleaned"} {
+	for _, want := range []string{"Affected (processed)", "cleaned", "Recycle Bin moved", "Permanently deleted"} {
 		if !strings.Contains(result, want) {
 			// cleaned may be state wording
 			if want == "cleaned" && !strings.Contains(result, "Clean") {

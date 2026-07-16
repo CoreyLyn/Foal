@@ -1,5 +1,7 @@
 package clean
 
+import "strings"
+
 // CategoryExecutionState is the path-free lifecycle for one selected category
 // during shared Clean execution and its terminal projection from the final
 // Result. In-progress values (rechecking, ready, cleaning) come from shared
@@ -23,10 +25,15 @@ const (
 // protected paths, or raw path-bearing errors. Item-level Result and History
 // remain authoritative for executed, skipped, and context_canceled items.
 type CategoryExecutionOutcome struct {
-	Identifier    string
-	Label         string
-	State         CategoryExecutionState
-	// AffectedBytes counts successful Recycle Bin moves for this category only.
+	Identifier string
+	Label      string
+	State      CategoryExecutionState
+	// RecycleBinMovedBytes is successful Recycle Bin work for this category.
+	RecycleBinMovedBytes int64
+	// PermanentlyDeletedBytes is successful permanent deletion for this category.
+	PermanentlyDeletedBytes int64
+	// AffectedBytes is RecycleBinMovedBytes + PermanentlyDeletedBytes (processed
+	// content, not released disk space).
 	AffectedBytes int64
 	DeletedCount  int
 	SkippedCount  int
@@ -71,12 +78,13 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 	}
 
 	type bucket struct {
-		deleted        int
-		skipped        int
-		affectedBytes  int64
-		hasCancel      bool
-		hasOperational bool
-		hasSafetySkip  bool
+		deleted                 int
+		skipped                 int
+		recycleBinMovedBytes    int64
+		permanentlyDeletedBytes int64
+		hasCancel               bool
+		hasOperational          bool
+		hasSafetySkip           bool
 	}
 	byID := make(map[string]*bucket, len(selected))
 	for _, id := range selected {
@@ -90,7 +98,14 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		}
 		b.deleted++
 		if item.Bytes > 0 {
-			b.affectedBytes += item.Bytes
+			switch DeletionAction(item.Action) {
+			case DeletionActionDeletePermanently:
+				b.permanentlyDeletedBytes += item.Bytes
+			default:
+				// Empty action (legacy/test fixtures) and move_to_recycle_bin
+				// both count as Recycle Bin work.
+				b.recycleBinMovedBytes += item.Bytes
+			}
 		}
 	}
 	for _, item := range result.Failed {
@@ -169,12 +184,14 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		}
 		state := projectCategoryExecutionState(b.deleted, b.skipped, hasCancel, hasOperational, b.hasSafetySkip)
 		out = append(out, CategoryExecutionOutcome{
-			Identifier:    id,
-			Label:         label,
-			State:         state,
-			AffectedBytes: b.affectedBytes,
-			DeletedCount:  b.deleted,
-			SkippedCount:  b.skipped,
+			Identifier:              id,
+			Label:                   label,
+			State:                   state,
+			RecycleBinMovedBytes:    b.recycleBinMovedBytes,
+			PermanentlyDeletedBytes: b.permanentlyDeletedBytes,
+			AffectedBytes:           b.recycleBinMovedBytes + b.permanentlyDeletedBytes,
+			DeletedCount:            b.deleted,
+			SkippedCount:            b.skipped,
 		})
 	}
 	return out
@@ -191,13 +208,68 @@ func CountTerminalExecutionOutcomes(outcomes []CategoryExecutionOutcome) int {
 	return n
 }
 
-// SumExecutionAffectedBytes sums successful Recycle Bin move bytes only.
+// SumExecutionAffectedBytes sums successful processed content across outcomes
+// (Recycle Bin moves plus permanent deletions). It is not released disk space.
 func SumExecutionAffectedBytes(outcomes []CategoryExecutionOutcome) int64 {
 	var total int64
 	for _, outcome := range outcomes {
 		total += outcome.AffectedBytes
 	}
 	return total
+}
+
+// SumExecutionRecycleBinMovedBytes sums successful Recycle Bin move bytes.
+func SumExecutionRecycleBinMovedBytes(outcomes []CategoryExecutionOutcome) int64 {
+	var total int64
+	for _, outcome := range outcomes {
+		total += outcome.RecycleBinMovedBytes
+	}
+	return total
+}
+
+// SumExecutionPermanentlyDeletedBytes sums successful permanent deletion bytes.
+func SumExecutionPermanentlyDeletedBytes(outcomes []CategoryExecutionOutcome) int64 {
+	var total int64
+	for _, outcome := range outcomes {
+		total += outcome.PermanentlyDeletedBytes
+	}
+	return total
+}
+
+// PermanentPartialRiskWarning is the path-free result notice shown when shared
+// Clean reports permanent_delete_failed or a permanent cancel after mutation
+// may have begun. Raw path-bearing issue text is never forwarded.
+const PermanentPartialRiskWarning = "Some permanent deletion may have partially completed and cannot be undone."
+
+// ResultHasPermanentPartialRisk reports whether the authoritative Result
+// indicates permanent mutation may have partially completed.
+func ResultHasPermanentPartialRisk(result Result) bool {
+	for _, item := range result.Failed {
+		if item.Reason.Code == permanentDeleteFailedIssueCode ||
+			DeletionAction(item.Action) == DeletionActionDeletePermanently ||
+			DeletionAction(item.PlannedAction) == DeletionActionDeletePermanently {
+			return true
+		}
+	}
+	for _, item := range result.Skipped {
+		if DeletionAction(item.PlannedAction) != DeletionActionDeletePermanently {
+			continue
+		}
+		if item.Reason.Code == "context_canceled" {
+			// Cancel after possible permanent mutation is the only permanent
+			// cancel that carries partial-risk semantics in shared Clean.
+			msg := strings.ToLower(item.Reason.Message)
+			if strings.Contains(msg, "may already") || strings.Contains(msg, "partial") {
+				return true
+			}
+		}
+	}
+	for _, issue := range result.Errors {
+		if issue.Code == permanentDeleteFailedIssueCode {
+			return true
+		}
+	}
+	return false
 }
 
 type executionIssueKind int
