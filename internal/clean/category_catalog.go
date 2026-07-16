@@ -196,6 +196,36 @@ func validDeletionAction(action DeletionAction) bool {
 	}
 }
 
+// InitiallySelectedCategory reports whether the Clean TUI should start with this
+// path-free category summary selected. Selection is derived only from shared
+// eligibility and planned action: executable defaults and every category whose
+// planned action is delete_permanently start selected; non-default Recycle Bin
+// opt-ins start unselected. Permission-boundary and other non-executable rows
+// never start selected. Callers must not hard-code permanent-category lists.
+func InitiallySelectedCategory(summary CleanupCategorySummary) bool {
+	switch summary.Eligibility {
+	case CategoryEligibilityDefault:
+		return true
+	case CategoryEligibilityOptIn:
+		return summary.PlannedAction == DeletionActionDeletePermanently
+	default:
+		return false
+	}
+}
+
+// DeletionActionLabel returns the path-free display label for a planned or
+// actual deletion action. Unknown values are returned unchanged.
+func DeletionActionLabel(action DeletionAction) string {
+	switch action {
+	case DeletionActionMoveToRecycleBin:
+		return "Recycle Bin"
+	case DeletionActionDeletePermanently:
+		return "Permanent deletion"
+	default:
+		return string(action)
+	}
+}
+
 func (c CleanupCategoryCatalog) Summaries() []CleanupCategorySummary {
 	summaries := make([]CleanupCategorySummary, 0, len(c.definitions))
 	for _, definition := range c.definitions {

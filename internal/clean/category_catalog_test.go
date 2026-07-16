@@ -225,6 +225,142 @@ func TestCategoryCatalogAcceptsSupportedPlannedActions(t *testing.T) {
 	}
 }
 
+func TestInitiallySelectedCategoryDerivedFromEligibilityAndAction(t *testing.T) {
+	cases := []struct {
+		name     string
+		summary  clean.CleanupCategorySummary
+		want     bool
+	}{
+		{
+			name: "default recycle bin",
+			summary: clean.CleanupCategorySummary{
+				Identifier:    "foal_owned_temp_sandboxes",
+				Eligibility:   clean.CategoryEligibilityDefault,
+				PlannedAction: clean.DeletionActionMoveToRecycleBin,
+			},
+			want: true,
+		},
+		{
+			name: "opt-in permanent",
+			summary: clean.CleanupCategorySummary{
+				Identifier:    "go-cache",
+				Eligibility:   clean.CategoryEligibilityOptIn,
+				PlannedAction: clean.DeletionActionDeletePermanently,
+			},
+			want: true,
+		},
+		{
+			name: "opt-in recycle bin",
+			summary: clean.CleanupCategorySummary{
+				Identifier:    "user_temp",
+				Eligibility:   clean.CategoryEligibilityOptIn,
+				PlannedAction: clean.DeletionActionMoveToRecycleBin,
+			},
+			want: false,
+		},
+		{
+			name: "permission boundary",
+			summary: clean.CleanupCategorySummary{
+				Identifier:  "administrator_only_caches",
+				Eligibility: clean.CategoryEligibilityPermissionBoundary,
+			},
+			want: false,
+		},
+		{
+			name: "review only",
+			summary: clean.CleanupCategorySummary{
+				Identifier:  "review_only_tool",
+				Eligibility: clean.CategoryEligibilityReviewOnly,
+			},
+			want: false,
+		},
+		{
+			name: "default permanent still selected",
+			summary: clean.CleanupCategorySummary{
+				Identifier:    "future_default",
+				Eligibility:   clean.CategoryEligibilityDefault,
+				PlannedAction: clean.DeletionActionDeletePermanently,
+			},
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clean.InitiallySelectedCategory(tc.summary); got != tc.want {
+				t.Fatalf("InitiallySelectedCategory(%#v) = %v, want %v", tc.summary, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInitiallySelectedCategoryUsesInjectedCatalogSummariesWithoutHardCodedList(t *testing.T) {
+	catalog, err := clean.NewCleanupCategoryCatalog([]clean.CleanupCategoryDefinition{
+		{
+			Identifier:               "default_recycle",
+			Label:                    "Default recycle",
+			ReportCategory:           clean.ReportCategoryUserEssentials,
+			Eligibility:              clean.CategoryEligibilityDefault,
+			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+			PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+		},
+		{
+			Identifier:               "permanent_cache",
+			Label:                    "Permanent cache",
+			ReportCategory:           clean.ReportCategoryDeveloperTools,
+			Eligibility:              clean.CategoryEligibilityOptIn,
+			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+			PlannedAction:            clean.DeletionActionDeletePermanently,
+		},
+		{
+			Identifier:               "recycle_opt_in",
+			Label:                    "Recycle opt-in",
+			ReportCategory:           clean.ReportCategorySystem,
+			Eligibility:              clean.CategoryEligibilityOptIn,
+			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+			PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+		},
+		{
+			Identifier:               "admin_boundary",
+			Label:                    "Admin boundary",
+			ReportCategory:           clean.ReportCategorySystem,
+			Eligibility:              clean.CategoryEligibilityPermissionBoundary,
+			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSelected := map[string]bool{
+		"default_recycle":  true,
+		"permanent_cache":  true,
+		"recycle_opt_in":   false,
+		"admin_boundary":   false,
+	}
+	for _, summary := range catalog.Summaries() {
+		got := clean.InitiallySelectedCategory(summary)
+		if got != wantSelected[summary.Identifier] {
+			t.Fatalf("%s selected=%v, want %v", summary.Identifier, got, wantSelected[summary.Identifier])
+		}
+	}
+	// Production catalog remains Recycle Bin-only: only defaults start selected.
+	for _, summary := range clean.EagerPreviewQueue() {
+		want := summary.Eligibility == clean.CategoryEligibilityDefault
+		if clean.InitiallySelectedCategory(summary) != want {
+			t.Fatalf("production %q selected=%v, want %v (still Recycle Bin-only)",
+				summary.Identifier, !want, want)
+		}
+	}
+}
+
+func TestDeletionActionLabel(t *testing.T) {
+	if clean.DeletionActionLabel(clean.DeletionActionMoveToRecycleBin) != "Recycle Bin" {
+		t.Fatal("recycle label")
+	}
+	if clean.DeletionActionLabel(clean.DeletionActionDeletePermanently) != "Permanent deletion" {
+		t.Fatal("permanent label")
+	}
+}
+
 func TestFixedPathOpportunityUsesCanonicalCatalogVocabulary(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	summary, ok := catalog.Summary(clean.OpportunityCategoryCrashDumps)

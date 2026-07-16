@@ -51,18 +51,23 @@ const (
 )
 
 // cancellationRequestedMessage is shown after the first cooperative Ctrl+C
-// during active execution. Completed Recycle Bin moves are never rolled back.
-const cancellationRequestedMessage = "Cancellation requested. Completed Recycle Bin operations will not be rolled back."
+// during active execution. Completed work is never rolled back; permanent
+// mutation that may already have started cannot be undone.
+const cancellationRequestedMessage = "Cancellation requested. Completed operations will not be rolled back. Permanent deletion already in progress cannot be undone."
 
 type eagerCategoryRow struct {
 	Identifier     string
 	Label          string
 	ReportCategory clean.ReportCategory
 	Eligibility    clean.CategoryEligibility
-	State          clean.CategoryPreviewState
+	// PlannedAction is catalog-owned; the TUI never chooses or overrides it.
+	PlannedAction clean.DeletionAction
+	State         clean.CategoryPreviewState
 	// Selected is session-only cleanup authorization. Independent of cursor.
-	// Defaults start true; opt-ins start false. Non-selectable terminal
-	// outcomes clear and disable the row for the rest of the session.
+	// Initial selection is derived from shared eligibility + planned action
+	// (defaults and delete_permanently start selected; non-default Recycle Bin
+	// opt-ins start unselected). Non-selectable terminal outcomes clear and
+	// disable the row for the rest of the session.
 	Selected             bool
 	CandidateCount       int
 	Bytes                int64
@@ -115,9 +120,11 @@ var buildEagerPreviewOptions = func() clean.Options {
 
 // runExactCleanSelection is the confirmed TUI exact-execution seam. It compiles
 // a path-free exact CategoryPlan, records structured TUI History provenance,
-// and reuses shared Clean Execute (fresh resolution, protection, capacity,
-// Recycle Bin-only). Tests replace it to assert handoff without deletion.
-var runExactCleanSelection = func(ctx context.Context, selected []string, reporter clean.ProgressReporter) clean.Result {
+// passes equivalent per-run permanent authorization when the confirmed
+// selection disclosed permanent work, and reuses shared Clean Execute (fresh
+// resolution, protection, capacity, mixed actions). Tests replace it to assert
+// handoff without deletion. It never synthesizes CLI arguments.
+var runExactCleanSelection = func(ctx context.Context, selected []string, allowPermanent bool, reporter clean.ProgressReporter) clean.Result {
 	plan, err := clean.CompileExactCategoryPlan(selected)
 	if err != nil {
 		return clean.Result{
@@ -139,6 +146,7 @@ var runExactCleanSelection = func(ctx context.Context, selected []string, report
 		HistoryRecorder:           recorder,
 		CommandParameters:         exactTUICommandParameters(plan.Categories),
 		Plan:                      &plan,
+		AllowPermanentDeletion:    allowPermanent,
 		DetectRunningApplications: clean.DetectSupportedApplications,
 		ProgressReporter:          reporter,
 	})
@@ -155,7 +163,7 @@ func exactTUICommandParameters(categories []string) history.CommandParameters {
 	}
 }
 
-func executeExactCleanSelectionCmd(ctx context.Context, selected []string) tea.Cmd {
+func executeExactCleanSelectionCmd(ctx context.Context, selected []string, allowPermanent bool) tea.Cmd {
 	selected = append([]string(nil), selected...)
 	return func() tea.Msg {
 		progress := make(chan clean.ExecutionProgress, 4)
@@ -163,7 +171,7 @@ func executeExactCleanSelectionCmd(ctx context.Context, selected []string) tea.C
 		stream := &cleanExecutionStream{progress: progress, result: result}
 		go func() {
 			defer close(progress)
-			result <- runExactCleanSelection(ctx, selected, func(event clean.ExecutionProgress) {
+			result <- runExactCleanSelection(ctx, selected, allowPermanent, func(event clean.ExecutionProgress) {
 				progress <- event
 			})
 			close(result)
@@ -233,6 +241,9 @@ type eagerCleanModel struct {
 
 	phase                 eagerCleanPhase
 	frozenCategories      []string
+	// frozenAllowPermanent is the per-run permanent authorization disclosed by
+	// the strengthened confirmation for the frozen exact selection.
+	frozenAllowPermanent  bool
 	executionStarted      bool
 	executionResult       clean.Result
 	executionProgress     clean.ExecutionProgress
@@ -242,7 +253,24 @@ type eagerCleanModel struct {
 }
 
 func newEagerCleanModel(width, height int) eagerCleanModel {
-	queue := clean.EagerPreviewQueue()
+	return newEagerCleanModelFromSummaries(clean.EagerPreviewQueue(), width, height)
+}
+
+// newEagerCleanModelFromSummaries builds the category-first model from an
+// injected path-free summary queue. Production uses the canonical eager queue;
+// tests inject mixed planned actions without activating production rules.
+func newEagerCleanModelFromSummaries(queue []clean.CleanupCategorySummary, width, height int) eagerCleanModel {
+	return eagerCleanModel{
+		rows:              eagerRowsFromSummaries(queue),
+		activeIndex:       -1,
+		width:             width,
+		height:            height,
+		now:               time.Now,
+		execTrackedActive: -1,
+	}
+}
+
+func eagerRowsFromSummaries(queue []clean.CleanupCategorySummary) []eagerCategoryRow {
 	rows := make([]eagerCategoryRow, 0, len(queue))
 	for _, summary := range queue {
 		rows = append(rows, eagerCategoryRow{
@@ -250,19 +278,14 @@ func newEagerCleanModel(width, height int) eagerCleanModel {
 			Label:          summary.Label,
 			ReportCategory: summary.ReportCategory,
 			Eligibility:    summary.Eligibility,
+			PlannedAction:  summary.PlannedAction,
 			State:          clean.CategoryPreviewWaiting,
-			// ADR 0013: defaults start selected but remain removable; opt-ins do not.
-			Selected: summary.Eligibility == clean.CategoryEligibilityDefault,
+			// ADR 0018 / deletion policy: derive initial selection from shared
+			// eligibility + planned action (no hard-coded permanent list).
+			Selected: clean.InitiallySelectedCategory(summary),
 		})
 	}
-	return eagerCleanModel{
-		rows:              rows,
-		activeIndex:       -1,
-		width:             width,
-		height:            height,
-		now:               time.Now,
-		execTrackedActive: -1,
-	}
+	return rows
 }
 
 // setSize applies a terminal resize. It preserves the focused preview row or
@@ -311,6 +334,7 @@ func (m *eagerCleanModel) start() tea.Cmd {
 	m.previewStream = nil
 	m.phase = eagerPhasePreview
 	m.frozenCategories = nil
+	m.frozenAllowPermanent = false
 	m.executionStarted = false
 	m.executionResult = clean.Result{}
 	m.executionProgress = clean.ExecutionProgress{}
@@ -322,18 +346,7 @@ func (m *eagerCleanModel) start() tea.Cmd {
 	m.cursor = 0
 	// Rebuild catalog-derived rows for a fresh session so queue growth/order
 	// stays aligned with the shared catalog without a second TUI registry.
-	queue := clean.EagerPreviewQueue()
-	m.rows = make([]eagerCategoryRow, 0, len(queue))
-	for _, summary := range queue {
-		m.rows = append(m.rows, eagerCategoryRow{
-			Identifier:     summary.Identifier,
-			Label:          summary.Label,
-			ReportCategory: summary.ReportCategory,
-			Eligibility:    summary.Eligibility,
-			State:          clean.CategoryPreviewWaiting,
-			Selected:       summary.Eligibility == clean.CategoryEligibilityDefault,
-		})
-	}
+	m.rows = eagerRowsFromSummaries(clean.EagerPreviewQueue())
 
 	opts := buildEagerPreviewOptions()
 	if unavailable := clean.CheckEagerPreviewAvailability(opts); unavailable != nil {
@@ -793,11 +806,13 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 	if len(ids) == 0 {
 		return eagerPreviewNavNone, nil
 	}
+	allowPermanent := m.selectionIncludesPermanent()
 	plan, err := clean.CompileExactCategoryPlan(ids)
 	if err != nil {
 		// Selection is catalog-derived; reject before any cleanup work.
 		m.executionStarted = true
 		m.frozenCategories = append([]string(nil), ids...)
+		m.frozenAllowPermanent = allowPermanent
 		m.executionResult = clean.Result{
 			Status: "error",
 			Mode:   "execute",
@@ -812,6 +827,7 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 		return eagerPreviewNavNone, nil
 	}
 	m.frozenCategories = append([]string(nil), plan.Categories...)
+	m.frozenAllowPermanent = allowPermanent
 	m.executionStarted = true
 	m.cancellationRequested = false
 	m.executionOutcomes = nil
@@ -827,7 +843,47 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 	m.cancelExecution = cancel
 	// Single command keeps the Bubble Tea handoff seam simple for tests and
 	// production; the header spinner advances on progress observations and ticks.
-	return eagerPreviewNavNone, executeExactCleanSelectionCmd(ctx, m.frozenCategories)
+	return eagerPreviewNavNone, executeExactCleanSelectionCmd(ctx, m.frozenCategories, m.frozenAllowPermanent)
+}
+
+// selectionIncludesPermanent reports whether the current exact selection
+// discloses any delete_permanently planned action. Used for confirmation
+// grouping and equivalent per-run permanent authorization.
+func (m eagerCleanModel) selectionIncludesPermanent() bool {
+	for _, row := range m.rows {
+		if row.Selected && row.PlannedAction == clean.DeletionActionDeletePermanently {
+			return true
+		}
+	}
+	return false
+}
+
+// confirmationActionGroups splits the exact selection into Permanent deletion
+// and Recycle Bin work. Empty groups are omitted. Action is catalog-owned.
+func (m eagerCleanModel) confirmationActionGroups() (permanent, recycle []eagerCategoryRow) {
+	for _, row := range m.rows {
+		if !row.Selected {
+			continue
+		}
+		switch row.PlannedAction {
+		case clean.DeletionActionDeletePermanently:
+			permanent = append(permanent, row)
+		default:
+			// Missing/unknown action is treated as Recycle Bin presentation only
+			// for confirmation totals; shared Clean remains authoritative.
+			recycle = append(recycle, row)
+		}
+	}
+	return permanent, recycle
+}
+
+func confirmationGroupTotals(rows []eagerCategoryRow) (categories, candidates int, bytes int64) {
+	for _, row := range rows {
+		categories++
+		candidates += row.CandidateCount
+		bytes += row.Bytes
+	}
+	return categories, candidates, bytes
 }
 
 // initialExecutionOutcomes builds path-free in-progress rows for the frozen
@@ -1010,15 +1066,7 @@ func (m eagerCleanModel) fixedFooterLines() []string {
 	}
 	switch m.phase {
 	case eagerPhaseConfirmation:
-		n, measured, _ := m.selectionTotals()
-		return []string{
-			"",
-			fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured)),
-			"Latest preview total only. Execution resolves fresh state; candidates or bytes may differ from preview.",
-			"Successful cleanup moves items to the Recycle Bin.",
-			"",
-			"Enter: execute | b/Esc: back to preview",
-		}
+		return m.confirmationFooterLines()
 	case eagerPhaseExecuting:
 		lines := []string{""}
 		if m.cancellationRequested {
@@ -1032,19 +1080,7 @@ func (m eagerCleanModel) fixedFooterLines() []string {
 		}
 		return lines
 	case eagerPhaseResult:
-		affected := m.executionResult.Totals.AffectedBytes
-		if affected == 0 {
-			affected = clean.SumExecutionAffectedBytes(m.executionOutcomes)
-		}
-		terminal := clean.CountTerminalExecutionOutcomes(m.executionOutcomes)
-		total := len(m.executionOutcomes)
-		return []string{
-			"",
-			fmt.Sprintf("Processed: %d/%d", terminal, total),
-			fmt.Sprintf("Affected bytes: %s", cleanFormatBytes(affected)),
-			"",
-			"Enter/Esc/b: menu · q: quit",
-		}
+		return m.resultFooterLines()
 	default:
 		lines := []string{"", m.selectionSummaryLine()}
 		lines = append(lines, strings.Split(m.focusedDetailPanel(), "\n")...)
@@ -1076,18 +1112,7 @@ func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
 	}
 	switch m.phase {
 	case eagerPhaseConfirmation:
-		lines := []eagerBodyLine{{text: "Selected categories:", rowIndex: -1, outcomeIndex: -1}}
-		for _, row := range m.rows {
-			if !row.Selected {
-				continue
-			}
-			lines = append(lines, eagerBodyLine{
-				text:         fmt.Sprintf("  - %s", row.Label),
-				rowIndex:     -1,
-				outcomeIndex: -1,
-			})
-		}
-		return lines
+		return m.confirmationBodyEntries()
 	case eagerPhaseExecuting, eagerPhaseResult:
 		lines := make([]eagerBodyLine, 0, len(m.executionOutcomes))
 		for i, outcome := range m.executionOutcomes {
@@ -1283,6 +1308,8 @@ func sharedExecutionPhaseLabel(phase clean.ExecutionPhase) string {
 		return "Recycle Bin safety check"
 	case clean.ExecutionPhaseRecycleBinOperations:
 		return "Moving to Recycle Bin"
+	case clean.ExecutionPhasePermanentOperations:
+		return "Permanent deletion"
 	case clean.ExecutionPhaseComplete:
 		return "Completion"
 	default:
@@ -1290,19 +1317,107 @@ func sharedExecutionPhaseLabel(phase clean.ExecutionPhase) string {
 	}
 }
 
+func (m eagerCleanModel) confirmationBodyEntries() []eagerBodyLine {
+	permanent, recycle := m.confirmationActionGroups()
+	lines := make([]eagerBodyLine, 0, len(permanent)+len(recycle)+8)
+	appendGroup := func(title string, rows []eagerCategoryRow) {
+		if len(rows) == 0 {
+			return
+		}
+		cats, candidates, bytes := confirmationGroupTotals(rows)
+		lines = append(lines, eagerBodyLine{
+			text:         fmt.Sprintf("%s · %d categories · %d item(s) · %s", title, cats, candidates, cleanFormatBytes(bytes)),
+			rowIndex:     -1,
+			outcomeIndex: -1,
+		})
+		for _, row := range rows {
+			action := clean.DeletionActionLabel(row.PlannedAction)
+			lines = append(lines, eagerBodyLine{
+				text: fmt.Sprintf("  - %s · %d item(s) · %s · %s",
+					row.Label, row.CandidateCount, cleanFormatBytes(row.Bytes), action),
+				rowIndex:     -1,
+				outcomeIndex: -1,
+			})
+			if row.SafetyNote != "" {
+				lines = append(lines, eagerBodyLine{
+					text:         "      Impact: " + row.SafetyNote,
+					rowIndex:     -1,
+					outcomeIndex: -1,
+				})
+			}
+		}
+	}
+	appendGroup("Permanent deletion", permanent)
+	appendGroup("Recycle Bin", recycle)
+	return lines
+}
+
+func (m eagerCleanModel) confirmationFooterLines() []string {
+	n, measured, _ := m.selectionTotals()
+	lines := []string{
+		"",
+		fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured)),
+		"Latest preview total only. Execution resolves fresh state; candidates or bytes may differ from preview.",
+		"Fresh execution cannot introduce a deletion action type that was not disclosed above.",
+	}
+	if m.selectionIncludesPermanent() {
+		lines = append(lines, "Permanent deletion is irreversible and cannot be recovered from the Recycle Bin.")
+	}
+	// Recycle Bin-only wording when that group is present; never claim free space.
+	if _, recycle := m.confirmationActionGroups(); len(recycle) > 0 {
+		lines = append(lines, "Recycle Bin items are moved, not permanently erased.")
+	}
+	lines = append(lines, "", "Enter: execute | b/Esc: back to preview")
+	return lines
+}
+
+func (m eagerCleanModel) resultTotals() (recycle, permanent, affected int64) {
+	recycle = m.executionResult.Totals.RecycleBinMovedBytes
+	permanent = m.executionResult.Totals.PermanentlyDeletedBytes
+	affected = m.executionResult.Totals.AffectedBytes
+	if recycle == 0 && permanent == 0 && affected == 0 {
+		recycle = clean.SumExecutionRecycleBinMovedBytes(m.executionOutcomes)
+		permanent = clean.SumExecutionPermanentlyDeletedBytes(m.executionOutcomes)
+		affected = clean.SumExecutionAffectedBytes(m.executionOutcomes)
+	}
+	if affected == 0 {
+		affected = recycle + permanent
+	}
+	return recycle, permanent, affected
+}
+
+func (m eagerCleanModel) resultFooterLines() []string {
+	recycle, permanent, affected := m.resultTotals()
+	terminal := clean.CountTerminalExecutionOutcomes(m.executionOutcomes)
+	total := len(m.executionOutcomes)
+	lines := []string{
+		"",
+		fmt.Sprintf("Processed: %d/%d", terminal, total),
+		fmt.Sprintf("Recycle Bin moved: %s", cleanFormatBytes(recycle)),
+		fmt.Sprintf("Permanently deleted: %s", cleanFormatBytes(permanent)),
+		// Aggregate is processed content, never "freed" or "reclaimed" disk space.
+		fmt.Sprintf("Affected (processed): %s", cleanFormatBytes(affected)),
+	}
+	if clean.ResultHasPermanentPartialRisk(m.executionResult) {
+		lines = append(lines, clean.PermanentPartialRiskWarning)
+	}
+	lines = append(lines, "", "Enter/Esc/b: menu · q: quit")
+	return lines
+}
+
 func (m eagerCleanModel) executionFooterLine() string {
 	terminal := clean.CountTerminalExecutionOutcomes(m.executionOutcomes)
 	total := len(m.executionOutcomes)
 	// In-progress progress cannot invent successful move bytes; only the final
-	// Result (and its projection) contributes affected totals.
-	affected := int64(0)
-	if m.phase == eagerPhaseResult {
-		affected = m.executionResult.Totals.AffectedBytes
-		if affected == 0 {
-			affected = clean.SumExecutionAffectedBytes(m.executionOutcomes)
-		}
+	// Result (and its projection) contributes totals.
+	if m.phase != eagerPhaseResult {
+		return fmt.Sprintf("Processed: %d/%d · Affected (processed): 0 KB", terminal, total)
 	}
-	return fmt.Sprintf("Processed: %d/%d · Affected bytes: %s", terminal, total, cleanFormatBytes(affected))
+	recycle, permanent, affected := m.resultTotals()
+	return fmt.Sprintf(
+		"Processed: %d/%d · Recycle Bin moved: %s · Permanently deleted: %s · Affected (processed): %s",
+		terminal, total, cleanFormatBytes(recycle), cleanFormatBytes(permanent), cleanFormatBytes(affected),
+	)
 }
 
 func (m eagerCleanModel) executionRowMarker(state clean.CategoryExecutionState) string {
