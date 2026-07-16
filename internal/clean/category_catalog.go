@@ -394,19 +394,22 @@ func developerCacheEntryWithProductScopedChildren(
 }
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
-	// Prefactor (#216): every current executable production category declares
-	// move_to_recycle_bin. Permanent deletion is not activated in this ticket.
+	// Default and Recycle Bin opt-ins remain move_to_recycle_bin. Permanent
+	// production activation (#219/#220): d3d_shader_cache, nvidia_dx_cache,
+	// browser_cache, vscode_cache, cursor_cache. Package/runtime dev caches stay
+	// Recycle Bin until later tickets.
 	{definition: categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)},
 	{definition: categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true},
 	{definition: categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"CrashDumps"}},
 	{definition: categoryDefinition(OpportunityCategoryWindowsErrorReporting, "Windows Error Reporting", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "WER"}},
+	// Whole-root Explorer/INetCache stay Recycle Bin until exact allowlists exist.
 	{definition: categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "Explorer"}},
 	{definition: categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "INetCache"}},
 	// d3d_shader_cache is the first production permanent-deletion tracer (#219).
-	// Only this production category is activated as delete_permanently in this slice.
 	{definition: categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), opportunity: true, fixedLocalAppDataPath: []string{"D3DSCache"}},
-	{definition: categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"NVIDIA", "DXCache"}},
-	{definition: categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, DeletionActionMoveToRecycleBin), opportunity: true},
+	// #220: remaining proven regenerable Windows/browser/editor caches.
+	{definition: categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), opportunity: true, fixedLocalAppDataPath: []string{"NVIDIA", "DXCache"}},
+	{definition: categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, DeletionActionDeletePermanently), opportunity: true},
 	{
 		definition: categoryDefinition(
 			OpportunityCategoryVSCodeCache,
@@ -414,7 +417,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
-			DeletionActionMoveToRecycleBin,
+			DeletionActionDeletePermanently,
 		),
 		opportunity:              true,
 		applicationCache:         true,
@@ -428,7 +431,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
-			DeletionActionMoveToRecycleBin,
+			DeletionActionDeletePermanently,
 		),
 		opportunity:              true,
 		applicationCache:         true,

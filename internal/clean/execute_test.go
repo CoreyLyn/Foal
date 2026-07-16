@@ -1085,7 +1085,8 @@ func TestDryRunOptInCategoriesShowOptInCandidatesNotOpportunities(t *testing.T) 
 				t.Fatalf("opt-in candidate category mismatch for %q, got %q want %q", tc.category, result.OptInCandidates[0].Category, tc.category)
 			}
 			wantAction := string(clean.DeletionActionMoveToRecycleBin)
-			if tc.category == clean.OpportunityCategoryD3DShaderCache {
+			switch tc.category {
+			case clean.OpportunityCategoryD3DShaderCache, clean.OpportunityCategoryNVIDIADXCache:
 				wantAction = string(clean.DeletionActionDeletePermanently)
 			}
 			if result.OptInCandidates[0].PlannedAction != wantAction {
@@ -1673,7 +1674,8 @@ func TestExecuteOptInBrowserCacheCleansWhenBrowserIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	adapter := &recordingRecycleBinAdapter{}
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 
 	// Create a detector that reports Chrome as idle
 	detector := func(ctx context.Context) []clean.RunningApplicationState {
@@ -1694,7 +1696,9 @@ func TestExecuteOptInBrowserCacheCleansWhenBrowserIdle(t *testing.T) {
 			ID:             "test_rule",
 			DefaultEnabled: false, // Disable default candidate
 		}},
-		RecycleBinAdapter:         adapter,
+		RecycleBinAdapter:         recycle,
+		PermanentRemover:          permanent,
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{"browser_cache"},
 		DetectRunningApplications: detector,
 		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
@@ -1704,19 +1708,28 @@ func TestExecuteOptInBrowserCacheCleansWhenBrowserIdle(t *testing.T) {
 
 	result := executeCleanWithSafeCapacity(context.Background(), opts)
 
-	// Verify the cache path was deleted (browser was idle)
+	if len(recycle.paths) != 0 {
+		t.Fatalf("browser permanent must not use Recycle Bin: %v", recycle.paths)
+	}
+	// Verify the cache path was deleted permanently (browser was idle)
 	found := false
-	for _, p := range adapter.paths {
+	for _, p := range permanent.paths {
 		if p == defaultCache {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected adapter to receive browser cache path, got %v", adapter.paths)
+		t.Fatalf("expected permanent remover to receive browser cache path, got %v", permanent.paths)
 	}
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("expected OptInDeletedCount 1 when browser is idle, got %d", result.Totals.OptInDeletedCount)
+	}
+	if result.Totals.PermanentlyDeletedBytes == 0 {
+		t.Fatalf("permanently_deleted_bytes = 0")
+	}
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 }
 

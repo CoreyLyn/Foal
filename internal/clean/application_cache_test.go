@@ -354,8 +354,8 @@ func TestDryRunVSCodeOptInConvertsRootsToCandidates(t *testing.T) {
 		if candidate.Category != clean.OpportunityCategoryVSCodeCache {
 			t.Fatalf("candidate category = %q", candidate.Category)
 		}
-		if candidate.PlannedAction != "move_to_recycle_bin" {
-			t.Fatalf("planned action = %q", candidate.PlannedAction)
+		if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			t.Fatalf("planned action = %q, want delete_permanently", candidate.PlannedAction)
 		}
 		reclaimable += candidate.Bytes
 	}
@@ -414,14 +414,17 @@ func TestExecuteOptInVSCodeCacheCleansWhenIdle(t *testing.T) {
 	})
 	cachePath := filepath.Join(codeRoot, "Cache")
 	cachedDataPath := filepath.Join(codeRoot, "CachedData")
-	adapter := &recordingRecycleBinAdapter{}
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	recorder := &recordingHistoryRecorder{}
 
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
-		RecycleBinAdapter: adapter,
-		HistoryRecorder:   recorder,
-		OptIn:             []string{clean.OpportunityCategoryVSCodeCache},
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter:      recycle,
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: true,
+		HistoryRecorder:        recorder,
+		OptIn:                  []string{clean.OpportunityCategoryVSCodeCache},
 		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
 			RoamingAppDataDir: roaming,
 		},
@@ -431,12 +434,20 @@ func TestExecuteOptInVSCodeCacheCleansWhenIdle(t *testing.T) {
 	if result.Totals.OptInDeletedCount != 2 {
 		t.Fatalf("OptInDeletedCount = %d, want 2; result=%#v", result.Totals.OptInDeletedCount, result)
 	}
+	if len(recycle.paths) != 0 {
+		t.Fatalf("vscode permanent must not use Recycle Bin: %v", recycle.paths)
+	}
 	found := map[string]bool{}
-	for _, path := range adapter.paths {
+	for _, path := range permanent.paths {
 		found[path] = true
 	}
 	if !found[cachePath] || !found[cachedDataPath] {
-		t.Fatalf("adapter paths = %v, want Cache and CachedData", adapter.paths)
+		t.Fatalf("permanent paths = %v, want Cache and CachedData", permanent.paths)
+	}
+	for _, item := range result.Deleted {
+		if item.Action != string(clean.DeletionActionDeletePermanently) {
+			t.Fatalf("deleted action = %q", item.Action)
+		}
 	}
 	// Opted-in execution history keeps path-bearing item records.
 	if len(recorder.items) == 0 {
@@ -444,6 +455,9 @@ func TestExecuteOptInVSCodeCacheCleansWhenIdle(t *testing.T) {
 	}
 	for _, item := range recorder.items {
 		if item.Path == cachePath || item.Path == cachedDataPath {
+			if item.Action != string(clean.DeletionActionDeletePermanently) {
+				t.Fatalf("history action = %q", item.Action)
+			}
 			return
 		}
 	}
@@ -456,13 +470,14 @@ func TestExecuteOptInVSCodeFreshResolvesNotPreviewPaths(t *testing.T) {
 	roamingExecute := t.TempDir()
 	codeRoot := writeVSCodeRoot(t, roamingExecute, map[string]string{"GPUCache": "execute-root"})
 	executePath := filepath.Join(codeRoot, "GPUCache")
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 
 	// Preview would see Cache under roamingPreview; execute must use fresh options.
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
-		RecycleBinAdapter: adapter,
-		OptIn:             []string{clean.OpportunityCategoryVSCodeCache},
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: true,
+		OptIn:                  []string{clean.OpportunityCategoryVSCodeCache},
 		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
 			RoamingAppDataDir: roamingExecute,
 		},
@@ -471,15 +486,19 @@ func TestExecuteOptInVSCodeFreshResolvesNotPreviewPaths(t *testing.T) {
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("OptInDeletedCount = %d, want 1", result.Totals.OptInDeletedCount)
 	}
-	if len(adapter.paths) != 1 || adapter.paths[0] != executePath {
-		t.Fatalf("adapter paths = %v, want fresh GPUCache %q", adapter.paths, executePath)
+	if len(permanent.paths) != 1 || permanent.paths[0] != executePath {
+		t.Fatalf("permanent paths = %v, want fresh GPUCache %q", permanent.paths, executePath)
 	}
 }
 
-func TestExecuteOptInVSCodeCapacityFailureSkipsBeforeDeletion(t *testing.T) {
+func TestExecuteOptInVSCodePermanentExcludesRecycleBinCapacity(t *testing.T) {
+	// Permanent editor caches are excluded from Recycle Bin capacity budgets.
+	// Tiny capacity must not block authorized permanent deletion.
 	roaming := t.TempDir()
-	writeVSCodeRoot(t, roaming, map[string]string{"Cache": string(make([]byte, 64))})
-	adapter := &recordingRecycleBinAdapter{}
+	codeRoot := writeVSCodeRoot(t, roaming, map[string]string{"Cache": string(make([]byte, 64))})
+	cachePath := filepath.Join(codeRoot, "Cache")
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	probe := func(path string) (clean.RecycleBinVolumeConfig, error) {
 		return clean.RecycleBinVolumeConfig{
 			Volume:       filepath.VolumeName(path),
@@ -490,7 +509,9 @@ func TestExecuteOptInVSCodeCapacityFailureSkipsBeforeDeletion(t *testing.T) {
 	}
 	result := clean.Execute(context.Background(), clean.Options{
 		Rules:                   []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
-		RecycleBinAdapter:       adapter,
+		RecycleBinAdapter:       recycle,
+		PermanentRemover:        permanent,
+		AllowPermanentDeletion:  true,
 		RecycleBinCapacityProbe: probe,
 		OptIn:                   []string{clean.OpportunityCategoryVSCodeCache},
 		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
@@ -498,20 +519,14 @@ func TestExecuteOptInVSCodeCapacityFailureSkipsBeforeDeletion(t *testing.T) {
 		},
 		DetectRunningApplications: idleVSCodeDetector(),
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("adapter called despite capacity failure: %v", adapter.paths)
+	if len(recycle.paths) != 0 {
+		t.Fatalf("recycle adapter called for permanent category: %v", recycle.paths)
 	}
-	if result.Totals.OptInDeletedCount != 0 {
-		t.Fatalf("deleted count = %d", result.Totals.OptInDeletedCount)
+	if result.Totals.OptInDeletedCount != 1 || len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+		t.Fatalf("permanent delete failed under tiny capacity: totals=%#v paths=%v", result.Totals, permanent.paths)
 	}
-	found := false
-	for _, skipped := range result.Skipped {
-		if skipped.Reason.Code == "recycle_bin_capacity" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("skipped = %#v, want recycle_bin_capacity", result.Skipped)
+	if result.Totals.PermanentlyDeletedBytes == 0 {
+		t.Fatalf("permanently_deleted_bytes = 0")
 	}
 }
 
@@ -931,8 +946,8 @@ func TestDryRunCursorOptInConvertsRootsToCandidatesWithoutSelectingVSCode(t *tes
 		if candidate.Category != clean.OpportunityCategoryCursorCache {
 			t.Fatalf("candidate category = %q, want cursor_cache only", candidate.Category)
 		}
-		if candidate.PlannedAction != "move_to_recycle_bin" {
-			t.Fatalf("planned action = %q", candidate.PlannedAction)
+		if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			t.Fatalf("planned action = %q, want delete_permanently", candidate.PlannedAction)
 		}
 	}
 	model := clean.NewPreviewReadModel(result)
@@ -979,14 +994,17 @@ func TestExecuteOptInCursorCacheCleansWhenIdle(t *testing.T) {
 	})
 	cachePath := filepath.Join(cursorRoot, "Cache")
 	cachedDataPath := filepath.Join(cursorRoot, "CachedData")
-	adapter := &recordingRecycleBinAdapter{}
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	recorder := &recordingHistoryRecorder{}
 
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
-		RecycleBinAdapter: adapter,
-		HistoryRecorder:   recorder,
-		OptIn:             []string{clean.OpportunityCategoryCursorCache},
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter:      recycle,
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: true,
+		HistoryRecorder:        recorder,
+		OptIn:                  []string{clean.OpportunityCategoryCursorCache},
 		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
 			RoamingAppDataDir: roaming,
 		},
@@ -996,18 +1014,24 @@ func TestExecuteOptInCursorCacheCleansWhenIdle(t *testing.T) {
 	if result.Totals.OptInDeletedCount != 2 {
 		t.Fatalf("OptInDeletedCount = %d, want 2; result=%#v", result.Totals.OptInDeletedCount, result)
 	}
+	if len(recycle.paths) != 0 {
+		t.Fatalf("cursor permanent must not use Recycle Bin: %v", recycle.paths)
+	}
 	found := map[string]bool{}
-	for _, path := range adapter.paths {
+	for _, path := range permanent.paths {
 		found[path] = true
 	}
 	if !found[cachePath] || !found[cachedDataPath] {
-		t.Fatalf("adapter paths = %v, want Cache and CachedData", adapter.paths)
+		t.Fatalf("permanent paths = %v, want Cache and CachedData", permanent.paths)
 	}
 	if len(recorder.items) == 0 {
 		t.Fatalf("history items empty, want path-bearing opt-in records")
 	}
 	for _, item := range recorder.items {
 		if item.Path == cachePath || item.Path == cachedDataPath {
+			if item.Action != string(clean.DeletionActionDeletePermanently) {
+				t.Fatalf("history action = %q", item.Action)
+			}
 			return
 		}
 	}
@@ -1018,12 +1042,13 @@ func TestExecuteOptInCursorFreshResolvesNotPreviewPaths(t *testing.T) {
 	roamingExecute := t.TempDir()
 	cursorRoot := writeCursorRoot(t, roamingExecute, map[string]string{"GPUCache": "execute-root"})
 	executePath := filepath.Join(cursorRoot, "GPUCache")
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
-		RecycleBinAdapter: adapter,
-		OptIn:             []string{clean.OpportunityCategoryCursorCache},
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: true,
+		OptIn:                  []string{clean.OpportunityCategoryCursorCache},
 		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
 			RoamingAppDataDir: roamingExecute,
 		},
@@ -1032,15 +1057,17 @@ func TestExecuteOptInCursorFreshResolvesNotPreviewPaths(t *testing.T) {
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("OptInDeletedCount = %d, want 1", result.Totals.OptInDeletedCount)
 	}
-	if len(adapter.paths) != 1 || adapter.paths[0] != executePath {
-		t.Fatalf("adapter paths = %v, want fresh GPUCache %q", adapter.paths, executePath)
+	if len(permanent.paths) != 1 || permanent.paths[0] != executePath {
+		t.Fatalf("permanent paths = %v, want fresh GPUCache %q", permanent.paths, executePath)
 	}
 }
 
-func TestExecuteOptInCursorCapacityFailureSkipsBeforeDeletion(t *testing.T) {
+func TestExecuteOptInCursorPermanentExcludesRecycleBinCapacity(t *testing.T) {
 	roaming := t.TempDir()
-	writeCursorRoot(t, roaming, map[string]string{"Cache": string(make([]byte, 64))})
-	adapter := &recordingRecycleBinAdapter{}
+	cursorRoot := writeCursorRoot(t, roaming, map[string]string{"Cache": string(make([]byte, 64))})
+	cachePath := filepath.Join(cursorRoot, "Cache")
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	probe := func(path string) (clean.RecycleBinVolumeConfig, error) {
 		return clean.RecycleBinVolumeConfig{
 			Volume:       filepath.VolumeName(path),
@@ -1051,7 +1078,9 @@ func TestExecuteOptInCursorCapacityFailureSkipsBeforeDeletion(t *testing.T) {
 	}
 	result := clean.Execute(context.Background(), clean.Options{
 		Rules:                   []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
-		RecycleBinAdapter:       adapter,
+		RecycleBinAdapter:       recycle,
+		PermanentRemover:        permanent,
+		AllowPermanentDeletion:  true,
 		RecycleBinCapacityProbe: probe,
 		OptIn:                   []string{clean.OpportunityCategoryCursorCache},
 		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
@@ -1059,20 +1088,11 @@ func TestExecuteOptInCursorCapacityFailureSkipsBeforeDeletion(t *testing.T) {
 		},
 		DetectRunningApplications: idleCursorDetector(),
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("adapter called despite capacity failure: %v", adapter.paths)
+	if len(recycle.paths) != 0 {
+		t.Fatalf("recycle adapter called for permanent category: %v", recycle.paths)
 	}
-	if result.Totals.OptInDeletedCount != 0 {
-		t.Fatalf("deleted count = %d", result.Totals.OptInDeletedCount)
-	}
-	found := false
-	for _, skipped := range result.Skipped {
-		if skipped.Reason.Code == "recycle_bin_capacity" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("skipped = %#v, want recycle_bin_capacity", result.Skipped)
+	if result.Totals.OptInDeletedCount != 1 || len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+		t.Fatalf("permanent delete failed under tiny capacity: totals=%#v paths=%v", result.Totals, permanent.paths)
 	}
 }
 
@@ -1080,11 +1100,12 @@ func TestExecuteOptInCursorDoesNotAuthorizeVSCode(t *testing.T) {
 	roaming := t.TempDir()
 	writeCursorRoot(t, roaming, map[string]string{"Cache": "cursor"})
 	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "vscode"})
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
-		RecycleBinAdapter: adapter,
-		OptIn:             []string{clean.OpportunityCategoryCursorCache},
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: true,
+		OptIn:                  []string{clean.OpportunityCategoryCursorCache},
 		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
 			RoamingAppDataDir: roaming,
 		},
@@ -1093,10 +1114,10 @@ func TestExecuteOptInCursorDoesNotAuthorizeVSCode(t *testing.T) {
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("OptInDeletedCount = %d, want 1 cursor root", result.Totals.OptInDeletedCount)
 	}
-	for _, path := range adapter.paths {
+	for _, path := range permanent.paths {
 		if strings.Contains(path, string(filepath.Separator)+"Code"+string(filepath.Separator)) ||
 			strings.HasSuffix(path, string(filepath.Separator)+"Code") {
-			t.Fatalf("cursor opt-in deleted VS Code path: %v", adapter.paths)
+			t.Fatalf("cursor opt-in deleted VS Code path: %v", permanent.paths)
 		}
 	}
 }

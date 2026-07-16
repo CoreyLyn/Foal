@@ -313,10 +313,13 @@ func TestExecuteCombinedOptInUsesSameRunningApplicationAggregation(t *testing.T)
 	roaming := t.TempDir()
 	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "vscode"})
 	writeCursorRoot(t, roaming, map[string]string{"Cache": "cursor"})
-	adapter := &recordingRecycleBinAdapter{}
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		RecycleBinAdapter:                adapter,
+		RecycleBinAdapter:                recycle,
+		PermanentRemover:                 permanent,
+		AllowPermanentDeletion:           true,
 		BrowserCacheDiscoveryOptions:     clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: localAppData},
 		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
 		DetectRunningApplications:        noisyDetector(clean.RunningApplicationStateIdle),
@@ -352,9 +355,12 @@ func TestExecuteCombinedOptInUsesSameRunningApplicationAggregation(t *testing.T)
 			t.Fatalf("execute leaked %q: %#v", forbidden, result.RunningApplications)
 		}
 	}
-	// Fake recycle bin must have been used for successful opt-in deletes.
-	if len(adapter.paths) == 0 {
-		t.Fatal("expected fake recycle bin adapter to receive opt-in candidates")
+	// Browser/editor caches are permanent: permanent remover receives candidates.
+	if len(permanent.paths) == 0 {
+		t.Fatal("expected permanent remover to receive opt-in candidates")
+	}
+	if len(recycle.paths) != 0 {
+		t.Fatalf("permanent categories must not use Recycle Bin: %v", recycle.paths)
 	}
 	if result.Mode != "execute" {
 		t.Fatalf("mode = %q, want execute", result.Mode)
