@@ -15,6 +15,7 @@ func TestInProgressExecutionStateProjectsSharedPhases(t *testing.T) {
 		{clean.ExecutionPhaseScanning, clean.CategoryExecutionRechecking},
 		{clean.ExecutionPhaseRecycleBinSafety, clean.CategoryExecutionReady},
 		{clean.ExecutionPhaseRecycleBinOperations, clean.CategoryExecutionCleaning},
+		{clean.ExecutionPhasePermanentOperations, clean.CategoryExecutionCleaning},
 		{clean.ExecutionPhaseComplete, clean.CategoryExecutionCleaning},
 		{"", clean.CategoryExecutionRechecking},
 	}

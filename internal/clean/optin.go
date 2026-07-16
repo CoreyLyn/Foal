@@ -185,7 +185,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 							Path:          path,
 							Bytes:         0,
 							Rule:          category,
-							PlannedAction: plannedActionForCategory(category),
+							PlannedAction: plannedActionForOpts(opts, category),
 							Reason:        *outcome.skipReason,
 						})
 					}
@@ -195,7 +195,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 					Path:          path,
 					Bytes:         outcome.bytes,
 					Category:      category,
-					PlannedAction: plannedActionForCategory(category),
+					PlannedAction: plannedActionForOpts(opts, category),
 				})
 				continue
 			}
@@ -213,7 +213,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 				Path:          path,
 				Bytes:         bytes,
 				Category:      category,
-				PlannedAction: plannedActionForCategory(category),
+				PlannedAction: plannedActionForOpts(opts, category),
 			})
 		}
 	}
@@ -234,7 +234,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 				Path:          opportunity.Path,
 				Bytes:         opportunity.Bytes,
 				Category:      opportunity.Category,
-				PlannedAction: plannedActionForCategory(opportunity.Category),
+				PlannedAction: plannedActionForOpts(opts, opportunity.Category),
 			}
 			if opportunity.Category == OpportunityCategoryUserTemp {
 				candidate.IsUserTemp = true
@@ -300,7 +300,7 @@ func resolveStructuredDevCacheRoot(
 					Path:          root,
 					Bytes:         0,
 					Rule:          category,
-					PlannedAction: plannedActionForCategory(category),
+					PlannedAction: plannedActionForOpts(opts, category),
 					Reason:        *reason,
 				})
 			}
@@ -332,7 +332,7 @@ func resolveStructuredDevCacheRoot(
 				Path:          root,
 				Bytes:         0,
 				Rule:          category,
-				PlannedAction: plannedActionForCategory(category),
+				PlannedAction: plannedActionForOpts(opts, category),
 				Reason:        *reason,
 			})
 		}
@@ -415,7 +415,7 @@ func resolveApplicationCacheOptInCandidates(ctx context.Context, opts Options, c
 			Path:          opportunity.Path,
 			Bytes:         opportunity.Bytes,
 			Category:      category,
-			PlannedAction: plannedActionForCategory(category),
+			PlannedAction: plannedActionForOpts(opts, category),
 		})
 	}
 }
@@ -474,13 +474,13 @@ func resolveBrowserOptInCandidates(ctx context.Context, opts Options, res *optIn
 		if discovery.opportunity == nil || browserOpportunityProtected(opts.Validator, *discovery.opportunity) {
 			continue
 		}
-		appendBrowserCacheCandidates(res, discovery.opportunity)
+		appendBrowserCacheCandidates(opts, res, discovery.opportunity)
 	}
 }
 
 // appendBrowserCacheCandidates appends one Opt-in candidate per non-empty
 // regenerating cache directory across the browser's profiles.
-func appendBrowserCacheCandidates(res *optInResolution, opportunity *Opportunity) {
+func appendBrowserCacheCandidates(opts Options, res *optInResolution, opportunity *Opportunity) {
 	if opportunity.BrowserCache == nil {
 		return
 	}
@@ -493,7 +493,7 @@ func appendBrowserCacheCandidates(res *optInResolution, opportunity *Opportunity
 				Path:          cache.Path,
 				Bytes:         cache.Bytes,
 				Category:      OpportunityCategoryBrowserCache,
-				PlannedAction: plannedActionForCategory(OpportunityCategoryBrowserCache),
+				PlannedAction: plannedActionForOpts(opts, OpportunityCategoryBrowserCache),
 			})
 		}
 	}

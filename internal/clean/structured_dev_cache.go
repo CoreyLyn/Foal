@@ -211,7 +211,7 @@ func appendStructuredDevCacheCandidates(
 			Path:          child,
 			Bytes:         inspection.bytes,
 			Category:      category,
-			PlannedAction: plannedActionForCategory(category),
+			PlannedAction: plannedActionForOpts(opts, category),
 		})
 	}
 }
