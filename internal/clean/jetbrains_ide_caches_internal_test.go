@@ -36,20 +36,22 @@ var jetbrainsCatalogPrefixCases = []struct {
 	{"Aqua2024.1", ApplicationAqua, "2024.1", true},
 	{"MPS2024.1", ApplicationMPS, "2024.1", true},
 	{"Writerside2024.1", ApplicationWriterside, "2024.1", true},
-	// Fail-closed: version / decoy / deferred / non-catalog
+	// Rider (with Rider-only resharper-host children at discovery)
+	{"Rider2025.3", ApplicationRider, "2025.3", true},
+	{"rider2024.1", ApplicationRider, "2024.1", true},
+	// Fail-closed: version / decoy / non-catalog
 	{"IntelliJIdea2019.3", "", "", false},
 	{"IntelliJIdea2020", "", "", false},
 	{"IntelliJIdea2020.0", "", "", false},
 	{"IntelliJIdea2024.1.1", "", "", false},
 	{"IntelliJIdea2024.1-backup", "", "", false},
 	{"MyIntelliJIdea2024.1", "", "", false},
-	{"Rider2024.1", "", "", false}, // #210 owns Rider
 	{"PyCharmEdu2024.1", "", "", false},
 	{"Fleet2024.1", "", "", false},
 	{"AndroidStudio2024.1", "", "", false},
 	{"WebIde2024.1", "", "", false},
 	{"Toolbox", "", "", false},
-	{"ReSharper", "", "", false},
+	{"ReSharper", "", "", false}, // standalone ReSharper is not Rider
 	{"", "", "", false},
 }
 
@@ -72,6 +74,7 @@ var jetbrainsCatalogProcessCases = []struct {
 	{ApplicationAqua, []string{"aqua64.exe", "aqua.exe"}},
 	{ApplicationMPS, []string{"mps64.exe", "mps.exe"}},
 	{ApplicationWriterside, []string{"writerside64.exe", "writerside.exe"}},
+	{ApplicationRider, []string{"rider64.exe", "rider.exe"}},
 }
 
 func TestMatchJetBrainsProductVersionDir(t *testing.T) {
@@ -197,7 +200,7 @@ func TestCompareJetBrainsVersions(t *testing.T) {
 func TestDiscoverJetBrainsIDECacheChildrenAllowlistOnly(t *testing.T) {
 	parent := t.TempDir()
 	productRoot := filepath.Join(parent, "IntelliJIdea2024.1")
-	for _, name := range []string{"caches", "index", "LocalHistory", "plugins", "log", "tmp"} {
+	for _, name := range []string{"caches", "index", "resharper-host", "LocalHistory", "plugins", "log", "tmp"} {
 		if err := os.MkdirAll(filepath.Join(productRoot, name), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -208,7 +211,7 @@ func TestDiscoverJetBrainsIDECacheChildrenAllowlistOnly(t *testing.T) {
 
 	children := discoverJetBrainsIDECacheChildren(context.Background(), productRoot)
 	if len(children) != 2 {
-		t.Fatalf("children = %#v, want caches+index only", children)
+		t.Fatalf("children = %#v, want caches+index only (no resharper-host on IDEA)", children)
 	}
 	if filepath.Base(children[0]) != "caches" || filepath.Base(children[1]) != "index" {
 		t.Fatalf("order/names = %#v", children)
@@ -237,6 +240,31 @@ func TestDiscoverJetBrainsIDECacheChildrenNoResharperHost(t *testing.T) {
 	}
 }
 
+func TestDiscoverJetBrainsIDECacheChildrenRiderIncludesReSharperHost(t *testing.T) {
+	parent := t.TempDir()
+	productRoot := filepath.Join(parent, "Rider2025.3")
+	for _, name := range []string{
+		"caches", "index", "resharper-host",
+		"LocalHistory", "fileHistory", "vcs-log", "jcef_cache",
+		"plugins", "log", "coverage", "projects", "tmp", "full-line",
+	} {
+		if err := os.MkdirAll(filepath.Join(productRoot, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	children := discoverJetBrainsIDECacheChildren(context.Background(), productRoot)
+	if len(children) != 3 {
+		t.Fatalf("children = %#v, want caches+index+resharper-host", children)
+	}
+	want := []string{"caches", "index", "resharper-host"}
+	for i, name := range want {
+		if filepath.Base(children[i]) != name {
+			t.Fatalf("children[%d] = %q, want %q among %#v", i, children[i], name, children)
+		}
+	}
+}
+
 func TestResolveJetBrainsIDECacheRootScopesOrdering(t *testing.T) {
 	local := t.TempDir()
 	jb := filepath.Join(local, "JetBrains")
@@ -248,7 +276,8 @@ func TestResolveJetBrainsIDECacheRootScopesOrdering(t *testing.T) {
 		"WebStorm2024.1",
 		"GoLand2023.3",
 		"GoLand2024.1",
-		"Rider2024.1", // ignored until #210
+		"Rider2025.3",
+		"Rider2024.1",
 		"Fleet2024.1", // non-standard architecture
 	} {
 		if err := os.MkdirAll(filepath.Join(jb, name), 0700); err != nil {
@@ -264,19 +293,20 @@ func TestResolveJetBrainsIDECacheRootScopesOrdering(t *testing.T) {
 		},
 		joinPath: filepath.Join,
 	})
-	// Product catalog order: IDEA editions by version, PyCharm by version,
-	// then WebStorm, then GoLand versions ascending.
+	// Product catalog order: IDEA, PyCharm, WebStorm, GoLand, then Rider (end).
 	wantNames := []string{
 		"IdeaIC2024.1", "IntelliJIdea2024.2",
 		"PyCharm2024.1", "PyCharmCE2024.3",
 		"WebStorm2024.1",
 		"GoLand2023.3", "GoLand2024.1",
+		"Rider2024.1", "Rider2025.3",
 	}
 	wantApps := []string{
 		ApplicationIntelliJIDEA, ApplicationIntelliJIDEA,
 		ApplicationPyCharm, ApplicationPyCharm,
 		ApplicationWebStorm,
 		ApplicationGoLand, ApplicationGoLand,
+		ApplicationRider, ApplicationRider,
 	}
 	if len(scopes) != len(wantNames) {
 		t.Fatalf("scopes = %#v, want %d product roots", scopes, len(wantNames))

@@ -243,6 +243,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		"idea64.exe", "pycharm64.exe", "webstorm64.exe", "phpstorm64.exe",
 		"rubymine64.exe", "clion64.exe", "datagrip64.exe", "dataspell64.exe",
 		"goland64.exe", "rustrover64.exe", "aqua64.exe", "mps64.exe", "writerside64.exe",
+		"rider64.exe",
 		"IntelliJIdea", "IdeaIC", "PyCharmCE", "WebStorm", "PhpStorm", "RubyMine",
 		"CLion", "DataGrip", "DataSpell", "GoLand", "RustRover", "Writerside",
 		"resolvePaths", "lookupEnv", "LOCALAPPDATA", "APPDATA", "ms-playwright",

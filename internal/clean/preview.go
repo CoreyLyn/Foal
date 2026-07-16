@@ -238,6 +238,7 @@ const (
 	ApplicationAqua                        = "aqua"
 	ApplicationMPS                         = "mps"
 	ApplicationWriterside                  = "writerside"
+	ApplicationRider                       = "rider"
 	RunningApplicationStateRunning         = RunningApplicationStatus("running")
 	RunningApplicationStateIdle            = RunningApplicationStatus("idle")
 	RunningApplicationStateUnknown         = RunningApplicationStatus("unknown")

@@ -30,9 +30,8 @@ type jetbrainsIDEProductPolicy struct {
 }
 
 // jetbrainsIDEProductPolicies is the fail-closed product catalog for standard-
-// layout Windows IntelliJ-platform IDEs that share the caches+index child policy.
-// Order is part of deterministic discovery (productIndex). Rider and its
-// resharper-host child remain intentionally absent (#210). Non-IntelliJ storage
+// layout Windows IntelliJ-platform IDEs (caches+index; Rider also resharper-host).
+// Order is part of deterministic discovery (productIndex). Non-IntelliJ storage
 // (Fleet/Air/Gateway/Client) and third-party platforms (Android Studio) stay out.
 //
 // Longer edition prefixes must appear before shorter prefixes they extend
@@ -59,6 +58,12 @@ var jetbrainsIDEProductPolicies = []jetbrainsIDEProductPolicy{
 	{application: ApplicationAqua, prefixes: []string{"Aqua"}},
 	{application: ApplicationMPS, prefixes: []string{"MPS"}},
 	{application: ApplicationWriterside, prefixes: []string{"Writerside"}},
+	{
+		application: ApplicationRider,
+		// Rider system dirs are RiderYYYY.N; ReSharper caches are Rider-only.
+		prefixes:           []string{"Rider"},
+		extraCacheChildren: []string{"resharper-host"},
+	},
 }
 
 // jetbrainsIDEApplicationIDs returns the deterministic logical application

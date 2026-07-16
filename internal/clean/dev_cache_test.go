@@ -736,6 +736,9 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 	})
 
 	t.Run("empty path from resolver skips execute", func(t *testing.T) {
+		// Isolate product-scoped JetBrains roots (catalog resolveRootScopes).
+		t.Setenv("LOCALAPPDATA", t.TempDir())
+
 		fakeResolver := func(category string) []string {
 			return nil
 		}
