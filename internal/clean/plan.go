@@ -295,6 +295,7 @@ func newCleanResultSkeleton(mode string, opts Options) Result {
 		ProtectionDiagnostics:            append([]ProtectionDiagnostic(nil), opts.ProtectionDiagnostics...),
 		Candidates:                       []CandidatePreview{},
 		Deleted:                          []DeletedItem{},
+		Failed:                           []FailedItem{},
 		Skipped:                          []SkippedItem{},
 		Errors:                           []StructuredIssue{},
 		Opportunities:                    []Opportunity{},
@@ -326,7 +327,7 @@ func appendDefaultCandidates(ctx context.Context, opts Options, selectedDefaults
 			continue
 		}
 		for _, path := range rule.CandidatePaths {
-			previewCandidate(ctx, opts.Validator, path, rule.ID, result)
+			previewCandidate(ctx, opts, path, rule.ID, result)
 		}
 		for _, root := range rule.Roots {
 			select {
@@ -346,7 +347,7 @@ func appendDefaultCandidates(ctx context.Context, opts Options, selectedDefaults
 					continue
 				}
 				path := filepath.Join(root, entry.Name())
-				previewCandidate(ctx, opts.Validator, path, rule.ID, result)
+				previewCandidate(ctx, opts, path, rule.ID, result)
 			}
 		}
 	}

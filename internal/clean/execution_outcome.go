@@ -51,7 +51,7 @@ func InProgressExecutionState(phase ExecutionPhase) CategoryExecutionState {
 	switch phase {
 	case ExecutionPhaseRecycleBinSafety:
 		return CategoryExecutionReady
-	case ExecutionPhaseRecycleBinOperations, ExecutionPhaseComplete:
+	case ExecutionPhaseRecycleBinOperations, ExecutionPhasePermanentOperations, ExecutionPhaseComplete:
 		return CategoryExecutionCleaning
 	case ExecutionPhaseScanning:
 		return CategoryExecutionRechecking
@@ -92,6 +92,16 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		if item.Bytes > 0 {
 			b.affectedBytes += item.Bytes
 		}
+	}
+	for _, item := range result.Failed {
+		b := byID[item.Rule]
+		if b == nil {
+			continue
+		}
+		// Permanent post-mutation failures count as operational skips for
+		// category projection (failed/partial), not successful deletions.
+		b.skipped++
+		b.hasOperational = true
 	}
 	for _, item := range result.Skipped {
 		b := byID[item.Rule]
@@ -203,12 +213,14 @@ func classifyExecutionIssueCode(code string) executionIssueKind {
 	case "context_canceled":
 		return executionIssueCancel
 	case "delete_failed", "permission_denied", "unsupported_target",
+		permanentDeleteFailedIssueCode,
 		"invalid_category_plan", PreviewReasonInspectionFailed,
 		"protection_file_load_failed", "protection_file_invalid_utf8":
 		return executionIssueOperational
 	default:
 		// Safety skips and path-safety rejections (protected_path, recycle_bin_*,
-		// running application, reparse_point, hardlink, etc.).
+		// permanent_deletion_not_authorized, running application, reparse_point,
+		// hardlink, etc.).
 		return executionIssueSafety
 	}
 }

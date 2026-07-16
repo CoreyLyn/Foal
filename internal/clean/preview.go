@@ -85,10 +85,11 @@ type DevCacheRootScopeResolver func(category string) []DevCacheRootScope
 type ExecutionPhase string
 
 const (
-	ExecutionPhaseScanning             ExecutionPhase = "fresh_candidate_scanning"
-	ExecutionPhaseRecycleBinSafety     ExecutionPhase = "aggregate_recycle_bin_safety_checks"
-	ExecutionPhaseRecycleBinOperations ExecutionPhase = "recycle_bin_operations"
-	ExecutionPhaseComplete             ExecutionPhase = "completion"
+	ExecutionPhaseScanning              ExecutionPhase = "fresh_candidate_scanning"
+	ExecutionPhaseRecycleBinSafety      ExecutionPhase = "aggregate_recycle_bin_safety_checks"
+	ExecutionPhaseRecycleBinOperations  ExecutionPhase = "recycle_bin_operations"
+	ExecutionPhasePermanentOperations   ExecutionPhase = "permanent_deletion_operations"
+	ExecutionPhaseComplete              ExecutionPhase = "completion"
 )
 
 // ExecutionProgress is deliberately absent from Result and its JSON contract.
@@ -105,8 +106,12 @@ type Options struct {
 	ProtectionDiagnostics            []ProtectionDiagnostic
 	ProtectionLoadError              *StructuredIssue
 	RecycleBinAdapter                delete.Adapter
-	HistoryRecorder                  history.Recorder
-	DetailedListDir                  string
+	// PermanentRemover permanently deletes authorized candidates. Production
+	// uses ordinary filesystem removal; tests inject recording/failing removers.
+	// Nil selects delete.FilesystemPermanentRemover.
+	PermanentRemover delete.PermanentRemover
+	HistoryRecorder  history.Recorder
+	DetailedListDir  string
 	CommandParameters                history.CommandParameters
 	UserTempDiscoveryOptions         UserTempDiscoveryOptions
 	DiscoverUserTempOpportunities    func(context.Context) UserTempDiscoveryResult
@@ -124,7 +129,16 @@ type Options struct {
 	// Execute honor it directly: additive plans always include defaults, exact
 	// plans omit unlisted defaults. When nil, an additive plan is compiled from
 	// OptIn so existing CLI callers stay compatible.
-	Plan                    *CategoryPlan
+	Plan *CategoryPlan
+	// AllowPermanentDeletion is explicit per-run authorization for candidates
+	// whose planned action is delete_permanently. Independent of ordinary
+	// execute confirmation. When false, permanent candidates are skipped with
+	// permanent_deletion_not_authorized and Recycle Bin work continues.
+	AllowPermanentDeletion bool
+	// CategoryPlannedActions injects planned actions by category ID for tests.
+	// Production leaves it nil so the catalog remains the sole source of truth.
+	// Used to exercise permanent deletion without activating production rules.
+	CategoryPlannedActions map[string]DeletionAction
 	RecycleBinCapacityProbe RecycleBinCapacityProbe
 	DevCachePathResolver    DevCachePathResolver
 	// DevCacheRootScopeResolver injects product-scoped root scopes. When set,
@@ -153,6 +167,9 @@ type Result struct {
 	ProtectionDiagnostics            []ProtectionDiagnostic            `json:"protection_diagnostics"`
 	Candidates                       []CandidatePreview                `json:"candidates"`
 	Deleted                          []DeletedItem                     `json:"deleted"`
+	// Failed holds permanent-deletion candidates that errored after mutation
+	// may have begun (permanent_delete_failed). Pre-mutation rejects stay in Skipped.
+	Failed                           []FailedItem                      `json:"failed"`
 	Skipped                          []SkippedItem                     `json:"skipped"`
 	Errors                           []StructuredIssue                 `json:"errors"`
 	Opportunities                    []Opportunity                     `json:"opportunities"`
@@ -197,6 +214,18 @@ type DeletedItem struct {
 	// Action is the actual deletion action taken for a successful item.
 	Action  string `json:"action,omitempty"`
 	IsOptIn bool   `json:"is_opt_in,omitempty"`
+}
+
+// FailedItem is a permanent-deletion candidate that failed after mutation may
+// have begun. It is not a pre-mutation skip and never falls back to the Recycle Bin.
+type FailedItem struct {
+	Path          string          `json:"path"`
+	Bytes         int64           `json:"bytes"`
+	Rule          string          `json:"rule"`
+	PlannedAction string          `json:"planned_action"`
+	// Action is the attempted action (always delete_permanently for this ticket).
+	Action string          `json:"action"`
+	Reason StructuredIssue `json:"reason"`
 }
 
 type OptInCandidate struct {
@@ -249,10 +278,12 @@ const (
 	RunningApplicationStateIdle            = RunningApplicationStatus("idle")
 	RunningApplicationStateUnknown         = RunningApplicationStatus("unknown")
 	runningApplicationDetectionIssueCode   = "running_application_detection_unknown"
-	recycleBinDisabledIssueCode            = "recycle_bin_disabled"
-	recycleBinCapacityIssueCode            = "recycle_bin_capacity"
-	recycleBinCapacityProbeFailedIssueCode = "recycle_bin_capacity_probe_failed"
-	devToolRunningIssueCode                = "dev_tool_running"
+	recycleBinDisabledIssueCode              = "recycle_bin_disabled"
+	recycleBinCapacityIssueCode              = "recycle_bin_capacity"
+	recycleBinCapacityProbeFailedIssueCode   = "recycle_bin_capacity_probe_failed"
+	permanentDeletionNotAuthorizedIssueCode  = "permanent_deletion_not_authorized"
+	permanentDeleteFailedIssueCode           = "permanent_delete_failed"
+	devToolRunningIssueCode                  = "dev_tool_running"
 )
 
 type RunningApplicationState struct {
@@ -644,16 +675,15 @@ func Execute(ctx context.Context, opts Options) Result {
 	exactDefaults := categoryPlan.Mode == SelectionModeExact
 	appendDefaultCandidates(ctx, opts, planDefaultSet(categoryPlan), exactDefaults, &result)
 
-	adapter := opts.RecycleBinAdapter
-	if adapter == nil {
-		adapter = delete.WindowsRecycleBinAdapter{}
-	}
-
-	executionCandidates := make([]recycleBinExecutionCandidate, 0, len(result.Candidates))
+	// Collect every fresh candidate with its catalog/test planned action.
+	// Partition happens before any mutation so capacity preflight and order
+	// remain action-aware (Recycle Bin first, permanent last).
+	executionCandidates := make([]actionExecutionCandidate, 0, len(result.Candidates))
 	for _, candidate := range result.Candidates {
-		executionCandidates = append(executionCandidates, recycleBinExecutionCandidate{
-			candidate: delete.Candidate{Path: candidate.Path, Bytes: candidate.Bytes},
-			rule:      candidate.Rule,
+		executionCandidates = append(executionCandidates, actionExecutionCandidate{
+			candidate:     delete.Candidate{Path: candidate.Path, Bytes: candidate.Bytes},
+			rule:          candidate.Rule,
+			plannedAction: resolvePlannedAction(candidate.Rule, opts.CategoryPlannedActions),
 		})
 	}
 
@@ -672,18 +702,42 @@ func Execute(ctx context.Context, opts Options) Result {
 			if opts.Validator.IsUserProtected(c.Path) {
 				continue
 			}
-			executionCandidates = append(executionCandidates, recycleBinExecutionCandidate{
-				candidate: delete.Candidate{Path: c.Path, Bytes: c.Bytes},
-				rule:      c.Category,
-				isOptIn:   true,
+			executionCandidates = append(executionCandidates, actionExecutionCandidate{
+				candidate:     delete.Candidate{Path: c.Path, Bytes: c.Bytes},
+				rule:          c.Category,
+				isOptIn:       true,
+				plannedAction: resolvePlannedAction(c.Category, opts.CategoryPlannedActions),
 			})
 		}
 	}
 
+	var recycleBinCandidates []actionExecutionCandidate
+	var permanentCandidates []actionExecutionCandidate
+	for _, candidate := range executionCandidates {
+		if candidate.plannedAction == string(DeletionActionDeletePermanently) {
+			permanentCandidates = append(permanentCandidates, candidate)
+			continue
+		}
+		recycleBinCandidates = append(recycleBinCandidates, candidate)
+	}
+
+	// Global Recycle Bin capacity preflight covers only move_to_recycle_bin
+	// candidates. Permanent bytes never enter the capacity calculation.
 	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseRecycleBinSafety)
-	executionGroups := prepareRecycleBinCandidateGroups(opts, executionCandidates)
+	executionGroups := prepareRecycleBinCandidateGroups(opts, recycleBinCandidates)
+
+	// Recoverable Recycle Bin mutation first; irreversible permanent last.
 	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseRecycleBinOperations)
+	adapter := opts.RecycleBinAdapter
+	if adapter == nil {
+		adapter = delete.WindowsRecycleBinAdapter{}
+	}
 	executeRecycleBinCandidateGroups(ctx, opts, adapter, executionGroups, &result)
+
+	if len(permanentCandidates) > 0 {
+		reportExecutionProgress(opts.ProgressReporter, ExecutionPhasePermanentOperations)
+		executePermanentCandidates(ctx, opts, permanentCandidates, &result)
+	}
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
@@ -700,15 +754,18 @@ func reportExecutionProgress(reporter ProgressReporter, phase ExecutionPhase) {
 	reporter(ExecutionProgress{Phase: phase})
 }
 
-type recycleBinExecutionCandidate struct {
-	candidate delete.Candidate
-	rule      string
-	isOptIn   bool
+// actionExecutionCandidate is one freshly resolved candidate with its planned
+// deletion action for the action-aware execution seam.
+type actionExecutionCandidate struct {
+	candidate     delete.Candidate
+	rule          string
+	isOptIn       bool
+	plannedAction string
 }
 
 type recycleBinVolumeGroup struct {
 	config     RecycleBinVolumeConfig
-	candidates []recycleBinExecutionCandidate
+	candidates []actionExecutionCandidate
 	totalBytes int64
 	unsafe     bool
 }
@@ -723,7 +780,7 @@ type recycleBinCandidateGroups struct {
 	order    []string
 }
 
-func prepareRecycleBinCandidateGroups(opts Options, candidates []recycleBinExecutionCandidate) recycleBinCandidateGroups {
+func prepareRecycleBinCandidateGroups(opts Options, candidates []actionExecutionCandidate) recycleBinCandidateGroups {
 	probe := opts.RecycleBinCapacityProbe
 	if probe == nil {
 		probe = RecycleBinVolumeCapacity
@@ -778,7 +835,7 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 		}
 
 		deleteCandidates := make([]delete.Candidate, 0, len(group.candidates))
-		byPath := make(map[string]recycleBinExecutionCandidate, len(group.candidates))
+		byPath := make(map[string]actionExecutionCandidate, len(group.candidates))
 		for _, candidate := range group.candidates {
 			deleteCandidates = append(deleteCandidates, candidate.candidate)
 			byPath[candidate.candidate.Path] = candidate
@@ -786,8 +843,6 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 		deleteResult := delete.ExecuteWithValidator(ctx, deleteCandidates, adapter, opts.Validator)
 		for _, item := range deleteResult.Deleted {
 			candidate := byPath[item.Path]
-			// Actual action for the Recycle Bin execution path. Permanent
-			// deletion is not activated in this prefactor ticket.
 			result.Deleted = append(result.Deleted, DeletedItem{
 				Path:    item.Path,
 				Bytes:   item.Bytes,
@@ -798,9 +853,94 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 		}
 		for _, item := range deleteResult.Skipped {
 			candidate := byPath[item.Path]
+			planned := candidate.plannedAction
+			if planned == "" {
+				planned = plannedRecycleBinAction
+			}
 			result.Skipped = append(result.Skipped, SkippedItem{
 				Path: item.Path, Bytes: item.Bytes, Rule: candidate.rule,
-				PlannedAction: plannedActionForCategory(candidate.rule),
+				PlannedAction: planned,
+				Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
+			})
+		}
+	}
+}
+
+// executePermanentCandidates runs authorized permanent removal only through the
+// permanent remover. Missing authorization skips with a stable reason and never
+// reroutes work to the Recycle Bin. Local failures do not block siblings.
+func executePermanentCandidates(ctx context.Context, opts Options, candidates []actionExecutionCandidate, result *Result) {
+	if len(candidates) == 0 {
+		return
+	}
+	permanentAction := string(DeletionActionDeletePermanently)
+	if !opts.AllowPermanentDeletion {
+		for _, candidate := range candidates {
+			result.Skipped = append(result.Skipped, SkippedItem{
+				Path:          candidate.candidate.Path,
+				Bytes:         candidate.candidate.Bytes,
+				Rule:          candidate.rule,
+				PlannedAction: permanentAction,
+				Reason: issue(
+					permanentDeletionNotAuthorizedIssueCode,
+					"permanent deletion is not authorized for this run; planned action is unchanged",
+					true,
+					candidate.candidate.Path,
+					candidate.rule,
+				),
+			})
+		}
+		return
+	}
+
+	remover := opts.PermanentRemover
+	if remover == nil {
+		remover = delete.FilesystemPermanentRemover{}
+	}
+
+	deleteCandidates := make([]delete.Candidate, 0, len(candidates))
+	byPath := make(map[string]actionExecutionCandidate, len(candidates))
+	for _, candidate := range candidates {
+		deleteCandidates = append(deleteCandidates, candidate.candidate)
+		byPath[candidate.candidate.Path] = candidate
+	}
+
+	permanentResult := delete.ExecutePermanentWithValidator(ctx, deleteCandidates, remover, opts.Validator)
+	for _, item := range permanentResult.Items {
+		candidate := byPath[item.Path]
+		switch item.Kind {
+		case delete.PermanentOutcomeDeleted:
+			result.Deleted = append(result.Deleted, DeletedItem{
+				Path:    item.Path,
+				Bytes:   item.Bytes,
+				Rule:    candidate.rule,
+				Action:  permanentAction,
+				IsOptIn: candidate.isOptIn,
+			})
+		case delete.PermanentOutcomeFailed:
+			result.Failed = append(result.Failed, FailedItem{
+				Path:          item.Path,
+				Bytes:         item.Bytes,
+				Rule:          candidate.rule,
+				PlannedAction: permanentAction,
+				Action:        permanentAction,
+				Reason:        issue(permanentDeleteFailedIssueCode, item.Reason.Message, true, item.Path, candidate.rule),
+			})
+		case delete.PermanentOutcomeCanceled:
+			result.Skipped = append(result.Skipped, SkippedItem{
+				Path:          item.Path,
+				Bytes:         item.Bytes,
+				Rule:          candidate.rule,
+				PlannedAction: permanentAction,
+				Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
+			})
+		default:
+			// Pre-mutation skips (protection, reparse, hardlink, validation).
+			result.Skipped = append(result.Skipped, SkippedItem{
+				Path:          item.Path,
+				Bytes:         item.Bytes,
+				Rule:          candidate.rule,
+				PlannedAction: permanentAction,
 				Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
 			})
 		}
@@ -812,11 +952,15 @@ func recycleBinIdentity(config RecycleBinVolumeConfig) recycleBinVolumeIdentity 
 	return recycleBinVolumeIdentity{key: key, known: key != ""}
 }
 
-func skipRecycleBinVolume(result *Result, candidates []recycleBinExecutionCandidate, code, message string) {
+func skipRecycleBinVolume(result *Result, candidates []actionExecutionCandidate, code, message string) {
 	for _, candidate := range candidates {
+		planned := candidate.plannedAction
+		if planned == "" {
+			planned = plannedRecycleBinAction
+		}
 		result.Skipped = append(result.Skipped, SkippedItem{
 			Path: candidate.candidate.Path, Bytes: candidate.candidate.Bytes, Rule: candidate.rule,
-			PlannedAction: plannedActionForCategory(candidate.rule),
+			PlannedAction: planned,
 			Reason:        issue(code, message, true, candidate.candidate.Path, candidate.rule),
 		})
 	}
@@ -836,6 +980,7 @@ func protectionLoadFailure(mode string, opts Options, start time.Time) Result {
 		ProtectionDiagnostics:            append([]ProtectionDiagnostic(nil), opts.ProtectionDiagnostics...),
 		Candidates:                       []CandidatePreview{},
 		Deleted:                          []DeletedItem{},
+		Failed:                           []FailedItem{},
 		Skipped:                          []SkippedItem{},
 		Errors:                           []StructuredIssue{loadError},
 		Opportunities:                    []Opportunity{},
@@ -862,7 +1007,7 @@ func recordHistorySession(ctx context.Context, opts Options, result Result, star
 			CandidateCount:           result.Totals.CandidateCount,
 			DeletedCount:             result.Totals.DeletedCount,
 			SkippedCount:             result.Totals.SkippedCount,
-			ErrorCount:               len(result.Errors),
+			ErrorCount:               len(result.Errors) + len(result.Failed),
 			OpportunityCount:         result.Totals.OpportunityCount,
 			CandidateBytes:           result.Totals.CandidateBytes,
 			OpportunityObservedBytes: result.Totals.OpportunityObservedBytes,
@@ -941,7 +1086,7 @@ func newHistorySessionID(mode string, at time.Time) string {
 }
 
 func historyItems(sessionID string, result Result) []history.ItemRecord {
-	items := make([]history.ItemRecord, 0, len(result.Candidates)+len(result.Deleted)+len(result.Skipped)+len(result.Errors))
+	items := make([]history.ItemRecord, 0, len(result.Candidates)+len(result.Deleted)+len(result.Failed)+len(result.Skipped)+len(result.Errors))
 	if result.Mode == "dry_run" {
 		for _, candidate := range result.Candidates {
 			bytes := candidate.Bytes
@@ -969,6 +1114,27 @@ func historyItems(sessionID string, result Result) []history.ItemRecord {
 			Action:    action,
 			Bytes:     &bytes,
 			Result:    "deleted",
+		})
+	}
+	for _, failed := range result.Failed {
+		bytes := failed.Bytes
+		action := failed.Action
+		if action == "" {
+			action = string(DeletionActionDeletePermanently)
+		}
+		planned := failed.PlannedAction
+		if planned == "" {
+			planned = action
+		}
+		items = append(items, history.ItemRecord{
+			SessionID:     sessionID,
+			Path:          failed.Path,
+			Rule:          failed.Rule,
+			PlannedAction: planned,
+			Action:        action,
+			Bytes:         &bytes,
+			Result:        "failed",
+			Error:         historyIssue(failed.Reason),
 		})
 	}
 	for _, skipped := range result.Skipped {
@@ -1117,6 +1283,22 @@ func plannedActionLabel(action string) string {
 // canonical category. Injected test rules outside the catalog stay Recycle Bin
 // only; permanent deletion is never inferred for non-catalog identifiers.
 func plannedActionForCategory(identifier string) string {
+	return resolvePlannedAction(identifier, nil)
+}
+
+// plannedActionForOpts resolves the planned action for identifier using any
+// per-run CategoryPlannedActions override on opts before the catalog.
+func plannedActionForOpts(opts Options, identifier string) string {
+	return resolvePlannedAction(identifier, opts.CategoryPlannedActions)
+}
+
+// resolvePlannedAction returns the planned action for identifier, honoring an
+// optional per-run test override map before the catalog. Production leaves
+// overrides nil so the catalog remains the sole source of truth.
+func resolvePlannedAction(identifier string, overrides map[string]DeletionAction) string {
+	if action, ok := overrides[identifier]; ok && validDeletionAction(action) {
+		return string(action)
+	}
 	if summary, ok := canonicalCleanupCategoryCatalog.Summary(identifier); ok {
 		if summary.PlannedAction == "" {
 			return ""
@@ -1141,24 +1323,25 @@ func DefaultRuleCatalog() []Rule {
 	}
 }
 
-func previewCandidate(ctx context.Context, validator pathsafe.Validator, path, ruleID string, result *Result) {
+func previewCandidate(ctx context.Context, opts Options, path, ruleID string, result *Result) {
+	planned := resolvePlannedAction(ruleID, opts.CategoryPlannedActions)
 	select {
 	case <-ctx.Done():
 		result.Skipped = append(result.Skipped, SkippedItem{
 			Path:          path,
 			Rule:          ruleID,
-			PlannedAction: plannedActionForCategory(ruleID),
+			PlannedAction: planned,
 			Reason:        issue("context_canceled", ctx.Err().Error(), true, path, ruleID),
 		})
 		return
 	default:
 	}
 
-	if reason, ok := validator.ValidateDeletePath(path); !ok {
+	if reason, ok := opts.Validator.ValidateDeletePath(path); !ok {
 		result.Skipped = append(result.Skipped, SkippedItem{
 			Path:          path,
 			Rule:          ruleID,
-			PlannedAction: plannedActionForCategory(ruleID),
+			PlannedAction: planned,
 			Reason:        fromPathsafeReason(reason, path, ruleID),
 		})
 		return
@@ -1169,7 +1352,7 @@ func previewCandidate(ctx context.Context, validator pathsafe.Validator, path, r
 		result.Skipped = append(result.Skipped, SkippedItem{
 			Path:          path,
 			Rule:          ruleID,
-			PlannedAction: plannedActionForCategory(ruleID),
+			PlannedAction: planned,
 			Reason:        issue(classifyError(err), err.Error(), true, path, ruleID),
 		})
 		return
@@ -1179,7 +1362,7 @@ func previewCandidate(ctx context.Context, validator pathsafe.Validator, path, r
 		Path:          path,
 		Bytes:         bytes,
 		Rule:          ruleID,
-		PlannedAction: plannedActionForCategory(ruleID),
+		PlannedAction: planned,
 	})
 }
 
@@ -1356,7 +1539,9 @@ func totals(result Result) Totals {
 	return Totals{
 		CandidateCount:           len(result.Candidates),
 		DeletedCount:             len(result.Deleted),
-		SkippedCount:             len(result.Skipped),
+		// Failed permanent candidates are not successes; surface them with skips
+		// so aggregate counts stay path-complete without claiming permanent bytes.
+		SkippedCount:             len(result.Skipped) + len(result.Failed),
 		OpportunityCount:         len(result.Opportunities),
 		CandidateBytes:           bytes,
 		OpportunityObservedBytes: opportunityBytes,
