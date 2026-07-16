@@ -7,11 +7,15 @@ It is designed for Windows developers and power users who want cleanup, uninstal
 ## Design Principles
 
 - Preview first: cleanup candidates should be inspectable before execution.
-- Recycle Bin by default: confirmed cleanup should use the Windows Recycle Bin, not permanent deletion.
+- Current builds use the Recycle Bin for every confirmed cleanup action.
 - Conservative defaults: default cleanup rules should be easy to explain and low-disagreement.
 - Windows-native safety: protected paths, reparse points, permissions, package managers, and installer ecosystems are first-class design concerns.
 - JSON contracts first: human output can be friendly, but stable JSON output is the automation and TUI contract.
 - No automatic elevation: permission failures should be visible skipped items, not a reason to silently escalate.
+
+### Accepted deletion-policy follow-up
+
+Permanent deletion is designed but not yet implemented. The accepted target keeps CLI and TUI behavior aligned: each canonical rule declares a visible planned action, only proven regenerable content may bypass the Recycle Bin, and permanent deletion is never a fallback. CLI execution will require per-run `--allow-permanent`; the TUI will automatically use the rule action after one strengthened confirmation and initially select the default category plus all permanent-delete-eligible categories. See [Clean deletion policy](docs/plan/clean-deletion-policy.md) and [ADR 0018](docs/adr/0018-permanent-deletion-is-an-explicit-planned-action.md).
 
 ## Implemented Command Shape
 
@@ -43,13 +47,13 @@ Invalid lines are skipped with structured Protection diagnostics. A missing defa
 
 ### Interactive TUI
 
-Running `foal` (or the `fo` alias) with no arguments in an interactive terminal opens a TUI: a main menu, category-first Clean preview with explicitly confirmed Recycle Bin execution, and read-only viewers for uninstall, status, and history. Entering Clean immediately starts a catalog-derived eager scan of every canonical default and opt-in cleanup category and shows path-free rows (cursor, checkbox, scan marker, measured size) while scanning continues. Defaults start selected but may be cleared; opt-in categories start unselected; `space` toggles the focused row, `a` selects every currently selectable category for this session, and `x` clears all. Selection changes never restart the scan and never write history or detailed lists. Non-executable Review suggestions and review clues stay on CLI/JSON dry-run contracts and do not appear in the category list; the TUI does not run external tool-query probes solely for those suggestions. `Enter` opens a separate confirmation only after every scannable category is terminal and the selection is non-empty; a second `Enter` freezes the exact selected category identifiers and runs shared Clean execution (fresh resolution, current Protection, running-application gates, aggregate Recycle Bin capacity checks, Recycle Bin-only moves). Progress is observation-only and path-free; the result page projects category outcomes and actual affected bytes from the authoritative Result. Optional TUI History provenance records `surface=tui`, `selection_mode=exact`, and the selected category identifiers without fabricating CLI args. Cancellation after confirmation does not roll back completed Recycle Bin operations. The first category-first slice has no retry or rescan control; leave and re-enter Clean to start a new scan. Scripts, pipes, and `--json` callers are unaffected.
+Running `foal` (or the `fo` alias) with no arguments in an interactive terminal opens a TUI: a main menu, category-first Clean preview with explicitly confirmed Recycle Bin execution, and read-only viewers for uninstall, status, and history. This paragraph describes the current build; the accepted deletion-policy follow-up above is not implemented yet. Entering Clean immediately starts a catalog-derived eager scan of every canonical default and opt-in cleanup category and shows path-free rows (cursor, checkbox, scan marker, measured size) while scanning continues. Defaults start selected but may be cleared; opt-in categories start unselected; `space` toggles the focused row, `a` selects every currently selectable category for this session, and `x` clears all. Selection changes never restart the scan and never write history or detailed lists. Non-executable Review suggestions and review clues stay on CLI/JSON dry-run contracts and do not appear in the category list; the TUI does not run external tool-query probes solely for those suggestions. `Enter` opens a separate confirmation only after every scannable category is terminal and the selection is non-empty; a second `Enter` freezes the exact selected category identifiers and runs shared Clean execution (fresh resolution, current Protection, running-application gates, aggregate Recycle Bin capacity checks, Recycle Bin-only moves). Progress is observation-only and path-free; the result page projects category outcomes and actual affected bytes from the authoritative Result. Optional TUI History provenance records `surface=tui`, `selection_mode=exact`, and the selected category identifiers without fabricating CLI args. Cancellation after confirmation does not roll back completed Recycle Bin operations. The first category-first slice has no retry or rescan control; leave and re-enter Clean to start a new scan. Scripts, pipes, and `--json` callers are unaffected.
 
 ## Scope
 
 Foal is inspired by tools like Mole, but it is not "Mole for Windows". The roadmap is ordered by Windows risk and Foal's safety model rather than feature parity.
 
-- `clean`: conservative Foal-owned temp sandbox rule, preview-first output, Recycle Bin-only execution after explicit `--execute`.
+- `clean`: currently uses conservative preview-first rules and Recycle Bin-only execution after explicit `--execute`; the accepted mixed-action follow-up remains pending implementation.
 - `uninstall`: preview-only application review for registry-discovered installed applications, their high-confidence footprint evidence, and lower-confidence orphaned residue review clues. Foal does not execute uninstallers, stop processes, or delete leftovers.
 - `analyze`: read-only, JSON-first directory insight.
 - `status`: read-only system snapshot.

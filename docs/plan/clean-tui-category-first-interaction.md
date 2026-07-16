@@ -46,6 +46,7 @@ Make Clean immediately understandable and operable: show every cleanup category,
 - ADR 0014: active execution owns Ctrl+C until the final shared Result.
 - ADR 0015: Protection exclusions may retain path-free category evidence.
 - ADR 0016: exact TUI selection is recorded as structured history provenance.
+- ADR 0018: permanent deletion is an explicit planned action and never a fallback.
 
 ## Preserved boundaries
 
@@ -53,4 +54,13 @@ Make Clean immediately understandable and operable: show every cleanup category,
 - The TUI does not own candidate resolution, running-application gates, deletion, path safety, Protection rules, or Recycle Bin capacity decisions.
 - CLI dry-run and Execute keep selected-only opt-in resolution. The eager unselected measurement exception belongs only to the Clean TUI preview.
 - Clean preview and execution JSON contracts remain unchanged; `history --json` adds only optional path-free TUI provenance for TUI execution sessions.
-- Confirmed execution remains Recycle Bin-only, validates fresh paths, and may produce different candidates or bytes than the preview.
+- The current implementation remains Recycle Bin-only, validates fresh paths, and may produce different candidates or bytes than the preview.
+
+## Accepted deletion-policy follow-up (not yet implemented)
+
+- Shared Clean assigns each canonical category either `move_to_recycle_bin` or `delete_permanently`; the TUI displays and authorizes that action but never chooses it.
+- The initial selection becomes the default category plus every permanent-delete-eligible category, currently 19 selectable categories. The five non-default Recycle Bin opt-ins remain unselected. Empty, skipped, incomplete, or failed rows still clear themselves.
+- One strengthened confirmation separates both action groups by category count, candidate count, and measured bytes, labels every category action, retains impact notices, and warns that permanent deletion is irreversible.
+- Execution completes all applicable preflight first, runs Recycle Bin work before permanent work, and remains attached during responsive cancellation until shared Clean returns the final Result.
+- Result and History expose actual action plus `permanently_deleted_bytes`, `recycle_bin_moved_bytes`, and their `affected_bytes` sum without describing aggregate bytes as released disk space.
+- The complete category classification and rule-addition contract are defined in `docs/plan/clean-deletion-policy.md`.
