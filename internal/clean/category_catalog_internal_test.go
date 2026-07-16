@@ -29,7 +29,7 @@ func TestValidateDeveloperCacheRegistryRejectsIncompleteEntries(t *testing.T) {
 		}}
 		if err := validateDeveloperCacheRegistry(entries, apps, allowlist); err == nil {
 			t.Fatal("expected missing resolver error")
-		} else if !strings.Contains(err.Error(), "missing a path resolver") {
+		} else if !strings.Contains(err.Error(), "missing a path or root-scope resolver") {
 			t.Fatalf("error = %v", err)
 		}
 	})

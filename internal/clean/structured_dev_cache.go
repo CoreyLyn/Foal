@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
@@ -22,6 +23,58 @@ import (
 // tests inject this hook to exercise safety without real user caches or new
 // public categories. Shared resolution always re-validates children.
 type DevCacheChildDiscoverer func(ctx context.Context, category, root string) (children []string, structured bool)
+
+// resolveDevCacheRootScopes returns product-aware root scopes for a category.
+// Prefer Options.DevCacheRootScopeResolver when set; otherwise path resolvers
+// produce scopes with empty Application (category-wide gating).
+func resolveDevCacheRootScopes(opts Options, category string) []DevCacheRootScope {
+	if opts.DevCacheRootScopeResolver != nil {
+		return normalizeDevCacheRootScopes(opts.DevCacheRootScopeResolver(category))
+	}
+	entry, ok := canonicalCategoryEntry(category)
+	if ok && entry.developerCache && entry.resolveRootScopes != nil {
+		return normalizeDevCacheRootScopes(entry.resolveRootScopes(devCachePathDependencies{
+			lookupEnv:   os.LookupEnv,
+			userHomeDir: os.UserHomeDir,
+			joinPath:    filepath.Join,
+			goos:        runtime.GOOS,
+		}))
+	}
+	resolveDevCache := opts.DevCachePathResolver
+	if resolveDevCache == nil {
+		resolveDevCache = ResolveDevCachePaths
+	}
+	paths := normalizeAndDeduplicatePaths(resolveDevCache(category))
+	scopes := make([]DevCacheRootScope, 0, len(paths))
+	for _, path := range paths {
+		scopes = append(scopes, DevCacheRootScope{Path: path})
+	}
+	return scopes
+}
+
+// normalizeDevCacheRootScopes drops empty paths, trims application identities,
+// and deduplicates by Windows path identity while preserving first-seen order
+// and the first-seen application association for each path.
+func normalizeDevCacheRootScopes(scopes []DevCacheRootScope) []DevCacheRootScope {
+	seen := make(map[string]bool, len(scopes))
+	result := make([]DevCacheRootScope, 0, len(scopes))
+	for _, scope := range scopes {
+		if pathsafe.IsEmptyOrWhitespacePath(scope.Path) {
+			continue
+		}
+		path := filepath.Clean(scope.Path)
+		identity := pathsafe.NormalizePathForIdentity(path)
+		if seen[identity] {
+			continue
+		}
+		seen[identity] = true
+		result = append(result, DevCacheRootScope{
+			Path:        path,
+			Application: strings.TrimSpace(scope.Application),
+		})
+	}
+	return result
+}
 
 // resolveDevCacheChildCandidates returns structured children when the category
 // has a catalog-owned policy or the injectable seam forces structured mode.
