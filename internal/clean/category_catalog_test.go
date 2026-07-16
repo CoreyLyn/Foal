@@ -38,6 +38,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"playwright-browsers",
 		"puppeteer-browsers",
 		"electron-cache",
+		"jetbrains-ide-caches",
 		"administrator_only_caches",
 	}
 	gotIdentifiers := make([]string, 0, len(summaries))
@@ -169,6 +170,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryPlaywright,
 		clean.DevCacheCategoryPuppeteerBrowsers,
 		clean.DevCacheCategoryElectron,
+		clean.DevCacheCategoryJetBrainsIDECaches,
 	}
 	wantDeveloperToolsOptIn := append(
 		[]string{clean.OpportunityCategoryVSCodeCache, clean.OpportunityCategoryCursorCache},
@@ -212,6 +214,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryPlaywright:          clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryPuppeteerBrowsers:   clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryElectron:            clean.RunningApplicationPolicySharedRuntime,
+		clean.DevCacheCategoryJetBrainsIDECaches:  clean.RunningApplicationPolicyDistinctiveProcessIdle,
 	}
 	for id, wantPolicy := range policies {
 		summary, ok := catalog.Summary(id)
@@ -237,9 +240,11 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		"electron_config_cache",
 		"go.exe", "cargo.exe", "dotnet.exe", "nuget.exe", "node.exe", "python.exe",
 		"uv.exe", "uvx.exe", "bun.exe", "bunx.exe", "Code.exe", "Cursor.exe",
+		"idea64.exe", "pycharm64.exe", "IntelliJIdea", "IdeaIC", "PyCharmCE",
 		"resolvePaths", "lookupEnv", "LOCALAPPDATA", "APPDATA", "ms-playwright",
 		"CachedData", "CachedExtensionVSIXs", "INSTALLATION_COMPLETE",
 		"chromium_headless_shell", "chrome-headless-shell", "discoverChildren",
+		"resolveRootScopes", "LocalHistory", "resharper-host",
 	} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("path-free catalog projection exposes %q: %s", forbidden, encoded)

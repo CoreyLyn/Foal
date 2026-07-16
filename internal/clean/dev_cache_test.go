@@ -29,6 +29,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPlaywright,
 			clean.DevCacheCategoryPuppeteerBrowsers,
 			clean.DevCacheCategoryElectron,
+			clean.DevCacheCategoryJetBrainsIDECaches,
 			clean.OpportunityCategoryVSCodeCache,
 			clean.OpportunityCategoryCursorCache,
 		}
@@ -37,8 +38,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"dev-caches\"", cat)
 			}
 		}
-		if len(enabled) != 14 {
-			t.Fatalf("expected 14 enabled developer-tools categories, got %d", len(enabled))
+		if len(enabled) != 15 {
+			t.Fatalf("expected 15 enabled developer-tools categories, got %d", len(enabled))
 		}
 		// Verify valid names include dev categories and dev-caches
 		found := make(map[string]bool)
@@ -85,6 +86,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPlaywright,
 			clean.DevCacheCategoryPuppeteerBrowsers,
 			clean.DevCacheCategoryElectron,
+			clean.DevCacheCategoryJetBrainsIDECaches,
 		}
 		for _, cat := range expectedOpportunities {
 			if !enabled[cat] {
@@ -96,8 +98,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"all\"", cat)
 			}
 		}
-		if len(enabled) != 10+12 {
-			t.Fatalf("expected 22 enabled categories (10+12), got %d", len(enabled))
+		if len(enabled) != 10+13 {
+			t.Fatalf("expected 23 enabled categories (10+13), got %d", len(enabled))
 		}
 	})
 
@@ -115,6 +117,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPlaywright,
 			clean.DevCacheCategoryPuppeteerBrowsers,
 			clean.DevCacheCategoryElectron,
+			clean.DevCacheCategoryJetBrainsIDECaches,
 		}
 		for _, cat := range devCaches {
 			t.Run(cat, func(t *testing.T) {
@@ -186,6 +189,8 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 
 	t.Run("dev-caches enables all developer-cache categories", func(t *testing.T) {
 		root := t.TempDir()
+		// Isolate JetBrains product-scoped resolution from the real user profile.
+		t.Setenv("LOCALAPPDATA", t.TempDir())
 		cachePaths := make(map[string]string)
 		wholeRootCaches := []string{
 			clean.DevCacheCategoryNPM,
@@ -256,6 +261,8 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 	})
 
 	t.Run("empty path from resolver skips the dev cache", func(t *testing.T) {
+		// Isolate product-scoped JetBrains roots (catalog resolveRootScopes).
+		t.Setenv("LOCALAPPDATA", t.TempDir())
 		fakeResolver := func(category string) []string {
 			return nil
 		}
@@ -489,6 +496,8 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 
 	t.Run("dev-caches enables all developer-cache categories for execute", func(t *testing.T) {
 		root := t.TempDir()
+		// Isolate JetBrains product-scoped resolution from the real user profile.
+		t.Setenv("LOCALAPPDATA", t.TempDir())
 		cachePaths := make(map[string]string)
 		wholeRootCaches := []string{
 			clean.DevCacheCategoryNPM,

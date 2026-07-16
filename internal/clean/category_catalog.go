@@ -196,6 +196,9 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationUV, displayName: "uv", executables: []string{"uv.exe", "uvx.exe"}},
 	// bun and bunx are one logical application: either process means the tool is running.
 	{id: ApplicationBun, displayName: "Bun", executables: []string{"bun.exe", "bunx.exe"}},
+	// JetBrains IDE launchers: any edition/version of a product shares one identity.
+	{id: ApplicationIntelliJIDEA, displayName: "IntelliJ IDEA", executables: []string{"idea64.exe", "idea.exe"}},
+	{id: ApplicationPyCharm, displayName: "PyCharm", executables: []string{"pycharm64.exe", "pycharm.exe"}},
 }
 
 // applicationCacheApplicationDefinitions is the controlled registry of idle
@@ -275,6 +278,23 @@ func developerCacheEntryWithChildren(
 	runningApplications ...string,
 ) categoryCatalogEntry {
 	entry := developerCacheEntry(definition, resolvePaths, reviewSuggestionTools, runningApplications...)
+	entry.discoverChildren = discoverChildren
+	return entry
+}
+
+// developerCacheEntryWithProductScopedChildren registers a developer-cache
+// category whose roots are product-scoped (resolveRootScopes) and whose
+// candidates are structured children under each root. discoverChildren must be
+// non-nil and fail closed. Public Clean remains category-based.
+func developerCacheEntryWithProductScopedChildren(
+	definition CleanupCategoryDefinition,
+	resolveRootScopes func(devCachePathDependencies) []DevCacheRootScope,
+	discoverChildren func(ctx context.Context, root string) []string,
+	reviewSuggestionTools []string,
+	runningApplications ...string,
+) categoryCatalogEntry {
+	entry := developerCacheEntry(definition, nil, reviewSuggestionTools, runningApplications...)
+	entry.resolveRootScopes = resolveRootScopes
 	entry.discoverChildren = discoverChildren
 	return entry
 }
@@ -391,6 +411,17 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		categoryDefinition(DevCacheCategoryElectron, "Electron cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
 		resolveElectronCachePaths,
 		nil,
+	),
+	// JetBrains IDE system caches: product-scoped roots under %LOCALAPPDATA%\JetBrains
+	// with structured children (caches/index). Distinctive-process policy; each
+	// product identity gates independently via DevCacheRootScope.Application.
+	// No Review suggestion probe — Foal owns Recycle Bin reclaim only.
+	developerCacheEntryWithProductScopedChildren(
+		categoryDefinition(DevCacheCategoryJetBrainsIDECaches, "JetBrains IDE caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		resolveJetBrainsIDECacheRootScopes,
+		discoverJetBrainsIDECacheChildren,
+		nil,
+		ApplicationIntelliJIDEA, ApplicationPyCharm,
 	),
 	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable)},
 }
