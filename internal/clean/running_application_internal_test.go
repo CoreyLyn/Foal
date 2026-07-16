@@ -51,6 +51,8 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 		ApplicationPython,
 		ApplicationUV,
 		ApplicationBun,
+		ApplicationIntelliJIDEA,
+		ApplicationPyCharm,
 		ApplicationVisualStudioCode,
 		ApplicationCursor,
 	}

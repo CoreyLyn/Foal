@@ -413,6 +413,8 @@ func categoryPreviewSafetyNote(identifier string, hasSafeCandidates bool) string
 		return puppeteerBrowsersOptInImpactNotice
 	case DevCacheCategoryElectron:
 		return electronCacheOptInImpactNotice
+	case DevCacheCategoryJetBrainsIDECaches:
+		return jetbrainsIDECachesOptInImpactNotice
 	default:
 		return ""
 	}

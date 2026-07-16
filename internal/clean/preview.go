@@ -31,6 +31,7 @@ const (
 	DevCacheCategoryPlaywright          = "playwright-browsers"
 	DevCacheCategoryPuppeteerBrowsers   = "puppeteer-browsers"
 	DevCacheCategoryElectron            = "electron-cache"
+	DevCacheCategoryJetBrainsIDECaches  = "jetbrains-ide-caches"
 	DevCacheCategoryAll                 = "dev-caches"
 )
 
@@ -224,6 +225,8 @@ const (
 	ApplicationBun                         = "bun"
 	ApplicationVisualStudioCode            = "visual_studio_code"
 	ApplicationCursor                      = "cursor"
+	ApplicationIntelliJIDEA                = "intellij_idea"
+	ApplicationPyCharm                     = "pycharm"
 	RunningApplicationStateRunning         = RunningApplicationStatus("running")
 	RunningApplicationStateIdle            = RunningApplicationStatus("idle")
 	RunningApplicationStateUnknown         = RunningApplicationStatus("unknown")

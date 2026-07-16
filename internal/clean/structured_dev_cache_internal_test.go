@@ -182,11 +182,16 @@ func TestAppendStructuredDevCacheCandidatesCanceledSiblingIndependence(t *testin
 }
 
 func TestCanonicalStructuredDevCachePolicyIsPlaywrightAndPuppeteer(t *testing.T) {
-	// playwright-browsers and puppeteer-browsers ship structured child discovery;
-	// whole-root categories stay nil.
+	// Structured child discovery: playwright-browsers, puppeteer-browsers, and
+	// jetbrains-ide-caches. Whole-root categories stay nil.
+	structured := map[string]bool{
+		DevCacheCategoryPlaywright:         true,
+		DevCacheCategoryPuppeteerBrowsers:  true,
+		DevCacheCategoryJetBrainsIDECaches: true,
+	}
 	for _, id := range developerCacheCategoryIDs() {
 		has := categoryHasStructuredDevCacheDiscovery(id)
-		if id == DevCacheCategoryPlaywright || id == DevCacheCategoryPuppeteerBrowsers {
+		if structured[id] {
 			if !has {
 				t.Fatalf("%s must register structured child discovery", id)
 			}

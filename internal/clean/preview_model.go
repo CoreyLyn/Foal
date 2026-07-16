@@ -141,6 +141,10 @@ const puppeteerBrowsersOptInImpactNotice = "Opt-in Puppeteer browser cleanup rec
 // and custom-cache workflows may be affected. Foal does not stop Electron/Node.
 const electronCacheOptInImpactNotice = "Opt-in Electron cache cleanup may require re-downloading cached Electron binaries. Offline and custom-cache workflows may be affected."
 
+// jetbrainsIDECachesOptInImpactNotice is defined in jetbrains_ide_caches.go and
+// shown when jetbrains-ide-caches has Opt-in candidates. Indexes rebuild; the
+// next IDE startup or project open may be slower.
+
 // applicationCacheCachedExtensionVSIXsImpactNotice is shown when an Application
 // cache CachedExtensionVSIXs root is observed or selected. Installed extensions
 // and settings are never selected for any editor category.
@@ -229,7 +233,7 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasUVOptIn, hasBunOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasApplicationCacheVSIX bool
+	var hasUVOptIn, hasBunOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasApplicationCacheVSIX bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case DevCacheCategoryUV:
@@ -242,6 +246,8 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			hasPuppeteerOptIn = true
 		case DevCacheCategoryElectron:
 			hasElectronOptIn = true
+		case DevCacheCategoryJetBrainsIDECaches:
+			hasJetBrainsOptIn = true
 		default:
 			if isApplicationCacheCategory(candidate.Category) && isCachedExtensionVSIXsPath(candidate.Path) {
 				hasApplicationCacheVSIX = true
@@ -282,6 +288,12 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
 			Message: electronCacheOptInImpactNotice,
+		})
+	}
+	if hasJetBrainsOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: jetbrainsIDECachesOptInImpactNotice,
 		})
 	}
 	if hasApplicationCacheVSIX {

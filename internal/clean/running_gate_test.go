@@ -12,7 +12,7 @@ func TestDevCacheGateTier(t *testing.T) {
 			t.Errorf("devCacheGateTier(%q) = %v, want none", c, got)
 		}
 	}
-	for _, c := range []string{DevCacheCategoryGo, DevCacheCategoryCargo, DevCacheCategoryNuGet, DevCacheCategoryNuGetGlobalPackages, DevCacheCategoryUV, DevCacheCategoryBun} {
+	for _, c := range []string{DevCacheCategoryGo, DevCacheCategoryCargo, DevCacheCategoryNuGet, DevCacheCategoryNuGetGlobalPackages, DevCacheCategoryUV, DevCacheCategoryBun, DevCacheCategoryJetBrainsIDECaches} {
 		if got := devCacheGateTier(c); got != runningGateTierBeforeAfter {
 			t.Errorf("devCacheGateTier(%q) = %v, want before/after", c, got)
 		}
@@ -40,6 +40,9 @@ func TestPlanNeedsDistinctiveProcessDetection(t *testing.T) {
 	}
 	if !planNeedsDistinctiveProcessDetection(map[string]bool{DevCacheCategoryBun: true}) {
 		t.Fatal("bun-cache should need distinctive-process detection")
+	}
+	if !planNeedsDistinctiveProcessDetection(map[string]bool{DevCacheCategoryJetBrainsIDECaches: true}) {
+		t.Fatal("jetbrains-ide-caches should need distinctive-process detection")
 	}
 	if !planNeedsDistinctiveProcessDetection(map[string]bool{
 		DevCacheCategoryNPM: true,
