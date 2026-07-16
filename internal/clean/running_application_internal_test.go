@@ -64,6 +64,7 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 		ApplicationAqua,
 		ApplicationMPS,
 		ApplicationWriterside,
+		ApplicationRider,
 		ApplicationVisualStudioCode,
 		ApplicationCursor,
 	}

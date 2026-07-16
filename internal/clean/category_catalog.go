@@ -211,6 +211,7 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationAqua, displayName: "Aqua", executables: []string{"aqua64.exe", "aqua.exe"}},
 	{id: ApplicationMPS, displayName: "MPS", executables: []string{"mps64.exe", "mps.exe"}},
 	{id: ApplicationWriterside, displayName: "Writerside", executables: []string{"writerside64.exe", "writerside.exe"}},
+	{id: ApplicationRider, displayName: "Rider", executables: []string{"rider64.exe", "rider.exe"}},
 }
 
 // applicationCacheApplicationDefinitions is the controlled registry of idle
@@ -425,9 +426,10 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		nil,
 	),
 	// JetBrains IDE system caches: product-scoped roots under %LOCALAPPDATA%\JetBrains
-	// with structured children (caches/index). Distinctive-process policy; each
-	// product identity gates independently via DevCacheRootScope.Application.
-	// No Review suggestion probe — Foal owns Recycle Bin reclaim only.
+	// with structured children (caches/index; Rider also resharper-host). Distinctive-
+	// process policy; each product identity gates independently via
+	// DevCacheRootScope.Application. No Review suggestion probe — Foal owns Recycle
+	// Bin reclaim only.
 	developerCacheEntryWithProductScopedChildren(
 		categoryDefinition(DevCacheCategoryJetBrainsIDECaches, "JetBrains IDE caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
 		resolveJetBrainsIDECacheRootScopes,
@@ -438,7 +440,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		ApplicationWebStorm, ApplicationPhpStorm, ApplicationRubyMine,
 		ApplicationCLion, ApplicationDataGrip, ApplicationDataSpell,
 		ApplicationGoLand, ApplicationRustRover, ApplicationAqua,
-		ApplicationMPS, ApplicationWriterside,
+		ApplicationMPS, ApplicationWriterside, ApplicationRider,
 	),
 	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable)},
 }

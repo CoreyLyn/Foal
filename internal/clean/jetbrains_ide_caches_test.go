@@ -18,6 +18,9 @@ var jetbrainsProductFixture = []struct {
 	dirName     string
 	application string
 	label       string
+	// extraChildren are product-specific allowlisted children beyond caches/index
+	// (Rider-only resharper-host).
+	extraChildren []string
 }{
 	{dirName: "IntelliJIdea2024.1", application: clean.ApplicationIntelliJIDEA, label: "IDEA Ultimate"},
 	{dirName: "IdeaIC2024.2", application: clean.ApplicationIntelliJIDEA, label: "IDEA Community"},
@@ -34,6 +37,7 @@ var jetbrainsProductFixture = []struct {
 	{dirName: "Aqua2024.1", application: clean.ApplicationAqua, label: "Aqua"},
 	{dirName: "MPS2024.1", application: clean.ApplicationMPS, label: "MPS"},
 	{dirName: "Writerside2024.1", application: clean.ApplicationWriterside, label: "Writerside"},
+	{dirName: "Rider2025.3", application: clean.ApplicationRider, label: "Rider", extraChildren: []string{"resharper-host"}},
 }
 
 // jetbrainsProcessFixture pairs every logical JetBrains application with its
@@ -55,6 +59,7 @@ var jetbrainsProcessFixture = []struct {
 	{clean.ApplicationAqua, []string{"aqua64.exe", "aqua.exe"}},
 	{clean.ApplicationMPS, []string{"mps64.exe", "mps.exe"}},
 	{clean.ApplicationWriterside, []string{"writerside64.exe", "writerside.exe"}},
+	{clean.ApplicationRider, []string{"rider64.exe", "rider.exe"}},
 }
 
 func writeJetBrainsProductRoot(t *testing.T, jetbrainsParent, dirName string, children map[string]string) string {
@@ -145,9 +150,9 @@ func TestJetBrainsIDECaches_CatalogAndGroupTokens(t *testing.T) {
 func TestJetBrainsIDECaches_EditionPrefixesDiscoverCachesAndIndex(t *testing.T) {
 	_, parent := jetbrainsLocalAppData(t)
 
-	wantPaths := make([]string, 0, len(jetbrainsProductFixture)*2)
+	wantPaths := make([]string, 0, len(jetbrainsProductFixture)*3)
 	for _, fx := range jetbrainsProductFixture {
-		root := writeJetBrainsProductRoot(t, parent, fx.dirName, map[string]string{
+		children := map[string]string{
 			"caches": fx.label + "-c",
 			"index":  fx.label + "-i",
 			// Permanent exclusions must never become candidates.
@@ -161,16 +166,22 @@ func TestJetBrainsIDECaches_EditionPrefixesDiscoverCachesAndIndex(t *testing.T) 
 			"projects":     "proj",
 			"tmp":          "tmp",
 			"full-line":    "fl",
-		})
+		}
+		// Place resharper-host under every product so only Rider policy can select it.
+		children["resharper-host"] = fx.label + "-rs"
+		root := writeJetBrainsProductRoot(t, parent, fx.dirName, children)
 		wantPaths = append(wantPaths,
 			filepath.Join(root, "caches"),
 			filepath.Join(root, "index"),
 		)
+		for _, extra := range fx.extraChildren {
+			wantPaths = append(wantPaths, filepath.Join(root, extra))
+		}
 	}
-	// Non-IDE / unknown roots under JetBrains parent (Rider deferred to #210).
+	// Non-IDE / unknown roots under JetBrains parent.
 	for _, decoy := range []string{
 		"Toolbox", "Installations", "Transient", "Daemon", "Shared",
-		"dotPeek", "ReSharper", "Rider2024.1", "Fleet2024.1", "AndroidStudio2024.1",
+		"dotPeek", "ReSharper", "Fleet2024.1", "AndroidStudio2024.1",
 		"IntelliJIdea2019.3", "IntelliJIdea2020", "IntelliJIdea2020.0",
 		"MyIntelliJIdea2024.1", "IntelliJIdea2024.1-backup",
 		"PyCharmEdu2024.1", "consentOptions", "WebIde2024.1",
@@ -201,8 +212,15 @@ func TestJetBrainsIDECaches_EditionPrefixesDiscoverCachesAndIndex(t *testing.T) 
 			t.Fatalf("planned action = %q", c.PlannedAction)
 		}
 		base := filepath.Base(c.Path)
-		if base != "caches" && base != "index" {
+		if base != "caches" && base != "index" && base != "resharper-host" {
 			t.Fatalf("unexpected child candidate %q", c.Path)
+		}
+		// resharper-host only under Rider product roots.
+		if base == "resharper-host" {
+			product := filepath.Base(filepath.Dir(c.Path))
+			if !strings.HasPrefix(strings.ToLower(product), "rider") {
+				t.Fatalf("resharper-host leaked under non-Rider product: %q", c.Path)
+			}
 		}
 		// Product-version roots and JetBrains parent must never be candidates.
 		if strings.EqualFold(filepath.Base(filepath.Dir(c.Path)), "JetBrains") {
@@ -265,16 +283,28 @@ func TestJetBrainsIDECaches_IndependentProductGates(t *testing.T) {
 		"caches": "py",
 		"index":  "py-i",
 	})
+	riderRoot := writeJetBrainsProductRoot(t, parent, "Rider2025.3", map[string]string{
+		"caches":         "rider-c",
+		"index":          "rider-i",
+		"resharper-host": "rider-rs",
+	})
+	// Second Rider version shares the logical rider gate.
+	_ = writeJetBrainsProductRoot(t, parent, "Rider2024.1", map[string]string{
+		"caches": "rider-old",
+	})
 	ideaCaches := filepath.Join(ideaRoot, "caches")
 	pyCaches := filepath.Join(pyRoot, "caches")
+	riderCaches := filepath.Join(riderRoot, "caches")
+	riderRS := filepath.Join(riderRoot, "resharper-host")
 
-	t.Run("running IDEA keeps idle PyCharm", func(t *testing.T) {
+	t.Run("running IDEA keeps idle PyCharm and Rider", func(t *testing.T) {
 		result := clean.DryRun(context.Background(), clean.Options{
 			OptIn: []string{clean.DevCacheCategoryJetBrainsIDECaches},
 			DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
 				return []clean.RunningApplicationState{
 					{Application: clean.ApplicationIntelliJIDEA, State: clean.RunningApplicationStateRunning},
 					{Application: clean.ApplicationPyCharm, State: clean.RunningApplicationStateIdle},
+					{Application: clean.ApplicationRider, State: clean.RunningApplicationStateIdle},
 				}
 			},
 			DiscoverOpportunities:     noOpportunities,
@@ -285,14 +315,20 @@ func TestJetBrainsIDECaches_IndependentProductGates(t *testing.T) {
 				t.Fatalf("IDEA child leaked while running: %#v", result.OptInCandidates)
 			}
 		}
-		foundPy := false
+		foundPy, foundRider := false, false
 		for _, c := range result.OptInCandidates {
 			if c.Path == pyCaches || c.Path == filepath.Join(pyRoot, "index") {
 				foundPy = true
 			}
+			if c.Path == riderCaches || c.Path == riderRS || c.Path == filepath.Join(riderRoot, "index") {
+				foundRider = true
+			}
 		}
 		if !foundPy {
 			t.Fatalf("candidates = %#v, want PyCharm children", result.OptInCandidates)
+		}
+		if !foundRider {
+			t.Fatalf("candidates = %#v, want Rider children", result.OptInCandidates)
 		}
 		// Scoped skip on product root; no unrelated tool states.
 		foundSkip := false
@@ -308,8 +344,11 @@ func TestJetBrainsIDECaches_IndependentProductGates(t *testing.T) {
 			t.Fatalf("skipped = %#v, want IDEA root skip", result.Skipped)
 		}
 		apps := applicationIDs(result.RunningApplications)
-		if len(apps) != 2 || apps[0] != clean.ApplicationIntelliJIDEA || apps[1] != clean.ApplicationPyCharm {
-			t.Fatalf("running applications = %#v, want [intellij_idea pycharm]", result.RunningApplications)
+		if len(apps) != 3 ||
+			apps[0] != clean.ApplicationIntelliJIDEA ||
+			apps[1] != clean.ApplicationPyCharm ||
+			apps[2] != clean.ApplicationRider {
+			t.Fatalf("running applications = %#v, want [intellij_idea pycharm rider]", result.RunningApplications)
 		}
 		for _, state := range result.RunningApplications {
 			if state.Application == clean.ApplicationGo {
@@ -325,6 +364,7 @@ func TestJetBrainsIDECaches_IndependentProductGates(t *testing.T) {
 				return []clean.RunningApplicationState{
 					{Application: clean.ApplicationIntelliJIDEA, State: clean.RunningApplicationStateIdle},
 					{Application: clean.ApplicationPyCharm, State: clean.RunningApplicationStateRunning},
+					{Application: clean.ApplicationRider, State: clean.RunningApplicationStateIdle},
 				}
 			},
 			DiscoverOpportunities:     noOpportunities,
@@ -344,6 +384,38 @@ func TestJetBrainsIDECaches_IndependentProductGates(t *testing.T) {
 		}
 	})
 
+	t.Run("running Rider skips all Rider versions and keeps idle IDEA/PyCharm", func(t *testing.T) {
+		result := clean.DryRun(context.Background(), clean.Options{
+			OptIn: []string{clean.DevCacheCategoryJetBrainsIDECaches},
+			DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+				return []clean.RunningApplicationState{
+					{Application: clean.ApplicationIntelliJIDEA, State: clean.RunningApplicationStateIdle},
+					{Application: clean.ApplicationPyCharm, State: clean.RunningApplicationStateIdle},
+					{Application: clean.ApplicationRider, State: clean.RunningApplicationStateRunning},
+				}
+			},
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: noReviewSuggestions,
+		})
+		for _, c := range result.OptInCandidates {
+			if strings.Contains(strings.ToLower(c.Path), "rider") {
+				t.Fatalf("Rider child leaked while running: %#v", result.OptInCandidates)
+			}
+		}
+		foundIdea, foundPy := false, false
+		for _, c := range result.OptInCandidates {
+			if c.Path == ideaCaches || c.Path == filepath.Join(ideaRoot, "index") {
+				foundIdea = true
+			}
+			if c.Path == pyCaches || c.Path == filepath.Join(pyRoot, "index") {
+				foundPy = true
+			}
+		}
+		if !foundIdea || !foundPy {
+			t.Fatalf("candidates = %#v, want IDEA/PyCharm children", result.OptInCandidates)
+		}
+	})
+
 	t.Run("any IDEA edition running skips all IDEA versions", func(t *testing.T) {
 		// Second IDEA edition root.
 		idea2 := writeJetBrainsProductRoot(t, parent, "IdeaIC2023.3", map[string]string{"caches": "ic"})
@@ -353,6 +425,7 @@ func TestJetBrainsIDECaches_IndependentProductGates(t *testing.T) {
 				return []clean.RunningApplicationState{
 					{Application: clean.ApplicationIntelliJIDEA, State: clean.RunningApplicationStateRunning},
 					{Application: clean.ApplicationPyCharm, State: clean.RunningApplicationStateIdle},
+					{Application: clean.ApplicationRider, State: clean.RunningApplicationStateIdle},
 				}
 			},
 			DiscoverOpportunities:     noOpportunities,
@@ -373,36 +446,39 @@ func TestJetBrainsIDECaches_IndependentProductGates(t *testing.T) {
 			OptIn: []string{clean.DevCacheCategoryJetBrainsIDECaches},
 			DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
 				call++
-				// Shared pre idle for both; post for first product (IDEA) becomes running.
+				// Shared pre idle for all; post for Rider becomes running.
 				if call == 1 {
 					return []clean.RunningApplicationState{
 						{Application: clean.ApplicationIntelliJIDEA, State: clean.RunningApplicationStateIdle},
 						{Application: clean.ApplicationPyCharm, State: clean.RunningApplicationStateIdle},
+						{Application: clean.ApplicationRider, State: clean.RunningApplicationStateIdle},
 					}
 				}
-				// Subsequent posts: IDEA running, PyCharm idle.
 				return []clean.RunningApplicationState{
-					{Application: clean.ApplicationIntelliJIDEA, State: clean.RunningApplicationStateRunning},
+					{Application: clean.ApplicationIntelliJIDEA, State: clean.RunningApplicationStateIdle},
 					{Application: clean.ApplicationPyCharm, State: clean.RunningApplicationStateIdle},
+					{Application: clean.ApplicationRider, State: clean.RunningApplicationStateRunning},
 				}
 			},
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
 		})
 		for _, c := range result.OptInCandidates {
-			if strings.HasPrefix(strings.ToLower(c.Path), strings.ToLower(ideaRoot)) ||
-				strings.Contains(strings.ToLower(c.Path), "ideaic") {
-				t.Fatalf("IDEA child survived post-gate: %#v", result.OptInCandidates)
+			if strings.Contains(strings.ToLower(c.Path), "rider") {
+				t.Fatalf("Rider child survived post-gate: %#v", result.OptInCandidates)
 			}
 		}
-		foundPy := false
+		foundIdea, foundPy := false, false
 		for _, c := range result.OptInCandidates {
+			if strings.HasPrefix(strings.ToLower(c.Path), strings.ToLower(ideaRoot)) {
+				foundIdea = true
+			}
 			if strings.HasPrefix(strings.ToLower(c.Path), strings.ToLower(pyRoot)) {
 				foundPy = true
 			}
 		}
-		if !foundPy {
-			t.Fatalf("candidates = %#v, want PyCharm retained after IDEA post discard", result.OptInCandidates)
+		if !foundIdea || !foundPy {
+			t.Fatalf("candidates = %#v, want IDEA/PyCharm retained after Rider post discard", result.OptInCandidates)
 		}
 	})
 
@@ -411,20 +487,21 @@ func TestJetBrainsIDECaches_IndependentProductGates(t *testing.T) {
 			OptIn: []string{clean.DevCacheCategoryJetBrainsIDECaches},
 			DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
 				return []clean.RunningApplicationState{
-					{Application: clean.ApplicationIntelliJIDEA, State: clean.RunningApplicationStateUnknown, Message: "snapshot failed"},
+					{Application: clean.ApplicationIntelliJIDEA, State: clean.RunningApplicationStateIdle},
 					{Application: clean.ApplicationPyCharm, State: clean.RunningApplicationStateIdle},
+					{Application: clean.ApplicationRider, State: clean.RunningApplicationStateUnknown, Message: "snapshot failed"},
 				}
 			},
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
 		})
 		for _, c := range result.OptInCandidates {
-			if strings.HasPrefix(strings.ToLower(c.Path), strings.ToLower(ideaRoot)) {
-				t.Fatalf("IDEA survived unknown: %#v", result.OptInCandidates)
+			if strings.Contains(strings.ToLower(c.Path), "rider") {
+				t.Fatalf("Rider survived unknown: %#v", result.OptInCandidates)
 			}
 		}
 		if len(result.OptInCandidates) == 0 {
-			t.Fatal("want PyCharm candidates under unknown IDEA")
+			t.Fatal("want IDEA/PyCharm candidates under unknown Rider")
 		}
 	})
 }
@@ -547,9 +624,16 @@ func TestJetBrainsIDECaches_Protection(t *testing.T) {
 	pyRoot := writeJetBrainsProductRoot(t, parent, "PyCharm2024.1", map[string]string{
 		"caches": "c",
 	})
+	riderRoot := writeJetBrainsProductRoot(t, parent, "Rider2025.3", map[string]string{
+		"caches":         "r",
+		"index":          "ri",
+		"resharper-host": "rs",
+	})
 	ideaCaches := filepath.Join(ideaRoot, "caches")
 	ideaIndex := filepath.Join(ideaRoot, "index")
 	pyCaches := filepath.Join(pyRoot, "caches")
+	riderCaches := filepath.Join(riderRoot, "caches")
+	riderRS := filepath.Join(riderRoot, "resharper-host")
 
 	t.Run("protect JetBrains parent suppresses all", func(t *testing.T) {
 		result := clean.DryRun(context.Background(), clean.Options{
@@ -577,36 +661,69 @@ func TestJetBrainsIDECaches_Protection(t *testing.T) {
 				t.Fatalf("protected product child leaked: %#v", result.OptInCandidates)
 			}
 		}
-		foundPy := false
+		foundPy, foundRider := false, false
 		for _, c := range result.OptInCandidates {
 			if c.Path == pyCaches {
 				foundPy = true
 			}
+			if c.Path == riderCaches || c.Path == riderRS {
+				foundRider = true
+			}
 		}
 		if !foundPy {
 			t.Fatalf("sibling product suppressed incorrectly: %#v", result.OptInCandidates)
+		}
+		if !foundRider {
+			t.Fatalf("Rider sibling suppressed incorrectly: %#v", result.OptInCandidates)
+		}
+	})
+
+	t.Run("protect Rider root suppresses only Rider children", func(t *testing.T) {
+		result := clean.DryRun(context.Background(), clean.Options{
+			OptIn:                     []string{clean.DevCacheCategoryJetBrainsIDECaches},
+			Validator:                 pathsafe.NewValidator([]string{riderRoot}),
+			DetectRunningApplications: idleJetBrainsDetector(),
+			DiscoverOpportunities:     noOpportunities,
+			DiscoverReviewSuggestions: noReviewSuggestions,
+		})
+		for _, c := range result.OptInCandidates {
+			if strings.HasPrefix(strings.ToLower(c.Path), strings.ToLower(riderRoot)) {
+				t.Fatalf("protected Rider child leaked: %#v", result.OptInCandidates)
+			}
+		}
+		foundIdea := false
+		for _, c := range result.OptInCandidates {
+			if c.Path == ideaCaches {
+				foundIdea = true
+			}
+		}
+		if !foundIdea {
+			t.Fatalf("IDEA suppressed when only Rider protected: %#v", result.OptInCandidates)
 		}
 	})
 
 	t.Run("protect one child keeps sibling", func(t *testing.T) {
 		result := clean.DryRun(context.Background(), clean.Options{
 			OptIn:                     []string{clean.DevCacheCategoryJetBrainsIDECaches},
-			Validator:                 pathsafe.NewValidator([]string{ideaCaches}),
+			Validator:                 pathsafe.NewValidator([]string{riderCaches}),
 			DetectRunningApplications: idleJetBrainsDetector(),
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
 		})
-		foundIndex := false
+		foundRS, foundIndex := false, false
 		for _, c := range result.OptInCandidates {
-			if c.Path == ideaCaches {
-				t.Fatalf("protected child leaked: %#v", result.OptInCandidates)
+			if c.Path == riderCaches {
+				t.Fatalf("protected Rider child leaked: %#v", result.OptInCandidates)
 			}
-			if c.Path == ideaIndex {
+			if c.Path == riderRS {
+				foundRS = true
+			}
+			if c.Path == filepath.Join(riderRoot, "index") {
 				foundIndex = true
 			}
 		}
-		if !foundIndex {
-			t.Fatalf("sibling child suppressed: %#v", result.OptInCandidates)
+		if !foundRS || !foundIndex {
+			t.Fatalf("Rider sibling children suppressed: %#v", result.OptInCandidates)
 		}
 	})
 }
@@ -786,6 +903,7 @@ func TestJetBrainsIDECaches_PublicCatalogPathFree(t *testing.T) {
 		"idea64.exe", "pycharm64.exe", "webstorm64.exe", "phpstorm64.exe",
 		"rubymine64.exe", "clion64.exe", "datagrip64.exe", "dataspell64.exe",
 		"goland64.exe", "rustrover64.exe", "aqua64.exe", "mps64.exe", "writerside64.exe",
+		"rider64.exe",
 		"resolveRootScopes", "discoverChildren", "LocalHistory", "resharper-host",
 		`JetBrains\`,
 	} {
@@ -798,7 +916,67 @@ func TestJetBrainsIDECaches_PublicCatalogPathFree(t *testing.T) {
 	}
 }
 
+// TestJetBrainsIDECaches_RiderMachineShapedLayout mirrors current-machine
+// evidence for Rider 2025.3: allowlisted caches/index/resharper-host are
+// selected while representative excluded siblings stay untouched.
+func TestJetBrainsIDECaches_RiderMachineShapedLayout(t *testing.T) {
+	_, parent := jetbrainsLocalAppData(t)
+	root := writeJetBrainsProductRoot(t, parent, "Rider2025.3", map[string]string{
+		"caches":         strings.Repeat("c", 64),
+		"index":          strings.Repeat("i", 32),
+		"resharper-host": strings.Repeat("r", 48),
+		// Representative permanent exclusions / unknown siblings.
+		"LocalHistory":   "history",
+		"fileHistory":    "fh",
+		"vcs-log":        "vcs",
+		"jcef_cache":     "jcef",
+		"plugins":        "plug",
+		"log":            "log",
+		"event-log-data": "eld",
+		"coverage":       "cov",
+		"projects":       "proj",
+		"data-source":    "ds",
+		"editor":         "ed",
+		"full-line":      "fl",
+		"tmp":            "tmp",
+		"splash":         "sp",
+		"unknown-state":  "nope",
+	})
+	// Non-IDE ReSharper root must never become a product root.
+	_ = writeJetBrainsProductRoot(t, parent, "ReSharper", map[string]string{
+		"caches":         "nope",
+		"resharper-host": "nope",
+	})
 
+	result := clean.DryRun(context.Background(), clean.Options{
+		OptIn:                     []string{clean.DevCacheCategoryJetBrainsIDECaches},
+		DetectRunningApplications: idleJetBrainsDetector(),
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+	want := []string{
+		filepath.Join(root, "caches"),
+		filepath.Join(root, "index"),
+		filepath.Join(root, "resharper-host"),
+	}
+	if len(result.OptInCandidates) != len(want) {
+		t.Fatalf("candidates = %#v, want exactly %v", result.OptInCandidates, want)
+	}
+	for i, path := range want {
+		if result.OptInCandidates[i].Path != path {
+			t.Fatalf("candidates[%d] = %q, want %q", i, result.OptInCandidates[i].Path, path)
+		}
+	}
+	for _, c := range result.OptInCandidates {
+		if c.Path == root || strings.EqualFold(filepath.Base(filepath.Dir(c.Path)), "JetBrains") {
+			t.Fatalf("parent/product root leaked: %q", c.Path)
+		}
+		base := filepath.Base(c.Path)
+		if base != "caches" && base != "index" && base != "resharper-host" {
+			t.Fatalf("excluded sibling selected: %q", c.Path)
+		}
+	}
+}
 
 func TestJetBrainsIDECaches_NoReviewSuggestionCommand(t *testing.T) {
 	result := clean.DryRun(context.Background(), clean.Options{
@@ -847,6 +1025,11 @@ func TestJetBrainsIDECaches_ParentAndProductRootNeverRecycled(t *testing.T) {
 		"caches": "x",
 		"index":  "y",
 	})
+	riderRoot := writeJetBrainsProductRoot(t, parent, "Rider2025.3", map[string]string{
+		"caches":         "rc",
+		"index":          "ri",
+		"resharper-host": "rs",
+	})
 	adapter := &recordingRecycleBinAdapter{}
 	_ = executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		OptIn:                     []string{clean.DevCacheCategoryJetBrainsIDECaches},
@@ -860,15 +1043,15 @@ func TestJetBrainsIDECaches_ParentAndProductRootNeverRecycled(t *testing.T) {
 		}},
 	})
 	for _, p := range adapter.paths {
-		if p == parent || p == root {
+		if p == parent || p == root || p == riderRoot {
 			t.Fatalf("adapter received parent/product root %q", p)
 		}
 		base := filepath.Base(p)
-		if base != "caches" && base != "index" {
+		if base != "caches" && base != "index" && base != "resharper-host" {
 			t.Fatalf("adapter path not allowlisted child: %q", p)
 		}
 	}
-	if len(adapter.paths) != 2 {
-		t.Fatalf("adapter paths = %v, want 2 children", adapter.paths)
+	if len(adapter.paths) != 5 {
+		t.Fatalf("adapter paths = %v, want 5 children (2 IDEA + 3 Rider)", adapter.paths)
 	}
 }
