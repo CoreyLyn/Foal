@@ -33,7 +33,7 @@ type commandSpec struct {
 var commands = []commandSpec{
 	{name: "version", description: "Report Foal build and runtime metadata."},
 	{name: "analyze", description: "Inspect disk usage and cleanup opportunities without changing files."},
-	{name: "clean", description: "Preview or execute conservative cleanup candidates through the Recycle Bin."},
+	{name: "clean", description: "Preview or execute conservative cleanup; permanent categories need per-run --allow-permanent."},
 	{name: "status", description: "Report a read-only system and Foal state snapshot."},
 	{name: "history", description: "Show previous Foal operation records."},
 	{name: "uninstall", description: "Preview application uninstall evidence without executing uninstallers."},
@@ -261,7 +261,8 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 				Command: "clean",
 				Args:    append([]string(nil), args...),
 			},
-			OptIn: optInSlice,
+			OptIn:                  optInSlice,
+			AllowPermanentDeletion: invocation.allowPermanent,
 		}
 		protectionConfig := loadProtectionConfiguration()
 		cleanOptions.Validator = protectionConfig.Validator
@@ -278,6 +279,7 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			result = executeClean(context.Background(), cleanOptions)
 		} else {
 			// For dry-run, always enable running-application detection for browser_cache review and dev cache gating.
+			// Dry-run reports true planned actions without requiring or consuming permanent authorization.
 			cleanOptions.DetectRunningApplications = clean.DetectSupportedApplications
 			result = dryRunClean(context.Background(), cleanOptions)
 		}
@@ -297,8 +299,7 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 		if invocation.execute {
-			_, _ = fmt.Fprintf(stdout, "Foal clean\nExecution complete. Deleted: %d, skipped: %d, action: Recycle Bin.\n",
-				result.Totals.DeletedCount, result.Totals.SkippedCount)
+			_, _ = fmt.Fprint(stdout, renderCleanExecuteHumanSummary(result))
 			return exitOK
 		}
 		_, _ = fmt.Fprint(stdout, clean.RenderPreviewReport(clean.NewPreviewReadModel(result)))
@@ -397,15 +398,17 @@ func isKnownCommand(name string) bool {
 }
 
 type cleanInvocation struct {
-	dryRun  bool
-	execute bool
-	optIn   []string
+	dryRun         bool
+	execute        bool
+	allowPermanent bool
+	optIn          []string
 }
 
 func validateCleanArgs(args []string) (cleanInvocation, error) {
 	var invocation cleanInvocation
 	dryRun := false
 	execute := false
+	allowPermanent := false
 	var optIn []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -414,6 +417,11 @@ func validateCleanArgs(args []string) (cleanInvocation, error) {
 			dryRun = true
 		case "--execute":
 			execute = true
+		case "--allow-permanent":
+			// Per-run permanent-deletion authorization (ADR 0018). Dry-run accepts
+			// the flag but does not require or consume it; execute without it skips
+			// permanent candidates with permanent_deletion_not_authorized.
+			allowPermanent = true
 		case "--opt-in":
 			if i+1 >= len(args) {
 				return invocation, fmt.Errorf("--opt-in requires an argument (use \"all\" for all available, or a specific name like \"user_temp\")")
@@ -424,7 +432,7 @@ func validateCleanArgs(args []string) (cleanInvocation, error) {
 			return invocation, fmt.Errorf("unknown clean option: %s", arg)
 		}
 	}
-	invocation = cleanInvocation{dryRun: dryRun, execute: execute, optIn: optIn}
+	invocation = cleanInvocation{dryRun: dryRun, execute: execute, allowPermanent: allowPermanent, optIn: optIn}
 	if dryRun && execute {
 		return invocation, fmt.Errorf("clean accepts either --dry-run or --execute, not both")
 	}
@@ -432,9 +440,27 @@ func validateCleanArgs(args []string) (cleanInvocation, error) {
 		if len(optIn) > 0 {
 			return invocation, fmt.Errorf("--opt-in requires either --dry-run or --execute")
 		}
+		if allowPermanent {
+			return invocation, fmt.Errorf("--allow-permanent requires --execute (or may accompany --dry-run without authorizing mutation)")
+		}
 		return invocation, fmt.Errorf("clean requires explicit --dry-run preview or --execute confirmation")
 	}
 	return invocation, nil
+}
+
+// renderCleanExecuteHumanSummary reports action-aware completion totals without
+// claiming free space, secure erasure, or Recycle Bin fallback.
+func renderCleanExecuteHumanSummary(result clean.Result) string {
+	var builder strings.Builder
+	builder.WriteString("Foal clean\n")
+	builder.WriteString(fmt.Sprintf("Execution complete. Deleted: %d, skipped: %d.\n",
+		result.Totals.DeletedCount, result.Totals.SkippedCount))
+	builder.WriteString(fmt.Sprintf("Recycle Bin moved: %d bytes. Permanently deleted: %d bytes. Affected: %d bytes.\n",
+		result.Totals.RecycleBinMovedBytes, result.Totals.PermanentlyDeletedBytes, result.Totals.AffectedBytes))
+	if result.Totals.PermanentlyDeletedBytes > 0 {
+		builder.WriteString("Permanent deletion is ordinary filesystem removal; it is irreversible and is not a secure-erasure wipe.\n")
+	}
+	return builder.String()
 }
 
 func helpText() string {
@@ -448,10 +474,19 @@ func helpText() string {
 	for _, command := range commands {
 		builder.WriteString(fmt.Sprintf("  %-10s %s\n", command.name, command.description))
 	}
+	builder.WriteString("\nClean options:\n")
+	builder.WriteString("  --dry-run            Preview candidates and true planned actions (no authorization required).\n")
+	builder.WriteString("  --execute            Confirm cleanup for freshly resolved candidates.\n")
+	builder.WriteString("  --allow-permanent    Per-run authorization for permanent deletion (with --execute).\n")
+	builder.WriteString("                       Without it, permanent categories are skipped; Recycle Bin work continues.\n")
+	builder.WriteString("                       Permanent deletion is ordinary filesystem removal (not secure erasure)\n")
+	builder.WriteString("                       and is never used as a Recycle Bin fallback.\n")
+	builder.WriteString("  --opt-in <name>      Include an opt-in category (repeatable; or \"all\" / \"dev-caches\").\n")
 	builder.WriteString("\nExamples:\n")
 	builder.WriteString("  foal status --json\n")
 	builder.WriteString("  foal clean --dry-run\n")
 	builder.WriteString("  foal clean --execute\n")
+	builder.WriteString("  foal clean --execute --opt-in d3d_shader_cache --allow-permanent\n")
 	builder.WriteString("  foal.exe analyze\n")
 	return builder.String()
 }

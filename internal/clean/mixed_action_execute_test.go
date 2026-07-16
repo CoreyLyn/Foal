@@ -601,13 +601,13 @@ func TestDryRunInjectedPermanentPlannedActionNeedsNoAuthorization(t *testing.T) 
 	}
 }
 
-func TestProductionCatalogStillRecycleBinOnlyWithoutInjection(t *testing.T) {
+func TestProductionDefaultCategoryStaysRecycleBinWithoutInjection(t *testing.T) {
 	root := t.TempDir()
 	path := writeTestFile(t, root, "foal-owned.tmp", "cache")
 	permanent := &recordingPermanentRemover{}
 	adapter := &recordingRecycleBinAdapter{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		AllowPermanentDeletion: true, // even with auth, catalog action stays recycle bin
+		AllowPermanentDeletion: true, // auth alone must not change non-permanent catalog actions
 		RecycleBinAdapter:      adapter,
 		PermanentRemover:       permanent,
 		Rules: []clean.Rule{{
@@ -617,7 +617,7 @@ func TestProductionCatalogStillRecycleBinOnlyWithoutInjection(t *testing.T) {
 		}},
 	})
 	if len(adapter.paths) != 1 || len(permanent.paths) != 0 {
-		t.Fatalf("production path must stay recycle-bin only: recycle=%v permanent=%v", adapter.paths, permanent.paths)
+		t.Fatalf("default path must stay recycle-bin: recycle=%v permanent=%v", adapter.paths, permanent.paths)
 	}
 	if result.Deleted[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
 		t.Fatalf("action = %q", result.Deleted[0].Action)

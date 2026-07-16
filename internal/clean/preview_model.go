@@ -552,6 +552,7 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 		} else {
 			entryCount := cappedEntryCountFor(len(model.Candidates), opts.EntryLimit)
 			for _, candidate := range model.Candidates[:entryCount] {
+				actionLabel := plannedActionLabel(candidate.PlannedAction)
 				if opts.Compact {
 					label := compactPathLabel(candidate.Path)
 					if opts.Expanded {
@@ -559,13 +560,13 @@ func userEssentialsReportLines(model PreviewReadModel, opts PreviewReportCategor
 					}
 					line := fmt.Sprintf("    [candidate] %s (%s)", label, reportFormatBytes(opts, candidate.Bytes))
 					if opts.Expanded {
-						line += fmt.Sprintf(" (status: %s, rule: %s, planned action: Recycle Bin)", presentation.defaultCandidateLabel, candidate.Rule)
+						line += fmt.Sprintf(" (status: %s, rule: %s, planned action: %s)", presentation.defaultCandidateLabel, candidate.Rule, actionLabel)
 					}
 					lines = append(lines, line)
 					continue
 				}
-				lines = append(lines, fmt.Sprintf("    %s (%s, %srule: %s, planned action: Recycle Bin)",
-					candidate.Path, reportFormatBytes(opts, candidate.Bytes), statusLabel(presentation.defaultCandidateLabel), candidate.Rule))
+				lines = append(lines, fmt.Sprintf("    %s (%s, %srule: %s, planned action: %s)",
+					candidate.Path, reportFormatBytes(opts, candidate.Bytes), statusLabel(presentation.defaultCandidateLabel), candidate.Rule, actionLabel))
 			}
 			if omitted := len(model.Candidates) - entryCount; omitted > 0 {
 				lines = append(lines, omittedLine(omitted, model.DetailedListPath))
