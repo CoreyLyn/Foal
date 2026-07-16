@@ -197,8 +197,20 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 	// bun and bunx are one logical application: either process means the tool is running.
 	{id: ApplicationBun, displayName: "Bun", executables: []string{"bun.exe", "bunx.exe"}},
 	// JetBrains IDE launchers: any edition/version of a product shares one identity.
+	// 64-bit then 32-bit launcher names match JetBrains Windows bin layout.
 	{id: ApplicationIntelliJIDEA, displayName: "IntelliJ IDEA", executables: []string{"idea64.exe", "idea.exe"}},
 	{id: ApplicationPyCharm, displayName: "PyCharm", executables: []string{"pycharm64.exe", "pycharm.exe"}},
+	{id: ApplicationWebStorm, displayName: "WebStorm", executables: []string{"webstorm64.exe", "webstorm.exe"}},
+	{id: ApplicationPhpStorm, displayName: "PhpStorm", executables: []string{"phpstorm64.exe", "phpstorm.exe"}},
+	{id: ApplicationRubyMine, displayName: "RubyMine", executables: []string{"rubymine64.exe", "rubymine.exe"}},
+	{id: ApplicationCLion, displayName: "CLion", executables: []string{"clion64.exe", "clion.exe"}},
+	{id: ApplicationDataGrip, displayName: "DataGrip", executables: []string{"datagrip64.exe", "datagrip.exe"}},
+	{id: ApplicationDataSpell, displayName: "DataSpell", executables: []string{"dataspell64.exe", "dataspell.exe"}},
+	{id: ApplicationGoLand, displayName: "GoLand", executables: []string{"goland64.exe", "goland.exe"}},
+	{id: ApplicationRustRover, displayName: "RustRover", executables: []string{"rustrover64.exe", "rustrover.exe"}},
+	{id: ApplicationAqua, displayName: "Aqua", executables: []string{"aqua64.exe", "aqua.exe"}},
+	{id: ApplicationMPS, displayName: "MPS", executables: []string{"mps64.exe", "mps.exe"}},
+	{id: ApplicationWriterside, displayName: "Writerside", executables: []string{"writerside64.exe", "writerside.exe"}},
 }
 
 // applicationCacheApplicationDefinitions is the controlled registry of idle
@@ -421,7 +433,12 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		resolveJetBrainsIDECacheRootScopes,
 		discoverJetBrainsIDECacheChildren,
 		nil,
+		// Application list must stay aligned with jetbrainsIDEProductPolicies.
 		ApplicationIntelliJIDEA, ApplicationPyCharm,
+		ApplicationWebStorm, ApplicationPhpStorm, ApplicationRubyMine,
+		ApplicationCLion, ApplicationDataGrip, ApplicationDataSpell,
+		ApplicationGoLand, ApplicationRustRover, ApplicationAqua,
+		ApplicationMPS, ApplicationWriterside,
 	),
 	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable)},
 }

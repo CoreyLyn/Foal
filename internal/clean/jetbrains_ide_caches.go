@@ -29,9 +29,14 @@ type jetbrainsIDEProductPolicy struct {
 	extraCacheChildren []string
 }
 
-// jetbrainsIDEProductPolicies is the fail-closed product catalog for this slice.
-// #208 ships IntelliJ IDEA Ultimate/Community and PyCharm Professional/Community.
-// Additional JetBrains IDEs require a deliberate catalog + test expansion.
+// jetbrainsIDEProductPolicies is the fail-closed product catalog for standard-
+// layout Windows IntelliJ-platform IDEs that share the caches+index child policy.
+// Order is part of deterministic discovery (productIndex). Rider and its
+// resharper-host child remain intentionally absent (#210). Non-IntelliJ storage
+// (Fleet/Air/Gateway/Client) and third-party platforms (Android Studio) stay out.
+//
+// Longer edition prefixes must appear before shorter prefixes they extend
+// (e.g. PyCharmCE before PyCharm).
 var jetbrainsIDEProductPolicies = []jetbrainsIDEProductPolicy{
 	{
 		application: ApplicationIntelliJIDEA,
@@ -43,6 +48,32 @@ var jetbrainsIDEProductPolicies = []jetbrainsIDEProductPolicy{
 		// PyCharmCE before PyCharm so Community is not absorbed by Professional.
 		prefixes: []string{"PyCharmCE", "PyCharm"},
 	},
+	{application: ApplicationWebStorm, prefixes: []string{"WebStorm"}},
+	{application: ApplicationPhpStorm, prefixes: []string{"PhpStorm"}},
+	{application: ApplicationRubyMine, prefixes: []string{"RubyMine"}},
+	{application: ApplicationCLion, prefixes: []string{"CLion"}},
+	{application: ApplicationDataGrip, prefixes: []string{"DataGrip"}},
+	{application: ApplicationDataSpell, prefixes: []string{"DataSpell"}},
+	{application: ApplicationGoLand, prefixes: []string{"GoLand"}},
+	{application: ApplicationRustRover, prefixes: []string{"RustRover"}},
+	{application: ApplicationAqua, prefixes: []string{"Aqua"}},
+	{application: ApplicationMPS, prefixes: []string{"MPS"}},
+	{application: ApplicationWriterside, prefixes: []string{"Writerside"}},
+}
+
+// jetbrainsIDEApplicationIDs returns the deterministic logical application
+// identities registered for jetbrains-ide-caches (catalog order, unique).
+func jetbrainsIDEApplicationIDs() []string {
+	ids := make([]string, 0, len(jetbrainsIDEProductPolicies))
+	seen := make(map[string]struct{}, len(jetbrainsIDEProductPolicies))
+	for _, p := range jetbrainsIDEProductPolicies {
+		if _, ok := seen[p.application]; ok {
+			continue
+		}
+		seen[p.application] = struct{}{}
+		ids = append(ids, p.application)
+	}
+	return ids
 }
 
 // jetbrainsSharedCacheChildren is the common exact allowlist under every

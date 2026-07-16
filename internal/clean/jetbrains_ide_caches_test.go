@@ -12,8 +12,8 @@ import (
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 )
 
-// jetbrainsProductFixture enumerates edition prefixes and logical product gates
-// for the #208 baseline catalog (IntelliJ IDEA + PyCharm).
+// jetbrainsProductFixture enumerates every catalogued standard-layout product
+// prefix and logical application gate (deterministic catalog order).
 var jetbrainsProductFixture = []struct {
 	dirName     string
 	application string
@@ -23,6 +23,38 @@ var jetbrainsProductFixture = []struct {
 	{dirName: "IdeaIC2024.2", application: clean.ApplicationIntelliJIDEA, label: "IDEA Community"},
 	{dirName: "PyCharm2024.1", application: clean.ApplicationPyCharm, label: "PyCharm Professional"},
 	{dirName: "PyCharmCE2024.3", application: clean.ApplicationPyCharm, label: "PyCharm Community"},
+	{dirName: "WebStorm2024.1", application: clean.ApplicationWebStorm, label: "WebStorm"},
+	{dirName: "PhpStorm2024.2", application: clean.ApplicationPhpStorm, label: "PhpStorm"},
+	{dirName: "RubyMine2024.1", application: clean.ApplicationRubyMine, label: "RubyMine"},
+	{dirName: "CLion2024.3", application: clean.ApplicationCLion, label: "CLion"},
+	{dirName: "DataGrip2024.1", application: clean.ApplicationDataGrip, label: "DataGrip"},
+	{dirName: "DataSpell2024.2", application: clean.ApplicationDataSpell, label: "DataSpell"},
+	{dirName: "GoLand2024.1", application: clean.ApplicationGoLand, label: "GoLand"},
+	{dirName: "RustRover2024.3", application: clean.ApplicationRustRover, label: "RustRover"},
+	{dirName: "Aqua2024.1", application: clean.ApplicationAqua, label: "Aqua"},
+	{dirName: "MPS2024.1", application: clean.ApplicationMPS, label: "MPS"},
+	{dirName: "Writerside2024.1", application: clean.ApplicationWriterside, label: "Writerside"},
+}
+
+// jetbrainsProcessFixture pairs every logical JetBrains application with its
+// exact Windows launcher process names (private detection surface).
+var jetbrainsProcessFixture = []struct {
+	application string
+	executables []string
+}{
+	{clean.ApplicationIntelliJIDEA, []string{"idea64.exe", "idea.exe"}},
+	{clean.ApplicationPyCharm, []string{"pycharm64.exe", "pycharm.exe"}},
+	{clean.ApplicationWebStorm, []string{"webstorm64.exe", "webstorm.exe"}},
+	{clean.ApplicationPhpStorm, []string{"phpstorm64.exe", "phpstorm.exe"}},
+	{clean.ApplicationRubyMine, []string{"rubymine64.exe", "rubymine.exe"}},
+	{clean.ApplicationCLion, []string{"clion64.exe", "clion.exe"}},
+	{clean.ApplicationDataGrip, []string{"datagrip64.exe", "datagrip.exe"}},
+	{clean.ApplicationDataSpell, []string{"dataspell64.exe", "dataspell.exe"}},
+	{clean.ApplicationGoLand, []string{"goland64.exe", "goland.exe"}},
+	{clean.ApplicationRustRover, []string{"rustrover64.exe", "rustrover.exe"}},
+	{clean.ApplicationAqua, []string{"aqua64.exe", "aqua.exe"}},
+	{clean.ApplicationMPS, []string{"mps64.exe", "mps.exe"}},
+	{clean.ApplicationWriterside, []string{"writerside64.exe", "writerside.exe"}},
 }
 
 func writeJetBrainsProductRoot(t *testing.T, jetbrainsParent, dirName string, children map[string]string) string {
@@ -58,10 +90,14 @@ func jetbrainsLocalAppData(t *testing.T) (localAppData, jetbrainsParent string) 
 
 func idleJetBrainsDetector() func(context.Context) []clean.RunningApplicationState {
 	return func(context.Context) []clean.RunningApplicationState {
-		return []clean.RunningApplicationState{
-			{Application: clean.ApplicationIntelliJIDEA, State: clean.RunningApplicationStateIdle},
-			{Application: clean.ApplicationPyCharm, State: clean.RunningApplicationStateIdle},
+		states := make([]clean.RunningApplicationState, 0, len(jetbrainsProcessFixture))
+		for _, fx := range jetbrainsProcessFixture {
+			states = append(states, clean.RunningApplicationState{
+				Application: fx.application,
+				State:       clean.RunningApplicationStateIdle,
+			})
 		}
+		return states
 	}
 }
 
@@ -131,13 +167,13 @@ func TestJetBrainsIDECaches_EditionPrefixesDiscoverCachesAndIndex(t *testing.T) 
 			filepath.Join(root, "index"),
 		)
 	}
-	// Non-IDE / unknown roots under JetBrains parent.
+	// Non-IDE / unknown roots under JetBrains parent (Rider deferred to #210).
 	for _, decoy := range []string{
 		"Toolbox", "Installations", "Transient", "Daemon", "Shared",
-		"dotPeek", "ReSharper", "Rider2024.1", "WebStorm2024.1",
+		"dotPeek", "ReSharper", "Rider2024.1", "Fleet2024.1", "AndroidStudio2024.1",
 		"IntelliJIdea2019.3", "IntelliJIdea2020", "IntelliJIdea2020.0",
 		"MyIntelliJIdea2024.1", "IntelliJIdea2024.1-backup",
-		"PyCharmEdu2024.1", "consentOptions",
+		"PyCharmEdu2024.1", "consentOptions", "WebIde2024.1",
 	} {
 		_ = writeJetBrainsProductRoot(t, parent, decoy, map[string]string{"caches": "nope"})
 	}
@@ -179,11 +215,11 @@ func TestJetBrainsIDECaches_EditionPrefixesDiscoverCachesAndIndex(t *testing.T) 
 			t.Fatalf("missing candidate %q among %#v", want, result.OptInCandidates)
 		}
 	}
-	// Deterministic product-catalog then version then child order:
-	// IDEA 2024.1 caches/index, IDEA Community 2024.2 caches/index,
-	// PyCharm Pro 2024.1, PyCharm CE 2024.3.
-	if result.OptInCandidates[0].Path != wantPaths[0] {
-		t.Fatalf("first candidate = %q, want %q", result.OptInCandidates[0].Path, wantPaths[0])
+	// Deterministic product-catalog then version then child order matches fixture.
+	for i, want := range wantPaths {
+		if result.OptInCandidates[i].Path != want {
+			t.Fatalf("candidates[%d] = %q, want %q", i, result.OptInCandidates[i].Path, want)
+		}
 	}
 	if result.Totals.CandidateBytes != 0 {
 		t.Fatalf("default candidates must stay frozen, got %d", result.Totals.CandidateBytes)
@@ -745,7 +781,11 @@ func TestJetBrainsIDECaches_PublicCatalogPathFree(t *testing.T) {
 	}
 	encoded := string(raw)
 	for _, forbidden := range []string{
-		"IntelliJIdea", "IdeaIC", "PyCharmCE", "idea64.exe", "pycharm64.exe",
+		"IntelliJIdea", "IdeaIC", "PyCharmCE", "WebStorm", "PhpStorm", "RubyMine",
+		"CLion", "DataGrip", "DataSpell", "GoLand", "RustRover", "Writerside",
+		"idea64.exe", "pycharm64.exe", "webstorm64.exe", "phpstorm64.exe",
+		"rubymine64.exe", "clion64.exe", "datagrip64.exe", "dataspell64.exe",
+		"goland64.exe", "rustrover64.exe", "aqua64.exe", "mps64.exe", "writerside64.exe",
 		"resolveRootScopes", "discoverChildren", "LocalHistory", "resharper-host",
 		`JetBrains\`,
 	} {
@@ -757,6 +797,8 @@ func TestJetBrainsIDECaches_PublicCatalogPathFree(t *testing.T) {
 		t.Fatalf("catalog missing public identifier: %s", encoded)
 	}
 }
+
+
 
 func TestJetBrainsIDECaches_NoReviewSuggestionCommand(t *testing.T) {
 	result := clean.DryRun(context.Background(), clean.Options{

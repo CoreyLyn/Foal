@@ -227,6 +227,17 @@ const (
 	ApplicationCursor                      = "cursor"
 	ApplicationIntelliJIDEA                = "intellij_idea"
 	ApplicationPyCharm                     = "pycharm"
+	ApplicationWebStorm                    = "webstorm"
+	ApplicationPhpStorm                    = "phpstorm"
+	ApplicationRubyMine                    = "rubymine"
+	ApplicationCLion                       = "clion"
+	ApplicationDataGrip                    = "datagrip"
+	ApplicationDataSpell                   = "dataspell"
+	ApplicationGoLand                      = "goland"
+	ApplicationRustRover                   = "rustrover"
+	ApplicationAqua                        = "aqua"
+	ApplicationMPS                         = "mps"
+	ApplicationWriterside                  = "writerside"
 	RunningApplicationStateRunning         = RunningApplicationStatus("running")
 	RunningApplicationStateIdle            = RunningApplicationStatus("idle")
 	RunningApplicationStateUnknown         = RunningApplicationStatus("unknown")
