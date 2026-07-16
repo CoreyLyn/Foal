@@ -163,13 +163,23 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 	}
 }
 
+// productionPermanentCategoryIDs is the activated permanent set after #219/#220.
+// Package/runtime developer caches remain Recycle Bin until later tickets.
+func productionPermanentCategoryIDs() map[string]bool {
+	return map[string]bool{
+		clean.OpportunityCategoryD3DShaderCache: true,
+		clean.OpportunityCategoryNVIDIADXCache:  true,
+		clean.OpportunityCategoryBrowserCache:   true,
+		clean.OpportunityCategoryVSCodeCache:    true,
+		clean.OpportunityCategoryCursorCache:    true,
+	}
+}
+
 func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
-	// #219 activates only d3d_shader_cache as permanent; every other executable
-	// production category remains move_to_recycle_bin until later tracer tickets.
-	wantPermanent := map[string]bool{
-		clean.OpportunityCategoryD3DShaderCache: true,
-	}
+	// #219/#220 activate d3d, nvidia DX, browser, and editor caches; every other
+	// executable production category remains move_to_recycle_bin for now.
+	wantPermanent := productionPermanentCategoryIDs()
 	for _, definition := range catalog.Definitions() {
 		switch definition.Eligibility {
 		case clean.CategoryEligibilityDefault, clean.CategoryEligibilityOptIn:
@@ -211,29 +221,49 @@ func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T
 	}
 }
 
-func TestD3DShaderCacheIsOnlyProductionPermanentCategory(t *testing.T) {
+func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
-	summary, ok := catalog.Summary(clean.OpportunityCategoryD3DShaderCache)
-	if !ok {
-		t.Fatal("d3d_shader_cache missing from catalog")
-	}
-	if summary.PlannedAction != clean.DeletionActionDeletePermanently {
-		t.Fatalf("d3d planned_action = %q, want delete_permanently", summary.PlannedAction)
-	}
-	if summary.Eligibility != clean.CategoryEligibilityOptIn {
-		t.Fatalf("d3d eligibility = %q, want opt-in", summary.Eligibility)
-	}
-	if !clean.InitiallySelectedCategory(summary) {
-		t.Fatal("d3d must initially select when permanently eligible")
-	}
+	want := productionPermanentCategoryIDs()
 	var permanent []string
 	for _, definition := range catalog.Definitions() {
 		if definition.PlannedAction == clean.DeletionActionDeletePermanently {
 			permanent = append(permanent, definition.Identifier)
+			if !want[definition.Identifier] {
+				t.Fatalf("unexpected permanent category %q", definition.Identifier)
+			}
+			summary, ok := catalog.Summary(definition.Identifier)
+			if !ok {
+				t.Fatalf("%s missing from catalog", definition.Identifier)
+			}
+			if summary.Eligibility != clean.CategoryEligibilityOptIn {
+				t.Fatalf("%s eligibility = %q, want opt-in", definition.Identifier, summary.Eligibility)
+			}
+			if !clean.InitiallySelectedCategory(summary) {
+				t.Fatalf("%s must initially select when permanently eligible", definition.Identifier)
+			}
 		}
 	}
-	if len(permanent) != 1 || permanent[0] != clean.OpportunityCategoryD3DShaderCache {
-		t.Fatalf("production permanent categories = %v, want only d3d_shader_cache", permanent)
+	if len(permanent) != len(want) {
+		t.Fatalf("production permanent categories = %v, want %d entries from %v", permanent, len(want), want)
+	}
+	// Over-broad whole-root system caches stay Recycle Bin.
+	for _, id := range []string{
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
+		clean.OpportunityCategoryUserTemp,
+		clean.OpportunityCategoryCrashDumps,
+		clean.OpportunityCategoryWindowsErrorReporting,
+	} {
+		summary, ok := catalog.Summary(id)
+		if !ok {
+			t.Fatalf("%s missing", id)
+		}
+		if summary.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+			t.Fatalf("%s planned_action = %q, want move_to_recycle_bin", id, summary.PlannedAction)
+		}
+		if clean.InitiallySelectedCategory(summary) {
+			t.Fatalf("%s must start unselected (Recycle Bin opt-in)", id)
+		}
 	}
 }
 
@@ -377,10 +407,10 @@ func TestInitiallySelectedCategoryUsesInjectedCatalogSummariesWithoutHardCodedLi
 			t.Fatalf("%s selected=%v, want %v", summary.Identifier, got, wantSelected[summary.Identifier])
 		}
 	}
-	// Production catalog: defaults + d3d_shader_cache (sole permanent tracer) start selected.
+	// Production catalog: defaults + every permanent-action category start selected.
+	permanent := productionPermanentCategoryIDs()
 	for _, summary := range clean.EagerPreviewQueue() {
-		want := summary.Eligibility == clean.CategoryEligibilityDefault ||
-			summary.Identifier == clean.OpportunityCategoryD3DShaderCache
+		want := summary.Eligibility == clean.CategoryEligibilityDefault || permanent[summary.Identifier]
 		if clean.InitiallySelectedCategory(summary) != want {
 			t.Fatalf("production %q selected=%v, want %v",
 				summary.Identifier, clean.InitiallySelectedCategory(summary), want)

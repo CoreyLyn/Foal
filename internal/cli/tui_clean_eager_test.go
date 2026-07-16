@@ -2754,16 +2754,22 @@ func TestEagerCleanInitialSelectionDerivedFromInjectedSummaries(t *testing.T) {
 			t.Fatalf("clear mutated action for %q", row.Identifier)
 		}
 	}
-	// Production catalog: defaults + d3d_shader_cache (sole permanent tracer) start selected.
+	// Production catalog: defaults + permanent-action categories start selected.
+	permanentIDs := map[string]bool{
+		clean.OpportunityCategoryD3DShaderCache: true,
+		clean.OpportunityCategoryNVIDIADXCache:  true,
+		clean.OpportunityCategoryBrowserCache:   true,
+		clean.OpportunityCategoryVSCodeCache:    true,
+		clean.OpportunityCategoryCursorCache:    true,
+	}
 	prod := newEagerCleanModel(80, 24)
 	for _, row := range prod.rows {
-		wantSelected := row.Eligibility == clean.CategoryEligibilityDefault ||
-			row.Identifier == clean.OpportunityCategoryD3DShaderCache
+		wantSelected := row.Eligibility == clean.CategoryEligibilityDefault || permanentIDs[row.Identifier]
 		if row.Selected != wantSelected {
 			t.Fatalf("production %q selected=%v, want %v", row.Identifier, row.Selected, wantSelected)
 		}
 		wantAction := clean.DeletionActionMoveToRecycleBin
-		if row.Identifier == clean.OpportunityCategoryD3DShaderCache {
+		if permanentIDs[row.Identifier] {
 			wantAction = clean.DeletionActionDeletePermanently
 		}
 		if row.PlannedAction != wantAction {
@@ -3097,16 +3103,25 @@ func TestEagerCleanProductionD3DTracerInitialSelectionAndConfirmation(t *testing
 	t.Cleanup(func() { runExactCleanSelection = original })
 
 	model := newEagerCleanModel(100, 40)
-	// D3D starts selected from catalog planned action; other opt-ins stay unselected.
+	// Permanent opt-ins start selected from catalog planned action; Recycle Bin opt-ins stay unselected.
+	permanentIDs := map[string]bool{
+		clean.OpportunityCategoryD3DShaderCache: true,
+		clean.OpportunityCategoryNVIDIADXCache:  true,
+		clean.OpportunityCategoryBrowserCache:   true,
+		clean.OpportunityCategoryVSCodeCache:    true,
+		clean.OpportunityCategoryCursorCache:    true,
+	}
 	var d3dIndex = -1
 	for i, row := range model.rows {
-		if row.Identifier == d3dID {
-			d3dIndex = i
+		if permanentIDs[row.Identifier] {
 			if !row.Selected {
-				t.Fatal("d3d_shader_cache must start selected")
+				t.Fatalf("%s must start selected", row.Identifier)
 			}
 			if row.PlannedAction != clean.DeletionActionDeletePermanently {
-				t.Fatalf("d3d planned action = %q", row.PlannedAction)
+				t.Fatalf("%s planned action = %q", row.Identifier, row.PlannedAction)
+			}
+			if row.Identifier == d3dID {
+				d3dIndex = i
 			}
 			continue
 		}
@@ -3118,7 +3133,8 @@ func TestEagerCleanProductionD3DTracerInitialSelectionAndConfirmation(t *testing
 		t.Fatal("d3d_shader_cache missing from production queue")
 	}
 
-	// Terminal complete for default + d3d only.
+	// Terminal complete for default + d3d only; clear other permanent rows so
+	// confirmation exercises the mixed default + single permanent path.
 	for i := range model.rows {
 		id := model.rows[i].Identifier
 		switch id {

@@ -264,6 +264,7 @@ func ProjectCategoryPreview(resolution CategoryResolution) CategoryPreviewObserv
 		excluded++
 	}
 
+	vsixImpact := resolutionIncludesCachedExtensionVSIXs(resolution)
 	switch {
 	case safeCount > 0 && excluded > 0:
 		obs.State = CategoryPreviewPartial
@@ -271,12 +272,12 @@ func ProjectCategoryPreview(resolution CategoryResolution) CategoryPreviewObserv
 		obs.Bytes = safeBytes
 		obs.ExcludedSiblingCount = excluded
 		obs.ReasonCode = partialReasonCode(protectedCount, incompleteSiblingCount, failedSiblingCount, skippedCount, runningBlocked, skipReason, diagnosticReason)
-		obs.SafetyNote = categoryPreviewSafetyNote(summary.Identifier, true)
+		obs.SafetyNote = categoryPreviewSafetyNote(summary.Identifier, true, vsixImpact)
 	case safeCount > 0:
 		obs.State = CategoryPreviewComplete
 		obs.CandidateCount = safeCount
 		obs.Bytes = safeBytes
-		obs.SafetyNote = categoryPreviewSafetyNote(summary.Identifier, true)
+		obs.SafetyNote = categoryPreviewSafetyNote(summary.Identifier, true, vsixImpact)
 	case canceled:
 		obs.State = CategoryPreviewIncomplete
 		obs.ReasonCode = PreviewReasonContextCanceled
@@ -402,7 +403,10 @@ func firstSkippedReasonCode(skipped []SkippedItem) string {
 // categoryPreviewSafetyNote returns optional shared impact vocabulary for
 // categories that already publish notices on the dry-run surface. Empty when
 // there is no shared note or no safe candidates to associate it with.
-func categoryPreviewSafetyNote(identifier string, hasSafeCandidates bool) string {
+//
+// Application-cache VSIX re-fetch impact is path-sensitive: callers pass
+// includeVSIXImpact when any safe candidate is an exact CachedExtensionVSIXs root.
+func categoryPreviewSafetyNote(identifier string, hasSafeCandidates bool, includeVSIXImpact bool) string {
 	if !hasSafeCandidates {
 		return ""
 	}
@@ -419,9 +423,28 @@ func categoryPreviewSafetyNote(identifier string, hasSafeCandidates bool) string
 		return electronCacheOptInImpactNotice
 	case DevCacheCategoryJetBrainsIDECaches:
 		return jetbrainsIDECachesOptInImpactNotice
+	case OpportunityCategoryVSCodeCache, OpportunityCategoryCursorCache:
+		if includeVSIXImpact {
+			return applicationCacheCachedExtensionVSIXsImpactNotice
+		}
+		return ""
 	default:
 		return ""
 	}
+}
+
+func resolutionIncludesCachedExtensionVSIXs(resolution CategoryResolution) bool {
+	for _, candidate := range resolution.Candidates {
+		if isCachedExtensionVSIXsPath(candidate.Path) {
+			return true
+		}
+	}
+	for _, candidate := range resolution.OptInCandidates {
+		if isCachedExtensionVSIXsPath(candidate.Path) {
+			return true
+		}
+	}
+	return false
 }
 
 // ErrEagerPreviewUnavailable is returned when RunEagerPreview refuses to scan
