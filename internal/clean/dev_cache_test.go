@@ -499,7 +499,8 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 		// Isolate JetBrains product-scoped resolution from the real user profile.
 		t.Setenv("LOCALAPPDATA", t.TempDir())
 		cachePaths := make(map[string]string)
-		wholeRootCaches := []string{
+		// Recycle-bin package/build caches stay whole-root until later tickets.
+		recycleWholeRootCaches := []string{
 			clean.DevCacheCategoryNPM,
 			clean.DevCacheCategoryGo,
 			clean.DevCacheCategoryPip,
@@ -509,9 +510,8 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryCorepack,
 			clean.DevCacheCategoryUV,
 			clean.DevCacheCategoryBun,
-			clean.DevCacheCategoryElectron,
 		}
-		for _, cat := range wholeRootCaches {
+		for _, cat := range recycleWholeRootCaches {
 			cachePath := filepath.Join(root, cat)
 			if err := os.Mkdir(cachePath, 0700); err != nil {
 				t.Fatal(err)
@@ -522,6 +522,16 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}
 			cachePaths[cat] = cachePath
 		}
+		// #222 permanent whole-root: electron-cache
+		electronPath := filepath.Join(root, clean.DevCacheCategoryElectron)
+		if err := os.Mkdir(electronPath, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(electronPath, "data.bin"), []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cachePaths[clean.DevCacheCategoryElectron] = electronPath
+
 		playwrightRoot := filepath.Join(root, "ms-playwright")
 		pwInstall := filepath.Join(playwrightRoot, "chromium-1")
 		if err := os.MkdirAll(pwInstall, 0700); err != nil {
@@ -552,11 +562,14 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 		}
 
 		adapter := &recordingRecycleBinAdapter{}
+		permanent := &recordingPermanentRemover{}
 
 		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			AllowPermanentDeletion:    true,
 			OptIn:                     []string{"dev-caches"},
 			DevCachePathResolver:      fakeResolver,
 			RecycleBinAdapter:         adapter,
+			PermanentRemover:          permanent,
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
 			Rules: []clean.Rule{{
@@ -565,13 +578,22 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}},
 		})
 
-		// 10 whole-root + 1 playwright install child + 1 puppeteer install child
-		if len(adapter.paths) != 12 {
-			t.Fatalf("expected 12 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
+		// 9 recycle whole-root + 1 permanent electron + 1 playwright install + 1 puppeteer install
+		if len(adapter.paths) != 9 {
+			t.Fatalf("expected 9 recycle-bin paths, got %d: %v", len(adapter.paths), adapter.paths)
+		}
+		if len(permanent.paths) != 3 {
+			t.Fatalf("expected 3 permanent paths (electron+pw+pptr), got %d: %v", len(permanent.paths), permanent.paths)
 		}
 
 		if result.Totals.OptInDeletedCount != 12 {
 			t.Fatalf("expected OptInDeletedCount 12, got %d", result.Totals.OptInDeletedCount)
+		}
+		if result.Totals.PermanentlyDeletedBytes == 0 {
+			t.Fatal("expected non-zero permanently_deleted_bytes for #222 categories")
+		}
+		if result.Totals.RecycleBinMovedBytes == 0 {
+			t.Fatal("expected non-zero recycle_bin_moved_bytes for package caches")
 		}
 	})
 

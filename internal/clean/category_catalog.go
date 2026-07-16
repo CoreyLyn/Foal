@@ -394,10 +394,9 @@ func developerCacheEntryWithProductScopedChildren(
 }
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
-	// Default and Recycle Bin opt-ins remain move_to_recycle_bin. Permanent
-	// production activation (#219/#220): d3d_shader_cache, nvidia_dx_cache,
-	// browser_cache, vscode_cache, cursor_cache. Package/runtime dev caches stay
-	// Recycle Bin until later tickets.
+	// Permanent production activation (#219/#220/#222): d3d_shader_cache, nvidia_dx_cache,
+	// browser_cache, vscode_cache, cursor_cache, playwright-browsers, puppeteer-browsers,
+	// electron-cache, jetbrains-ide-caches. Package/build caches stay Recycle Bin until #221.
 	{definition: categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)},
 	{definition: categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true},
 	{definition: categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"CrashDumps"}},
@@ -491,37 +490,36 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	),
 	// Playwright global browser binaries: structured child discovery under the
 	// env/default root. Shared-runtime policy: do not attribute node/chrome/etc.
-	// as Playwright-owned. No Review suggestion probe (Foal owns Recycle Bin).
+	// as Playwright-owned. Permanent deletion (#222); no Review suggestion probe.
 	developerCacheEntryWithChildren(
-		categoryDefinition(DevCacheCategoryPlaywright, "Playwright browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryPlaywright, "Playwright browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolvePlaywrightBrowserPaths,
 		discoverPlaywrightBrowserChildren,
 		nil,
 	),
 	// Puppeteer browser binaries: shared-runtime (Node/Python/Chrome/Firefox are
 	// not attributable). Structured children under env/default root only; root
-	// and product parents are never candidates (ADR 0011).
+	// and product parents are never candidates (ADR 0011). Permanent deletion (#222).
 	developerCacheEntryWithChildren(
-		categoryDefinition(DevCacheCategoryPuppeteerBrowsers, "Puppeteer browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryPuppeteerBrowsers, "Puppeteer browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolvePuppeteerCachePaths,
 		discoverPuppeteerBrowserChildren,
 		nil,
 	),
 	// Electron download cache: whole-root under env/default only. Shared-runtime
-	// (Node/Electron hosts are not attributable). No Review suggestion probe —
-	// Foal owns Recycle Bin reclaim and does not invent an Electron cleanup command.
+	// (Node/Electron hosts are not attributable). Permanent deletion (#222); no
+	// Review suggestion probe and no invented Electron cleanup command.
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryElectron, "Electron cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryElectron, "Electron cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolveElectronCachePaths,
 		nil,
 	),
 	// JetBrains IDE system caches: product-scoped roots under %LOCALAPPDATA%\JetBrains
 	// with structured children (caches/index; Rider also resharper-host). Distinctive-
 	// process policy; each product identity gates independently via
-	// DevCacheRootScope.Application. No Review suggestion probe — Foal owns Recycle
-	// Bin reclaim only.
+	// DevCacheRootScope.Application. Permanent deletion (#222); no Review probe.
 	developerCacheEntryWithProductScopedChildren(
-		categoryDefinition(DevCacheCategoryJetBrainsIDECaches, "JetBrains IDE caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryJetBrainsIDECaches, "JetBrains IDE caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveJetBrainsIDECacheRootScopes,
 		discoverJetBrainsIDECacheChildren,
 		nil,

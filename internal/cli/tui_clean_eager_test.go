@@ -789,7 +789,7 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 			}
 		case clean.CategoryEligibilityOptIn:
 			optIns++
-			// Permanent-action opt-ins (currently d3d_shader_cache) start selected.
+			// Permanent-action opt-ins (d3d + #222 runtimes/JetBrains) start selected.
 			if row.PlannedAction == clean.DeletionActionDeletePermanently {
 				if !row.Selected {
 					t.Fatalf("permanent opt-in %q must start selected", row.Identifier)
@@ -1582,7 +1582,7 @@ func TestRunExactCleanSelectionUsesPlanAndTUIProvenance(t *testing.T) {
 	})
 
 	// Omit default; pass only crash_dumps and go-cache style opt-ins.
-	// Production catalog is still Recycle Bin-only, so permanent auth stays false.
+	// Recycle-bin opt-ins only: permanent auth stays false.
 	selected := []string{clean.DevCacheCategoryGo, clean.OpportunityCategoryCrashDumps}
 	result := runExactCleanSelection(context.Background(), selected, false, nil)
 	if result.Status != "ok" {
@@ -2754,26 +2754,20 @@ func TestEagerCleanInitialSelectionDerivedFromInjectedSummaries(t *testing.T) {
 			t.Fatalf("clear mutated action for %q", row.Identifier)
 		}
 	}
-	// Production catalog: defaults + permanent-action categories start selected.
-	permanentIDs := map[string]bool{
-		clean.OpportunityCategoryD3DShaderCache: true,
-		clean.OpportunityCategoryNVIDIADXCache:  true,
-		clean.OpportunityCategoryBrowserCache:   true,
-		clean.OpportunityCategoryVSCodeCache:    true,
-		clean.OpportunityCategoryCursorCache:    true,
-	}
+	// Production catalog: defaults + all delete_permanently categories start selected.
 	prod := newEagerCleanModel(80, 24)
 	for _, row := range prod.rows {
-		wantSelected := row.Eligibility == clean.CategoryEligibilityDefault || permanentIDs[row.Identifier]
+		wantSelected := row.Eligibility == clean.CategoryEligibilityDefault ||
+			row.PlannedAction == clean.DeletionActionDeletePermanently
 		if row.Selected != wantSelected {
 			t.Fatalf("production %q selected=%v, want %v", row.Identifier, row.Selected, wantSelected)
 		}
-		wantAction := clean.DeletionActionMoveToRecycleBin
-		if permanentIDs[row.Identifier] {
-			wantAction = clean.DeletionActionDeletePermanently
-		}
-		if row.PlannedAction != wantAction {
-			t.Fatalf("production %q action = %q, want %q", row.Identifier, row.PlannedAction, wantAction)
+		if row.PlannedAction == clean.DeletionActionDeletePermanently {
+			if row.PlannedAction != clean.DeletionActionDeletePermanently {
+				t.Fatalf("production %q action = %q, want delete_permanently", row.Identifier, row.PlannedAction)
+			}
+		} else if row.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+			t.Fatalf("production %q action = %q, want move_to_recycle_bin", row.Identifier, row.PlannedAction)
 		}
 	}
 }
@@ -3103,38 +3097,27 @@ func TestEagerCleanProductionD3DTracerInitialSelectionAndConfirmation(t *testing
 	t.Cleanup(func() { runExactCleanSelection = original })
 
 	model := newEagerCleanModel(100, 40)
-	// Permanent opt-ins start selected from catalog planned action; Recycle Bin opt-ins stay unselected.
-	permanentIDs := map[string]bool{
-		clean.OpportunityCategoryD3DShaderCache: true,
-		clean.OpportunityCategoryNVIDIADXCache:  true,
-		clean.OpportunityCategoryBrowserCache:   true,
-		clean.OpportunityCategoryVSCodeCache:    true,
-		clean.OpportunityCategoryCursorCache:    true,
-	}
+	// Permanent-action opt-ins start selected; recycle-bin opt-ins stay unselected.
 	var d3dIndex = -1
 	for i, row := range model.rows {
-		if permanentIDs[row.Identifier] {
-			if !row.Selected {
-				t.Fatalf("%s must start selected", row.Identifier)
-			}
-			if row.PlannedAction != clean.DeletionActionDeletePermanently {
-				t.Fatalf("%s planned action = %q", row.Identifier, row.PlannedAction)
-			}
-			if row.Identifier == d3dID {
-				d3dIndex = i
-			}
-			continue
+		if row.Identifier == d3dID {
+			d3dIndex = i
 		}
-		if row.Eligibility == clean.CategoryEligibilityOptIn && row.Selected {
-			t.Fatalf("non-permanent opt-in %q must start unselected", row.Identifier)
+		if row.Eligibility == clean.CategoryEligibilityOptIn {
+			if row.PlannedAction == clean.DeletionActionDeletePermanently {
+				if !row.Selected {
+					t.Fatalf("permanent opt-in %q must start selected", row.Identifier)
+				}
+			} else if row.Selected {
+				t.Fatalf("non-permanent opt-in %q must start unselected", row.Identifier)
+			}
 		}
 	}
 	if d3dIndex < 0 {
 		t.Fatal("d3d_shader_cache missing from production queue")
 	}
 
-	// Terminal complete for default + d3d only; clear other permanent rows so
-	// confirmation exercises the mixed default + single permanent path.
+	// Keep confirmation focused on default + d3d only (deselect other permanents).
 	for i := range model.rows {
 		id := model.rows[i].Identifier
 		switch id {
