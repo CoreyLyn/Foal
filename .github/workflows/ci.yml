@@ -29,7 +29,16 @@ jobs:
         run: go mod verify
 
       - name: Test
-        run: go test ./... -count=1 -timeout=5m
+        # GHA Windows runners often expose TEMP under 8.3 short paths (e.g. C:\Users\RUNNER~1\...).
+        # pathsafe rejects ~ segments; point TEMP/TMP at a long path so t.TempDir() stays valid.
+        shell: pwsh
+        run: |
+          $temp = "C:\foal-ci-temp"
+          New-Item -ItemType Directory -Force $temp | Out-Null
+          $env:TEMP = $temp
+          $env:TMP = $temp
+          go test ./... -count=1 -timeout=5m
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Windows archive inputs
         shell: pwsh
