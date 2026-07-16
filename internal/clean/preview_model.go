@@ -119,8 +119,14 @@ const ReviewSuggestionSafetyNote = "Clearing a tool cache while the tool is inst
 const administratorOnlyCacheBoundaryNotice = "Permission boundary: administrator-only caches such as SoftwareDistribution and Delivery Optimization are excluded from Opportunity discovery. Foal will not request elevation automatically."
 // uvCacheOptInImpactNotice is shown when uv-cache is an Opt-in candidate. uv
 // rebuilds disposable tool environments and re-downloads dependencies after a
-// cache reclaim; Foal must not present this as zero-impact cleanup.
+// cache reclaim; Foal must not present this as zero-impact cleanup. Upstream
+// also advises against modifying the cache directory directly.
 const uvCacheOptInImpactNotice = "Opt-in uv cache cleanup may require re-downloading dependencies and rebuilding disposable tool environments. It is not zero-impact."
+
+// nugetGlobalPackagesOptInImpactNotice is a high-impact warning for
+// nuget-global-packages. Packages may restore on the next build, but offline,
+// private-source, removed, or inaccessible packages may not be recoverable.
+const nugetGlobalPackagesOptInImpactNotice = "Opt-in NuGet global packages cleanup will require builds to restore packages again. Offline, private-source, removed, or otherwise inaccessible packages may not be recoverable."
 
 // bunCacheOptInImpactNotice is shown when bun-cache is an Opt-in candidate.
 // Clearing Bun's global install cache may require future dependency downloads,
@@ -235,11 +241,13 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasUVOptIn, hasBunOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasApplicationCacheVSIX bool
+	var hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasApplicationCacheVSIX bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case DevCacheCategoryUV:
 			hasUVOptIn = true
+		case DevCacheCategoryNuGetGlobalPackages:
+			hasNuGetGlobalPackagesOptIn = true
 		case DevCacheCategoryBun:
 			hasBunOptIn = true
 		case DevCacheCategoryPlaywright:
@@ -266,6 +274,12 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
 			Message: uvCacheOptInImpactNotice,
+		})
+	}
+	if hasNuGetGlobalPackagesOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: nugetGlobalPackagesOptInImpactNotice,
 		})
 	}
 	if hasBunOptIn {

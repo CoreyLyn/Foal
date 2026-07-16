@@ -163,25 +163,34 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 	}
 }
 
-// productionPermanentCategoryIDs is the activated permanent set after #219/#220/#222.
-// Package/build developer caches remain Recycle Bin until #221.
+// productionPermanentCategoryIDs is the full activated permanent set after
+// #219/#220/#221/#222 (18 categories). Over-broad whole-root system caches remain Recycle Bin.
 func productionPermanentCategoryIDs() map[string]bool {
 	return map[string]bool{
-		clean.OpportunityCategoryD3DShaderCache:  true,
-		clean.OpportunityCategoryNVIDIADXCache:   true,
-		clean.OpportunityCategoryBrowserCache:    true,
-		clean.OpportunityCategoryVSCodeCache:     true,
-		clean.OpportunityCategoryCursorCache:     true,
-		clean.DevCacheCategoryPlaywright:         true,
-		clean.DevCacheCategoryPuppeteerBrowsers:  true,
-		clean.DevCacheCategoryElectron:           true,
-		clean.DevCacheCategoryJetBrainsIDECaches: true,
+		clean.OpportunityCategoryD3DShaderCache:   true,
+		clean.OpportunityCategoryNVIDIADXCache:    true,
+		clean.OpportunityCategoryBrowserCache:     true,
+		clean.OpportunityCategoryVSCodeCache:      true,
+		clean.OpportunityCategoryCursorCache:      true,
+		clean.DevCacheCategoryNPM:                 true,
+		clean.DevCacheCategoryGo:                  true,
+		clean.DevCacheCategoryPip:                 true,
+		clean.DevCacheCategoryCargo:               true,
+		clean.DevCacheCategoryNuGet:               true,
+		clean.DevCacheCategoryNuGetGlobalPackages: true,
+		clean.DevCacheCategoryCorepack:            true,
+		clean.DevCacheCategoryUV:                  true,
+		clean.DevCacheCategoryBun:                 true,
+		clean.DevCacheCategoryPlaywright:          true,
+		clean.DevCacheCategoryPuppeteerBrowsers:   true,
+		clean.DevCacheCategoryElectron:            true,
+		clean.DevCacheCategoryJetBrainsIDECaches:  true,
 	}
 }
 
 func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
-	// #219/#220/#222 activated permanent set; package/build caches remain RB for now.
+	// #219/#220/#221/#222 activated permanent set; remaining whole-root system caches stay RB.
 	wantPermanent := productionPermanentCategoryIDs()
 	for _, definition := range catalog.Definitions() {
 		switch definition.Eligibility {
@@ -249,15 +258,14 @@ func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 	if len(permanent) != len(want) {
 		t.Fatalf("production permanent categories = %v, want %d entries from %v", permanent, len(want), want)
 	}
-	// Over-broad whole-root system caches and package/build caches stay Recycle Bin.
+	// Over-broad whole-root system caches and the default category stay Recycle Bin.
 	for _, id := range []string{
+		clean.DefaultCategoryFoalOwnedTempSandboxes,
 		clean.OpportunityCategoryExplorerThumbnailCache,
 		clean.OpportunityCategoryINetCache,
 		clean.OpportunityCategoryUserTemp,
 		clean.OpportunityCategoryCrashDumps,
 		clean.OpportunityCategoryWindowsErrorReporting,
-		clean.DevCacheCategoryNPM,
-		clean.DevCacheCategoryGo,
 	} {
 		summary, ok := catalog.Summary(id)
 		if !ok {

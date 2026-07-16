@@ -391,6 +391,8 @@ func TestCursorCacheUnauthorizedSkipsPermanent(t *testing.T) {
 }
 
 func TestIssue220RecycleBinCategoriesUnchanged(t *testing.T) {
+	// #220 must not flip over-broad whole-root system categories or the default.
+	// Package/build permanent activation is owned by #221.
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	for _, id := range []string{
 		clean.OpportunityCategoryExplorerThumbnailCache,
@@ -399,8 +401,6 @@ func TestIssue220RecycleBinCategoriesUnchanged(t *testing.T) {
 		clean.OpportunityCategoryCrashDumps,
 		clean.OpportunityCategoryWindowsErrorReporting,
 		clean.DefaultCategoryFoalOwnedTempSandboxes,
-		clean.DevCacheCategoryNPM,
-		clean.DevCacheCategoryGo,
 	} {
 		summary, ok := catalog.Summary(id)
 		if !ok {
