@@ -394,9 +394,9 @@ func developerCacheEntryWithProductScopedChildren(
 }
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
-	// Permanent production activation (#219/#220/#222): d3d_shader_cache, nvidia_dx_cache,
-	// browser_cache, vscode_cache, cursor_cache, playwright-browsers, puppeteer-browsers,
-	// electron-cache, jetbrains-ide-caches. Package/build caches stay Recycle Bin until #221.
+	// Executable categories declare an explicit planned action. Permanent production
+	// activation: #219 d3d tracer, #220 Windows/browser/editor, #221 package/build
+	// caches, #222 runtimes/JetBrains. Over-broad whole-root system caches stay Recycle Bin.
 	{definition: categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)},
 	{definition: categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true},
 	{definition: categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"CrashDumps"}},
@@ -437,53 +437,55 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		applicationCachePolicyID: applicationCachePolicyCursor,
 		runningApplications:      []string{ApplicationCursor},
 	},
+	// Package and build caches (#221): proven regenerable roots; env/default
+	// resolvers, gates, and impact notices unchanged.
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolveNPMCachePaths,
 		[]string{"npm"},
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryGo, "Go build cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryGo, "Go build cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveGoCachePaths,
 		[]string{"go"},
 		ApplicationGo,
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryPip, "pip cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryPip, "pip cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolvePipCachePaths,
 		[]string{"pip"},
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryCargo, "Cargo cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryCargo, "Cargo cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveCargoCachePaths,
 		nil,
 		ApplicationCargo,
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryNuGet, "NuGet cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryNuGet, "NuGet cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveNuGetCachePaths,
 		[]string{"dotnet"},
 		ApplicationDotNet, ApplicationNuGet,
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryNuGetGlobalPackages, "NuGet global packages", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryNuGetGlobalPackages, "NuGet global packages", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveNuGetGlobalPackagesPaths,
 		[]string{"dotnet"},
 		ApplicationDotNet, ApplicationNuGet,
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryCorepack, "Corepack cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryCorepack, "Corepack cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolveCorepackOptInCachePaths,
 		[]string{"corepack"},
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryUV, "uv cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryUV, "uv cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveUVCachePaths,
 		[]string{"uv"},
 		ApplicationUV,
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryBun, "Bun cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
+		categoryDefinition(DevCacheCategoryBun, "Bun cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveBunCachePaths,
 		[]string{"bun"},
 		ApplicationBun,

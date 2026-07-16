@@ -301,12 +301,15 @@ func TestStructuredDevCacheDiscovery_ExecuteFreshResolvesChildren(t *testing.T) 
 		t.Fatalf("dry-run candidates = %#v", dry.OptInCandidates)
 	}
 
-	adapter := &recordingRecycleBinAdapter{}
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	execResult := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryNPM},
 		DevCachePathResolver:      func(string) []string { return []string{cacheRoot} },
 		DevCacheChildDiscoverer:   structuredDiscoverer("execute-only"),
-		RecycleBinAdapter:         adapter,
+		RecycleBinAdapter:         recycle,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{{
@@ -315,19 +318,25 @@ func TestStructuredDevCacheDiscovery_ExecuteFreshResolvesChildren(t *testing.T) 
 		}},
 	})
 
-	if len(adapter.paths) != 1 || adapter.paths[0] != executeChild {
-		t.Fatalf("adapter paths = %v, want only fresh execute child %q", adapter.paths, executeChild)
+	if len(recycle.paths) != 0 {
+		t.Fatalf("structured npm children must not use Recycle Bin: %v", recycle.paths)
 	}
-	for _, p := range adapter.paths {
+	if len(permanent.paths) != 1 || permanent.paths[0] != executeChild {
+		t.Fatalf("permanent paths = %v, want only fresh execute child %q", permanent.paths, executeChild)
+	}
+	for _, p := range permanent.paths {
 		if p == previewChild {
 			t.Fatalf("execute trusted dry-run path %q", previewChild)
 		}
 		if p == cacheRoot {
-			t.Fatalf("execute sent root to adapter: %q", cacheRoot)
+			t.Fatalf("execute sent root to permanent remover: %q", cacheRoot)
 		}
 	}
 	if execResult.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("opt-in deleted = %d, want 1", execResult.Totals.OptInDeletedCount)
+	}
+	if execResult.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+		t.Fatalf("action = %q", execResult.Deleted[0].Action)
 	}
 }
 

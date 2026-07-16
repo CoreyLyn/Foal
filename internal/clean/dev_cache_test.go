@@ -179,8 +179,8 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 		if candidate.Category != clean.DevCacheCategoryNPM {
 			t.Fatalf("expected category %q, got %q", clean.DevCacheCategoryNPM, candidate.Category)
 		}
-		if candidate.PlannedAction != "move_to_recycle_bin" {
-			t.Fatalf("expected planned action move_to_recycle_bin, got %q", candidate.PlannedAction)
+		if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			t.Fatalf("expected planned action delete_permanently, got %q", candidate.PlannedAction)
 		}
 		if candidate.Bytes != 4 {
 			t.Fatalf("expected 4 bytes, got %d", candidate.Bytes)
@@ -427,7 +427,7 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 }
 
 func TestExecute_OptInDevCaches(t *testing.T) {
-	t.Run("dev cache executes via Recycle Bin when opted in", func(t *testing.T) {
+	t.Run("dev cache executes via permanent removal when opted in and authorized", func(t *testing.T) {
 		root := t.TempDir()
 		cachePath := filepath.Join(root, "npm-cache")
 		if err := os.Mkdir(cachePath, 0700); err != nil {
@@ -445,13 +445,16 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			return nil
 		}
 
-		adapter := &recordingRecycleBinAdapter{}
+		recycle := &recordingRecycleBinAdapter{}
+		permanent := &recordingPermanentRemover{}
 
 		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-			OptIn:                 []string{"npm-cache"},
-			DevCachePathResolver:  fakeResolver,
-			RecycleBinAdapter:     adapter,
-			DiscoverOpportunities: noOpportunities,
+			AllowPermanentDeletion: true,
+			OptIn:                  []string{"npm-cache"},
+			DevCachePathResolver:   fakeResolver,
+			RecycleBinAdapter:      recycle,
+			PermanentRemover:       permanent,
+			DiscoverOpportunities:  noOpportunities,
 			DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
 				return nil
 			},
@@ -461,19 +464,14 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}},
 		})
 
-		// Verify the path was sent to Recycle Bin
-		found := false
-		for _, p := range adapter.paths {
-			if p == cachePath {
-				found = true
-				break
-			}
+		if len(recycle.paths) != 0 {
+			t.Fatalf("npm-cache must not use Recycle Bin: %v", recycle.paths)
 		}
-		if !found {
-			t.Fatalf("expected adapter to receive %q, got %v", cachePath, adapter.paths)
+		if len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+			t.Fatalf("permanent paths = %v, want [%q]", permanent.paths, cachePath)
 		}
 
-		// Verify deleted item is marked as opt-in
+		// Verify deleted item is marked as opt-in permanent
 		if result.Totals.OptInDeletedCount != 1 {
 			t.Fatalf("expected OptInDeletedCount 1, got %d", result.Totals.OptInDeletedCount)
 		}
@@ -487,6 +485,9 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 				if d.Rule != clean.DevCacheCategoryNPM {
 					t.Fatalf("expected deleted item rule to be %q, got %q", clean.DevCacheCategoryNPM, d.Rule)
 				}
+				if d.Action != string(clean.DeletionActionDeletePermanently) {
+					t.Fatalf("expected permanent action, got %q", d.Action)
+				}
 			}
 		}
 		if !foundDeleted {
@@ -499,8 +500,8 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 		// Isolate JetBrains product-scoped resolution from the real user profile.
 		t.Setenv("LOCALAPPDATA", t.TempDir())
 		cachePaths := make(map[string]string)
-		// Recycle-bin package/build caches stay whole-root until later tickets.
-		recycleWholeRootCaches := []string{
+		// #221+#222: all registered developer-cache whole-root categories are permanent.
+		wholeRootCaches := []string{
 			clean.DevCacheCategoryNPM,
 			clean.DevCacheCategoryGo,
 			clean.DevCacheCategoryPip,
@@ -510,8 +511,9 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryCorepack,
 			clean.DevCacheCategoryUV,
 			clean.DevCacheCategoryBun,
+			clean.DevCacheCategoryElectron,
 		}
-		for _, cat := range recycleWholeRootCaches {
+		for _, cat := range wholeRootCaches {
 			cachePath := filepath.Join(root, cat)
 			if err := os.Mkdir(cachePath, 0700); err != nil {
 				t.Fatal(err)
@@ -522,15 +524,6 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}
 			cachePaths[cat] = cachePath
 		}
-		// #222 permanent whole-root: electron-cache
-		electronPath := filepath.Join(root, clean.DevCacheCategoryElectron)
-		if err := os.Mkdir(electronPath, 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(electronPath, "data.bin"), []byte("test"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		cachePaths[clean.DevCacheCategoryElectron] = electronPath
 
 		playwrightRoot := filepath.Join(root, "ms-playwright")
 		pwInstall := filepath.Join(playwrightRoot, "chromium-1")
@@ -561,14 +554,28 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			return nil
 		}
 
-		adapter := &recordingRecycleBinAdapter{}
+		recycle := &recordingRecycleBinAdapter{}
 		permanent := &recordingPermanentRemover{}
+
+		// Distinctive-process package caches need idle snapshots; shared-runtime
+		// (npm/pip/corepack/electron/playwright/puppeteer) do not.
+		idleDetector := func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationGo, State: clean.RunningApplicationStateIdle},
+				{Application: clean.ApplicationCargo, State: clean.RunningApplicationStateIdle},
+				{Application: clean.ApplicationDotNet, State: clean.RunningApplicationStateIdle},
+				{Application: clean.ApplicationNuGet, State: clean.RunningApplicationStateIdle},
+				{Application: clean.ApplicationUV, State: clean.RunningApplicationStateIdle},
+				{Application: clean.ApplicationBun, State: clean.RunningApplicationStateIdle},
+			}
+		}
 
 		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 			AllowPermanentDeletion:    true,
 			OptIn:                     []string{"dev-caches"},
 			DevCachePathResolver:      fakeResolver,
-			RecycleBinAdapter:         adapter,
+			DetectRunningApplications: idleDetector,
+			RecycleBinAdapter:         recycle,
 			PermanentRemover:          permanent,
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
@@ -578,182 +585,22 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}},
 		})
 
-		// 9 recycle whole-root + 1 permanent electron + 1 playwright install + 1 puppeteer install
-		if len(adapter.paths) != 9 {
-			t.Fatalf("expected 9 recycle-bin paths, got %d: %v", len(adapter.paths), adapter.paths)
+		// All 12 discovered developer-cache candidates are permanent after #221+#222
+		// (9 package/build whole-roots + electron + playwright install + puppeteer install).
+		if len(recycle.paths) != 0 {
+			t.Fatalf("recycle paths = %d: %v, want none (all dev caches permanent)", len(recycle.paths), recycle.paths)
 		}
-		if len(permanent.paths) != 3 {
-			t.Fatalf("expected 3 permanent paths (electron+pw+pptr), got %d: %v", len(permanent.paths), permanent.paths)
+		if len(permanent.paths) != 12 {
+			t.Fatalf("permanent paths = %d: %v, want 12", len(permanent.paths), permanent.paths)
 		}
-
 		if result.Totals.OptInDeletedCount != 12 {
 			t.Fatalf("expected OptInDeletedCount 12, got %d", result.Totals.OptInDeletedCount)
 		}
 		if result.Totals.PermanentlyDeletedBytes == 0 {
-			t.Fatal("expected non-zero permanently_deleted_bytes for #222 categories")
+			t.Fatal("expected non-zero permanently_deleted_bytes for permanent dev caches")
 		}
-		if result.Totals.RecycleBinMovedBytes == 0 {
-			t.Fatal("expected non-zero recycle_bin_moved_bytes for package caches")
-		}
-	})
-
-	t.Run("capacity pre-check applies to dev caches", func(t *testing.T) {
-		root := t.TempDir()
-		cachePath := filepath.Join(root, "npm-cache")
-		if err := os.Mkdir(cachePath, 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(cachePath, "large.bin"), make([]byte, 100), 0600); err != nil {
-			t.Fatal(err)
-		}
-
-		fakeResolver := func(category string) []string {
-			if category == clean.DevCacheCategoryNPM {
-				return []string{cachePath}
-			}
-			return nil
-		}
-
-		// Fake probe that returns very low capacity
-		fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
-			return clean.RecycleBinVolumeConfig{
-				Volume:       filepath.VolumeName(path),
-				NukeOnDelete: false,
-				MaxCapacity:  50, // Too small for our 100-byte file
-			}, nil
-		}
-
-		adapter := &recordingRecycleBinAdapter{}
-
-		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-			OptIn:                     []string{"npm-cache"},
-			DevCachePathResolver:      fakeResolver,
-			RecycleBinCapacityProbe:   fakeProbe,
-			RecycleBinAdapter:         adapter,
-			DiscoverOpportunities:     noOpportunities,
-			DiscoverReviewSuggestions: noReviewSuggestions,
-			Rules: []clean.Rule{{
-				ID:             "test_rule",
-				DefaultEnabled: false,
-			}},
-		})
-
-		// Verify adapter didn't get the path (capacity check failed)
-		if len(adapter.paths) != 0 {
-			t.Fatalf("expected adapter to receive 0 paths, got %v", adapter.paths)
-		}
-
-		// Verify it's in skipped with the right reason
-		if len(result.Skipped) != 1 {
-			t.Fatalf("expected 1 skipped item, got %d", len(result.Skipped))
-		}
-		if result.Skipped[0].Reason.Code != "recycle_bin_capacity" {
-			t.Fatalf("expected reason code recycle_bin_capacity, got %q", result.Skipped[0].Reason.Code)
-		}
-	})
-
-	t.Run("probe error fail-closed for dev caches", func(t *testing.T) {
-		root := t.TempDir()
-		cachePath := filepath.Join(root, "npm-cache")
-		if err := os.Mkdir(cachePath, 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(cachePath, "data.bin"), []byte("test"), 0600); err != nil {
-			t.Fatal(err)
-		}
-
-		fakeResolver := func(category string) []string {
-			if category == clean.DevCacheCategoryNPM {
-				return []string{cachePath}
-			}
-			return nil
-		}
-
-		// Fake probe that returns error
-		fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
-			return clean.RecycleBinVolumeConfig{Volume: filepath.VolumeName(path)}, os.ErrNotExist
-		}
-
-		adapter := &recordingRecycleBinAdapter{}
-
-		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-			OptIn:                     []string{"npm-cache"},
-			DevCachePathResolver:      fakeResolver,
-			RecycleBinCapacityProbe:   fakeProbe,
-			RecycleBinAdapter:         adapter,
-			DiscoverOpportunities:     noOpportunities,
-			DiscoverReviewSuggestions: noReviewSuggestions,
-			Rules: []clean.Rule{{
-				ID:             "test_rule",
-				DefaultEnabled: false,
-			}},
-		})
-
-		// Verify adapter didn't get the path (fail-closed)
-		if len(adapter.paths) != 0 {
-			t.Fatalf("expected adapter to receive 0 paths, got %v", adapter.paths)
-		}
-
-		// Verify it's in skipped with the right reason
-		if len(result.Skipped) != 1 {
-			t.Fatalf("expected 1 skipped item, got %d", len(result.Skipped))
-		}
-		if result.Skipped[0].Reason.Code != "recycle_bin_capacity_probe_failed" {
-			t.Fatalf("expected reason code recycle_bin_capacity_probe_failed, got %q", result.Skipped[0].Reason.Code)
-		}
-	})
-
-	t.Run("recycle bin disabled skips dev caches", func(t *testing.T) {
-		root := t.TempDir()
-		cachePath := filepath.Join(root, "npm-cache")
-		if err := os.Mkdir(cachePath, 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(cachePath, "data.bin"), []byte("test"), 0600); err != nil {
-			t.Fatal(err)
-		}
-
-		fakeResolver := func(category string) []string {
-			if category == clean.DevCacheCategoryNPM {
-				return []string{cachePath}
-			}
-			return nil
-		}
-
-		// Fake probe that returns NukeOnDelete true
-		fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
-			return clean.RecycleBinVolumeConfig{
-				Volume:       filepath.VolumeName(path),
-				NukeOnDelete: true,
-				MaxCapacity:  1000,
-			}, nil
-		}
-
-		adapter := &recordingRecycleBinAdapter{}
-
-		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-			OptIn:                     []string{"npm-cache"},
-			DevCachePathResolver:      fakeResolver,
-			RecycleBinCapacityProbe:   fakeProbe,
-			RecycleBinAdapter:         adapter,
-			DiscoverOpportunities:     noOpportunities,
-			DiscoverReviewSuggestions: noReviewSuggestions,
-			Rules: []clean.Rule{{
-				ID:             "test_rule",
-				DefaultEnabled: false,
-			}},
-		})
-
-		// Verify adapter didn't get the path
-		if len(adapter.paths) != 0 {
-			t.Fatalf("expected adapter to receive 0 paths, got %v", adapter.paths)
-		}
-
-		if len(result.Skipped) != 1 {
-			t.Fatalf("expected 1 skipped item, got %d", len(result.Skipped))
-		}
-		if result.Skipped[0].Reason.Code != "recycle_bin_disabled" {
-			t.Fatalf("expected reason code recycle_bin_disabled, got %q", result.Skipped[0].Reason.Code)
+		if result.Totals.RecycleBinMovedBytes != 0 {
+			t.Fatalf("recycle_bin_moved_bytes = %d, want 0", result.Totals.RecycleBinMovedBytes)
 		}
 	})
 
@@ -844,12 +691,15 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			return nil
 		}
 
-		adapter := &recordingRecycleBinAdapter{}
+		recycle := &recordingRecycleBinAdapter{}
+		permanent := &recordingPermanentRemover{}
 
 		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			AllowPermanentDeletion:    true,
 			OptIn:                     []string{"npm-cache"},
 			DevCachePathResolver:      fakeResolver,
-			RecycleBinAdapter:         adapter,
+			RecycleBinAdapter:         recycle,
+			PermanentRemover:          permanent,
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
 			Rules: []clean.Rule{{
@@ -858,15 +708,18 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}},
 		})
 
-		if len(adapter.paths) != 2 {
-			t.Fatalf("expected 2 paths in adapter, got %d: %v", len(adapter.paths), adapter.paths)
+		if len(recycle.paths) != 0 {
+			t.Fatalf("npm multi-root must not use Recycle Bin: %v", recycle.paths)
+		}
+		if len(permanent.paths) != 2 {
+			t.Fatalf("expected 2 permanent paths, got %d: %v", len(permanent.paths), permanent.paths)
 		}
 		if result.Totals.OptInDeletedCount != 2 {
 			t.Fatalf("expected OptInDeletedCount 2, got %d", result.Totals.OptInDeletedCount)
 		}
 	})
 
-	t.Run("one skipped root doesn't block other roots", func(t *testing.T) {
+	t.Run("one protected root doesn't block other roots", func(t *testing.T) {
 		root := t.TempDir()
 		skippedPath := filepath.Join(root, "skipped")
 		allowedPath := filepath.Join(root, "allowed")
@@ -887,25 +740,17 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			return nil
 		}
 
-		// Fake probe that fails only for skippedPath
-		fakeProbe := func(path string) (clean.RecycleBinVolumeConfig, error) {
-			if path == skippedPath {
-				return clean.RecycleBinVolumeConfig{}, os.ErrNotExist
-			}
-			return clean.RecycleBinVolumeConfig{
-				Volume:       filepath.VolumeName(path),
-				NukeOnDelete: false,
-				MaxCapacity:  1000,
-			}, nil
-		}
-
-		adapter := &recordingRecycleBinAdapter{}
+		// Protection suppresses one root; permanent capacity is not used for package caches.
+		recycle := &recordingRecycleBinAdapter{}
+		permanent := &recordingPermanentRemover{}
 
 		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			AllowPermanentDeletion:    true,
 			OptIn:                     []string{"npm-cache"},
 			DevCachePathResolver:      fakeResolver,
-			RecycleBinCapacityProbe:   fakeProbe,
-			RecycleBinAdapter:         adapter,
+			Validator:                 pathsafe.NewValidator([]string{skippedPath}),
+			RecycleBinAdapter:         recycle,
+			PermanentRemover:          permanent,
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
 			Rules: []clean.Rule{{
@@ -914,16 +759,16 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}},
 		})
 
-		// Verify only allowed path was executed
-		if len(adapter.paths) != 1 || adapter.paths[0] != allowedPath {
-			t.Fatalf("expected only allowed path to be executed, got %v", adapter.paths)
+		// Verify only allowed path was executed permanently
+		if len(recycle.paths) != 0 {
+			t.Fatalf("npm must not use Recycle Bin: %v", recycle.paths)
 		}
-		// Verify one deleted, one skipped
+		if len(permanent.paths) != 1 || permanent.paths[0] != allowedPath {
+			t.Fatalf("expected only allowed path to be executed, got %v", permanent.paths)
+		}
+		// Verify one deleted; protected root does not become a candidate
 		if result.Totals.OptInDeletedCount != 1 {
 			t.Fatalf("expected OptInDeletedCount 1, got %d", result.Totals.OptInDeletedCount)
-		}
-		if len(result.Skipped) != 1 || result.Skipped[0].Path != skippedPath {
-			t.Fatalf("expected skipped path to be present")
 		}
 	})
 }

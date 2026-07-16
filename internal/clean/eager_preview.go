@@ -413,6 +413,8 @@ func categoryPreviewSafetyNote(identifier string, hasSafeCandidates bool, includ
 	switch identifier {
 	case DevCacheCategoryUV:
 		return uvCacheOptInImpactNotice
+	case DevCacheCategoryNuGetGlobalPackages:
+		return nugetGlobalPackagesOptInImpactNotice
 	case DevCacheCategoryBun:
 		return bunCacheOptInImpactNotice
 	case DevCacheCategoryPlaywright:

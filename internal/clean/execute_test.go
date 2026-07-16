@@ -1935,14 +1935,17 @@ func TestExecuteOptInGoCacheCleansWhenGoIdle(t *testing.T) {
 		}
 	}
 
-	adapter := &recordingRecycleBinAdapter{}
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
 		}},
-		RecycleBinAdapter:         adapter,
+		RecycleBinAdapter:         recycle,
+		PermanentRemover:          permanent,
 		OptIn:                     []string{"go-cache"},
 		DevCachePathResolver:      fakeResolver,
 		DetectRunningApplications: detector,
@@ -1950,19 +1953,17 @@ func TestExecuteOptInGoCacheCleansWhenGoIdle(t *testing.T) {
 		DiscoverReviewSuggestions: noReviewSuggestions,
 	})
 
-	// Verify the cache path was deleted
-	found := false
-	for _, p := range adapter.paths {
-		if p == cachePath {
-			found = true
-			break
-		}
+	if len(recycle.paths) != 0 {
+		t.Fatalf("go-cache must not use Recycle Bin: %v", recycle.paths)
 	}
-	if !found {
-		t.Fatalf("expected adapter to receive go-cache path, got %v", adapter.paths)
+	if len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+		t.Fatalf("permanent paths = %v, want [%q]", permanent.paths, cachePath)
 	}
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("expected OptInDeletedCount 1 when Go is idle, got %d", result.Totals.OptInDeletedCount)
+	}
+	if result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+		t.Fatalf("action = %q", result.Deleted[0].Action)
 	}
 }
 
@@ -2228,14 +2229,17 @@ func TestExecuteOptInNPMCacheStillCleansWhenNodeRunning(t *testing.T) {
 		}
 	}
 
-	adapter := &recordingRecycleBinAdapter{}
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
 		}},
-		RecycleBinAdapter:         adapter,
+		RecycleBinAdapter:         recycle,
+		PermanentRemover:          permanent,
 		OptIn:                     []string{"npm-cache"},
 		DevCachePathResolver:      fakeResolver,
 		DetectRunningApplications: detector,
@@ -2243,16 +2247,12 @@ func TestExecuteOptInNPMCacheStillCleansWhenNodeRunning(t *testing.T) {
 		DiscoverReviewSuggestions: noReviewSuggestions,
 	})
 
-	// npm-cache should still be cleaned even though node is running
-	found := false
-	for _, p := range adapter.paths {
-		if p == cachePath {
-			found = true
-			break
-		}
+	// npm-cache should still be cleaned permanently even though node is running
+	if len(recycle.paths) != 0 {
+		t.Fatalf("npm-cache must not use Recycle Bin: %v", recycle.paths)
 	}
-	if !found {
-		t.Fatalf("expected adapter to receive npm-cache path even when node is running, got %v", adapter.paths)
+	if len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+		t.Fatalf("permanent paths = %v, want [%q]", permanent.paths, cachePath)
 	}
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("expected OptInDeletedCount 1 for npm-cache when node is running, got %d", result.Totals.OptInDeletedCount)
@@ -2288,14 +2288,17 @@ func TestExecuteOptInPipCacheStillCleansWhenPythonRunning(t *testing.T) {
 		}
 	}
 
-	adapter := &recordingRecycleBinAdapter{}
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
 		}},
-		RecycleBinAdapter:         adapter,
+		RecycleBinAdapter:         recycle,
+		PermanentRemover:          permanent,
 		OptIn:                     []string{"pip-cache"},
 		DevCachePathResolver:      fakeResolver,
 		DetectRunningApplications: detector,
@@ -2303,16 +2306,12 @@ func TestExecuteOptInPipCacheStillCleansWhenPythonRunning(t *testing.T) {
 		DiscoverReviewSuggestions: noReviewSuggestions,
 	})
 
-	// pip-cache should still be cleaned even though python is running
-	found := false
-	for _, p := range adapter.paths {
-		if p == cachePath {
-			found = true
-			break
-		}
+	// pip-cache should still be cleaned permanently even though python is running
+	if len(recycle.paths) != 0 {
+		t.Fatalf("pip-cache must not use Recycle Bin: %v", recycle.paths)
 	}
-	if !found {
-		t.Fatalf("expected adapter to receive pip-cache path even when python is running, got %v", adapter.paths)
+	if len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+		t.Fatalf("permanent paths = %v, want [%q]", permanent.paths, cachePath)
 	}
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("expected OptInDeletedCount 1 for pip-cache when python is running, got %d", result.Totals.OptInDeletedCount)
@@ -2348,14 +2347,17 @@ func TestExecuteOptInCorepackCacheStillCleansWhenNodeRunning(t *testing.T) {
 		}
 	}
 
-	adapter := &recordingRecycleBinAdapter{}
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
 		Rules: []clean.Rule{{
 			ID:             "test_rule",
 			DefaultEnabled: false,
 		}},
-		RecycleBinAdapter:         adapter,
+		RecycleBinAdapter:         recycle,
+		PermanentRemover:          permanent,
 		OptIn:                     []string{"corepack-cache"},
 		DevCachePathResolver:      fakeResolver,
 		DetectRunningApplications: detector,
@@ -2363,16 +2365,12 @@ func TestExecuteOptInCorepackCacheStillCleansWhenNodeRunning(t *testing.T) {
 		DiscoverReviewSuggestions: noReviewSuggestions,
 	})
 
-	// corepack-cache should still be cleaned even though node is running
-	found := false
-	for _, p := range adapter.paths {
-		if p == cachePath {
-			found = true
-			break
-		}
+	// corepack-cache should still be cleaned permanently even though node is running
+	if len(recycle.paths) != 0 {
+		t.Fatalf("corepack-cache must not use Recycle Bin: %v", recycle.paths)
 	}
-	if !found {
-		t.Fatalf("expected adapter to receive corepack-cache path even when node is running, got %v", adapter.paths)
+	if len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+		t.Fatalf("permanent paths = %v, want [%q]", permanent.paths, cachePath)
 	}
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("expected OptInDeletedCount 1 for corepack-cache when node is running, got %d", result.Totals.OptInDeletedCount)
@@ -2616,36 +2614,45 @@ func TestUVCacheOptInDryRunAndExecuteEndToEnd(t *testing.T) {
 		}
 	})
 
-	t.Run("execute idle deletes via recycle bin; running skips adapter", func(t *testing.T) {
-		adapter := &recordingRecycleBinAdapter{}
+	t.Run("execute idle deletes permanently; running skips remover", func(t *testing.T) {
+		recycle := &recordingRecycleBinAdapter{}
+		permanent := &recordingPermanentRemover{}
 		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			AllowPermanentDeletion:    true,
 			OptIn:                     []string{clean.DevCacheCategoryUV},
 			DevCachePathResolver:      fakeResolver,
 			DetectRunningApplications: idleDetector,
-			RecycleBinAdapter:         adapter,
+			RecycleBinAdapter:         recycle,
+			PermanentRemover:          permanent,
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
 			Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
 		})
-		if len(adapter.paths) != 1 || adapter.paths[0] != cachePath {
-			t.Fatalf("adapter paths = %v, want [%q]", adapter.paths, cachePath)
+		if len(recycle.paths) != 0 {
+			t.Fatalf("uv-cache must not use Recycle Bin: %v", recycle.paths)
+		}
+		if len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+			t.Fatalf("permanent paths = %v, want [%q]", permanent.paths, cachePath)
 		}
 		if result.Totals.OptInDeletedCount != 1 {
 			t.Fatalf("OptInDeletedCount = %d, want 1", result.Totals.OptInDeletedCount)
 		}
 
-		adapter = &recordingRecycleBinAdapter{}
+		recycle = &recordingRecycleBinAdapter{}
+		permanent = &recordingPermanentRemover{}
 		result = executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			AllowPermanentDeletion:    true,
 			OptIn:                     []string{clean.DevCacheCategoryUV},
 			DevCachePathResolver:      fakeResolver,
 			DetectRunningApplications: runningDetector,
-			RecycleBinAdapter:         adapter,
+			RecycleBinAdapter:         recycle,
+			PermanentRemover:          permanent,
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
 			Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
 		})
-		if len(adapter.paths) != 0 || result.Totals.OptInDeletedCount != 0 {
-			t.Fatalf("running execute adapter/deleted = %v / %d", adapter.paths, result.Totals.OptInDeletedCount)
+		if len(recycle.paths) != 0 || len(permanent.paths) != 0 || result.Totals.OptInDeletedCount != 0 {
+			t.Fatalf("running execute collaborators/deleted = recycle=%v permanent=%v deleted=%d", recycle.paths, permanent.paths, result.Totals.OptInDeletedCount)
 		}
 	})
 
@@ -2832,36 +2839,45 @@ func TestBunCacheOptInDryRunAndExecuteEndToEnd(t *testing.T) {
 		}
 	})
 
-	t.Run("execute idle deletes via recycle bin; running skips adapter", func(t *testing.T) {
-		adapter := &recordingRecycleBinAdapter{}
+	t.Run("execute idle deletes permanently; running skips remover", func(t *testing.T) {
+		recycle := &recordingRecycleBinAdapter{}
+		permanent := &recordingPermanentRemover{}
 		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			AllowPermanentDeletion:    true,
 			OptIn:                     []string{clean.DevCacheCategoryBun},
 			DevCachePathResolver:      fakeResolver,
 			DetectRunningApplications: idleDetector,
-			RecycleBinAdapter:         adapter,
+			RecycleBinAdapter:         recycle,
+			PermanentRemover:          permanent,
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
 			Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
 		})
-		if len(adapter.paths) != 1 || adapter.paths[0] != cachePath {
-			t.Fatalf("adapter paths = %v, want [%q]", adapter.paths, cachePath)
+		if len(recycle.paths) != 0 {
+			t.Fatalf("bun-cache must not use Recycle Bin: %v", recycle.paths)
+		}
+		if len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+			t.Fatalf("permanent paths = %v, want [%q]", permanent.paths, cachePath)
 		}
 		if result.Totals.OptInDeletedCount != 1 {
 			t.Fatalf("OptInDeletedCount = %d, want 1", result.Totals.OptInDeletedCount)
 		}
 
-		adapter = &recordingRecycleBinAdapter{}
+		recycle = &recordingRecycleBinAdapter{}
+		permanent = &recordingPermanentRemover{}
 		result = executeCleanWithSafeCapacity(context.Background(), clean.Options{
+			AllowPermanentDeletion:    true,
 			OptIn:                     []string{clean.DevCacheCategoryBun},
 			DevCachePathResolver:      fakeResolver,
 			DetectRunningApplications: runningDetector,
-			RecycleBinAdapter:         adapter,
+			RecycleBinAdapter:         recycle,
+			PermanentRemover:          permanent,
 			DiscoverOpportunities:     noOpportunities,
 			DiscoverReviewSuggestions: noReviewSuggestions,
 			Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
 		})
-		if len(adapter.paths) != 0 || result.Totals.OptInDeletedCount != 0 {
-			t.Fatalf("running execute adapter/deleted = %v / %d", adapter.paths, result.Totals.OptInDeletedCount)
+		if len(recycle.paths) != 0 || len(permanent.paths) != 0 || result.Totals.OptInDeletedCount != 0 {
+			t.Fatalf("running execute collaborators/deleted = recycle=%v permanent=%v deleted=%d", recycle.paths, permanent.paths, result.Totals.OptInDeletedCount)
 		}
 	})
 
