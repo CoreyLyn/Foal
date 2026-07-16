@@ -86,6 +86,14 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 		Aliases:                  []string{"first-alias"},
 		RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
 	}
+	validExecutable := clean.CleanupCategoryDefinition{
+		Identifier:               "exec",
+		Label:                    "Executable",
+		ReportCategory:           clean.ReportCategorySystem,
+		Eligibility:              clean.CategoryEligibilityOptIn,
+		RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+		PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+	}
 
 	tests := []struct {
 		name        string
@@ -124,6 +132,26 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 			Identifier: "unsupported", Label: "Unsupported", ReportCategory: "Other",
 			Eligibility: "sometimes", RunningApplicationPolicy: "best-effort",
 		}}},
+		{name: "executable missing planned action", definitions: []clean.CleanupCategoryDefinition{{
+			Identifier: "missing-action", Label: "Missing action", ReportCategory: clean.ReportCategorySystem,
+			Eligibility:              clean.CategoryEligibilityOptIn,
+			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+		}}},
+		{name: "executable unknown planned action", definitions: []clean.CleanupCategoryDefinition{{
+			Identifier: "unknown-action", Label: "Unknown action", ReportCategory: clean.ReportCategorySystem,
+			Eligibility:              clean.CategoryEligibilityDefault,
+			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+			PlannedAction:            "shred",
+		}}},
+		{name: "non-executable with planned action", definitions: []clean.CleanupCategoryDefinition{{
+			Identifier: "boundary-with-action", Label: "Boundary", ReportCategory: clean.ReportCategorySystem,
+			Eligibility:              clean.CategoryEligibilityPermissionBoundary,
+			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+			PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+		}}},
+		// Ensure a valid executable definition still constructs (control case uses
+		// a separate positive test below; this only lists rejection cases).
+		{name: "duplicate with executable", definitions: []clean.CleanupCategoryDefinition{validExecutable, validExecutable}},
 	}
 
 	for _, tt := range tests {
@@ -132,6 +160,68 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 				t.Fatal("NewCleanupCategoryCatalog() error = nil")
 			}
 		})
+	}
+}
+
+func TestCanonicalExecutableCategoriesDeclareExplicitRecycleBinAction(t *testing.T) {
+	catalog := clean.CanonicalCleanupCategoryCatalog()
+	for _, definition := range catalog.Definitions() {
+		switch definition.Eligibility {
+		case clean.CategoryEligibilityDefault, clean.CategoryEligibilityOptIn:
+			if definition.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+				t.Fatalf("executable category %q planned_action = %q, want move_to_recycle_bin (no permanent activation in #216)",
+					definition.Identifier, definition.PlannedAction)
+			}
+			summary, ok := catalog.Summary(definition.Identifier)
+			if !ok || summary.PlannedAction != definition.PlannedAction {
+				t.Fatalf("summary planned_action for %q = %#v, want %#v", definition.Identifier, summary, definition.PlannedAction)
+			}
+		case clean.CategoryEligibilityPermissionBoundary, clean.CategoryEligibilityReviewOnly:
+			if definition.PlannedAction != "" {
+				t.Fatalf("non-executable category %q must be actionless, got %q", definition.Identifier, definition.PlannedAction)
+			}
+			summary, ok := catalog.Summary(definition.Identifier)
+			if !ok || summary.PlannedAction != "" {
+				t.Fatalf("non-executable summary %q planned_action = %#v", definition.Identifier, summary)
+			}
+		default:
+			t.Fatalf("unexpected eligibility %q on %q", definition.Eligibility, definition.Identifier)
+		}
+	}
+
+	// No parallel permanent-delete eligibility boolean on public catalog types.
+	summaryType := reflect.TypeOf(clean.CleanupCategorySummary{})
+	for i := 0; i < summaryType.NumField(); i++ {
+		name := summaryType.Field(i).Name
+		if strings.Contains(strings.ToLower(name), "permanent") && name != "PlannedAction" {
+			t.Fatalf("summary exposes permanent-eligibility field %q; planned_action must be sole source", name)
+		}
+		if strings.EqualFold(name, "CanPermanentDelete") || strings.EqualFold(name, "PermanentDeleteEligible") {
+			t.Fatalf("summary exposes parallel eligibility boolean %q", name)
+		}
+	}
+}
+
+func TestCategoryCatalogAcceptsSupportedPlannedActions(t *testing.T) {
+	for _, action := range []clean.DeletionAction{
+		clean.DeletionActionMoveToRecycleBin,
+		clean.DeletionActionDeletePermanently,
+	} {
+		catalog, err := clean.NewCleanupCategoryCatalog([]clean.CleanupCategoryDefinition{{
+			Identifier:               "sample",
+			Label:                    "Sample",
+			ReportCategory:           clean.ReportCategorySystem,
+			Eligibility:              clean.CategoryEligibilityOptIn,
+			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+			PlannedAction:            action,
+		}})
+		if err != nil {
+			t.Fatalf("action %q: %v", action, err)
+		}
+		summary, ok := catalog.Summary("sample")
+		if !ok || summary.PlannedAction != action {
+			t.Fatalf("summary = %#v, want planned_action %q", summary, action)
+		}
 	}
 }
 

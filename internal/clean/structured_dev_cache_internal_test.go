@@ -208,6 +208,7 @@ func TestValidateDeveloperCacheRegistryRejectsChildDiscoveryOnNonDevCache(t *tes
 		definition: categoryDefinition(
 			"user_temp", "User temp", ReportCategoryUserEssentials,
 			CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable,
+			DeletionActionMoveToRecycleBin,
 		),
 		opportunity: true,
 		discoverChildren: func(context.Context, string) []string {
@@ -228,6 +229,7 @@ func TestDeveloperCacheEntryWithChildrenBindsPolicy(t *testing.T) {
 		categoryDefinition(
 			"future-structured", "Future structured", ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime,
+			DeletionActionMoveToRecycleBin,
 		),
 		func(devCachePathDependencies) []string { return []string{`C:\root`} },
 		discover,

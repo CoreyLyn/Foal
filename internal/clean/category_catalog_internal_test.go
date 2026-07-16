@@ -18,6 +18,7 @@ func TestValidateDeveloperCacheRegistryRejectsIncompleteEntries(t *testing.T) {
 		ReportCategoryDeveloperTools,
 		CategoryEligibilityOptIn,
 		RunningApplicationPolicyDistinctiveProcessIdle,
+		DeletionActionMoveToRecycleBin,
 	)
 
 	t.Run("missing resolver", func(t *testing.T) {

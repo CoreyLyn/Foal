@@ -39,6 +39,8 @@ type PreviewOptInCategory struct {
 	Identifier       string
 	Label            string
 	ReportCategory   ReportCategory
+	// PlannedAction is the catalog-owned deletion action for this opt-in category.
+	PlannedAction    DeletionAction
 	Selected         bool
 	CandidateCount   int
 	ReclaimableBytes int64
@@ -378,6 +380,7 @@ func previewOptInCategories(result Result, selected map[string]bool) []PreviewOp
 				Identifier:     category.Identifier,
 				Label:          category.Label,
 				ReportCategory: category.ReportCategory,
+				PlannedAction:  category.PlannedAction,
 				Selected:       selected[category.Identifier],
 			}
 			for _, candidate := range result.OptInCandidates {

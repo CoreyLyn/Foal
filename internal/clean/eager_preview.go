@@ -65,6 +65,9 @@ type CategoryPreviewObservation struct {
 	Label                string               `json:"label"`
 	ReportCategory       ReportCategory       `json:"report_category"`
 	Eligibility          CategoryEligibility  `json:"eligibility"`
+	// PlannedAction is the catalog-owned deletion action for this executable
+	// category. Non-executable categories never appear in the eager queue.
+	PlannedAction        DeletionAction       `json:"planned_action,omitempty"`
 	State                CategoryPreviewState `json:"state"`
 	CandidateCount       int                  `json:"candidate_count"`
 	Bytes                int64                `json:"bytes"`
@@ -233,6 +236,7 @@ func ProjectCategoryPreview(resolution CategoryResolution) CategoryPreviewObserv
 		Label:          summary.Label,
 		ReportCategory: summary.ReportCategory,
 		Eligibility:    summary.Eligibility,
+		PlannedAction:  summary.PlannedAction,
 	}
 
 	safeCount := 0

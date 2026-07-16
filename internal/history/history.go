@@ -45,7 +45,12 @@ type AggregateOutcomes struct {
 	OpportunityObservedBytes int64 `json:"opportunity_observed_bytes"`
 	OptInDeletedCount        int   `json:"opt_in_deleted_count"`
 	OptInAffectedBytes       int64 `json:"opt_in_affected_bytes"`
-	AffectedBytes            int64 `json:"affected_bytes"`
+	// RecycleBinMovedBytes and PermanentlyDeletedBytes split successful work
+	// by actual action. AffectedBytes remains their sum for compatibility.
+	// Older History records without the split fields decode as zero.
+	RecycleBinMovedBytes    int64 `json:"recycle_bin_moved_bytes"`
+	PermanentlyDeletedBytes int64 `json:"permanently_deleted_bytes"`
+	AffectedBytes           int64 `json:"affected_bytes"`
 }
 
 type ItemRecord struct {

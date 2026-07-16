@@ -927,6 +927,26 @@ func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 	if got.Path != candidate || got.Bytes != 5 || got.Rule != "test_default_rule" || got.PlannedAction != "move_to_recycle_bin" {
 		t.Fatalf("candidate = %#v, want path/size/rule/planned action", got)
 	}
+	// Catalog-owned default category also projects recycle-bin planned action
+	// (no permanent activation in this prefactor).
+	defaultResult := clean.DryRun(context.Background(), clean.Options{
+		DiscoverUserTempOpportunities: noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
+		Rules: []clean.Rule{{
+			ID:             clean.DefaultCategoryFoalOwnedTempSandboxes,
+			Description:    "Foal-owned temporary sandbox entries",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+	if len(defaultResult.Candidates) != 1 || defaultResult.Candidates[0].PlannedAction != string(clean.DeletionActionMoveToRecycleBin) {
+		t.Fatalf("default category planned_action = %#v", defaultResult.Candidates)
+	}
+	summary, ok := clean.CanonicalCleanupCategoryCatalog().Summary(clean.DefaultCategoryFoalOwnedTempSandboxes)
+	if !ok || string(summary.PlannedAction) != defaultResult.Candidates[0].PlannedAction {
+		t.Fatalf("dry-run planned_action must match catalog: candidate=%q summary=%q",
+			defaultResult.Candidates[0].PlannedAction, summary.PlannedAction)
+	}
 	if _, err := os.Stat(candidate); err != nil {
 		t.Fatalf("dry-run deleted or changed candidate: %v", err)
 	}
