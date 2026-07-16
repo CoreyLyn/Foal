@@ -1,6 +1,6 @@
 # Plan: Clean deletion policy
 
-This is the accepted target policy for a future Clean implementation. Current builds still move every executed candidate to the Recycle Bin. ADR 0018 records the decision and this document is the canonical category matrix.
+This is the implemented Clean deletion policy. Shared Clean assigns each executable category an explicit planned action, executes mixed actions with per-run permanent authorization, and records split actual-action totals. ADR 0018 records the decision and this document is the canonical category matrix.
 
 ## Core policy
 
@@ -12,7 +12,7 @@ This is the accepted target policy for a future Clean implementation. Current bu
 
 ## Complete rule matrix
 
-`Initially selected` describes the target Clean TUI state when the category has at least one safely measured candidate. Users may clear any selection. CLI opt-in behavior remains explicit and additive.
+`Initially selected` describes the Clean TUI state when the category has at least one safely measured candidate. Users may clear any selection. CLI opt-in behavior remains explicit and additive.
 
 | Canonical category | Catalog class | Permanent-delete eligibility | Initially selected | Planned action | Reason and mandatory guard |
 | --- | --- | --- | --- | --- | --- |
@@ -46,7 +46,7 @@ This is the accepted target policy for a future Clean implementation. Current bu
 
 - Dry-run reports the true planned action without requiring authorization.
 - CLI execution requires `--allow-permanent` in addition to `--execute` for permanent actions. Without it, permanent candidates are skipped with `permanent_deletion_not_authorized`; authorized Recycle Bin work continues.
-- The TUI starts with the 19 eligible rows described above selected. Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
+- The TUI starts with the 19 eligible rows described above selected when safely measurable. Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
 - The one TUI confirmation authorizes both disclosed action groups. Fresh execution may change candidate counts and bytes, but it must not introduce an action type that was not disclosed.
 
 ## Execution, failure, and cancellation
@@ -65,6 +65,11 @@ This is the accepted target policy for a future Clean implementation. Current bu
 - `recycle_bin_moved_bytes` is measured logical content successfully moved to the Recycle Bin.
 - `affected_bytes` is the sum of those fields. It means processed content, not guaranteed physical space released.
 - Failed or canceled partially mutated permanent candidates retain their original measured bytes, attempted action, and outcome in History, but add zero to successful permanent bytes.
+
+## Explicit exclusions
+
+- No secure erasure, automatic elevation, process stopping, Recycle Bin fallback, rollback promise, or user-defined executable rules.
+- No permanent deletion for the six Recycle Bin categories above until a separate eligibility decision and tests replace the current policy.
 
 ## Rule addition checklist
 

@@ -394,19 +394,16 @@ func developerCacheEntryWithProductScopedChildren(
 }
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
-	// Executable categories declare an explicit planned action. Permanent production
-	// activation: #219 d3d tracer, #220 Windows/browser/editor, #221 package/build
-	// caches, #222 runtimes/JetBrains. Over-broad whole-root system caches stay Recycle Bin.
+	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
+	// 18 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
+	// Over-broad whole-root system caches stay Recycle Bin until exact allowlists exist.
 	{definition: categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)},
 	{definition: categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true},
 	{definition: categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"CrashDumps"}},
 	{definition: categoryDefinition(OpportunityCategoryWindowsErrorReporting, "Windows Error Reporting", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "WER"}},
-	// Whole-root Explorer/INetCache stay Recycle Bin until exact allowlists exist.
 	{definition: categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "Explorer"}},
 	{definition: categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "INetCache"}},
-	// d3d_shader_cache is the first production permanent-deletion tracer (#219).
 	{definition: categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), opportunity: true, fixedLocalAppDataPath: []string{"D3DSCache"}},
-	// #220: remaining proven regenerable Windows/browser/editor caches.
 	{definition: categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), opportunity: true, fixedLocalAppDataPath: []string{"NVIDIA", "DXCache"}},
 	{definition: categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, DeletionActionDeletePermanently), opportunity: true},
 	{
@@ -437,7 +434,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		applicationCachePolicyID: applicationCachePolicyCursor,
 		runningApplications:      []string{ApplicationCursor},
 	},
-	// Package and build caches (#221): proven regenerable roots; env/default
+	// Package and build caches: proven regenerable roots; env/default
 	// resolvers, gates, and impact notices unchanged.
 	developerCacheEntry(
 		categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
@@ -492,7 +489,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	),
 	// Playwright global browser binaries: structured child discovery under the
 	// env/default root. Shared-runtime policy: do not attribute node/chrome/etc.
-	// as Playwright-owned. Permanent deletion (#222); no Review suggestion probe.
+	// as Playwright-owned. Permanent deletion; no Review suggestion probe.
 	developerCacheEntryWithChildren(
 		categoryDefinition(DevCacheCategoryPlaywright, "Playwright browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolvePlaywrightBrowserPaths,
@@ -501,7 +498,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	),
 	// Puppeteer browser binaries: shared-runtime (Node/Python/Chrome/Firefox are
 	// not attributable). Structured children under env/default root only; root
-	// and product parents are never candidates (ADR 0011). Permanent deletion (#222).
+	// and product parents are never candidates (ADR 0011). Permanent deletion.
 	developerCacheEntryWithChildren(
 		categoryDefinition(DevCacheCategoryPuppeteerBrowsers, "Puppeteer browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolvePuppeteerCachePaths,
@@ -509,7 +506,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		nil,
 	),
 	// Electron download cache: whole-root under env/default only. Shared-runtime
-	// (Node/Electron hosts are not attributable). Permanent deletion (#222); no
+	// (Node/Electron hosts are not attributable). Permanent deletion; no
 	// Review suggestion probe and no invented Electron cleanup command.
 	developerCacheEntry(
 		categoryDefinition(DevCacheCategoryElectron, "Electron cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
@@ -519,7 +516,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// JetBrains IDE system caches: product-scoped roots under %LOCALAPPDATA%\JetBrains
 	// with structured children (caches/index; Rider also resharper-host). Distinctive-
 	// process policy; each product identity gates independently via
-	// DevCacheRootScope.Application. Permanent deletion (#222); no Review probe.
+	// DevCacheRootScope.Application. Permanent deletion; no Review probe.
 	developerCacheEntryWithProductScopedChildren(
 		categoryDefinition(DevCacheCategoryJetBrainsIDECaches, "JetBrains IDE caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveJetBrainsIDECacheRootScopes,
