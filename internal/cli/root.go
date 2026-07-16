@@ -487,6 +487,7 @@ func helpText() string {
 	builder.WriteString("  foal clean --dry-run\n")
 	builder.WriteString("  foal clean --execute\n")
 	builder.WriteString("  foal clean --execute --opt-in d3d_shader_cache --allow-permanent\n")
+	builder.WriteString("  foal clean --execute --opt-in playwright-browsers --allow-permanent\n")
 	builder.WriteString("  foal.exe analyze\n")
 	return builder.String()
 }

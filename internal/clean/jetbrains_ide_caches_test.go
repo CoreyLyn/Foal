@@ -208,8 +208,8 @@ func TestJetBrainsIDECaches_EditionPrefixesDiscoverCachesAndIndex(t *testing.T) 
 		if c.Category != clean.DevCacheCategoryJetBrainsIDECaches {
 			t.Fatalf("category = %q", c.Category)
 		}
-		if c.PlannedAction != "move_to_recycle_bin" {
-			t.Fatalf("planned action = %q", c.PlannedAction)
+		if c.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			t.Fatalf("planned action = %q, want delete_permanently", c.PlannedAction)
 		}
 		base := filepath.Base(c.Path)
 		if base != "caches" && base != "index" && base != "resharper-host" {
@@ -572,12 +572,13 @@ func TestJetBrainsIDECaches_ExecuteFreshResolveAndHistory(t *testing.T) {
 	executeRoot := writeJetBrainsProductRoot(t, parent, "PyCharm2024.2", map[string]string{"index": "new!"})
 	executeChild := filepath.Join(executeRoot, "index")
 
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	recorder := &recordingHistoryRecorder{}
 	execResult := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryJetBrainsIDECaches},
 		DetectRunningApplications: idleJetBrainsDetector(),
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		HistoryRecorder:           recorder,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
@@ -586,10 +587,10 @@ func TestJetBrainsIDECaches_ExecuteFreshResolveAndHistory(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	if len(adapter.paths) != 1 || adapter.paths[0] != executeChild {
-		t.Fatalf("adapter paths = %v, want only %q", adapter.paths, executeChild)
+	if len(permanent.paths) != 1 || permanent.paths[0] != executeChild {
+		t.Fatalf("permanent paths = %v, want only %q", permanent.paths, executeChild)
 	}
-	for _, p := range adapter.paths {
+	for _, p := range permanent.paths {
 		if p == filepath.Join(previewRoot, "caches") {
 			t.Fatal("execute trusted dry-run path")
 		}
@@ -597,12 +598,18 @@ func TestJetBrainsIDECaches_ExecuteFreshResolveAndHistory(t *testing.T) {
 	if execResult.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("opt-in deleted = %d", execResult.Totals.OptInDeletedCount)
 	}
+	if len(execResult.Deleted) != 1 || execResult.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+		t.Fatalf("deleted = %#v, want delete_permanently", execResult.Deleted)
+	}
 	found := false
 	for _, item := range recorder.items {
 		if item.Path == executeChild {
 			found = true
 			if item.Rule != clean.DevCacheCategoryJetBrainsIDECaches {
 				t.Fatalf("history rule = %q", item.Rule)
+			}
+			if item.Action != string(clean.DeletionActionDeletePermanently) {
+				t.Fatalf("history action = %q", item.Action)
 			}
 		}
 		if item.Path == filepath.Join(previewRoot, "caches") {
@@ -728,18 +735,19 @@ func TestJetBrainsIDECaches_Protection(t *testing.T) {
 	})
 }
 
-func TestJetBrainsIDECaches_CapacityPreCheck(t *testing.T) {
+func TestJetBrainsIDECaches_CapacityDoesNotBlockPermanent(t *testing.T) {
 	_, parent := jetbrainsLocalAppData(t)
 	root := writeJetBrainsProductRoot(t, parent, "IntelliJIdea2024.1", map[string]string{
 		"caches": "12345678",
 	})
 	child := filepath.Join(root, "caches")
 
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryJetBrainsIDECaches},
 		DetectRunningApplications: idleJetBrainsDetector(),
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		RecycleBinCapacityProbe: func(path string) (clean.RecycleBinVolumeConfig, error) {
@@ -755,17 +763,13 @@ func TestJetBrainsIDECaches_CapacityPreCheck(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("adapter must not run when capacity insufficient: %v", adapter.paths)
+	if len(permanent.paths) != 1 || permanent.paths[0] != child {
+		t.Fatalf("permanent paths = %v, want %q (capacity must not block permanent)", permanent.paths, child)
 	}
-	found := false
 	for _, skipped := range result.Skipped {
-		if skipped.Path == child && skipped.Reason.Code == "recycle_bin_capacity" {
-			found = true
+		if skipped.Reason.Code == "recycle_bin_capacity" {
+			t.Fatalf("permanent candidate skipped for recycle capacity: %#v", skipped)
 		}
-	}
-	if !found {
-		t.Fatalf("skipped = %#v, want recycle_bin_capacity for %q", result.Skipped, child)
 	}
 }
 
@@ -775,11 +779,12 @@ func TestJetBrainsIDECaches_Cancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	_ = executeCleanWithSafeCapacity(ctx, clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryJetBrainsIDECaches},
 		DetectRunningApplications: idleJetBrainsDetector(),
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{{
@@ -787,8 +792,8 @@ func TestJetBrainsIDECaches_Cancellation(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("canceled execute adapter paths = %v", adapter.paths)
+	if len(permanent.paths) != 0 {
+		t.Fatalf("canceled execute permanent paths = %v", permanent.paths)
 	}
 }
 
@@ -998,12 +1003,13 @@ func TestJetBrainsIDECaches_ImmediateValidationOnExecute(t *testing.T) {
 	root := writeJetBrainsProductRoot(t, parent, "IntelliJIdea2024.1", map[string]string{"caches": "data"})
 	child := filepath.Join(root, "caches")
 
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryJetBrainsIDECaches},
 		Validator:                 pathsafe.NewValidator([]string{child}),
 		DetectRunningApplications: idleJetBrainsDetector(),
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{{
@@ -1011,15 +1017,15 @@ func TestJetBrainsIDECaches_ImmediateValidationOnExecute(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("adapter must not delete protected path: %v", adapter.paths)
+	if len(permanent.paths) != 0 {
+		t.Fatalf("permanent remover must not delete protected path: %v", permanent.paths)
 	}
 	if result.Totals.OptInDeletedCount != 0 {
 		t.Fatalf("opt-in deleted = %d", result.Totals.OptInDeletedCount)
 	}
 }
 
-func TestJetBrainsIDECaches_ParentAndProductRootNeverRecycled(t *testing.T) {
+func TestJetBrainsIDECaches_ParentAndProductRootNeverDeleted(t *testing.T) {
 	_, parent := jetbrainsLocalAppData(t)
 	root := writeJetBrainsProductRoot(t, parent, "IntelliJIdea2024.1", map[string]string{
 		"caches": "x",
@@ -1030,11 +1036,12 @@ func TestJetBrainsIDECaches_ParentAndProductRootNeverRecycled(t *testing.T) {
 		"index":          "ri",
 		"resharper-host": "rs",
 	})
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	_ = executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryJetBrainsIDECaches},
 		DetectRunningApplications: idleJetBrainsDetector(),
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{{
@@ -1042,16 +1049,16 @@ func TestJetBrainsIDECaches_ParentAndProductRootNeverRecycled(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	for _, p := range adapter.paths {
+	for _, p := range permanent.paths {
 		if p == parent || p == root || p == riderRoot {
-			t.Fatalf("adapter received parent/product root %q", p)
+			t.Fatalf("permanent remover received parent/product root %q", p)
 		}
 		base := filepath.Base(p)
 		if base != "caches" && base != "index" && base != "resharper-host" {
-			t.Fatalf("adapter path not allowlisted child: %q", p)
+			t.Fatalf("permanent path not allowlisted child: %q", p)
 		}
 	}
-	if len(adapter.paths) != 5 {
-		t.Fatalf("adapter paths = %v, want 5 children (2 IDEA + 3 Rider)", adapter.paths)
+	if len(permanent.paths) != 5 {
+		t.Fatalf("permanent paths = %v, want 5 children (2 IDEA + 3 Rider)", permanent.paths)
 	}
 }

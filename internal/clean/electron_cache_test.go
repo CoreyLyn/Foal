@@ -309,12 +309,13 @@ func TestElectronCache_ExecuteFreshResolveAndHistory(t *testing.T) {
 	}
 
 	// Execute independently resolves execute path; never trusts preview paths.
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	recorder := &recordingHistoryRecorder{}
 	execResult := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryElectron},
 		DevCachePathResolver:      func(string) []string { return []string{executeRoot} },
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		HistoryRecorder:           recorder,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
@@ -323,16 +324,19 @@ func TestElectronCache_ExecuteFreshResolveAndHistory(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	if len(adapter.paths) != 1 || adapter.paths[0] != executeRoot {
-		t.Fatalf("adapter paths = %v, want only %q", adapter.paths, executeRoot)
+	if len(permanent.paths) != 1 || permanent.paths[0] != executeRoot {
+		t.Fatalf("permanent paths = %v, want only %q", permanent.paths, executeRoot)
 	}
-	for _, p := range adapter.paths {
+	for _, p := range permanent.paths {
 		if p == previewRoot {
 			t.Fatal("execute trusted dry-run path")
 		}
 	}
 	if execResult.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("opt-in deleted = %d", execResult.Totals.OptInDeletedCount)
+	}
+	if len(execResult.Deleted) != 1 || execResult.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+		t.Fatalf("deleted = %#v, want delete_permanently", execResult.Deleted)
 	}
 	if len(recorder.items) == 0 {
 		t.Fatal("history items empty, want path-bearing opt-in records")
@@ -343,6 +347,9 @@ func TestElectronCache_ExecuteFreshResolveAndHistory(t *testing.T) {
 			found = true
 			if item.Rule != clean.DevCacheCategoryElectron {
 				t.Fatalf("history rule = %q", item.Rule)
+			}
+			if item.Action != string(clean.DeletionActionDeletePermanently) {
+				t.Fatalf("history action = %q", item.Action)
 			}
 		}
 		if item.Path == previewRoot {
@@ -375,7 +382,7 @@ func TestElectronCache_Protection(t *testing.T) {
 	}
 }
 
-func TestElectronCache_CapacityPreCheck(t *testing.T) {
+func TestElectronCache_CapacityDoesNotBlockPermanent(t *testing.T) {
 	root := t.TempDir()
 	cachePath := filepath.Join(root, "electron-cache")
 	if err := os.Mkdir(cachePath, 0700); err != nil {
@@ -385,11 +392,12 @@ func TestElectronCache_CapacityPreCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryElectron},
 		DevCachePathResolver:      func(string) []string { return []string{cachePath} },
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		RecycleBinCapacityProbe: func(path string) (clean.RecycleBinVolumeConfig, error) {
@@ -405,17 +413,13 @@ func TestElectronCache_CapacityPreCheck(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("adapter must not run when capacity insufficient: %v", adapter.paths)
+	if len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+		t.Fatalf("permanent paths = %v, want %q (capacity must not block permanent)", permanent.paths, cachePath)
 	}
-	found := false
 	for _, skipped := range result.Skipped {
-		if skipped.Path == cachePath && skipped.Reason.Code == "recycle_bin_capacity" {
-			found = true
+		if skipped.Reason.Code == "recycle_bin_capacity" {
+			t.Fatalf("permanent candidate skipped for recycle capacity: %#v", skipped)
 		}
-	}
-	if !found {
-		t.Fatalf("skipped = %#v, want recycle_bin_capacity for %q", result.Skipped, cachePath)
 	}
 }
 
@@ -431,11 +435,12 @@ func TestElectronCache_Cancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	_ = executeCleanWithSafeCapacity(ctx, clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryElectron},
 		DevCachePathResolver:      func(string) []string { return []string{cachePath} },
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{{
@@ -443,8 +448,8 @@ func TestElectronCache_Cancellation(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("canceled execute adapter paths = %v", adapter.paths)
+	if len(permanent.paths) != 0 {
+		t.Fatalf("canceled execute permanent paths = %v", permanent.paths)
 	}
 }
 
@@ -572,12 +577,13 @@ func TestElectronCache_ImmediateValidationOnExecute(t *testing.T) {
 
 	// Protect the path so immediate pre-delete validation rejects it after scan
 	// would otherwise have measured it (validator applies on execute path).
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryElectron},
 		Validator:                 pathsafe.NewValidator([]string{cachePath}),
 		DevCachePathResolver:      func(string) []string { return []string{cachePath} },
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{{
@@ -585,8 +591,8 @@ func TestElectronCache_ImmediateValidationOnExecute(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("adapter must not delete protected path: %v", adapter.paths)
+	if len(permanent.paths) != 0 {
+		t.Fatalf("permanent remover must not delete protected path: %v", permanent.paths)
 	}
 	if result.Totals.OptInDeletedCount != 0 {
 		t.Fatalf("opt-in deleted = %d", result.Totals.OptInDeletedCount)

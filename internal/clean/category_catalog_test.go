@@ -163,22 +163,25 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 	}
 }
 
-// productionPermanentCategoryIDs is the activated permanent set after #219/#220.
-// Package/runtime developer caches remain Recycle Bin until later tickets.
+// productionPermanentCategoryIDs is the activated permanent set after #219/#220/#222.
+// Package/build developer caches remain Recycle Bin until #221.
 func productionPermanentCategoryIDs() map[string]bool {
 	return map[string]bool{
-		clean.OpportunityCategoryD3DShaderCache: true,
-		clean.OpportunityCategoryNVIDIADXCache:  true,
-		clean.OpportunityCategoryBrowserCache:   true,
-		clean.OpportunityCategoryVSCodeCache:    true,
-		clean.OpportunityCategoryCursorCache:    true,
+		clean.OpportunityCategoryD3DShaderCache:  true,
+		clean.OpportunityCategoryNVIDIADXCache:   true,
+		clean.OpportunityCategoryBrowserCache:    true,
+		clean.OpportunityCategoryVSCodeCache:     true,
+		clean.OpportunityCategoryCursorCache:     true,
+		clean.DevCacheCategoryPlaywright:         true,
+		clean.DevCacheCategoryPuppeteerBrowsers:  true,
+		clean.DevCacheCategoryElectron:           true,
+		clean.DevCacheCategoryJetBrainsIDECaches: true,
 	}
 }
 
 func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
-	// #219/#220 activate d3d, nvidia DX, browser, and editor caches; every other
-	// executable production category remains move_to_recycle_bin for now.
+	// #219/#220/#222 activated permanent set; package/build caches remain RB for now.
 	wantPermanent := productionPermanentCategoryIDs()
 	for _, definition := range catalog.Definitions() {
 		switch definition.Eligibility {
@@ -246,13 +249,15 @@ func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 	if len(permanent) != len(want) {
 		t.Fatalf("production permanent categories = %v, want %d entries from %v", permanent, len(want), want)
 	}
-	// Over-broad whole-root system caches stay Recycle Bin.
+	// Over-broad whole-root system caches and package/build caches stay Recycle Bin.
 	for _, id := range []string{
 		clean.OpportunityCategoryExplorerThumbnailCache,
 		clean.OpportunityCategoryINetCache,
 		clean.OpportunityCategoryUserTemp,
 		clean.OpportunityCategoryCrashDumps,
 		clean.OpportunityCategoryWindowsErrorReporting,
+		clean.DevCacheCategoryNPM,
+		clean.DevCacheCategoryGo,
 	} {
 		summary, ok := catalog.Summary(id)
 		if !ok {
@@ -261,7 +266,7 @@ func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 		if summary.PlannedAction != clean.DeletionActionMoveToRecycleBin {
 			t.Fatalf("%s planned_action = %q, want move_to_recycle_bin", id, summary.PlannedAction)
 		}
-		if clean.InitiallySelectedCategory(summary) {
+		if summary.Eligibility == clean.CategoryEligibilityOptIn && clean.InitiallySelectedCategory(summary) {
 			t.Fatalf("%s must start unselected (Recycle Bin opt-in)", id)
 		}
 	}
@@ -408,9 +413,9 @@ func TestInitiallySelectedCategoryUsesInjectedCatalogSummariesWithoutHardCodedLi
 		}
 	}
 	// Production catalog: defaults + every permanent-action category start selected.
-	permanent := productionPermanentCategoryIDs()
 	for _, summary := range clean.EagerPreviewQueue() {
-		want := summary.Eligibility == clean.CategoryEligibilityDefault || permanent[summary.Identifier]
+		want := summary.Eligibility == clean.CategoryEligibilityDefault ||
+			summary.PlannedAction == clean.DeletionActionDeletePermanently
 		if clean.InitiallySelectedCategory(summary) != want {
 			t.Fatalf("production %q selected=%v, want %v",
 				summary.Identifier, clean.InitiallySelectedCategory(summary), want)

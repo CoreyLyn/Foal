@@ -271,21 +271,22 @@ func TestPlaywrightBrowsersExecuteFreshDiscoveryAndCapacity(t *testing.T) {
 	}
 	_ = previewOnly
 
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	execResult := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryPlaywright},
 		DevCachePathResolver:      func(string) []string { return []string{browsersRoot} },
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
 	})
-	if len(adapter.paths) != 2 {
-		t.Fatalf("adapter paths = %v, want both fresh children", adapter.paths)
+	if len(permanent.paths) != 2 {
+		t.Fatalf("permanent paths = %v, want both fresh children", permanent.paths)
 	}
-	for _, p := range adapter.paths {
+	for _, p := range permanent.paths {
 		if p == browsersRoot {
-			t.Fatalf("root passed to adapter: %q", p)
+			t.Fatalf("root passed to permanent remover: %q", p)
 		}
 		if strings.Contains(p, "preview-root") {
 			t.Fatalf("execute trusted dry-run path %q", p)
@@ -294,13 +295,25 @@ func TestPlaywrightBrowsersExecuteFreshDiscoveryAndCapacity(t *testing.T) {
 	if execResult.Totals.OptInDeletedCount != 2 {
 		t.Fatalf("OptInDeletedCount = %d, want 2", execResult.Totals.OptInDeletedCount)
 	}
+	if execResult.Totals.PermanentlyDeletedBytes == 0 {
+		t.Fatalf("permanently_deleted_bytes = 0, want playwright content")
+	}
 
-	// Capacity failure skips before any adapter call.
-	adapter = &recordingRecycleBinAdapter{}
+	// Permanent candidates are excluded from Recycle Bin capacity; low capacity
+	// must not block authorized permanent deletion. Recreate children because the
+	// previous permanent execute actually removed them.
+	browsersRoot2 := filepath.Join(root, "ms-playwright-cap")
+	if err := os.Mkdir(browsersRoot2, 0700); err != nil {
+		t.Fatal(err)
+	}
+	_ = writePlaywrightCompleteRevision(t, browsersRoot2, "chromium-1", "old")
+	_ = writePlaywrightCompleteRevision(t, browsersRoot2, "firefox-2", "new!")
+	permanent = &recordingPermanentRemover{}
 	capResult := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		OptIn:                []string{clean.DevCacheCategoryPlaywright},
-		DevCachePathResolver: func(string) []string { return []string{browsersRoot} },
-		RecycleBinAdapter:    adapter,
+		AllowPermanentDeletion: true,
+		OptIn:                  []string{clean.DevCacheCategoryPlaywright},
+		DevCachePathResolver:   func(string) []string { return []string{browsersRoot2} },
+		PermanentRemover:       permanent,
 		RecycleBinCapacityProbe: func(path string) (clean.RecycleBinVolumeConfig, error) {
 			return clean.RecycleBinVolumeConfig{
 				Volume:       "C:",
@@ -313,14 +326,16 @@ func TestPlaywrightBrowsersExecuteFreshDiscoveryAndCapacity(t *testing.T) {
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("capacity failure still called adapter: %v", adapter.paths)
+	if len(permanent.paths) != 2 {
+		t.Fatalf("low Recycle Bin capacity blocked permanent playwright: %v", permanent.paths)
 	}
-	if capResult.Totals.OptInDeletedCount != 0 {
-		t.Fatalf("deleted = %d after capacity failure", capResult.Totals.OptInDeletedCount)
+	if capResult.Totals.OptInDeletedCount != 2 {
+		t.Fatalf("deleted = %d after capacity probe on permanent-only run", capResult.Totals.OptInDeletedCount)
 	}
-	if len(capResult.Skipped) == 0 {
-		t.Fatalf("expected capacity skip, got %#v", capResult)
+	for _, skipped := range capResult.Skipped {
+		if skipped.Reason.Code == "recycle_bin_capacity" {
+			t.Fatalf("permanent candidate skipped for recycle capacity: %#v", skipped)
+		}
 	}
 }
 
@@ -333,18 +348,22 @@ func TestPlaywrightBrowsersExecuteHistoryAndCanceled(t *testing.T) {
 	child := writePlaywrightCompleteRevision(t, browsersRoot, "chromium-1", "data")
 
 	recorder := &recordingHistoryRecorder{}
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryPlaywright},
 		DevCachePathResolver:      func(string) []string { return []string{browsersRoot} },
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		HistoryRecorder:           recorder,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
 	})
-	if result.Totals.OptInDeletedCount != 1 || len(adapter.paths) != 1 || adapter.paths[0] != child {
-		t.Fatalf("execute result/adapter = %#v / %v", result, adapter.paths)
+	if result.Totals.OptInDeletedCount != 1 || len(permanent.paths) != 1 || permanent.paths[0] != child {
+		t.Fatalf("execute result/permanent = %#v / %v", result, permanent.paths)
+	}
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+		t.Fatalf("deleted = %#v, want delete_permanently", result.Deleted)
 	}
 	if len(recorder.sessions) != 1 {
 		t.Fatalf("history sessions = %d", len(recorder.sessions))
@@ -353,6 +372,9 @@ func TestPlaywrightBrowsersExecuteHistoryAndCanceled(t *testing.T) {
 	for _, item := range recorder.items {
 		if item.Path == child {
 			found = true
+			if item.Action != string(clean.DeletionActionDeletePermanently) {
+				t.Fatalf("history action = %q", item.Action)
+			}
 		}
 	}
 	if !found {
@@ -362,9 +384,10 @@ func TestPlaywrightBrowsersExecuteHistoryAndCanceled(t *testing.T) {
 	// Non-opted-in: no history items for Playwright paths.
 	recorder = &recordingHistoryRecorder{}
 	_ = executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     nil,
 		DevCachePathResolver:      func(string) []string { return []string{browsersRoot} },
-		RecycleBinAdapter:         &recordingRecycleBinAdapter{},
+		PermanentRemover:          &recordingPermanentRemover{},
 		HistoryRecorder:           recorder,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
@@ -376,20 +399,21 @@ func TestPlaywrightBrowsersExecuteHistoryAndCanceled(t *testing.T) {
 		}
 	}
 
-	// Cancellation during execute scanning yields no adapter calls for remaining work.
+	// Cancellation during execute scanning yields no permanent remover calls.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	adapter = &recordingRecycleBinAdapter{}
+	permanent = &recordingPermanentRemover{}
 	canceled := executeCleanWithSafeCapacity(ctx, clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryPlaywright},
 		DevCachePathResolver:      func(string) []string { return []string{browsersRoot} },
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("canceled execute still deleted: %v", adapter.paths)
+	if len(permanent.paths) != 0 {
+		t.Fatalf("canceled execute still deleted: %v", permanent.paths)
 	}
 	_ = canceled
 }

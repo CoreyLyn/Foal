@@ -330,11 +330,12 @@ func TestPuppeteerBrowsers_ExecuteFreshDiscoveryAndNotRoot(t *testing.T) {
 	// Leave only execute install.
 	_ = executeOnly
 
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	execResult := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryPuppeteerBrowsers},
 		DevCachePathResolver:      func(string) []string { return []string{cacheRoot} },
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{{
@@ -343,34 +344,38 @@ func TestPuppeteerBrowsers_ExecuteFreshDiscoveryAndNotRoot(t *testing.T) {
 		}},
 	})
 
-	if len(adapter.paths) != 1 || adapter.paths[0] != executeOnly {
-		t.Fatalf("adapter paths = %v, want only %q", adapter.paths, executeOnly)
+	if len(permanent.paths) != 1 || permanent.paths[0] != executeOnly {
+		t.Fatalf("permanent paths = %v, want only %q", permanent.paths, executeOnly)
 	}
-	for _, p := range adapter.paths {
+	for _, p := range permanent.paths {
 		if p == previewOnly {
 			t.Fatal("execute trusted dry-run path")
 		}
 		if p == cacheRoot || filepath.Base(p) == "chrome" {
-			t.Fatalf("adapter received root or product parent: %q", p)
+			t.Fatalf("permanent remover received root or product parent: %q", p)
 		}
 	}
 	if execResult.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("opt-in deleted = %d", execResult.Totals.OptInDeletedCount)
 	}
+	if len(execResult.Deleted) != 1 || execResult.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+		t.Fatalf("deleted = %#v, want delete_permanently", execResult.Deleted)
+	}
 	// History records opted-in path through normal item outcomes when recorder present;
 	// non-opted-in paths are never an execution manifest (default execute test above).
 }
 
-func TestPuppeteerBrowsers_CapacityPreCheck(t *testing.T) {
+func TestPuppeteerBrowsers_CapacityDoesNotBlockPermanent(t *testing.T) {
 	root := t.TempDir()
 	cacheRoot := filepath.Join(root, "puppeteer")
 	install := writePuppeteerInstall(t, cacheRoot, "chrome", "win64-1.0.0", "12345678")
 
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryPuppeteerBrowsers},
 		DevCachePathResolver:      func(string) []string { return []string{cacheRoot} },
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		RecycleBinCapacityProbe: func(path string) (clean.RecycleBinVolumeConfig, error) {
@@ -386,17 +391,13 @@ func TestPuppeteerBrowsers_CapacityPreCheck(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("adapter must not run when capacity insufficient: %v", adapter.paths)
+	if len(permanent.paths) != 1 || permanent.paths[0] != install {
+		t.Fatalf("permanent paths = %v, want %q (capacity must not block permanent)", permanent.paths, install)
 	}
-	found := false
 	for _, skipped := range result.Skipped {
-		if skipped.Path == install && skipped.Reason.Code == "recycle_bin_capacity" {
-			found = true
+		if skipped.Reason.Code == "recycle_bin_capacity" {
+			t.Fatalf("permanent candidate skipped for recycle capacity: %#v", skipped)
 		}
-	}
-	if !found {
-		t.Fatalf("skipped = %#v, want recycle_bin_capacity for %q", result.Skipped, install)
 	}
 }
 
@@ -483,11 +484,12 @@ func TestPuppeteerBrowsers_CancellationDuringMeasurement(t *testing.T) {
 	// structured seam tests. Here we ensure a pre-canceled context yields no
 	// partial adapter calls for puppeteer.
 	cancel()
-	adapter := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
 	_ = executeCleanWithSafeCapacity(ctx, clean.Options{
+		AllowPermanentDeletion:    true,
 		OptIn:                     []string{clean.DevCacheCategoryPuppeteerBrowsers},
 		DevCachePathResolver:      func(string) []string { return []string{cacheRoot} },
-		RecycleBinAdapter:         adapter,
+		PermanentRemover:          permanent,
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{{
@@ -495,8 +497,8 @@ func TestPuppeteerBrowsers_CancellationDuringMeasurement(t *testing.T) {
 			DefaultEnabled: false,
 		}},
 	})
-	if len(adapter.paths) != 0 {
-		t.Fatalf("canceled execute adapter paths = %v", adapter.paths)
+	if len(permanent.paths) != 0 {
+		t.Fatalf("canceled execute permanent paths = %v", permanent.paths)
 	}
 	_ = first
 	_ = second
