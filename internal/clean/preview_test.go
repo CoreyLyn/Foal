@@ -927,8 +927,7 @@ func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 	if got.Path != candidate || got.Bytes != 5 || got.Rule != "test_default_rule" || got.PlannedAction != "move_to_recycle_bin" {
 		t.Fatalf("candidate = %#v, want path/size/rule/planned action", got)
 	}
-	// Catalog-owned default category also projects recycle-bin planned action
-	// (no permanent activation in this prefactor).
+	// Catalog-owned default category projects recycle-bin planned action.
 	defaultResult := clean.DryRun(context.Background(), clean.Options{
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		DiscoverReviewSuggestions:     noReviewSuggestions,

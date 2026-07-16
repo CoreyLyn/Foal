@@ -2284,3 +2284,191 @@ func TestCleanExecuteWithoutOptInDoesNotIncludeUserTempOpportunitiesInHistory(t 
 		t.Fatalf("totals.opt_in_deleted_count = %v, want 0", val)
 	}
 }
+
+func TestCleanAllowPermanentFlagWiresAuthorization(t *testing.T) {
+	disableHistoryRecording(t)
+	originalExecute := executeClean
+	defer func() { executeClean = originalExecute }()
+
+	var captured clean.Options
+	executeClean = func(_ context.Context, opts clean.Options) clean.Result {
+		captured = opts
+		return clean.Result{
+			Status: "ok",
+			Mode:   "execute",
+			Deleted: []clean.DeletedItem{{
+				Path:   `C:\Users\corey\AppData\Local\D3DSCache`,
+				Bytes:  64,
+				Rule:   clean.OpportunityCategoryD3DShaderCache,
+				Action: string(clean.DeletionActionDeletePermanently),
+			}},
+			Totals: clean.Totals{
+				DeletedCount:            1,
+				PermanentlyDeletedBytes: 64,
+				AffectedBytes:           64,
+			},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--execute", "--opt-in", "d3d_shader_cache", "--allow-permanent", "--json"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+	}
+	if !captured.AllowPermanentDeletion {
+		t.Fatal("AllowPermanentDeletion not set from --allow-permanent")
+	}
+	if len(captured.OptIn) != 1 || captured.OptIn[0] != clean.OpportunityCategoryD3DShaderCache {
+		t.Fatalf("OptIn = %#v", captured.OptIn)
+	}
+	result := readResultObject(t, stdout.Bytes())
+	deleted := result["deleted"].([]interface{})[0].(map[string]interface{})
+	if deleted["action"] != "delete_permanently" {
+		t.Fatalf("deleted action = %#v", deleted)
+	}
+}
+
+func TestCleanExecuteWithoutAllowPermanentDoesNotAuthorize(t *testing.T) {
+	disableHistoryRecording(t)
+	originalExecute := executeClean
+	defer func() { executeClean = originalExecute }()
+
+	var captured clean.Options
+	executeClean = func(_ context.Context, opts clean.Options) clean.Result {
+		captured = opts
+		return clean.Result{
+			Status: "ok",
+			Mode:   "execute",
+			Skipped: []clean.SkippedItem{{
+				Path:          `C:\Users\corey\AppData\Local\D3DSCache`,
+				Bytes:         64,
+				Rule:          clean.OpportunityCategoryD3DShaderCache,
+				PlannedAction: string(clean.DeletionActionDeletePermanently),
+				Reason: clean.StructuredIssue{
+					Code:        "permanent_deletion_not_authorized",
+					Message:     "permanent deletion is not authorized for this run; planned action is unchanged",
+					Recoverable: true,
+				},
+			}},
+			Totals: clean.Totals{SkippedCount: 1},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--execute", "--opt-in", "d3d_shader_cache", "--json"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+	}
+	if captured.AllowPermanentDeletion {
+		t.Fatal("AllowPermanentDeletion must stay false without --allow-permanent")
+	}
+}
+
+func TestCleanDryRunDoesNotRequireAllowPermanent(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	defer func() { dryRunClean = originalDryRun }()
+
+	var captured clean.Options
+	dryRunClean = func(_ context.Context, opts clean.Options) clean.Result {
+		captured = opts
+		return clean.Result{
+			Status: "preview",
+			Mode:   "dry_run",
+			OptInCandidates: []clean.OptInCandidate{{
+				Path:          `C:\Users\corey\AppData\Local\D3DSCache`,
+				Bytes:         64,
+				Category:      clean.OpportunityCategoryD3DShaderCache,
+				PlannedAction: string(clean.DeletionActionDeletePermanently),
+			}},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--dry-run", "--opt-in", "d3d_shader_cache", "--json"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+	}
+	// Dry-run without the flag must still succeed and report true planned action.
+	if captured.AllowPermanentDeletion {
+		t.Fatal("dry-run without --allow-permanent must not set permanent auth")
+	}
+	result := readResultObject(t, stdout.Bytes())
+	candidates := result["opt_in_candidates"].([]interface{})
+	if len(candidates) != 1 {
+		t.Fatalf("opt_in_candidates = %#v", candidates)
+	}
+	if candidates[0].(map[string]interface{})["planned_action"] != "delete_permanently" {
+		t.Fatalf("planned_action = %#v", candidates[0])
+	}
+}
+
+func TestCleanHumanExecuteSummaryDistinguishesPermanentBytes(t *testing.T) {
+	disableHistoryRecording(t)
+	originalExecute := executeClean
+	defer func() { executeClean = originalExecute }()
+
+	executeClean = func(context.Context, clean.Options) clean.Result {
+		return clean.Result{
+			Status: "ok",
+			Mode:   "execute",
+			Deleted: []clean.DeletedItem{
+				{Path: `C:\Temp\a`, Bytes: 4, Rule: clean.DefaultCategoryFoalOwnedTempSandboxes, Action: string(clean.DeletionActionMoveToRecycleBin)},
+				{Path: `C:\Users\corey\AppData\Local\D3DSCache`, Bytes: 8, Rule: clean.OpportunityCategoryD3DShaderCache, Action: string(clean.DeletionActionDeletePermanently)},
+			},
+			Totals: clean.Totals{
+				DeletedCount:            2,
+				RecycleBinMovedBytes:    4,
+				PermanentlyDeletedBytes: 8,
+				AffectedBytes:           12,
+			},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--execute", "--opt-in", "d3d_shader_cache", "--allow-permanent"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Execution complete",
+		"Deleted: 2",
+		"Recycle Bin moved: 4 bytes",
+		"Permanently deleted: 8 bytes",
+		"Affected: 12 bytes",
+		"ordinary filesystem removal",
+		"not a secure-erasure",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, out)
+		}
+	}
+	for _, forbidden := range []string{"secure wipe", "shred", "forensic"} {
+		if strings.Contains(strings.ToLower(out), forbidden) {
+			t.Fatalf("stdout has forbidden claim %q:\n%s", forbidden, out)
+		}
+	}
+}
+
+func TestHelpDocumentsAllowPermanent(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--help"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"--allow-permanent",
+		"per-run",
+		"ordinary filesystem removal",
+		"secure erasure",
+		"d3d_shader_cache",
+		"--dry-run",
+		"--execute",
+	} {
+		if !strings.Contains(strings.ToLower(out), strings.ToLower(want)) {
+			t.Fatalf("help missing %q:\n%s", want, out)
+		}
+	}
+}

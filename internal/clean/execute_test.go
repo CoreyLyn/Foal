@@ -131,7 +131,7 @@ func TestExecuteUsesCatalogPlannedActionForDefaultCategoryWithoutPermanentActiva
 		t.Fatalf("actual action = %q", result.Deleted[0].Action)
 	}
 	if result.Totals.PermanentlyDeletedBytes != 0 || result.Totals.RecycleBinMovedBytes != 5 {
-		t.Fatalf("totals = %#v, prefactor must not permanently delete", result.Totals)
+		t.Fatalf("totals = %#v, default category must not permanently delete", result.Totals)
 	}
 	if len(recorder.sessions) != 1 {
 		t.Fatalf("sessions = %#v", recorder.sessions)
@@ -1083,6 +1083,13 @@ func TestDryRunOptInCategoriesShowOptInCandidatesNotOpportunities(t *testing.T) 
 			}
 			if result.OptInCandidates[0].Category != tc.category {
 				t.Fatalf("opt-in candidate category mismatch for %q, got %q want %q", tc.category, result.OptInCandidates[0].Category, tc.category)
+			}
+			wantAction := string(clean.DeletionActionMoveToRecycleBin)
+			if tc.category == clean.OpportunityCategoryD3DShaderCache {
+				wantAction = string(clean.DeletionActionDeletePermanently)
+			}
+			if result.OptInCandidates[0].PlannedAction != wantAction {
+				t.Fatalf("planned_action for %q = %q, want %q", tc.category, result.OptInCandidates[0].PlannedAction, wantAction)
 			}
 			if result.Totals.OptInCandidateCount != 1 {
 				t.Fatalf("expected opt-in candidate count 1 for %q, got %d", tc.category, result.Totals.OptInCandidateCount)
