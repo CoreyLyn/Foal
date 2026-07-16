@@ -2,3 +2,4 @@
 *.exe~
 .gocache/
 /.worktrees
+/dist/

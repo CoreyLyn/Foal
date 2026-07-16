@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify Windows build
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Test
+        run: go test ./... -count=1 -timeout=5m
+
+      - name: Build Windows archive inputs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          $env:CGO_ENABLED = "0"
+          $env:GOOS = "windows"
+          foreach ($arch in @("amd64", "arm64")) {
+            $env:GOARCH = $arch
+            go build -trimpath -o "build/foal_windows_$arch.exe" ./cmd/foal
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            go build -trimpath -o "build/fo_windows_$arch.exe" ./cmd/fo
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Smoke test native CLI
+        shell: pwsh
+        run: |
+          & ./build/foal_windows_amd64.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build/foal_windows_amd64.exe --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build/foal_windows_amd64.exe status --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

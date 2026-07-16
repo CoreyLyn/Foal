@@ -32,6 +32,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 | Command | Current behavior |
 | --- | --- |
 | `foal --help` | Shows the implemented command list and Foal/foal/foal.exe examples. |
+| `foal version`, `foal --version`, `--json` forms | Read-only shared build metadata: version, commit, Go runtime, and target platform. |
 | `foal status --json` | Read-only system and Foal state snapshot with disk, OS, elapsed time, skipped items, and errors. |
 | `foal analyze --json <path>` | Read-only directory insight with totals, top children, skipped entries, and elapsed time. |
 | `foal clean --dry-run --json` | Preview-only cleanup candidate review for conservative default rules. |

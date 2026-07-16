@@ -23,6 +23,7 @@ The current command surface is:
 
 ```powershell
 foal --help
+foal version --json
 foal analyze --json .
 foal clean --dry-run --json
 foal clean --execute
@@ -30,6 +31,11 @@ foal status --json
 foal history --json
 foal uninstall --json
 ```
+
+`foal version`, `foal --version`, and their `--json` forms report the version,
+source commit, Go runtime, and target platform without reading or changing user
+state. Development builds report `dev`; versioned release builds receive their
+tag and commit from the release pipeline.
 
 `foal clean` requires either `--dry-run` or `--execute`; `--dry-run` previews default candidates and reports skipped-by-default Opportunity categories: idle user-temp entries as `user_temp`, the current user's fixed CrashDumps, Windows Error Reporting, Explorer thumbnail cache, INetCache, D3D shader cache, and NVIDIA DX cache roots as `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache`, `d3d_shader_cache`, and `nvidia_dx_cache` when they exist, Chrome and Edge `browser_cache` when the browser is idle before and after complete profile cache inspection, VS Code `vscode_cache` when Code is idle before and after inspection of the fixed regenerating cache roots under the current user's standard Roaming AppData `Code` directory, and Cursor `cursor_cache` when Cursor is idle before and after inspection of the same fixed allowlist under the standard Roaming AppData `Cursor` directory. Observed opportunity bytes stay separate from `Potential space`. Browser review is gated by Chrome/Edge running-application detection; Application cache review uses generic application idle-before-and-after detection with independent editor identities (`Code.exe` for VS Code, `Cursor.exe` for Cursor). Running apps are reported as Running application skips and unknown process state is a recoverable diagnostic. The Recycle Bin is permanently excluded, developer-tool caches remain Review suggestions by default (opt-in `playwright-browsers` reclaims only complete versioned Playwright browser installations; MCP profiles and hermetic `PLAYWRIGHT_BROWSERS_PATH=0` roots are never scanned; structured `puppeteer-browsers` reclaims allowlisted product platform-version installations under the env/default Puppeteer cache root; opt-in `electron-cache` reclaims the Electron download cache root from non-blank `electron_config_cache` or `%LOCALAPPDATA%\electron\Cache`; opt-in `jetbrains-ide-caches` reclaims only exact `caches`/`index` children under standard `%LOCALAPPDATA%\JetBrains` product-version roots for supported IntelliJ-platform IDEs (IntelliJ IDEA Ultimate/Community, PyCharm Professional/Community, WebStorm, PhpStorm, RubyMine, CLion, DataGrip, DataSpell, GoLand, RustRover, Aqua, MPS, Writerside, and Rider; Rider also reclaims exact `resharper-host`) with independent product idle gates), Application cache categories stay skipped by default until `--opt-in vscode_cache`, `--opt-in cursor_cache`, `--opt-in playwright-browsers`, `--opt-in puppeteer-browsers`, `--opt-in electron-cache`, `--opt-in dev-caches`, `--opt-in all`, or Clean TUI selection (selecting one editor never selects the other), and administrator-only caches such as SoftwareDistribution and Delivery Optimization are communicated only as permission boundaries without automatic elevation. `--execute` does not run opportunity discovery or browser/application running-application detection by default and confirms Recycle Bin cleanup only for freshly scanned, validated Foal-owned temp sandbox candidates (plus any explicitly opted-in categories). Docs and verification should prefer non-destructive examples such as `foal clean --dry-run --json`.
 
@@ -61,3 +67,14 @@ Foal is inspired by tools like Mole, but it is not "Mole for Windows". The roadm
 - `optimize`: future read-only health checks and recommendations; not current implementation scope.
 
 The TUI is a review and navigation surface over shared read models. Its primary Clean view is category-first: it measures catalog default and opt-in cleanup categories (including `user_temp`, `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache`, `d3d_shader_cache`, `nvidia_dx_cache`, Chrome/Edge `browser_cache`, Application caches `vscode_cache` and `cursor_cache`, and developer-tool opt-in categories) as path-free rows with permission-boundary notices, without writing history or detailed lists during preview. It does not duplicate deletion, uninstall, or path-safety logic.
+
+## Releases
+
+Foal uses Semantic Version tags to create draft GitHub releases. The initial
+release channel provides portable Windows amd64 and arm64 ZIP archives containing
+both `foal.exe` and `fo.exe`, plus SHA-256 checksums and GitHub provenance
+attestations. A maintainer smoke-tests each draft before publishing it; there are
+no automatic nightly releases.
+
+See [Release process](docs/plan/release-process.md) for release gates, artifact
+contents, and the staged Scoop/WinGet plan.

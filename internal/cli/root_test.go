@@ -10,10 +10,94 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CoreyLyn/Foal/internal/buildinfo"
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/history"
 	"github.com/CoreyLyn/Foal/internal/uninstall"
 )
+
+func TestVersionCommandAndFlagShareCanonicalHumanOutput(t *testing.T) {
+	original := currentBuildInfo
+	currentBuildInfo = func() buildinfo.Info {
+		return buildinfo.Info{
+			Version:   "v0.1.0-rc.1",
+			Commit:    "abc123",
+			GoVersion: "go1.25.0",
+			OS:        "windows",
+			Arch:      "amd64",
+		}
+	}
+	t.Cleanup(func() { currentBuildInfo = original })
+
+	for _, args := range [][]string{{"version"}, {"--version"}} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Run(args, &stdout, &stderr)
+			if code != exitOK {
+				t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+			}
+			want := "Foal v0.1.0-rc.1\nCommit: abc123\nGo: go1.25.0\nPlatform: windows/amd64\n"
+			if stdout.String() != want {
+				t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
+func TestVersionJSONUsesStableReadOnlyContract(t *testing.T) {
+	original := currentBuildInfo
+	currentBuildInfo = func() buildinfo.Info {
+		return buildinfo.Info{
+			Version:   "v0.1.0-rc.1",
+			Commit:    "abc123",
+			GoVersion: "go1.25.0",
+			OS:        "windows",
+			Arch:      "arm64",
+		}
+	}
+	t.Cleanup(func() { currentBuildInfo = original })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--version", "--json"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+
+	var got struct {
+		Command string         `json:"command"`
+		Result  buildinfo.Info `json:"result"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
+	}
+	if got.Command != "version" {
+		t.Fatalf("command = %q, want version", got.Command)
+	}
+	want := (buildinfo.Info{Version: "v0.1.0-rc.1", Commit: "abc123", GoVersion: "go1.25.0", OS: "windows", Arch: "arm64"})
+	if got.Result != want {
+		t.Fatalf("result = %#v, want %#v", got.Result, want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestVersionRejectsUnexpectedArguments(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"version", "unexpected"}, &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("Run returned %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "version does not accept arguments") {
+		t.Fatalf("stderr = %q, want version argument error", stderr.String())
+	}
+}
 
 func TestHelpUsesFoalNamingOnly(t *testing.T) {
 	var stdout, stderr bytes.Buffer

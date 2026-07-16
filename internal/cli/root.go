@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CoreyLyn/Foal/internal/analyze"
+	"github.com/CoreyLyn/Foal/internal/buildinfo"
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/history"
 	"github.com/CoreyLyn/Foal/internal/status"
@@ -30,6 +31,7 @@ type commandSpec struct {
 }
 
 var commands = []commandSpec{
+	{name: "version", description: "Report Foal build and runtime metadata."},
 	{name: "analyze", description: "Inspect disk usage and cleanup opportunities without changing files."},
 	{name: "clean", description: "Preview or execute conservative cleanup candidates through the Recycle Bin."},
 	{name: "status", description: "Report a read-only system and Foal state snapshot."},
@@ -51,8 +53,9 @@ var (
 	newHistoryQuery = func() (history.FileQuery, error) {
 		return history.NewDefaultFileQuery()
 	}
-	newHistoryDir   = history.DefaultDir
-	reviewUninstall = uninstall.Review
+	newHistoryDir    = history.DefaultDir
+	reviewUninstall  = uninstall.Review
+	currentBuildInfo = buildinfo.Current
 )
 
 type Invocation struct {
@@ -131,6 +134,26 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			Command:     command,
 			Args:        args,
 		})
+	}
+
+	if command == "version" {
+		if len(positional) > 1 {
+			return writeError(stderr, opts.json, command, args, jsonError{
+				Code:        "invalid_version_invocation",
+				Message:     "version does not accept arguments",
+				Recoverable: true,
+				Command:     command,
+				Args:        args,
+			})
+		}
+		result := currentBuildInfo()
+		if opts.json {
+			return writeJSON(stdout, envelope{Command: command, Result: result})
+		}
+
+		_, _ = fmt.Fprintf(stdout, "Foal %s\nCommit: %s\nGo: %s\nPlatform: %s/%s\n",
+			result.Version, result.Commit, result.GoVersion, result.OS, result.Arch)
+		return exitOK
 	}
 
 	if command == "status" {
@@ -341,6 +364,9 @@ func parseOptions(args []string) (options, []string, error) {
 		case "-h", "--help":
 			positional = append(positional, "help")
 			commandSeen = true
+		case "--version":
+			positional = append(positional, "version")
+			commandSeen = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return opts, positional, fmt.Errorf("unknown option: %s", arg)
@@ -416,7 +442,8 @@ func helpText() string {
 	builder.WriteString("Foal - safe, preview-first cleanup for Windows\n\n")
 	builder.WriteString("Usage:\n")
 	builder.WriteString("  foal [--json] <command>\n")
-	builder.WriteString("  foal --help\n\n")
+	builder.WriteString("  foal --help\n")
+	builder.WriteString("  foal --version [--json]\n\n")
 	builder.WriteString("Commands:\n")
 	for _, command := range commands {
 		builder.WriteString(fmt.Sprintf("  %-10s %s\n", command.name, command.description))
