@@ -163,34 +163,160 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 	}
 }
 
-// productionPermanentCategoryIDs is the full activated permanent set after
-// #219/#220/#221/#222 (18 categories). Over-broad whole-root system caches remain Recycle Bin.
+// lockedPermanentCategoryIDs is the complete production permanent matrix (18).
+// Order matches catalog registration among permanent-action categories.
+func lockedPermanentCategoryIDs() []string {
+	return []string{
+		clean.OpportunityCategoryD3DShaderCache,
+		clean.OpportunityCategoryNVIDIADXCache,
+		clean.OpportunityCategoryBrowserCache,
+		clean.OpportunityCategoryVSCodeCache,
+		clean.OpportunityCategoryCursorCache,
+		clean.DevCacheCategoryNPM,
+		clean.DevCacheCategoryGo,
+		clean.DevCacheCategoryPip,
+		clean.DevCacheCategoryCargo,
+		clean.DevCacheCategoryNuGet,
+		clean.DevCacheCategoryNuGetGlobalPackages,
+		clean.DevCacheCategoryCorepack,
+		clean.DevCacheCategoryUV,
+		clean.DevCacheCategoryBun,
+		clean.DevCacheCategoryPlaywright,
+		clean.DevCacheCategoryPuppeteerBrowsers,
+		clean.DevCacheCategoryElectron,
+		clean.DevCacheCategoryJetBrainsIDECaches,
+	}
+}
+
+// lockedRecycleBinCategoryIDs is the complete production Recycle Bin matrix (6).
+func lockedRecycleBinCategoryIDs() []string {
+	return []string{
+		clean.DefaultCategoryFoalOwnedTempSandboxes,
+		clean.OpportunityCategoryUserTemp,
+		clean.OpportunityCategoryCrashDumps,
+		clean.OpportunityCategoryWindowsErrorReporting,
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
+	}
+}
+
 func productionPermanentCategoryIDs() map[string]bool {
-	return map[string]bool{
-		clean.OpportunityCategoryD3DShaderCache:   true,
-		clean.OpportunityCategoryNVIDIADXCache:    true,
-		clean.OpportunityCategoryBrowserCache:     true,
-		clean.OpportunityCategoryVSCodeCache:      true,
-		clean.OpportunityCategoryCursorCache:      true,
-		clean.DevCacheCategoryNPM:                 true,
-		clean.DevCacheCategoryGo:                  true,
-		clean.DevCacheCategoryPip:                 true,
-		clean.DevCacheCategoryCargo:               true,
-		clean.DevCacheCategoryNuGet:               true,
-		clean.DevCacheCategoryNuGetGlobalPackages: true,
-		clean.DevCacheCategoryCorepack:            true,
-		clean.DevCacheCategoryUV:                  true,
-		clean.DevCacheCategoryBun:                 true,
-		clean.DevCacheCategoryPlaywright:          true,
-		clean.DevCacheCategoryPuppeteerBrowsers:   true,
-		clean.DevCacheCategoryElectron:            true,
-		clean.DevCacheCategoryJetBrainsIDECaches:  true,
+	want := make(map[string]bool, len(lockedPermanentCategoryIDs()))
+	for _, id := range lockedPermanentCategoryIDs() {
+		want[id] = true
+	}
+	return want
+}
+
+// TestCompleteDeletionRuleMatrixLocked is the end-state catalog contract for ADR 0018:
+// exactly 18 delete_permanently, 6 move_to_recycle_bin, and one actionless permission boundary.
+func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
+	catalog := clean.CanonicalCleanupCategoryCatalog()
+	wantPermanent := lockedPermanentCategoryIDs()
+	wantRecycleBin := lockedRecycleBinCategoryIDs()
+	if len(wantPermanent) != 18 {
+		t.Fatalf("locked permanent matrix length = %d, want 18", len(wantPermanent))
+	}
+	if len(wantRecycleBin) != 6 {
+		t.Fatalf("locked Recycle Bin matrix length = %d, want 6", len(wantRecycleBin))
+	}
+
+	var permanent, recycleBin, executable []string
+	for _, definition := range catalog.Definitions() {
+		switch definition.Eligibility {
+		case clean.CategoryEligibilityDefault, clean.CategoryEligibilityOptIn:
+			executable = append(executable, definition.Identifier)
+			switch definition.PlannedAction {
+			case clean.DeletionActionDeletePermanently:
+				permanent = append(permanent, definition.Identifier)
+			case clean.DeletionActionMoveToRecycleBin:
+				recycleBin = append(recycleBin, definition.Identifier)
+			default:
+				t.Fatalf("executable %q has unsupported planned_action %q", definition.Identifier, definition.PlannedAction)
+			}
+		case clean.CategoryEligibilityPermissionBoundary, clean.CategoryEligibilityReviewOnly:
+			if definition.PlannedAction != "" {
+				t.Fatalf("non-executable %q must be actionless, got %q", definition.Identifier, definition.PlannedAction)
+			}
+		default:
+			t.Fatalf("unexpected eligibility %q on %q", definition.Eligibility, definition.Identifier)
+		}
+	}
+
+	if len(executable) != 24 {
+		t.Fatalf("executable categories = %d (%v), want 24", len(executable), executable)
+	}
+	if !reflect.DeepEqual(permanent, wantPermanent) {
+		t.Fatalf("permanent matrix = %#v, want %#v", permanent, wantPermanent)
+	}
+	if !reflect.DeepEqual(recycleBin, wantRecycleBin) {
+		t.Fatalf("Recycle Bin matrix = %#v, want %#v", recycleBin, wantRecycleBin)
+	}
+
+	boundary, ok := catalog.Summary("administrator_only_caches")
+	if !ok {
+		t.Fatal("administrator_only_caches missing")
+	}
+	if boundary.Eligibility != clean.CategoryEligibilityPermissionBoundary || boundary.PlannedAction != "" {
+		t.Fatalf("administrator_only_caches = %#v, want actionless permission boundary", boundary)
+	}
+	if clean.InitiallySelectedCategory(boundary) {
+		t.Fatal("administrator_only_caches must never start selected")
+	}
+
+	// TUI initial selection when every executable row is present: default + 18 permanent = 19.
+	selected := 0
+	for _, summary := range catalog.Summaries() {
+		if !clean.InitiallySelectedCategory(summary) {
+			continue
+		}
+		selected++
+		if summary.Eligibility != clean.CategoryEligibilityDefault &&
+			summary.PlannedAction != clean.DeletionActionDeletePermanently {
+			t.Fatalf("unexpected initial selection %q eligibility=%q action=%q",
+				summary.Identifier, summary.Eligibility, summary.PlannedAction)
+		}
+	}
+	if selected != 19 {
+		t.Fatalf("initially selected categories = %d, want 19 (default + 18 permanent)", selected)
+	}
+	for _, id := range []string{
+		clean.OpportunityCategoryUserTemp,
+		clean.OpportunityCategoryCrashDumps,
+		clean.OpportunityCategoryWindowsErrorReporting,
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
+	} {
+		summary, ok := catalog.Summary(id)
+		if !ok {
+			t.Fatalf("%s missing", id)
+		}
+		if clean.InitiallySelectedCategory(summary) {
+			t.Fatalf("%s must start unselected (Recycle Bin opt-in)", id)
+		}
+		if summary.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+			t.Fatalf("%s planned_action = %q, want move_to_recycle_bin", id, summary.PlannedAction)
+		}
+	}
+
+	// Eager queue is all 24 executable rows; permission boundary is never scanned.
+	queue := clean.EagerPreviewQueue()
+	if len(queue) != 24 {
+		t.Fatalf("EagerPreviewQueue length = %d, want 24 executable categories", len(queue))
+	}
+	for _, summary := range queue {
+		if summary.Identifier == "administrator_only_caches" {
+			t.Fatal("permission boundary must not enter the eager queue")
+		}
+		if summary.PlannedAction != clean.DeletionActionDeletePermanently &&
+			summary.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+			t.Fatalf("queue %q planned_action = %q", summary.Identifier, summary.PlannedAction)
+		}
 	}
 }
 
 func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
-	// #219/#220/#221/#222 activated permanent set; remaining whole-root system caches stay RB.
 	wantPermanent := productionPermanentCategoryIDs()
 	for _, definition := range catalog.Definitions() {
 		switch definition.Eligibility {
@@ -234,6 +360,7 @@ func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T
 }
 
 func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
+	// Compatibility alias for the locked permanent set; full matrix is TestCompleteDeletionRuleMatrixLocked.
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	want := productionPermanentCategoryIDs()
 	var permanent []string
@@ -255,18 +382,10 @@ func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 			}
 		}
 	}
-	if len(permanent) != len(want) {
-		t.Fatalf("production permanent categories = %v, want %d entries from %v", permanent, len(want), want)
+	if len(permanent) != 18 || len(permanent) != len(want) {
+		t.Fatalf("production permanent categories = %v, want exactly 18", permanent)
 	}
-	// Over-broad whole-root system caches and the default category stay Recycle Bin.
-	for _, id := range []string{
-		clean.DefaultCategoryFoalOwnedTempSandboxes,
-		clean.OpportunityCategoryExplorerThumbnailCache,
-		clean.OpportunityCategoryINetCache,
-		clean.OpportunityCategoryUserTemp,
-		clean.OpportunityCategoryCrashDumps,
-		clean.OpportunityCategoryWindowsErrorReporting,
-	} {
+	for _, id := range lockedRecycleBinCategoryIDs() {
 		summary, ok := catalog.Summary(id)
 		if !ok {
 			t.Fatalf("%s missing", id)

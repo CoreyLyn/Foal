@@ -789,7 +789,7 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 			}
 		case clean.CategoryEligibilityOptIn:
 			optIns++
-			// Permanent-action opt-ins (#219–#222 full set) start selected.
+			// Permanent-action opt-ins (complete 18-category matrix) start selected.
 			if row.PlannedAction == clean.DeletionActionDeletePermanently {
 				if !row.Selected {
 					t.Fatalf("permanent opt-in %q must start selected", row.Identifier)
@@ -809,13 +809,27 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 		t.Fatalf("defaults=%d optIns=%d", defaults, optIns)
 	}
 	wantSelected := defaults
+	permanentOptIns := 0
+	recycleBinOptIns := 0
 	for _, row := range model.rows {
 		if row.Eligibility == clean.CategoryEligibilityOptIn && row.PlannedAction == clean.DeletionActionDeletePermanently {
 			wantSelected++
+			permanentOptIns++
+		}
+		if row.Eligibility == clean.CategoryEligibilityOptIn && row.PlannedAction == clean.DeletionActionMoveToRecycleBin {
+			recycleBinOptIns++
 		}
 	}
-	if model.selectedCount() != wantSelected {
-		t.Fatalf("selectedCount = %d, want %d (defaults + permanent opt-ins)", model.selectedCount(), wantSelected)
+	// Complete rule matrix: 1 default + 18 permanent = 19; 5 Recycle Bin opt-ins unselected.
+	if defaults != 1 || permanentOptIns != 18 || recycleBinOptIns != 5 || wantSelected != 19 {
+		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/18/5/19",
+			defaults, permanentOptIns, recycleBinOptIns, wantSelected)
+	}
+	if model.selectedCount() != 19 {
+		t.Fatalf("selectedCount = %d, want 19 (default + all permanent when rows present)", model.selectedCount())
+	}
+	if len(model.rows) != 24 {
+		t.Fatalf("eager rows = %d, want 24 executable categories", len(model.rows))
 	}
 	for _, id := range model.selectedCategoryIDs() {
 		if strings.Contains(id, `\`) || strings.Contains(id, "/") || strings.Contains(id, " ") {
@@ -1335,8 +1349,8 @@ func TestEagerCleanFirstEnterOpensConfirmationWithoutExecutionOrHistory(t *testi
 
 	model := newEagerCleanModel(100, 40)
 	markEagerQueueTerminal(&model, true)
-	// Keep this confirmation Recycle Bin-only: deselect the production permanent
-	// tracer (d3d_shader_cache) and select one recycle-bin opt-in.
+	// Keep this confirmation Recycle Bin-only: deselect permanent categories
+	// and select one Recycle Bin opt-in.
 	optInIndex := -1
 	for i, row := range model.rows {
 		if row.PlannedAction == clean.DeletionActionDeletePermanently {
@@ -2663,9 +2677,9 @@ func stringSlicesEqual(a, b []string) bool {
 	return true
 }
 
-// injectedMixedActionSummaries uses real catalog identifiers so exact-plan
-// compilation succeeds, while injecting planned actions that production has
-// not activated yet (still Recycle Bin-only on the live catalog).
+// injectedMixedActionSummaries is a reduced fixture with real catalog identifiers
+// so exact-plan compilation succeeds. Production catalog actions already match
+// these policies; the fixture only narrows the row set for focused TUI tests.
 func injectedMixedActionSummaries() []clean.CleanupCategorySummary {
 	return []clean.CleanupCategorySummary{
 		{

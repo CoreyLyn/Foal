@@ -31,13 +31,13 @@ Foal is a safe, preview-first cleanup CLI for Windows. It is inspired by tools l
 - `optimize` is not in the current implementation scope. Future optimize work starts as read-only health checks and recommendations.
 - The TUI remains read-only for non-Clean commands. Clean may orchestrate explicitly selected and confirmed cleanup through shared command/core execution paths, but the TUI must not own candidate resolution, deletion, uninstall, process stopping, elevation, or path-safety logic.
 
-## Clean deletion policy (partially implemented)
+## Clean deletion policy (implemented)
 
-- Every executable canonical cleanup rule must explicitly declare `move_to_recycle_bin` or `delete_permanently`; missing or unknown actions must fail registration. See `docs/plan/clean-deletion-policy.md` for the complete matrix.
+- Every executable canonical cleanup rule must explicitly declare `move_to_recycle_bin` or `delete_permanently`; missing or unknown actions must fail registration. See `docs/plan/clean-deletion-policy.md` for the complete matrix (18 permanent + 6 Recycle Bin + one non-executable permission boundary).
 - CLI and TUI must use the same category action. CLI permanent execution requires per-run `--allow-permanent`; dry-run does not. The TUI obtains equivalent authorization from one strengthened confirmation and never owns or overrides the action.
-- Production permanent activation currently covers `d3d_shader_cache`, `nvidia_dx_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, package/build caches, `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, and `jetbrains-ide-caches` (#219/#220/#221/#222). Remaining Recycle Bin categories are the default sandboxes plus over-broad whole-root system opt-ins. The Clean TUI initially selects defaults plus permanent-action categories when safely measurable. Recycle Bin opt-ins remain unselected, and the user may clear any selection.
+- Permanent matrix: `d3d_shader_cache`, `nvidia_dx_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, package/build caches, `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, and `jetbrains-ide-caches`. Recycle Bin matrix: `foal_owned_temp_sandboxes`, `user_temp`, `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, and `inet_cache`. The Clean TUI initially selects the default plus all permanent-action categories when safely measurable (19 rows). Recycle Bin opt-ins remain unselected, and the user may clear any selection.
 - Shared Clean must complete fresh resolution and applicable preflight before mutation, execute Recycle Bin work first and permanent work last, isolate local failures, preserve actual action in Result and History, and support responsive cancellation without rollback.
-- Do not add implicit permanent deletion, Recycle Bin failure fallback, secure-erasure claims, or automatic elevation.
+- Do not add implicit permanent deletion, Recycle Bin failure fallback, secure-erasure claims, automatic elevation, process stopping, or permanent deletion for the six Recycle Bin categories.
 
 ## Implemented command boundaries
 

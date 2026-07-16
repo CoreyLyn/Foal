@@ -1518,8 +1518,9 @@ func totals(result Result) Totals {
 		case string(DeletionActionDeletePermanently):
 			permanentlyDeletedBytes += deleted.Bytes
 		default:
-			// Empty action is treated as Recycle Bin for backward-compatible
-			// tests and the current Recycle Bin-only execution path.
+			// Empty action (legacy History / fixtures) and move_to_recycle_bin
+			// both count as Recycle Bin work. Production successes always set
+			// an explicit action; empty remains readable for older records.
 			recycleBinMovedBytes += deleted.Bytes
 		}
 		if deleted.IsOptIn {
