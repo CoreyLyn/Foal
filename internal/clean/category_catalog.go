@@ -30,11 +30,22 @@ const (
 type RunningApplicationPolicy string
 
 const (
-	RunningApplicationPolicyNotApplicable             RunningApplicationPolicy = "not-applicable"
-	RunningApplicationPolicyBrowserIdleBeforeAfter    RunningApplicationPolicy = "browser-idle-before-and-after-inspection"
+	RunningApplicationPolicyNotApplicable              RunningApplicationPolicy = "not-applicable"
+	RunningApplicationPolicyBrowserIdleBeforeAfter     RunningApplicationPolicy = "browser-idle-before-and-after-inspection"
 	RunningApplicationPolicyApplicationIdleBeforeAfter RunningApplicationPolicy = "application-idle-before-and-after-inspection"
-	RunningApplicationPolicyDistinctiveProcessIdle    RunningApplicationPolicy = "distinctive-process-must-be-idle"
-	RunningApplicationPolicySharedRuntime             RunningApplicationPolicy = "shared-runtime-not-attributable"
+	RunningApplicationPolicyDistinctiveProcessIdle     RunningApplicationPolicy = "distinctive-process-must-be-idle"
+	RunningApplicationPolicySharedRuntime              RunningApplicationPolicy = "shared-runtime-not-attributable"
+)
+
+// DeletionAction is the stable planned or actual Clean deletion action.
+// Catalog ownership: every executable canonical rule must declare exactly one
+// of these values. Permanent-delete eligibility is this declaration; there is
+// no parallel eligibility boolean.
+type DeletionAction string
+
+const (
+	DeletionActionMoveToRecycleBin  DeletionAction = "move_to_recycle_bin"
+	DeletionActionDeletePermanently DeletionAction = "delete_permanently"
 )
 
 // CleanupCategoryDefinition is the path-free policy vocabulary shared by
@@ -47,6 +58,9 @@ type CleanupCategoryDefinition struct {
 	Eligibility              CategoryEligibility      `json:"eligibility"`
 	Aliases                  []string                 `json:"aliases"`
 	RunningApplicationPolicy RunningApplicationPolicy `json:"running_application_policy"`
+	// PlannedAction is required for executable (default/opt-in) categories and
+	// must be empty for non-executable entries (permission-boundary, review-only).
+	PlannedAction DeletionAction `json:"planned_action,omitempty"`
 }
 
 // CleanupCategorySummary is the stable, path-free projection intended for
@@ -57,6 +71,9 @@ type CleanupCategorySummary struct {
 	ReportCategory           ReportCategory           `json:"report_category"`
 	Eligibility              CategoryEligibility      `json:"eligibility"`
 	RunningApplicationPolicy RunningApplicationPolicy `json:"running_application_policy"`
+	// PlannedAction is the catalog-owned deletion action for executable
+	// categories. Non-executable summaries omit it (empty).
+	PlannedAction DeletionAction `json:"planned_action,omitempty"`
 }
 
 // CleanupCategoryCatalog is an immutable metadata catalog. Constructing one
@@ -85,12 +102,27 @@ func NewCleanupCategoryCatalog(definitions []CleanupCategoryDefinition) (Cleanup
 	for _, definition := range definitions {
 		definition.Identifier = strings.ToLower(strings.TrimSpace(definition.Identifier))
 		definition.Label = strings.TrimSpace(definition.Label)
+		definition.PlannedAction = DeletionAction(strings.TrimSpace(string(definition.PlannedAction)))
 		if definition.Identifier == "" || definition.Label == "" || definition.ReportCategory == "" ||
 			definition.Eligibility == "" || definition.RunningApplicationPolicy == "" {
 			return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has incomplete metadata", definition.Identifier)
 		}
 		if !validReportCategory(definition.ReportCategory) || !validCategoryEligibility(definition.Eligibility) ||
 			!validRunningApplicationPolicy(definition.RunningApplicationPolicy) {
+			return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
+		}
+		if isExecutableCategoryEligibility(definition.Eligibility) {
+			// Executable rules must declare an explicit supported action. No
+			// default is inferred from category, eligibility, caller, or path.
+			if definition.PlannedAction == "" {
+				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has incomplete metadata", definition.Identifier)
+			}
+			if !validDeletionAction(definition.PlannedAction) {
+				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
+			}
+		} else if definition.PlannedAction != "" {
+			// Permission-boundary and other non-executable entries remain actionless
+			// and cannot enter execution.
 			return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
 		}
 		if _, exists := catalog.lookup[definition.Identifier]; exists {
@@ -146,6 +178,24 @@ func validRunningApplicationPolicy(policy RunningApplicationPolicy) bool {
 	}
 }
 
+func isExecutableCategoryEligibility(eligibility CategoryEligibility) bool {
+	switch eligibility {
+	case CategoryEligibilityDefault, CategoryEligibilityOptIn:
+		return true
+	default:
+		return false
+	}
+}
+
+func validDeletionAction(action DeletionAction) bool {
+	switch action {
+	case DeletionActionMoveToRecycleBin, DeletionActionDeletePermanently:
+		return true
+	default:
+		return false
+	}
+}
+
 func (c CleanupCategoryCatalog) Summaries() []CleanupCategorySummary {
 	summaries := make([]CleanupCategorySummary, 0, len(c.definitions))
 	for _, definition := range c.definitions {
@@ -169,6 +219,7 @@ func summaryFromDefinition(definition CleanupCategoryDefinition) CleanupCategory
 		ReportCategory:           definition.ReportCategory,
 		Eligibility:              definition.Eligibility,
 		RunningApplicationPolicy: definition.RunningApplicationPolicy,
+		PlannedAction:            definition.PlannedAction,
 	}
 }
 
@@ -313,15 +364,17 @@ func developerCacheEntryWithProductScopedChildren(
 }
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
-	{definition: categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable)},
-	{definition: categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true},
-	{definition: categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true, fixedLocalAppDataPath: []string{"CrashDumps"}},
-	{definition: categoryDefinition(OpportunityCategoryWindowsErrorReporting, "Windows Error Reporting", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "WER"}},
-	{definition: categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "Explorer"}},
-	{definition: categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "INetCache"}},
-	{definition: categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true, fixedLocalAppDataPath: []string{"D3DSCache"}},
-	{definition: categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable), opportunity: true, fixedLocalAppDataPath: []string{"NVIDIA", "DXCache"}},
-	{definition: categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter), opportunity: true},
+	// Prefactor (#216): every current executable production category declares
+	// move_to_recycle_bin. Permanent deletion is not activated in this ticket.
+	{definition: categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)},
+	{definition: categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true},
+	{definition: categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"CrashDumps"}},
+	{definition: categoryDefinition(OpportunityCategoryWindowsErrorReporting, "Windows Error Reporting", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "WER"}},
+	{definition: categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "Explorer"}},
+	{definition: categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "INetCache"}},
+	{definition: categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"D3DSCache"}},
+	{definition: categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"NVIDIA", "DXCache"}},
+	{definition: categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, DeletionActionMoveToRecycleBin), opportunity: true},
 	{
 		definition: categoryDefinition(
 			OpportunityCategoryVSCodeCache,
@@ -329,6 +382,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
+			DeletionActionMoveToRecycleBin,
 		),
 		opportunity:              true,
 		applicationCache:         true,
@@ -342,6 +396,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
+			DeletionActionMoveToRecycleBin,
 		),
 		opportunity:              true,
 		applicationCache:         true,
@@ -349,52 +404,52 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		runningApplications:      []string{ApplicationCursor},
 	},
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
 		resolveNPMCachePaths,
 		[]string{"npm"},
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryGo, "Go build cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		categoryDefinition(DevCacheCategoryGo, "Go build cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
 		resolveGoCachePaths,
 		[]string{"go"},
 		ApplicationGo,
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryPip, "pip cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		categoryDefinition(DevCacheCategoryPip, "pip cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
 		resolvePipCachePaths,
 		[]string{"pip"},
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryCargo, "Cargo cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		categoryDefinition(DevCacheCategoryCargo, "Cargo cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
 		resolveCargoCachePaths,
 		nil,
 		ApplicationCargo,
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryNuGet, "NuGet cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		categoryDefinition(DevCacheCategoryNuGet, "NuGet cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
 		resolveNuGetCachePaths,
 		[]string{"dotnet"},
 		ApplicationDotNet, ApplicationNuGet,
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryNuGetGlobalPackages, "NuGet global packages", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		categoryDefinition(DevCacheCategoryNuGetGlobalPackages, "NuGet global packages", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
 		resolveNuGetGlobalPackagesPaths,
 		[]string{"dotnet"},
 		ApplicationDotNet, ApplicationNuGet,
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryCorepack, "Corepack cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		categoryDefinition(DevCacheCategoryCorepack, "Corepack cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
 		resolveCorepackOptInCachePaths,
 		[]string{"corepack"},
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryUV, "uv cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		categoryDefinition(DevCacheCategoryUV, "uv cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
 		resolveUVCachePaths,
 		[]string{"uv"},
 		ApplicationUV,
 	),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryBun, "Bun cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		categoryDefinition(DevCacheCategoryBun, "Bun cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
 		resolveBunCachePaths,
 		[]string{"bun"},
 		ApplicationBun,
@@ -403,7 +458,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// env/default root. Shared-runtime policy: do not attribute node/chrome/etc.
 	// as Playwright-owned. No Review suggestion probe (Foal owns Recycle Bin).
 	developerCacheEntryWithChildren(
-		categoryDefinition(DevCacheCategoryPlaywright, "Playwright browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		categoryDefinition(DevCacheCategoryPlaywright, "Playwright browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
 		resolvePlaywrightBrowserPaths,
 		discoverPlaywrightBrowserChildren,
 		nil,
@@ -412,7 +467,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// not attributable). Structured children under env/default root only; root
 	// and product parents are never candidates (ADR 0011).
 	developerCacheEntryWithChildren(
-		categoryDefinition(DevCacheCategoryPuppeteerBrowsers, "Puppeteer browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		categoryDefinition(DevCacheCategoryPuppeteerBrowsers, "Puppeteer browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
 		resolvePuppeteerCachePaths,
 		discoverPuppeteerBrowserChildren,
 		nil,
@@ -421,7 +476,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// (Node/Electron hosts are not attributable). No Review suggestion probe —
 	// Foal owns Recycle Bin reclaim and does not invent an Electron cleanup command.
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryElectron, "Electron cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime),
+		categoryDefinition(DevCacheCategoryElectron, "Electron cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionMoveToRecycleBin),
 		resolveElectronCachePaths,
 		nil,
 	),
@@ -431,7 +486,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// DevCacheRootScope.Application. No Review suggestion probe — Foal owns Recycle
 	// Bin reclaim only.
 	developerCacheEntryWithProductScopedChildren(
-		categoryDefinition(DevCacheCategoryJetBrainsIDECaches, "JetBrains IDE caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle),
+		categoryDefinition(DevCacheCategoryJetBrainsIDECaches, "JetBrains IDE caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionMoveToRecycleBin),
 		resolveJetBrainsIDECacheRootScopes,
 		discoverJetBrainsIDECacheChildren,
 		nil,
@@ -442,10 +497,11 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		ApplicationGoLand, ApplicationRustRover, ApplicationAqua,
 		ApplicationMPS, ApplicationWriterside, ApplicationRider,
 	),
-	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable)},
+	// Non-executable permission boundary: actionless and cannot enter execution.
+	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable, "")},
 }
 
-func categoryDefinition(identifier, label string, reportCategory ReportCategory, eligibility CategoryEligibility, runningPolicy RunningApplicationPolicy) CleanupCategoryDefinition {
+func categoryDefinition(identifier, label string, reportCategory ReportCategory, eligibility CategoryEligibility, runningPolicy RunningApplicationPolicy, plannedAction DeletionAction) CleanupCategoryDefinition {
 	return CleanupCategoryDefinition{
 		Identifier:               identifier,
 		Label:                    label,
@@ -453,6 +509,7 @@ func categoryDefinition(identifier, label string, reportCategory ReportCategory,
 		Eligibility:              eligibility,
 		Aliases:                  []string{},
 		RunningApplicationPolicy: runningPolicy,
+		PlannedAction:            plannedAction,
 	}
 }
 

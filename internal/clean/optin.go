@@ -182,10 +182,11 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 						// Structured safety skip without reclaimable bytes: pre
 						// gate never measured; post gate discarded the measure.
 						res.skipped = append(res.skipped, SkippedItem{
-							Path:   path,
-							Bytes:  0,
-							Rule:   category,
-							Reason: *outcome.skipReason,
+							Path:          path,
+							Bytes:         0,
+							Rule:          category,
+							PlannedAction: plannedActionForCategory(category),
+							Reason:        *outcome.skipReason,
 						})
 					}
 					continue
@@ -194,7 +195,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 					Path:          path,
 					Bytes:         outcome.bytes,
 					Category:      category,
-					PlannedAction: plannedRecycleBinAction,
+					PlannedAction: plannedActionForCategory(category),
 				})
 				continue
 			}
@@ -212,7 +213,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 				Path:          path,
 				Bytes:         bytes,
 				Category:      category,
-				PlannedAction: plannedRecycleBinAction,
+				PlannedAction: plannedActionForCategory(category),
 			})
 		}
 	}
@@ -233,7 +234,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 				Path:          opportunity.Path,
 				Bytes:         opportunity.Bytes,
 				Category:      opportunity.Category,
-				PlannedAction: plannedRecycleBinAction,
+				PlannedAction: plannedActionForCategory(opportunity.Category),
 			}
 			if opportunity.Category == OpportunityCategoryUserTemp {
 				candidate.IsUserTemp = true
@@ -296,10 +297,11 @@ func resolveStructuredDevCacheRoot(
 		if idle, reason := appsIdleForApplications(apps, root, category, devCachePreStates); !idle {
 			if reason != nil {
 				res.skipped = append(res.skipped, SkippedItem{
-					Path:   root,
-					Bytes:  0,
-					Rule:   category,
-					Reason: *reason,
+					Path:          root,
+					Bytes:         0,
+					Rule:          category,
+					PlannedAction: plannedActionForCategory(category),
+					Reason:        *reason,
 				})
 			}
 			return
@@ -327,10 +329,11 @@ func resolveStructuredDevCacheRoot(
 		res.candidates = res.candidates[:start]
 		if reason != nil {
 			res.skipped = append(res.skipped, SkippedItem{
-				Path:   root,
-				Bytes:  0,
-				Rule:   category,
-				Reason: *reason,
+				Path:          root,
+				Bytes:         0,
+				Rule:          category,
+				PlannedAction: plannedActionForCategory(category),
+				Reason:        *reason,
 			})
 		}
 	}
@@ -412,7 +415,7 @@ func resolveApplicationCacheOptInCandidates(ctx context.Context, opts Options, c
 			Path:          opportunity.Path,
 			Bytes:         opportunity.Bytes,
 			Category:      category,
-			PlannedAction: plannedRecycleBinAction,
+			PlannedAction: plannedActionForCategory(category),
 		})
 	}
 }
@@ -490,7 +493,7 @@ func appendBrowserCacheCandidates(res *optInResolution, opportunity *Opportunity
 				Path:          cache.Path,
 				Bytes:         cache.Bytes,
 				Category:      OpportunityCategoryBrowserCache,
-				PlannedAction: plannedRecycleBinAction,
+				PlannedAction: plannedActionForCategory(OpportunityCategoryBrowserCache),
 			})
 		}
 	}

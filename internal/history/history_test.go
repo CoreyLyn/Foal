@@ -176,6 +176,29 @@ func TestQueryReadsAggregateRecordsWithAndWithoutOpportunityFields(t *testing.T)
 		result.Sessions[1].Aggregate.OpportunityObservedBytes != 0 {
 		t.Fatalf("older aggregate = %#v, want additive fields to decode as zero", result.Sessions[1].Aggregate)
 	}
+	// Older History without recycle_bin_moved_bytes / permanently_deleted_bytes
+	// remains readable with zero action-split fields.
+	if result.Sessions[1].Aggregate.RecycleBinMovedBytes != 0 ||
+		result.Sessions[1].Aggregate.PermanentlyDeletedBytes != 0 {
+		t.Fatalf("older action totals = %#v, want zero for missing fields", result.Sessions[1].Aggregate)
+	}
+}
+
+func TestQueryReadsActionSplitAggregateFields(t *testing.T) {
+	dir := t.TempDir()
+	payload := `{"type":"session","session":{"id":"split","command_parameters":{"command":"clean","args":["clean","--execute"]},"started_at":"2026-06-03T10:00:00Z","ended_at":"2026-06-03T10:00:01Z","mode":"execute","aggregate_outcomes":{"candidate_count":0,"deleted_count":1,"skipped_count":0,"error_count":0,"candidate_bytes":0,"recycle_bin_moved_bytes":12,"permanently_deleted_bytes":0,"affected_bytes":12}}}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "split.jsonl"), []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := history.NewFileQuery(dir).Recent(context.Background())
+	if result.Status != "ok" || len(result.Sessions) != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	agg := result.Sessions[0].Aggregate
+	if agg.RecycleBinMovedBytes != 12 || agg.PermanentlyDeletedBytes != 0 || agg.AffectedBytes != 12 {
+		t.Fatalf("aggregate = %#v, want action-aware split", agg)
+	}
 }
 
 func TestQueryReportsMalformedHistoryAsStructuredError(t *testing.T) {

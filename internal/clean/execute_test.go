@@ -72,11 +72,20 @@ func TestExecuteMovesEligibleCandidatesThroughRecycleBin(t *testing.T) {
 	if result.Deleted[0].Path != candidate || result.Deleted[0].Bytes != 5 || result.Deleted[0].Rule != "test_default_rule" {
 		t.Fatalf("deleted item = %#v, want path/size/rule", result.Deleted[0])
 	}
+	if result.Deleted[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+		t.Fatalf("deleted action = %q, want move_to_recycle_bin", result.Deleted[0].Action)
+	}
 	if len(result.Skipped) != 0 {
 		t.Fatalf("skipped = %#v, want none", result.Skipped)
 	}
 	if result.Totals.CandidateCount != 1 || result.Totals.DeletedCount != 1 || result.Totals.AffectedBytes != 5 {
 		t.Fatalf("totals = %#v, want one candidate/deleted and five affected bytes", result.Totals)
+	}
+	if result.Totals.RecycleBinMovedBytes != 5 || result.Totals.PermanentlyDeletedBytes != 0 {
+		t.Fatalf("action totals = %#v, want recycle_bin_moved_bytes=5 permanently_deleted_bytes=0", result.Totals)
+	}
+	if result.Totals.AffectedBytes != result.Totals.RecycleBinMovedBytes+result.Totals.PermanentlyDeletedBytes {
+		t.Fatalf("affected_bytes must equal action-split sum: %#v", result.Totals)
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
@@ -85,6 +94,55 @@ func TestExecuteMovesEligibleCandidatesThroughRecycleBin(t *testing.T) {
 	if strings.Contains(string(encoded), "Rebuildable project artifacts") ||
 		strings.Contains(string(encoded), "foal analyze <path>") {
 		t.Fatalf("execute result contains presentation-only project artifact clue: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"action":"move_to_recycle_bin"`) {
+		t.Fatalf("execute result missing actual action: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"recycle_bin_moved_bytes":5`) ||
+		!strings.Contains(string(encoded), `"permanently_deleted_bytes":0`) {
+		t.Fatalf("execute result missing action-aware totals: %s", encoded)
+	}
+}
+
+func TestExecuteUsesCatalogPlannedActionForDefaultCategoryWithoutPermanentActivation(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "foal-owned.tmp")
+	if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &recordingRecycleBinAdapter{}
+	recorder := &recordingHistoryRecorder{}
+
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   recorder,
+		Rules: []clean.Rule{{
+			ID:             clean.DefaultCategoryFoalOwnedTempSandboxes,
+			Description:    "Foal-owned temporary sandbox entries",
+			DefaultEnabled: true,
+			CandidatePaths: []string{candidate},
+		}},
+	})
+
+	if len(result.Deleted) != 1 {
+		t.Fatalf("deleted = %#v, want one deleted item", result.Deleted)
+	}
+	if result.Deleted[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+		t.Fatalf("actual action = %q", result.Deleted[0].Action)
+	}
+	if result.Totals.PermanentlyDeletedBytes != 0 || result.Totals.RecycleBinMovedBytes != 5 {
+		t.Fatalf("totals = %#v, prefactor must not permanently delete", result.Totals)
+	}
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("sessions = %#v", recorder.sessions)
+	}
+	if recorder.sessions[0].Aggregate.PermanentlyDeletedBytes != 0 ||
+		recorder.sessions[0].Aggregate.RecycleBinMovedBytes != 5 ||
+		recorder.sessions[0].Aggregate.AffectedBytes != 5 {
+		t.Fatalf("history aggregate = %#v", recorder.sessions[0].Aggregate)
+	}
+	if len(recorder.items) != 1 || recorder.items[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+		t.Fatalf("history item = %#v", recorder.items)
 	}
 }
 
@@ -477,6 +535,9 @@ func TestExecuteRecordsHistorySessionAndDeletedItem(t *testing.T) {
 	session := recorder.sessions[0]
 	if session.Mode != "execute" || session.Aggregate.DeletedCount != 1 || session.Aggregate.AffectedBytes != 5 {
 		t.Fatalf("session = %#v, want execute aggregate with deleted item", session)
+	}
+	if session.Aggregate.RecycleBinMovedBytes != 5 || session.Aggregate.PermanentlyDeletedBytes != 0 {
+		t.Fatalf("session action totals = %#v, want recycle-bin-only split", session.Aggregate)
 	}
 	if len(recorder.items) != 1 {
 		t.Fatalf("items = %#v, want one final execution item", recorder.items)

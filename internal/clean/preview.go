@@ -15,7 +15,10 @@ import (
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
-const plannedRecycleBinAction = "move_to_recycle_bin"
+// plannedRecycleBinAction is the stable Recycle Bin action string. Catalog
+// ownership is the source of planned actions; this alias remains for actual
+// Recycle Bin execution outcomes and label helpers.
+const plannedRecycleBinAction = string(DeletionActionMoveToRecycleBin)
 
 // Dev cache categories - these are Review suggestions that become opt-in candidates
 const (
@@ -180,16 +183,19 @@ type CandidatePreview struct {
 }
 
 type SkippedItem struct {
-	Path   string          `json:"path"`
-	Bytes  int64           `json:"bytes"`
-	Rule   string          `json:"rule"`
-	Reason StructuredIssue `json:"reason"`
+	Path          string          `json:"path"`
+	Bytes         int64           `json:"bytes"`
+	Rule          string          `json:"rule"`
+	PlannedAction string          `json:"planned_action,omitempty"`
+	Reason        StructuredIssue `json:"reason"`
 }
 
 type DeletedItem struct {
 	Path    string `json:"path"`
 	Bytes   int64  `json:"bytes"`
 	Rule    string `json:"rule"`
+	// Action is the actual deletion action taken for a successful item.
+	Action  string `json:"action,omitempty"`
 	IsOptIn bool   `json:"is_opt_in,omitempty"`
 }
 
@@ -274,7 +280,12 @@ type Totals struct {
 	OptInReclaimableBytes    int64 `json:"opt_in_reclaimable_bytes"`
 	OptInDeletedCount        int   `json:"opt_in_deleted_count"`
 	OptInAffectedBytes       int64 `json:"opt_in_affected_bytes"`
-	AffectedBytes            int64 `json:"affected_bytes"`
+	// RecycleBinMovedBytes is measured logical content successfully moved to
+	// the Recycle Bin. PermanentlyDeletedBytes is measured logical content
+	// successfully deleted permanently. AffectedBytes is their sum.
+	RecycleBinMovedBytes    int64 `json:"recycle_bin_moved_bytes"`
+	PermanentlyDeletedBytes int64 `json:"permanently_deleted_bytes"`
+	AffectedBytes           int64 `json:"affected_bytes"`
 }
 
 func DryRun(ctx context.Context, opts Options) Result {
@@ -775,13 +786,22 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 		deleteResult := delete.ExecuteWithValidator(ctx, deleteCandidates, adapter, opts.Validator)
 		for _, item := range deleteResult.Deleted {
 			candidate := byPath[item.Path]
-			result.Deleted = append(result.Deleted, DeletedItem{Path: item.Path, Bytes: item.Bytes, Rule: candidate.rule, IsOptIn: candidate.isOptIn})
+			// Actual action for the Recycle Bin execution path. Permanent
+			// deletion is not activated in this prefactor ticket.
+			result.Deleted = append(result.Deleted, DeletedItem{
+				Path:    item.Path,
+				Bytes:   item.Bytes,
+				Rule:    candidate.rule,
+				Action:  plannedRecycleBinAction,
+				IsOptIn: candidate.isOptIn,
+			})
 		}
 		for _, item := range deleteResult.Skipped {
 			candidate := byPath[item.Path]
 			result.Skipped = append(result.Skipped, SkippedItem{
 				Path: item.Path, Bytes: item.Bytes, Rule: candidate.rule,
-				Reason: issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
+				PlannedAction: plannedActionForCategory(candidate.rule),
+				Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
 			})
 		}
 	}
@@ -796,7 +816,8 @@ func skipRecycleBinVolume(result *Result, candidates []recycleBinExecutionCandid
 	for _, candidate := range candidates {
 		result.Skipped = append(result.Skipped, SkippedItem{
 			Path: candidate.candidate.Path, Bytes: candidate.candidate.Bytes, Rule: candidate.rule,
-			Reason: issue(code, message, true, candidate.candidate.Path, candidate.rule),
+			PlannedAction: plannedActionForCategory(candidate.rule),
+			Reason:        issue(code, message, true, candidate.candidate.Path, candidate.rule),
 		})
 	}
 }
@@ -847,6 +868,8 @@ func recordHistorySession(ctx context.Context, opts Options, result Result, star
 			OpportunityObservedBytes: result.Totals.OpportunityObservedBytes,
 			OptInDeletedCount:        result.Totals.OptInDeletedCount,
 			OptInAffectedBytes:       result.Totals.OptInAffectedBytes,
+			RecycleBinMovedBytes:     result.Totals.RecycleBinMovedBytes,
+			PermanentlyDeletedBytes:  result.Totals.PermanentlyDeletedBytes,
 			AffectedBytes:            result.Totals.AffectedBytes,
 		},
 	}
@@ -934,21 +957,30 @@ func historyItems(sessionID string, result Result) []history.ItemRecord {
 	}
 	for _, deleted := range result.Deleted {
 		bytes := deleted.Bytes
+		action := deleted.Action
+		if action == "" {
+			// Successful Recycle Bin path always records actual action.
+			action = plannedRecycleBinAction
+		}
 		items = append(items, history.ItemRecord{
 			SessionID: sessionID,
 			Path:      deleted.Path,
 			Rule:      deleted.Rule,
-			Action:    plannedRecycleBinAction,
+			Action:    action,
 			Bytes:     &bytes,
 			Result:    "deleted",
 		})
 	}
 	for _, skipped := range result.Skipped {
+		planned := skipped.PlannedAction
+		if planned == "" {
+			planned = plannedActionForCategory(skipped.Rule)
+		}
 		item := history.ItemRecord{
 			SessionID:     sessionID,
 			Path:          skipped.Path,
 			Rule:          skipped.Rule,
-			PlannedAction: plannedRecycleBinAction,
+			PlannedAction: planned,
 			Result:        "skipped",
 			SkippedReason: historyIssue(skipped.Reason),
 		}
@@ -1071,10 +1103,27 @@ func writeDetailedCandidateList(dir string, result Result, at time.Time) (string
 }
 
 func plannedActionLabel(action string) string {
-	if action == plannedRecycleBinAction {
+	switch action {
+	case plannedRecycleBinAction:
 		return "Recycle Bin"
+	case string(DeletionActionDeletePermanently):
+		return "Permanent deletion"
+	default:
+		return action
 	}
-	return action
+}
+
+// plannedActionForCategory returns the catalog-owned planned action for a
+// canonical category. Injected test rules outside the catalog stay Recycle Bin
+// only; permanent deletion is never inferred for non-catalog identifiers.
+func plannedActionForCategory(identifier string) string {
+	if summary, ok := canonicalCleanupCategoryCatalog.Summary(identifier); ok {
+		if summary.PlannedAction == "" {
+			return ""
+		}
+		return string(summary.PlannedAction)
+	}
+	return plannedRecycleBinAction
 }
 
 func DefaultRuleCatalog() []Rule {
@@ -1096,9 +1145,10 @@ func previewCandidate(ctx context.Context, validator pathsafe.Validator, path, r
 	select {
 	case <-ctx.Done():
 		result.Skipped = append(result.Skipped, SkippedItem{
-			Path:   path,
-			Rule:   ruleID,
-			Reason: issue("context_canceled", ctx.Err().Error(), true, path, ruleID),
+			Path:          path,
+			Rule:          ruleID,
+			PlannedAction: plannedActionForCategory(ruleID),
+			Reason:        issue("context_canceled", ctx.Err().Error(), true, path, ruleID),
 		})
 		return
 	default:
@@ -1106,9 +1156,10 @@ func previewCandidate(ctx context.Context, validator pathsafe.Validator, path, r
 
 	if reason, ok := validator.ValidateDeletePath(path); !ok {
 		result.Skipped = append(result.Skipped, SkippedItem{
-			Path:   path,
-			Rule:   ruleID,
-			Reason: fromPathsafeReason(reason, path, ruleID),
+			Path:          path,
+			Rule:          ruleID,
+			PlannedAction: plannedActionForCategory(ruleID),
+			Reason:        fromPathsafeReason(reason, path, ruleID),
 		})
 		return
 	}
@@ -1116,9 +1167,10 @@ func previewCandidate(ctx context.Context, validator pathsafe.Validator, path, r
 	bytes, err := measureBytes(ctx, path)
 	if err != nil {
 		result.Skipped = append(result.Skipped, SkippedItem{
-			Path:   path,
-			Rule:   ruleID,
-			Reason: issue(classifyError(err), err.Error(), true, path, ruleID),
+			Path:          path,
+			Rule:          ruleID,
+			PlannedAction: plannedActionForCategory(ruleID),
+			Reason:        issue(classifyError(err), err.Error(), true, path, ruleID),
 		})
 		return
 	}
@@ -1127,7 +1179,7 @@ func previewCandidate(ctx context.Context, validator pathsafe.Validator, path, r
 		Path:          path,
 		Bytes:         bytes,
 		Rule:          ruleID,
-		PlannedAction: plannedRecycleBinAction,
+		PlannedAction: plannedActionForCategory(ruleID),
 	})
 }
 
@@ -1274,16 +1326,25 @@ func totals(result Result) Totals {
 	for _, candidate := range result.Candidates {
 		bytes += candidate.Bytes
 	}
-	var affectedBytes int64
+	var recycleBinMovedBytes int64
+	var permanentlyDeletedBytes int64
 	var optInAffectedBytes int64
 	var optInDeletedCount int
 	for _, deleted := range result.Deleted {
-		affectedBytes += deleted.Bytes
+		switch deleted.Action {
+		case string(DeletionActionDeletePermanently):
+			permanentlyDeletedBytes += deleted.Bytes
+		default:
+			// Empty action is treated as Recycle Bin for backward-compatible
+			// tests and the current Recycle Bin-only execution path.
+			recycleBinMovedBytes += deleted.Bytes
+		}
 		if deleted.IsOptIn {
 			optInAffectedBytes += deleted.Bytes
 			optInDeletedCount++
 		}
 	}
+	affectedBytes := recycleBinMovedBytes + permanentlyDeletedBytes
 	var opportunityBytes int64
 	for _, opportunity := range result.Opportunities {
 		opportunityBytes += opportunity.Bytes
@@ -1303,6 +1364,8 @@ func totals(result Result) Totals {
 		OptInReclaimableBytes:    optInReclaimableBytes,
 		OptInDeletedCount:        optInDeletedCount,
 		OptInAffectedBytes:       optInAffectedBytes,
+		RecycleBinMovedBytes:     recycleBinMovedBytes,
+		PermanentlyDeletedBytes:  permanentlyDeletedBytes,
 		AffectedBytes:            affectedBytes,
 	}
 }
