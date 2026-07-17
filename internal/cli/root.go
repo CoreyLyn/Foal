@@ -14,6 +14,7 @@ import (
 	"github.com/CoreyLyn/Foal/internal/buildinfo"
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/history"
+	"github.com/CoreyLyn/Foal/internal/purge"
 	"github.com/CoreyLyn/Foal/internal/status"
 	"github.com/CoreyLyn/Foal/internal/uninstall"
 )
@@ -34,6 +35,7 @@ var commands = []commandSpec{
 	{name: "version", description: "Report Foal build and runtime metadata."},
 	{name: "analyze", description: "Inspect disk usage and cleanup opportunities without changing files."},
 	{name: "clean", description: "Preview or execute conservative cleanup; permanent categories need per-run --allow-permanent."},
+	{name: "purge", description: "Preview rebuildable project artifacts under one explicit root (dry-run only in this slice)."},
 	{name: "status", description: "Report a read-only system and Foal state snapshot."},
 	{name: "history", description: "Show previous Foal operation records."},
 	{name: "uninstall", description: "Preview application uninstall evidence without executing uninstallers."},
@@ -42,6 +44,7 @@ var commands = []commandSpec{
 var (
 	dryRunClean                 = clean.DryRun
 	executeClean                = clean.Execute
+	dryRunPurge                 = purge.DryRun
 	loadProtectionConfiguration = clean.LoadProtectionConfiguration
 	newHistoryRecorder          = func() (history.Recorder, error) {
 		recorder, err := history.NewDefaultFileRecorder()
@@ -208,6 +211,35 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 		}
 
 		_, _ = fmt.Fprintf(stdout, "Foal history\nSessions: %d\nStatus: %s\n", len(result.Sessions), result.Status)
+		return exitOK
+	}
+
+	if command == "purge" {
+		invocation, err := validatePurgeArgs(positional[1:])
+		if err != nil {
+			return writeError(stderr, opts.json, command, args, jsonError{
+				Code:        "invalid_purge_invocation",
+				Message:     err.Error(),
+				Recoverable: true,
+				Command:     command,
+				Args:        args,
+			})
+		}
+		result := dryRunPurge(context.Background(), purge.Options{Root: invocation.root})
+		if opts.json {
+			code := writeJSON(stdout, envelope{Command: command, Result: result})
+			if code != exitOK {
+				return code
+			}
+			if result.Status == purge.StatusError {
+				return exitUsage
+			}
+			return exitOK
+		}
+		_, _ = fmt.Fprint(stdout, purge.RenderPreviewReport(result))
+		if result.Status == purge.StatusError {
+			return exitUsage
+		}
 		return exitOK
 	}
 
@@ -404,6 +436,35 @@ type cleanInvocation struct {
 	optIn          []string
 }
 
+type purgeInvocation struct {
+	root string
+}
+
+func validatePurgeArgs(args []string) (purgeInvocation, error) {
+	var invocation purgeInvocation
+	var root string
+	for _, arg := range args {
+		switch arg {
+		case "--dry-run":
+			// Default is already dry-run; accept explicit flag for clarity.
+		case "--execute":
+			return invocation, fmt.Errorf("purge execute is not available in this slice; use dry-run preview only")
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return invocation, fmt.Errorf("unknown purge option: %s", arg)
+			}
+			if root != "" {
+				return invocation, fmt.Errorf("purge accepts exactly one explicit root; multi-root is not available in this slice")
+			}
+			root = arg
+		}
+	}
+	if strings.TrimSpace(root) == "" {
+		return invocation, fmt.Errorf("purge requires an explicit root path (example: foal purge .\\my-project); refusing to scan without a user-supplied root")
+	}
+	return purgeInvocation{root: root}, nil
+}
+
 func validateCleanArgs(args []string) (cleanInvocation, error) {
 	var invocation cleanInvocation
 	dryRun := false
@@ -482,12 +543,17 @@ func helpText() string {
 	builder.WriteString("                       Permanent deletion is ordinary filesystem removal (not secure erasure)\n")
 	builder.WriteString("                       and is never used as a Recycle Bin fallback.\n")
 	builder.WriteString("  --opt-in <name>      Include an opt-in category (repeatable; or \"all\" / \"dev-caches\").\n")
+	builder.WriteString("\nPurge options:\n")
+	builder.WriteString("  <root>               Required explicit project/workspace root to scan (never implied).\n")
+	builder.WriteString("  --dry-run            Preview only (default). No mutation in this slice.\n")
 	builder.WriteString("\nExamples:\n")
 	builder.WriteString("  foal status --json\n")
 	builder.WriteString("  foal clean --dry-run\n")
 	builder.WriteString("  foal clean --execute\n")
 	builder.WriteString("  foal clean --execute --opt-in d3d_shader_cache --allow-permanent\n")
 	builder.WriteString("  foal clean --execute --opt-in playwright-browsers --allow-permanent\n")
+	builder.WriteString("  foal purge .\\my-project\n")
+	builder.WriteString("  foal purge --json .\\my-project\n")
 	builder.WriteString("  foal.exe analyze\n")
 	return builder.String()
 }
