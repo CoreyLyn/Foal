@@ -30,6 +30,13 @@ var (
 	tuiMagnitudeStrongStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("208"))
 	tuiMagnitudeBoldStyle      = lipgloss.NewStyle().Bold(true)
 
+	// Selected-row magnitude stacking: keep reverse on the byte token so the
+	// focused row reads as continuous selection, while magnitude hue stays
+	// visible on the size token (orange/amber, never pure red for size).
+	tuiSelectedMagnitudeAttentionStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("214"))
+	tuiSelectedMagnitudeStrongStyle    = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("208"))
+	tuiSelectedMagnitudeBoldStyle      = lipgloss.NewStyle().Reverse(true).Bold(true)
+
 	// Risk channel: pure red + bold for irreversible permanent warning only.
 	// Distinct from magnitude orange — large size is not danger.
 	tuiRiskWarningStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
@@ -60,20 +67,74 @@ var tuiSectionHeadingPrefixes = []string{
 	"Disk",
 }
 
-// stylizeFrame decorates a rendered plain-text frame line by line. The plain
-// frame stays the source of truth for tests and the nil-input entry path.
-func stylizeFrame(content string) string {
-	lines := strings.Split(content, "\n")
-	for index, line := range lines {
-		lines[index] = stylizeLine(line)
-	}
-	return strings.Join(lines, "\n")
+// tuiStyleLine is one plain-frame line plus optional trusted magnitude bytes
+// for restricted token styling. Text stays the test oracle; when
+// HasMagnitudeBytes is true, production classification uses
+// cleanMagnitudeTierFromBytes and does not reverse-parse the display token.
+type tuiStyleLine struct {
+	Text              string
+	MagnitudeBytes    int64
+	HasMagnitudeBytes bool
 }
 
-func stylizeLine(line string) string {
-	trimmed := strings.TrimRight(line, " ")
+// plainStyleLine returns a style line with no magnitude metadata.
+func plainStyleLine(text string) tuiStyleLine {
+	return tuiStyleLine{Text: text}
+}
+
+// magnitudeStyleLine returns a style line whose primary cleanFormatBytes token
+// should be tier-classified from the trusted byte count.
+func magnitudeStyleLine(text string, bytes int64) tuiStyleLine {
+	return tuiStyleLine{Text: text, MagnitudeBytes: bytes, HasMagnitudeBytes: true}
+}
+
+// styleLinesFromPlain splits a plain multi-line frame (as strings.Split on
+// "\n") into style lines without magnitude metadata. Used for paths that only
+// have composed text (too-small / unavailable chrome).
+func styleLinesFromPlain(content string) []tuiStyleLine {
+	lines := strings.Split(content, "\n")
+	out := make([]tuiStyleLine, len(lines))
+	for i, line := range lines {
+		out[i] = plainStyleLine(line)
+	}
+	return out
+}
+
+// joinStyleLineText joins style line plain text. Trailing empty Text elements
+// preserve a final newline the same way content() historically did.
+func joinStyleLineText(lines []tuiStyleLine) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	parts := make([]string, len(lines))
+	for i, line := range lines {
+		parts[i] = line.Text
+	}
+	return strings.Join(parts, "\n")
+}
+
+// stylizeFrame decorates a rendered plain-text frame line by line. The plain
+// frame stays the source of truth for tests and the nil-input entry path.
+// Without per-line byte metadata, magnitude tiers fall back to formatted-token
+// classification (see stylizeMagnitudeEligibleLine).
+func stylizeFrame(content string) string {
+	return stylizeStyleLines(styleLinesFromPlain(content))
+}
+
+// stylizeStyleLines decorates annotated frame lines. When a line carries
+// trusted magnitude bytes, tier classification prefers cleanMagnitudeTierFromBytes.
+func stylizeStyleLines(lines []tuiStyleLine) string {
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = stylizeStyleLine(line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func stylizeStyleLine(line tuiStyleLine) string {
+	trimmed := strings.TrimRight(line.Text, " ")
 	if trimmed == "" {
-		return line
+		return line.Text
 	}
 
 	// Risk channel first: irreversible permanent warning (whole-line red/bold).
@@ -86,9 +147,21 @@ func stylizeLine(line string) string {
 	// measured lines so the plain frame stays authoritative and whole-line
 	// reverse can wrap segments.
 	if isMagnitudeEligibleLine(trimmed) {
-		return stylizeMagnitudeEligibleLine(trimmed)
+		return stylizeMagnitudeEligibleLine(trimmed, line.MagnitudeBytes, line.HasMagnitudeBytes)
 	}
 
+	return stylizeNonMagnitudeLine(line.Text, trimmed)
+}
+
+// stylizeLine decorates one plain line without trusted byte metadata.
+func stylizeLine(line string) string {
+	return stylizeStyleLine(plainStyleLine(line))
+}
+
+// stylizeNonMagnitudeLine applies whole-line styles (cursor reverse, headings,
+// borders, banners) for lines that are not magnitude or risk surfaces.
+// original is returned unchanged when no style matches so trailing spaces stay.
+func stylizeNonMagnitudeLine(original, trimmed string) string {
 	switch {
 	case strings.HasPrefix(trimmed, "> "):
 		return tuiSelectedStyle.Render(trimmed)
@@ -121,7 +194,7 @@ func stylizeLine(line string) string {
 			return tuiHeadingStyle.Render(trimmed)
 		}
 	}
-	return line
+	return original
 }
 
 // isMagnitudeEligibleLine reports lines where trusted byte tokens may receive
@@ -184,8 +257,14 @@ func styleRiskWarningWithColor(text string, colorEnabled bool) string {
 }
 
 // stylizeMagnitudeEligibleLine applies restricted magnitude token styling after
-// plain composition, then optional cursor reverse on non-token segments.
-func stylizeMagnitudeEligibleLine(line string) string {
+// plain composition, then optional cursor reverse on the full row including the
+// magnitude token so selection and size cues stack readably.
+//
+// When trusted is true, tier classification uses cleanMagnitudeTierFromBytes
+// (production Clean path). When trusted is false, formatted-token reverse parse
+// is an explicit fallback for plain-only stylizeFrame callers (tests / non-
+// annotated frames); it is not the primary production path.
+func stylizeMagnitudeEligibleLine(line string, bytes int64, trusted bool) string {
 	// Preview cursor rows look like "  > [x] …"; Selected totals are never reverse.
 	selected := strings.Contains(line, "> [")
 
@@ -197,23 +276,51 @@ func stylizeMagnitudeEligibleLine(line string) string {
 		return line
 	}
 	left, token, right := line[:loc[0]], line[loc[0]:loc[1]], line[loc[1]:]
-	tier := cleanMagnitudeTierFromFormattedToken(token)
-	styledToken := styleMagnitudeToken(token, tier)
+	tier := classifyMagnitudeTier(token, bytes, trusted)
+	styledToken := styleMagnitudeToken(token, tier, selected)
 	if selected {
 		return tuiSelectedStyle.Render(left) + styledToken + tuiSelectedStyle.Render(right)
 	}
 	return left + styledToken + right
 }
 
+// classifyMagnitudeTier prefers trusted int64 bytes; formatted-token parse is
+// fallback-only when the style seam has plain text and no byte metadata.
+func classifyMagnitudeTier(token string, bytes int64, trusted bool) cleanMagnitudeTier {
+	if trusted {
+		return cleanMagnitudeTierFromBytes(bytes)
+	}
+	return cleanMagnitudeTierFromFormattedToken(token)
+}
+
 // styleMagnitudeToken applies restricted magnitude emphasis to one plain byte
-// token. Zero/none tiers stay plain; NO_COLOR drops hues and keeps bold for
-// attention/strong.
-func styleMagnitudeToken(token string, tier cleanMagnitudeTier) string {
-	return styleMagnitudeTokenWithColor(token, tier, tuiMagnitudeColorEnabled())
+// token. Zero/none tiers stay plain (or reverse-only when selected); NO_COLOR
+// drops hues and keeps bold for attention/strong.
+func styleMagnitudeToken(token string, tier cleanMagnitudeTier, selected bool) string {
+	return styleMagnitudeTokenWithColor(token, tier, tuiMagnitudeColorEnabled(), selected)
 }
 
 // styleMagnitudeTokenWithColor is the testable core for magnitude token styles.
-func styleMagnitudeTokenWithColor(token string, tier cleanMagnitudeTier, colorEnabled bool) string {
+// selected stacks reverse with magnitude hue so focused preview rows keep both
+// the selection cue and the size cue without pure-red size coloring.
+func styleMagnitudeTokenWithColor(token string, tier cleanMagnitudeTier, colorEnabled bool, selected bool) string {
+	if selected {
+		switch tier {
+		case cleanMagnitudeAttention:
+			if !colorEnabled {
+				return tuiSelectedMagnitudeBoldStyle.Render(token)
+			}
+			return tuiSelectedMagnitudeAttentionStyle.Render(token)
+		case cleanMagnitudeStrong:
+			if !colorEnabled {
+				return tuiSelectedMagnitudeBoldStyle.Render(token)
+			}
+			return tuiSelectedMagnitudeStrongStyle.Render(token)
+		default:
+			// None/Neutral: continuous reverse so the focused row has no gap.
+			return tuiSelectedStyle.Render(token)
+		}
+	}
 	switch tier {
 	case cleanMagnitudeAttention:
 		if !colorEnabled {

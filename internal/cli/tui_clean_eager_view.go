@@ -546,8 +546,10 @@ func cleanMagnitudeTierFromBytes(bytes int64) cleanMagnitudeTier {
 }
 
 // cleanMagnitudeTierFromFormattedToken classifies a cleanFormatBytes plain
-// token after composition (restricted token styling path). Used when only the
-// rendered fragment is available; thresholds follow the displayed unit scale.
+// token by reverse-parsing the display unit scale. This is an explicit
+// fallback for plain-only stylizeFrame callers that lack trusted int64
+// metadata. Production Clean styling prefers cleanMagnitudeTierFromBytes via
+// tuiStyleLine.HasMagnitudeBytes (see classifyMagnitudeTier).
 func cleanMagnitudeTierFromFormattedToken(token string) cleanMagnitudeTier {
 	token = strings.TrimSpace(token)
 	if token == "" || token == "0 KB" {
@@ -561,7 +563,8 @@ func cleanMagnitudeTierFromFormattedToken(token string) cleanMagnitudeTier {
 }
 
 // parseCleanFormatBytesApprox maps a cleanFormatBytes token back to an
-// approximate int64 for tier classification only (not for accounting).
+// approximate int64 for fallback tier classification only (not for accounting).
+// Prefer cleanMagnitudeTierFromBytes with trusted counts on the production path.
 func parseCleanFormatBytesApprox(token string) (int64, bool) {
 	token = strings.TrimSpace(token)
 	if token == "0 KB" {

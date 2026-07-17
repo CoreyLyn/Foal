@@ -226,7 +226,16 @@ func (m rootModel) content() string {
 }
 
 func (m rootModel) View() tea.View {
-	view := tea.NewView(stylizeFrame(m.content()))
+	// Clean carries trusted magnitude byte metadata on annotated lines so
+	// tier classification prefers int64 over reverse-parsing display tokens.
+	// Other screens keep plain post-process styling.
+	var framed string
+	if m.screen == screenCleanPreview {
+		framed = stylizeStyleLines(m.clean.contentStyleLines())
+	} else {
+		framed = stylizeFrame(m.content())
+	}
+	view := tea.NewView(framed)
 	view.AltScreen = true
 	return view
 }

@@ -467,8 +467,8 @@ func TestEagerPreviewByteColumnAlignment(t *testing.T) {
 }
 
 func TestStyleMagnitudeTokenNoColorAndHues(t *testing.T) {
-	attention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, true)
-	strong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, true)
+	attention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, true, false)
+	strong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, true, false)
 	if attention == "100 MB" || strong == "1 GB" {
 		t.Fatal("colored path should decorate attention/strong tokens")
 	}
@@ -481,8 +481,8 @@ func TestStyleMagnitudeTokenNoColorAndHues(t *testing.T) {
 		t.Fatalf("strong magnitude must not use pure red: %q", strong)
 	}
 
-	noColorAttention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, false)
-	noColorStrong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, false)
+	noColorAttention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, false, false)
+	noColorStrong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, false, false)
 	if !strings.Contains(noColorAttention, "100 MB") || !strings.Contains(noColorStrong, "1 GB") {
 		t.Fatalf("NO_COLOR path lost fragments: %q %q", noColorAttention, noColorStrong)
 	}
@@ -492,11 +492,175 @@ func TestStyleMagnitudeTokenNoColorAndHues(t *testing.T) {
 	}
 
 	// Zero/none and neutral stay plain (no invented magnitude color).
-	if got := styleMagnitudeTokenWithColor("0 KB", cleanMagnitudeNone, true); got != "0 KB" {
+	if got := styleMagnitudeTokenWithColor("0 KB", cleanMagnitudeNone, true, false); got != "0 KB" {
 		t.Fatalf("none tier = %q", got)
 	}
-	if got := styleMagnitudeTokenWithColor("2 KB", cleanMagnitudeNeutral, true); got != "2 KB" {
+	if got := styleMagnitudeTokenWithColor("2 KB", cleanMagnitudeNeutral, true, false); got != "2 KB" {
 		t.Fatalf("neutral tier = %q", got)
+	}
+}
+
+func TestClassifyMagnitudeTierPrefersTrustedBytes(t *testing.T) {
+	const (
+		mib = int64(1024 * 1024)
+		gib = int64(1024 * 1024 * 1024)
+	)
+	// Display rounding can make just-below thresholds look like the next unit
+	// step; trusted int64 classification must still win on the production path.
+	justBelowAttention := 100*mib - 1
+	tokenBelowAttention := cleanFormatBytes(justBelowAttention)
+	if tokenBelowAttention != "100 MB" {
+		// Document the brittle display; if formatting changes, still assert tiers.
+		t.Logf("cleanFormatBytes(%d) = %q (expected rounding to 100 MB historically)", justBelowAttention, tokenBelowAttention)
+	}
+	if got := classifyMagnitudeTier(tokenBelowAttention, justBelowAttention, true); got != cleanMagnitudeNeutral {
+		t.Fatalf("trusted just-below 100 MiB tier = %v, want Neutral", got)
+	}
+	// Fallback reverse-parse of the rounded token is documented as imprecise.
+	if tokenBelowAttention == "100 MB" {
+		if got := classifyMagnitudeTier(tokenBelowAttention, 0, false); got != cleanMagnitudeAttention {
+			t.Fatalf("fallback for rounded 100 MB token = %v, want Attention", got)
+		}
+	}
+
+	justBelowStrong := gib - 1
+	tokenBelowStrong := cleanFormatBytes(justBelowStrong)
+	if got := classifyMagnitudeTier(tokenBelowStrong, justBelowStrong, true); got != cleanMagnitudeAttention {
+		t.Fatalf("trusted just-below 1 GiB tier = %v, want Attention", got)
+	}
+
+	// Exact thresholds via int64 remain the authoritative boundary table.
+	tests := []struct {
+		name    string
+		bytes   int64
+		trusted bool
+		token   string
+		want    cleanMagnitudeTier
+	}{
+		{name: "zero trusted", bytes: 0, trusted: true, token: "0 KB", want: cleanMagnitudeNone},
+		{name: "exactly 100 MiB", bytes: 100 * mib, trusted: true, token: cleanFormatBytes(100 * mib), want: cleanMagnitudeAttention},
+		{name: "exactly 1 GiB", bytes: gib, trusted: true, token: cleanFormatBytes(gib), want: cleanMagnitudeStrong},
+		{name: "fallback 1 GB token", bytes: 0, trusted: false, token: "1 GB", want: cleanMagnitudeStrong},
+		{name: "fallback 0 KB token", bytes: 0, trusted: false, token: "0 KB", want: cleanMagnitudeNone},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyMagnitudeTier(tt.token, tt.bytes, tt.trusted); got != tt.want {
+				t.Fatalf("classifyMagnitudeTier(%q, %d, trusted=%v) = %v, want %v",
+					tt.token, tt.bytes, tt.trusted, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStylizeStyleLinesUsesTrustedBytesNotTokenParse(t *testing.T) {
+	// Line displays a token that reverse-parse would call Attention, but the
+	// trusted count is Neutral (< 100 MiB). Production path must classify from
+	// int64 so the token stays undecorated (Neutral = plain).
+	const justBelow = int64(100*1024*1024 - 1)
+	token := cleanFormatBytes(justBelow)
+	plain := fmt.Sprintf("    [x] ✓ Edge · 1 item(s) · %s", token)
+
+	// Tier decision: trusted bytes win over token text.
+	if got := classifyMagnitudeTier(token, justBelow, true); got != cleanMagnitudeNeutral {
+		t.Fatalf("trusted tier = %v, want Neutral for %d (%q)", got, justBelow, token)
+	}
+	if token == "100 MB" {
+		if got := classifyMagnitudeTier(token, 0, false); got != cleanMagnitudeAttention {
+			t.Fatalf("fallback tier for rounded %q = %v, want Attention", token, got)
+		}
+	}
+
+	// Annotated style path: Neutral token remains plain (no magnitude style).
+	styled := stylizeStyleLines([]tuiStyleLine{
+		magnitudeStyleLine(plain, justBelow),
+	})
+	if !strings.Contains(styled, token) {
+		t.Fatalf("lost plain token %q:\n%q", token, styled)
+	}
+	// Neutral leaves the token unstyled; the whole line may still be plain.
+	if styled != plain {
+		// Allow only non-magnitude whole-line styles; magnitude hues must not apply.
+		if strings.Contains(styled, "214") || strings.Contains(styled, "208") {
+			t.Fatalf("trusted Neutral must not apply attention/strong hues:\n%q", styled)
+		}
+	}
+
+	// Explicit color core: Neutral stays plain; Attention (fallback tier) hues.
+	if got := styleMagnitudeTokenWithColor(token, cleanMagnitudeNeutral, true, false); got != token {
+		t.Fatalf("Neutral colored path should stay plain, got %q", got)
+	}
+	attention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, true, false)
+	if attention == "100 MB" || !strings.Contains(attention, "100 MB") {
+		t.Fatalf("Attention colored path should decorate token: %q", attention)
+	}
+	if strings.Contains(attention, "[31m") || strings.Contains(attention, "[91m") {
+		t.Fatalf("Attention must not use pure red: %q", attention)
+	}
+}
+
+func TestSelectedRowMagnitudeStacking(t *testing.T) {
+	// Focused preview row: reverse chrome + magnitude on the byte token.
+	// Plain fragments remain the oracle; strong must not use pure red.
+	const gib = int64(1024 * 1024 * 1024)
+	plain := "  > [x] ✓ Big · 1 item(s) · 1 GB"
+	styled := stylizeStyleLines([]tuiStyleLine{
+		magnitudeStyleLine(plain, gib),
+	})
+	for _, want := range []string{"Big · 1 item(s)", "1 GB", "[x]"} {
+		if !strings.Contains(styled, want) {
+			t.Fatalf("selected styled row missing plain fragment %q:\n%q", want, styled)
+		}
+	}
+	if strings.Contains(styled, "[31m") || strings.Contains(styled, "[91m") {
+		t.Fatalf("selected strong magnitude must not use pure red:\n%q", styled)
+	}
+	// Selection reverse is applied (left/token/right segments).
+	if !strings.Contains(styled, "\x1b[") {
+		t.Fatal("selected row should receive style escapes")
+	}
+	// Strip ANSI: plain frame fragments must still match the source line.
+	if stripANSIForTest(styled) != plain {
+		t.Fatalf("selected styled row plain projection mismatch:\n got %q\nwant %q", stripANSIForTest(styled), plain)
+	}
+
+	// Explicit color core: selected strong stacks reverse + orange, never pure red.
+	selectedStrong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, true, true)
+	if !strings.Contains(selectedStrong, "1 GB") {
+		t.Fatalf("selected strong lost plain fragment: %q", selectedStrong)
+	}
+	if selectedStrong == "1 GB" {
+		t.Fatal("selected strong should decorate token when color enabled")
+	}
+	if strings.Contains(selectedStrong, "[31m") || strings.Contains(selectedStrong, "[91m") {
+		t.Fatalf("selected strong must not use pure red: %q", selectedStrong)
+	}
+	// Reverse bit (7) should be present for continuous selection on the token.
+	if !strings.Contains(selectedStrong, "7") {
+		t.Fatalf("selected strong should include reverse: %q", selectedStrong)
+	}
+
+	// Neutral selected: continuous reverse, no magnitude hue indexes required.
+	neutralToken := styleMagnitudeTokenWithColor("2 KB", cleanMagnitudeNeutral, true, true)
+	if !strings.Contains(neutralToken, "2 KB") {
+		t.Fatalf("neutral selected lost fragment: %q", neutralToken)
+	}
+	// Explicit no-color selected strong: reverse/bold without magnitude hues.
+	noColorStrong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, false, true)
+	if !strings.Contains(noColorStrong, "1 GB") {
+		t.Fatalf("NO_COLOR selected strong lost fragment: %q", noColorStrong)
+	}
+	if strings.Contains(noColorStrong, "208") || strings.Contains(noColorStrong, "214") {
+		t.Fatalf("NO_COLOR selected strong leaked magnitude hues: %q", noColorStrong)
+	}
+
+	// Neutral selected full line still projects plain fragments.
+	neutralPlain := "  > [x] ✓ Small · 1 item(s) · 2 KB"
+	neutralStyled := stylizeStyleLines([]tuiStyleLine{
+		magnitudeStyleLine(neutralPlain, 2048),
+	})
+	if stripANSIForTest(neutralStyled) != neutralPlain {
+		t.Fatalf("neutral selected plain projection mismatch:\n got %q\nwant %q", stripANSIForTest(neutralStyled), neutralPlain)
 	}
 }
 
