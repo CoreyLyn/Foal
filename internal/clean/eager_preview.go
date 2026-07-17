@@ -218,8 +218,10 @@ func EagerPreviewQueueFrom(catalog CleanupCategoryCatalog) []CleanupCategorySumm
 
 // ProjectCategoryPreview maps one shared CategoryResolution into a path-free
 // observation. Terminal outcomes are complete, partial, empty, skipped,
-// incomplete, or failed. Only safe candidate count/bytes, excluded sibling
-// count, a stable reason code, and optional shared safety guidance survive.
+// incomplete, or failed. Classification lives in the shared evidence module;
+// this projection only attaches safe candidate totals and optional safety notes.
+// Only safe candidate count/bytes, excluded sibling count, a stable reason
+// code, and optional shared safety guidance survive.
 func ProjectCategoryPreview(resolution CategoryResolution) CategoryPreviewObservation {
 	summary, ok := CanonicalCleanupCategoryCatalog().Summary(resolution.Identifier)
 	if !ok {
@@ -239,165 +241,26 @@ func ProjectCategoryPreview(resolution CategoryResolution) CategoryPreviewObserv
 		PlannedAction:  summary.PlannedAction,
 	}
 
-	safeCount := 0
 	var safeBytes int64
 	for _, candidate := range resolution.Candidates {
-		safeCount++
 		safeBytes += candidate.Bytes
 	}
 	for _, candidate := range resolution.OptInCandidates {
-		safeCount++
 		safeBytes += candidate.Bytes
 	}
 
-	protectedCount := len(resolution.SuppressedProtectionPaths)
-	skippedCount := len(resolution.Skipped)
-	canceled := resolutionIndicatesCanceled(resolution)
-	runningBlocked := runningApplicationBlocked(resolution.RunningStates)
-	incompleteSiblingCount, failedSiblingCount, diagnosticReason := classifyResolutionDiagnostics(resolution.Diagnostics)
-	skipReason := firstSkippedReasonCode(resolution.Skipped)
-
-	excluded := protectedCount + skippedCount + incompleteSiblingCount + failedSiblingCount
-	if runningBlocked && skippedCount == 0 {
-		// Running/unknown application blocked discovery without a path-backed
-		// skipped item; still counts as one excluded sibling for partial.
-		excluded++
-	}
-
-	vsixImpact := resolutionIncludesCachedExtensionVSIXs(resolution)
-	switch {
-	case safeCount > 0 && excluded > 0:
-		obs.State = CategoryPreviewPartial
-		obs.CandidateCount = safeCount
+	factors := categoryEvidenceFromResolution(resolution)
+	state, reason, excluded := mapPreviewOutcome(factors)
+	obs.State = state
+	obs.ReasonCode = reason
+	obs.ExcludedSiblingCount = excluded
+	if factors.SuccessCount > 0 {
+		obs.CandidateCount = factors.SuccessCount
 		obs.Bytes = safeBytes
-		obs.ExcludedSiblingCount = excluded
-		obs.ReasonCode = partialReasonCode(protectedCount, incompleteSiblingCount, failedSiblingCount, skippedCount, runningBlocked, skipReason, diagnosticReason)
+		vsixImpact := resolutionIncludesCachedExtensionVSIXs(resolution)
 		obs.SafetyNote = categoryPreviewSafetyNote(summary.Identifier, true, vsixImpact)
-	case safeCount > 0:
-		obs.State = CategoryPreviewComplete
-		obs.CandidateCount = safeCount
-		obs.Bytes = safeBytes
-		obs.SafetyNote = categoryPreviewSafetyNote(summary.Identifier, true, vsixImpact)
-	case canceled:
-		obs.State = CategoryPreviewIncomplete
-		obs.ReasonCode = PreviewReasonContextCanceled
-		// Incomplete contributes no invent reclaimable bytes.
-	case incompleteSiblingCount > 0 && protectedCount == 0 && skippedCount == 0 && !runningBlocked:
-		obs.State = CategoryPreviewIncomplete
-		obs.ExcludedSiblingCount = incompleteSiblingCount
-		if diagnosticReason != "" {
-			obs.ReasonCode = diagnosticReason
-		} else {
-			obs.ReasonCode = PreviewReasonInspectionLimit
-		}
-	case protectedCount > 0 && skippedCount == 0 && !runningBlocked && incompleteSiblingCount == 0 && failedSiblingCount == 0:
-		// All-protected evidence with no other residual work.
-		obs.State = CategoryPreviewSkipped
-		obs.ExcludedSiblingCount = protectedCount
-		obs.ReasonCode = PreviewReasonProtected
-	case skippedCount > 0 || runningBlocked:
-		obs.State = CategoryPreviewSkipped
-		obs.ExcludedSiblingCount = excluded
-		if skipReason != "" {
-			obs.ReasonCode = skipReason
-		} else if runningBlocked {
-			obs.ReasonCode = PreviewReasonApplicationRunning
-		} else {
-			obs.ReasonCode = PreviewReasonApplicationRunning
-		}
-	case protectedCount > 0:
-		// Protected plus residual diagnostics without safe candidates: still a
-		// path-free safety exclusion rather than proven absence.
-		obs.State = CategoryPreviewSkipped
-		obs.ExcludedSiblingCount = protectedCount
-		obs.ReasonCode = PreviewReasonProtected
-	case incompleteSiblingCount > 0:
-		obs.State = CategoryPreviewIncomplete
-		obs.ExcludedSiblingCount = incompleteSiblingCount
-		if diagnosticReason != "" {
-			obs.ReasonCode = diagnosticReason
-		} else {
-			obs.ReasonCode = PreviewReasonInspectionLimit
-		}
-	case failedSiblingCount > 0 || len(resolution.Diagnostics) > 0:
-		obs.State = CategoryPreviewFailed
-		if diagnosticReason != "" {
-			obs.ReasonCode = diagnosticReason
-		} else {
-			obs.ReasonCode = PreviewReasonInspectionFailed
-		}
-	default:
-		obs.State = CategoryPreviewEmpty
-		obs.ReasonCode = PreviewReasonEmpty
 	}
 	return obs
-}
-
-func partialReasonCode(protected, incomplete, failed, skipped int, running bool, skipReason, diagnosticReason string) string {
-	if protected > 0 {
-		return PreviewReasonProtected
-	}
-	if incomplete > 0 {
-		if diagnosticReason != "" {
-			return diagnosticReason
-		}
-		return PreviewReasonInspectionLimit
-	}
-	if skipped > 0 || running {
-		if skipReason != "" {
-			return skipReason
-		}
-		return PreviewReasonApplicationRunning
-	}
-	if failed > 0 {
-		if diagnosticReason != "" {
-			return diagnosticReason
-		}
-		return PreviewReasonInspectionFailed
-	}
-	return PreviewReasonInspectionFailed
-}
-
-func classifyResolutionDiagnostics(diagnostics []StructuredIssue) (incompleteCount, failedCount int, reason string) {
-	for _, diagnostic := range diagnostics {
-		code := strings.TrimSpace(diagnostic.Code)
-		switch {
-		case code == PreviewReasonContextCanceled || strings.Contains(strings.ToLower(diagnostic.Message), "context canceled"):
-			// Cancellation is handled separately; do not count as sibling failure.
-			continue
-		case code == PreviewReasonInspectionLimit || code == "reparse_point":
-			incompleteCount++
-			if reason == "" {
-				reason = code
-			}
-		case code == runningApplicationDetectionIssueCode:
-			// Unknown process state is a safety skip, not operational failure.
-			// Counted via running states / skip path instead when present.
-			if reason == "" {
-				reason = code
-			}
-		default:
-			failedCount++
-			if reason == "" {
-				if code != "" {
-					reason = code
-				} else {
-					reason = PreviewReasonInspectionFailed
-				}
-			}
-		}
-	}
-	return incompleteCount, failedCount, reason
-}
-
-func firstSkippedReasonCode(skipped []SkippedItem) string {
-	for _, item := range skipped {
-		code := strings.TrimSpace(item.Reason.Code)
-		if code != "" {
-			return code
-		}
-	}
-	return ""
 }
 
 // categoryPreviewSafetyNote returns optional shared impact vocabulary for
@@ -455,10 +318,11 @@ func resolutionIncludesCachedExtensionVSIXs(resolution CategoryResolution) bool 
 var ErrEagerPreviewUnavailable = errors.New("clean unavailable")
 
 // RunEagerPreview sequentially measures every scannable cleanup category through
-// shared ResolveCategory. It is a TUI-specific read-only operation: it never
-// writes History or a detailed list, never calls a cleanup adapter, and never
-// runs external Review suggestion probes. emit receives scanning then terminal
-// observations for each queue entry; cooperative cancellation stops further work.
+// shared ResolveCategory (which projects resolveCategoryCore). It is a
+// TUI-specific read-only operation: it never writes History or a detailed list,
+// never calls a cleanup adapter, and never runs external Review suggestion
+// probes. emit receives scanning then terminal observations for each queue
+// entry; cooperative cancellation stops further work.
 //
 // A global protection-configuration failure returns without emitting category
 // rows so the TUI can open Clean unavailable.
@@ -515,26 +379,4 @@ func RunEagerPreview(ctx context.Context, opts Options, emit func(CategoryPrevie
 		}
 	}
 	return ctx.Err()
-}
-
-func resolutionIndicatesCanceled(resolution CategoryResolution) bool {
-	for _, diagnostic := range resolution.Diagnostics {
-		if diagnostic.Code == PreviewReasonContextCanceled || diagnostic.Code == "context_canceled" {
-			return true
-		}
-		if strings.Contains(strings.ToLower(diagnostic.Message), "context canceled") {
-			return true
-		}
-	}
-	return false
-}
-
-func runningApplicationBlocked(states []RunningApplicationState) bool {
-	for _, state := range states {
-		switch state.State {
-		case RunningApplicationStateRunning, RunningApplicationStateUnknown:
-			return true
-		}
-	}
-	return false
 }

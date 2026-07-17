@@ -124,12 +124,14 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 			continue
 		}
 		b.skipped++
-		switch classifyExecutionIssueCode(item.Reason.Code) {
-		case executionIssueCancel:
+		switch classifyEvidenceIssueCode(item.Reason.Code) {
+		case evidenceIssueCancel:
 			b.hasCancel = true
-		case executionIssueOperational:
+		case evidenceIssueOperational:
 			b.hasOperational = true
 		default:
+			// Safety, incomplete, and running-unknown residuals are safety skips
+			// on the execution surface (not operational failure).
 			b.hasSafetySkip = true
 		}
 	}
@@ -144,8 +146,8 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		if b == nil {
 			continue
 		}
-		switch classifyExecutionIssueCode(issue.Code) {
-		case executionIssueCancel:
+		switch classifyEvidenceIssueCode(issue.Code) {
+		case evidenceIssueCancel:
 			b.hasCancel = true
 		default:
 			b.hasOperational = true
@@ -159,8 +161,8 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		if issue.Rule != "" {
 			continue
 		}
-		switch classifyExecutionIssueCode(issue.Code) {
-		case executionIssueCancel:
+		switch classifyEvidenceIssueCode(issue.Code) {
+		case evidenceIssueCancel:
 			runLevelCancel = true
 		default:
 			runLevelOperational = true
@@ -182,7 +184,13 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		if runLevelFailed && b.deleted == 0 && b.skipped == 0 && !hasCancel {
 			hasOperational = true
 		}
-		state := projectCategoryExecutionState(b.deleted, b.skipped, hasCancel, hasOperational, b.hasSafetySkip)
+		state := mapExecutionOutcome(categoryEvidenceFactors{
+			SuccessCount:       b.deleted,
+			SkippedCount:       b.skipped,
+			Canceled:           hasCancel,
+			HasOperationalFail: hasOperational,
+			HasSafetySkip:      b.hasSafetySkip,
+		})
 		out = append(out, CategoryExecutionOutcome{
 			Identifier:              id,
 			Label:                   label,
@@ -272,47 +280,4 @@ func ResultHasPermanentPartialRisk(result Result) bool {
 	return false
 }
 
-type executionIssueKind int
 
-const (
-	executionIssueSafety executionIssueKind = iota
-	executionIssueOperational
-	executionIssueCancel
-)
-
-func classifyExecutionIssueCode(code string) executionIssueKind {
-	switch code {
-	case "context_canceled":
-		return executionIssueCancel
-	case "delete_failed", "permission_denied", "unsupported_target",
-		permanentDeleteFailedIssueCode,
-		"invalid_category_plan", PreviewReasonInspectionFailed,
-		"protection_file_load_failed", "protection_file_invalid_utf8":
-		return executionIssueOperational
-	default:
-		// Safety skips and path-safety rejections (protected_path, recycle_bin_*,
-		// permanent_deletion_not_authorized, running application, reparse_point,
-		// hardlink, etc.).
-		return executionIssueSafety
-	}
-}
-
-func projectCategoryExecutionState(deleted, skipped int, hasCancel, hasOperational, hasSafetySkip bool) CategoryExecutionState {
-	if deleted > 0 {
-		if skipped > 0 || hasCancel || hasOperational {
-			return CategoryExecutionPartial
-		}
-		return CategoryExecutionCleaned
-	}
-	// Zero successes.
-	if hasCancel {
-		return CategoryExecutionCanceled
-	}
-	if hasOperational {
-		return CategoryExecutionFailed
-	}
-	if hasSafetySkip || skipped > 0 {
-		return CategoryExecutionSkipped
-	}
-	return CategoryExecutionEmpty
-}
