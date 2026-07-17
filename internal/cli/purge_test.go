@@ -328,6 +328,7 @@ func TestPurgeExecuteWiresAllowPermanentFlag(t *testing.T) {
 			Status:  purge.StatusOK,
 			Mode:    purge.ModeExecute,
 			Root:    opts.Root,
+			Roots:   append([]string(nil), opts.Roots...),
 			Deleted: []purge.DeletedItem{},
 			Failed:  []purge.FailedItem{},
 			Skipped: []purge.Skipped{},
@@ -345,7 +346,10 @@ func TestPurgeExecuteWiresAllowPermanentFlag(t *testing.T) {
 	if !captured.AllowPermanentDeletion {
 		t.Fatal("AllowPermanentDeletion not set from --allow-permanent")
 	}
-	if captured.Root == "" || captured.CommandParameters.Command != "purge" {
+	if len(captured.Roots) != 1 || captured.Roots[0] != root {
+		t.Fatalf("roots = %#v, want [%q]", captured.Roots, root)
+	}
+	if captured.CommandParameters.Command != "purge" {
 		t.Fatalf("options = %#v", captured)
 	}
 }
@@ -398,14 +402,108 @@ func TestPurgeDefaultRemainsDryRunNonMutating(t *testing.T) {
 	}
 }
 
-func TestPurgeRejectsMultiRoot(t *testing.T) {
+func TestPurgeMultiRootDryRunJSONContract(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	writeTree(t, rootA, map[string]string{
+		filepath.Join("app", "node_modules", "a"): "aaa",
+	})
+	writeTree(t, rootB, map[string]string{
+		filepath.Join("lib", "dist", "b"): "bbbb",
+	})
+
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"purge", "a", "b"}, &stdout, &stderr)
-	if code != exitUsage {
-		t.Fatalf("exit = %d", code)
+	code := Run([]string{"purge", "--json", rootA, rootB}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "exactly one explicit root") {
-		t.Fatalf("stderr = %q", stderr.String())
+	var env struct {
+		Command string       `json:"command"`
+		Result  purge.Result `json:"result"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
+	}
+	if env.Command != "purge" || env.Result.Status != purge.StatusPreview {
+		t.Fatalf("envelope = %#v", env)
+	}
+	if len(env.Result.Roots) != 2 {
+		t.Fatalf("roots = %#v", env.Result.Roots)
+	}
+	if env.Result.Root != "" {
+		t.Fatalf("single root field should be empty for multi-root: %q", env.Result.Root)
+	}
+	if len(env.Result.Candidates) != 2 {
+		t.Fatalf("candidates = %#v", env.Result.Candidates)
+	}
+}
+
+func TestPurgeRejectsDangerousRoot(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"purge", "--json", `C:\Windows`}, &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("exit = %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	var env struct {
+		Command string       `json:"command"`
+		Result  purge.Result `json:"result"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
+	}
+	if env.Result.Status != purge.StatusError {
+		t.Fatalf("result = %#v", env.Result)
+	}
+	if len(env.Result.Candidates) != 0 {
+		t.Fatalf("candidates on dangerous root: %#v", env.Result.Candidates)
+	}
+	msg := strings.ToLower(env.Result.Message)
+	if !strings.Contains(msg, "dangerous_root") && !strings.Contains(msg, "system") {
+		t.Fatalf("message = %q", env.Result.Message)
+	}
+}
+
+func TestPurgeProtectionOmitsProtectedArtifact(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		filepath.Join("open", "node_modules", "a"):   "aa",
+		filepath.Join("locked", "node_modules", "b"): "bbb",
+	})
+	protectionFile := filepath.Join(t.TempDir(), "protection.txt")
+	protected := filepath.Join(root, "locked")
+	if err := os.WriteFile(protectionFile, []byte(protected+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FOAL_PROTECTION_FILE", protectionFile)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"purge", "--json", root}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	var env struct {
+		Result purge.Result `json:"result"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.Result.Candidates) != 1 {
+		t.Fatalf("candidates = %#v, want only open node_modules", env.Result.Candidates)
+	}
+	if strings.Contains(strings.ToLower(env.Result.Candidates[0].Path), "locked") {
+		t.Fatalf("protected candidate leaked: %#v", env.Result.Candidates[0])
+	}
+	found := false
+	for _, s := range env.Result.Skipped {
+		if s.Reason == purge.IssueProtectedPath {
+			found = true
+			if s.Path != "" {
+				t.Fatalf("protected skip path leak: %#v", s)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("skipped = %#v, want protected_path", env.Result.Skipped)
 	}
 }
 

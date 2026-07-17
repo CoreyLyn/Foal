@@ -85,6 +85,53 @@ func TestValidatorUserRulesCannotOverrideBuiltInSafety(t *testing.T) {
 	}
 }
 
+func TestValidateUserScanRootRejectsDangerousRoots(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		code string
+	}{
+		{name: "volume root", path: `C:\`, code: "dangerous_root"},
+		{name: "windows", path: `C:\Windows`, code: "dangerous_root"},
+		{name: "windows child", path: `C:\Windows\Temp`, code: "dangerous_root"},
+		{name: "program files", path: `C:\Program Files`, code: "dangerous_root"},
+		{name: "program files child", path: `C:\Program Files\Git`, code: "dangerous_root"},
+		{name: "program files x86", path: `C:\Program Files (x86)\App`, code: "dangerous_root"},
+		{name: "unc", path: `\\server\share\proj`, code: "unc_path"},
+		{name: "relative", path: `.\my-project`, code: "relative_path"},
+		{name: "empty", path: `  `, code: "empty_path"},
+		{name: "short name", path: `C:\PROGRA~1\App`, code: "short_name_path"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason, ok := pathsafe.ValidateUserScanRoot(tt.path)
+			if ok {
+				t.Fatalf("ValidateUserScanRoot(%q) ok=true, want false", tt.path)
+			}
+			if reason.Code != tt.code {
+				t.Fatalf("code = %q, want %q (message=%q)", reason.Code, tt.code, reason.Message)
+			}
+			if reason.Message == "" {
+				t.Fatal("empty message")
+			}
+		})
+	}
+}
+
+func TestValidateUserScanRootAllowsOrdinaryProjectPaths(t *testing.T) {
+	root := t.TempDir()
+	reason, ok := pathsafe.ValidateUserScanRoot(root)
+	if !ok {
+		t.Fatalf("ValidateUserScanRoot temp dir = %#v, false; want ok", reason)
+	}
+	// Nested project-style path under a user-ish absolute location.
+	proj := filepath.Join(root, "src", "my-project")
+	reason, ok = pathsafe.ValidateUserScanRoot(proj)
+	if !ok {
+		t.Fatalf("ValidateUserScanRoot project path = %#v, false; want ok", reason)
+	}
+}
+
 func TestValidatorProtectsDescendantsOfVolumeRoot(t *testing.T) {
 	validator := pathsafe.NewValidator([]string{`C:\`})
 

@@ -32,6 +32,7 @@ func Execute(ctx context.Context, opts Options) Result {
 		Status:     StatusOK,
 		Mode:       ModeExecute,
 		Root:       preview.root,
+		Roots:      append([]string(nil), preview.roots...),
 		Candidates: preview.candidates,
 		Deleted:    []DeletedItem{},
 		Failed:     []FailedItem{},
