@@ -2,7 +2,7 @@
 
 ## Status
 
-P1 specification accepted after a `grill-with-docs` session. Implementation is not yet shipped.
+P1 specification accepted after a `grill-with-docs` session. CLI tracer shipped via issue #262 (`grok-build-update-residue` opt-in permanent category). `cli-agents` selection alias and TUI polish remain #263.
 
 ## Goal
 

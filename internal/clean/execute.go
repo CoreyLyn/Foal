@@ -366,9 +366,10 @@ func composePermanentPreMutation(opts Options, byPath map[string]actionExecution
 			return pathsafe.Reason{}, true
 		}
 		return validator(PermanentIdentityCandidate{
-			Path:     candidate.Path,
-			Bytes:    candidate.Bytes,
-			Category: meta.rule,
+			Path:             candidate.Path,
+			Bytes:            candidate.Bytes,
+			Category:         meta.rule,
+			residueDiscovery: opts.GrokBuildResidueDiscoveryOptions,
 		})
 	}
 }

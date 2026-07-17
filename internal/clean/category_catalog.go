@@ -296,6 +296,9 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 	// Full Visual Studio IDE (not VS Code / Cursor). devenv.exe is the
 	// distinctive process Microsoft cache-clear guidance requires idle.
 	{id: ApplicationVisualStudio, displayName: "Visual Studio", executables: []string{"devenv.exe"}},
+	// Grok Build CLI agent: one logical identity covering both updater-managed
+	// Windows executables (grok.exe and agent.exe).
+	{id: ApplicationGrokBuild, displayName: "Grok Build", executables: []string{"grok.exe", "agent.exe"}},
 }
 
 // applicationCacheApplicationDefinitions is the controlled registry of idle
@@ -540,7 +543,7 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 23 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
+	// 25 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
 	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
 	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
@@ -746,6 +749,20 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		nil,
 		ApplicationVisualStudio,
 	), staticPreviewSafetyNote(visualStudioCachesOptInImpactNotice)),
+	// Grok Build updater residue: exact ordinary .old backups under $GROK_HOME\bin.
+	// Product-scoped dedicated resolver (not developer-cache / not dev-caches).
+	// Distinctive-process idle on grok.exe|agent.exe; permanent; witnesses never candidates.
+	// Evidence: ADR 0021/0022, docs/plan/grok-build-update-residue.md.
+	withPreviewSafetyNote(grokBuildUpdateResidueCategoryEntry(
+		categoryDefinition(
+			CategoryGrokBuildUpdateResidue,
+			"Grok Build update residue",
+			ReportCategoryDeveloperTools,
+			CategoryEligibilityOptIn,
+			RunningApplicationPolicyDistinctiveProcessIdle,
+			DeletionActionDeletePermanently,
+		),
+	), staticPreviewSafetyNote(grokBuildUpdateResidueOptInImpactNotice)),
 	// Non-executable permission boundary: actionless and cannot enter execution.
 	nonExecutableCategoryEntry(categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable, "")),
 }
@@ -794,9 +811,21 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 				return fmt.Errorf("default resolver category %q must use default eligibility", id)
 			}
 		case categoryResolverExistenceOpportunity, categoryResolverBrowserCache,
-			categoryResolverApplicationCache, categoryResolverDeveloperCache:
+			categoryResolverApplicationCache, categoryResolverDeveloperCache,
+			categoryResolverGrokBuildUpdateResidue:
 			if entry.definition.Eligibility != CategoryEligibilityOptIn {
 				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
+			}
+			if entry.resolverKind == categoryResolverGrokBuildUpdateResidue {
+				if entry.definition.RunningApplicationPolicy != RunningApplicationPolicyDistinctiveProcessIdle {
+					return fmt.Errorf("grok residue category %q must use distinctive-process idle policy", id)
+				}
+				if entry.definition.PlannedAction != DeletionActionDeletePermanently {
+					return fmt.Errorf("grok residue category %q must declare delete_permanently", id)
+				}
+				if len(entry.runningApplications) != 1 || entry.runningApplications[0] != ApplicationGrokBuild {
+					return fmt.Errorf("grok residue category %q must bind ApplicationGrokBuild only", id)
+				}
 			}
 		case categoryResolverNonExecutable:
 			if executable {
@@ -873,6 +902,9 @@ func validateDeveloperCacheRegistry(
 				// Application-cache categories are validated separately.
 				continue
 			}
+			// Grok residue and other non-dev-cache resolvers may list running
+			// applications for distinctive-process policy without being
+			// developer-cache registry members.
 			continue
 		}
 		id := entry.definition.Identifier

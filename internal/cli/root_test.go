@@ -2093,7 +2093,9 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.DevCacheCategoryJetBrainsIDECaches,
 		clean.DevCacheCategoryVisualStudioCaches,
 	}
-	want := append(expectedOpportunities, expectedDevCaches...)
+	// Catalog order: opportunities + developer caches + CLI-agent residue.
+	want := append(append([]string{}, expectedOpportunities...), expectedDevCaches...)
+	want = append(want, clean.CategoryGrokBuildUpdateResidue)
 	if len(capturedOpts.OptIn) != len(want) {
 		t.Fatalf("opts.OptIn has %d categories, want %d: %#v", len(capturedOpts.OptIn), len(want), capturedOpts.OptIn)
 	}

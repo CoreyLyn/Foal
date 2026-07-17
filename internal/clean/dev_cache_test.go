@@ -45,6 +45,10 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 		if len(enabled) != 19 {
 			t.Fatalf("expected 19 enabled developer-tools categories, got %d", len(enabled))
 		}
+		// Updater residue is Developer tools but not a cache; exclude from dev-caches.
+		if enabled[clean.CategoryGrokBuildUpdateResidue] {
+			t.Fatal("dev-caches must not enable grok-build-update-residue")
+		}
 		// Verify valid names include dev categories and dev-caches
 		found := make(map[string]bool)
 		for _, name := range valid {
@@ -108,8 +112,12 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"all\"", cat)
 			}
 		}
-		if len(enabled) != 12+17 {
-			t.Fatalf("expected 29 enabled categories (12+17), got %d", len(enabled))
+		if !enabled[clean.CategoryGrokBuildUpdateResidue] {
+			t.Fatal("expected grok-build-update-residue to be enabled by \"all\"")
+		}
+		// 12 opportunity + 17 developer-cache + 1 CLI-agent residue = 30
+		if len(enabled) != 12+17+1 {
+			t.Fatalf("expected 30 enabled categories (12+17+1), got %d", len(enabled))
 		}
 	})
 
