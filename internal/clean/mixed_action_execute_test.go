@@ -589,6 +589,8 @@ func TestDryRunInjectedPermanentPlannedActionNeedsNoAuthorization(t *testing.T) 
 		CategoryPlannedActions: map[string]clean.DeletionAction{
 			testPermanentRule: clean.DeletionActionDeletePermanently,
 		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{path}},
 		},

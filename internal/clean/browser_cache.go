@@ -287,6 +287,9 @@ func readBrowserProfileCatalog(userDataRoot string, config browserCacheConfig) (
 // profiles.ini. Absolute or path-escaping Path values are ignored (fail-closed
 // catalog evidence only). A missing or unreadable file is an error so callers
 // can emit browser_profile_catalog_unknown rather than guess profile folders.
+// When the catalog exists and every Profile* entry is absolute/out-of-scope,
+// return an error so callers emit a path-free recoverable diagnostic instead of
+// silent absence.
 func readFirefoxProfilesINI(catalogRoot string) ([]browserProfileCatalogEntry, error) {
 	data, err := os.ReadFile(filepath.Join(catalogRoot, "profiles.ini"))
 	if err != nil {
@@ -337,6 +340,8 @@ func parseFirefoxProfilesINI(data []byte) ([]browserProfileCatalogEntry, error) 
 	}
 
 	var profiles []browserProfileCatalogEntry
+	profileSectionsWithPath := 0
+	outOfScopeProfiles := 0
 	for _, sec := range sections {
 		if !isFirefoxProfileSection(sec.name) {
 			continue
@@ -345,13 +350,16 @@ func parseFirefoxProfilesINI(data []byte) ([]browserProfileCatalogEntry, error) 
 		if pathValue == "" {
 			continue
 		}
+		profileSectionsWithPath++
 		isRelative := strings.TrimSpace(sec.kv["IsRelative"])
 		// Only relative catalog paths under the standard root are in scope.
 		if isRelative == "0" || filepath.IsAbs(pathValue) {
+			outOfScopeProfiles++
 			continue
 		}
 		rel := filepath.ToSlash(filepath.Clean(pathValue))
 		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+			outOfScopeProfiles++
 			continue
 		}
 		// Keep the catalog Path as id so multi-profile layouts stay unique and
@@ -361,6 +369,11 @@ func parseFirefoxProfilesINI(data []byte) ([]browserProfileCatalogEntry, error) 
 			name:         strings.TrimSpace(sec.kv["Name"]),
 			relativePath: rel,
 		})
+	}
+	// Catalog present but every listed profile is absolute/out-of-scope: do not
+	// treat as silent absence (still never guess absolute paths as candidates).
+	if len(profiles) == 0 && profileSectionsWithPath > 0 && outOfScopeProfiles == profileSectionsWithPath {
+		return nil, errors.New("profiles.ini lists only absolute or out-of-scope profile paths")
 	}
 	sort.Slice(profiles, func(i, j int) bool {
 		return profiles[i].id < profiles[j].id

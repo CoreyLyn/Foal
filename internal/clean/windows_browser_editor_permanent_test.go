@@ -57,6 +57,8 @@ func TestNVIDIADXCacheDryRunReportsPermanentWithoutAuthorization(t *testing.T) {
 	result := clean.DryRun(context.Background(), clean.Options{
 		AllowPermanentDeletion: false,
 		OptIn:                  []string{clean.OpportunityCategoryNVIDIADXCache},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 		DiscoverOpportunities: func(context.Context) clean.OpportunityDiscoveryResult {
 			return clean.OpportunityDiscoveryResult{
 				Opportunities: []clean.Opportunity{{

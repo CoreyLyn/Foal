@@ -414,7 +414,8 @@ func TestExplorerThumbnailCache_DryRunOptInRecycleBinAction(t *testing.T) {
 			TempDir:         t.TempDir(),
 			LocalAppDataDir: localAppData,
 		},
-		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 	// Opted-in category must dual-project to OptInCandidates only (not review opportunities).
 	for _, opp := range result.Opportunities {
@@ -456,7 +457,8 @@ func TestINetCache_DryRunOptInRecycleBinAction(t *testing.T) {
 			TempDir:         t.TempDir(),
 			LocalAppDataDir: localAppData,
 		},
-		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 	for _, opp := range result.Opportunities {
 		if opp.Category == clean.OpportunityCategoryINetCache {
@@ -576,7 +578,8 @@ func TestExplorerThumbnailCache_ProtectionSuppressesCandidate(t *testing.T) {
 			TempDir:         t.TempDir(),
 			LocalAppDataDir: localAppData,
 		},
-		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 	if len(result.OptInCandidates) != 1 || result.OptInCandidates[0].Path != open {
 		t.Fatalf("candidates = %#v, want only unprotected file", result.OptInCandidates)
@@ -594,7 +597,8 @@ func TestINetCache_ProtectionSuppressesCandidate(t *testing.T) {
 			TempDir:         t.TempDir(),
 			LocalAppDataDir: localAppData,
 		},
-		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 	if len(result.OptInCandidates) != 1 || result.OptInCandidates[0].Path != lowIE {
 		t.Fatalf("candidates = %#v, want only unprotected Low\\IE", result.OptInCandidates)

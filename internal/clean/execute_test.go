@@ -276,8 +276,10 @@ func TestExecuteFreshOptInResolutionCanTurnPreviewIntoNoOp(t *testing.T) {
 		return clean.OpportunityDiscoveryResult{}
 	}
 	opts := clean.Options{
-		OptIn: []string{clean.OpportunityCategoryCrashDumps}, DiscoverOpportunities: discover,
-		Rules: []clean.Rule{{ID: "disabled_default", DefaultEnabled: false}},
+		OptIn:                     []string{clean.OpportunityCategoryCrashDumps},
+		DiscoverOpportunities:     discover,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_default", DefaultEnabled: false}},
 	}
 	preview := clean.DryRun(context.Background(), opts)
 	adapter := &recordingRecycleBinAdapter{}
@@ -305,7 +307,12 @@ func TestExecuteFreshResolutionDropsTempTouchedAfterPreview(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	opts := clean.Options{Rules: []clean.Rule{{ID: "disabled", DefaultEnabled: false}}, OptIn: []string{clean.OpportunityCategoryUserTemp}, UserTempDiscoveryOptions: clean.UserTempDiscoveryOptions{TempDir: root, Now: now}}
+	opts := clean.Options{
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		OptIn:                     []string{clean.OpportunityCategoryUserTemp},
+		UserTempDiscoveryOptions:  clean.UserTempDiscoveryOptions{TempDir: root, Now: now},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	}
 	if preview := clean.DryRun(context.Background(), opts); len(preview.OptInCandidates) != 1 {
 		t.Fatalf("preview = %#v", preview.OptInCandidates)
 	}
@@ -328,7 +335,11 @@ func TestExecuteFreshProtectionSuppressesPreviewedCandidate(t *testing.T) {
 	if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	opts := clean.Options{Rules: []clean.Rule{{ID: "test", DefaultEnabled: true, CandidatePaths: []string{path}}}}
+	opts := clean.Options{
+		Rules:                     []clean.Rule{{ID: "test", DefaultEnabled: true, CandidatePaths: []string{path}}},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	}
 	if preview := clean.DryRun(context.Background(), opts); len(preview.Candidates) != 1 {
 		t.Fatalf("preview = %#v", preview.Candidates)
 	}
@@ -363,7 +374,14 @@ func TestExecuteFreshRunningGateSkipsBrowserPreview(t *testing.T) {
 		}
 		return []clean.RunningApplicationState{{Application: clean.ApplicationGoogleChrome, State: state}, {Application: clean.ApplicationMicrosoftEdge, State: clean.RunningApplicationStateIdle}}
 	}
-	opts := clean.Options{Rules: []clean.Rule{{ID: "disabled", DefaultEnabled: false}}, OptIn: []string{clean.OpportunityCategoryBrowserCache}, DetectRunningApplications: detector, BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: localAppData}}
+	opts := clean.Options{
+		Rules:                         []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		OptIn:                         []string{clean.OpportunityCategoryBrowserCache},
+		DetectRunningApplications:     detector,
+		BrowserCacheDiscoveryOptions:  clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: localAppData},
+		DiscoverOpportunities:         noUserTempOpportunities,
+		DiscoverReviewSuggestions:     noReviewSuggestions,
+	}
 	if preview := clean.DryRun(context.Background(), opts); len(preview.OptInCandidates) != 1 {
 		t.Fatalf("preview = %#v", preview.OptInCandidates)
 	}
@@ -468,6 +486,7 @@ func TestDryRunOpportunityNeverReachesExecuteAdapterOrHistory(t *testing.T) {
 	options := clean.Options{
 		RecycleBinAdapter: adapter,
 		HistoryRecorder:   executeRecorder,
+		DiscoverReviewSuggestions: noReviewSuggestions,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{{
 				Path:   opportunity,
@@ -798,7 +817,9 @@ func TestDryRunOptInUserTempShowsOptInCandidatesNotOpportunities(t *testing.T) {
 	}
 
 	opts := clean.Options{
-		OptIn: []string{"user_temp"},
+		OptIn:                     []string{"user_temp"},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_default", DefaultEnabled: false}},
 		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{
 				Opportunities: []clean.UserTempOpportunity{
@@ -1061,6 +1082,10 @@ func TestDryRunOptInCategoriesShowOptInCandidatesNotOpportunities(t *testing.T) 
 
 			opts := clean.Options{
 				OptIn: []string{tc.category},
+				// Injected discovery already scopes the category under test;
+				// stub tool review so each subtest does not spawn host package managers.
+				DiscoverReviewSuggestions: noReviewSuggestions,
+				Rules:                     []clean.Rule{{ID: "disabled_default", DefaultEnabled: false}},
 				DiscoverOpportunities: func(ctx context.Context) clean.OpportunityDiscoveryResult {
 					return clean.OpportunityDiscoveryResult{
 						Opportunities: []clean.Opportunity{
@@ -1129,10 +1154,11 @@ func TestOptInUserTempRespectsProtectionRules(t *testing.T) {
 	validator := pathsafe.NewValidator([]string{userTempPath})
 
 	opts := clean.Options{
-		Rules:             []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
-		RecycleBinAdapter: adapter,
-		Validator:         validator,
-		OptIn:             []string{"user_temp"},
+		Rules:                     []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
+		RecycleBinAdapter:         adapter,
+		Validator:                 validator,
+		OptIn:                     []string{"user_temp"},
+		DiscoverReviewSuggestions: noReviewSuggestions,
 		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{
 				Opportunities: []clean.UserTempOpportunity{

@@ -257,11 +257,14 @@ func TestExecutePartialFailureIsHonestAndContinuesSiblings(t *testing.T) {
 		}
 		return delete.FilesystemPermanentRemover{}.Remove(ctx, path)
 	})
+	recorder := &recordingHistoryRecorder{}
 
 	result := purge.Execute(context.Background(), purge.Options{
 		Root:                   root,
 		AllowPermanentDeletion: true,
 		PermanentRemover:       remover,
+		HistoryRecorder:        recorder,
+		CommandParameters:      history.CommandParameters{Command: "purge"},
 	})
 
 	if len(result.Failed) != 1 || result.Failed[0].Path != nm {
@@ -284,6 +287,23 @@ func TestExecutePartialFailureIsHonestAndContinuesSiblings(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("remover calls = %d, want both candidates attempted", calls)
+	}
+	// History aggregates keep skipped and errors disjoint (no double-count).
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("sessions = %#v", recorder.sessions)
+	}
+	agg := recorder.sessions[0].Aggregate
+	if agg.ErrorCount != 1 {
+		t.Fatalf("history ErrorCount = %d, want 1 (failed only)", agg.ErrorCount)
+	}
+	if agg.SkippedCount != result.Totals.SkippedCount {
+		t.Fatalf("history SkippedCount = %d, want result skipped %d (not skipped+failed)", agg.SkippedCount, result.Totals.SkippedCount)
+	}
+	if agg.SkippedCount == agg.ErrorCount && result.Totals.SkippedCount == 0 {
+		// Explicit: failed must not inflate skipped when there were no skips.
+		if agg.SkippedCount != 0 {
+			t.Fatalf("failed folded into SkippedCount: %#v", agg)
+		}
 	}
 }
 

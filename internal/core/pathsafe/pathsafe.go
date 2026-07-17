@@ -116,9 +116,13 @@ func ValidateDeletePath(path string) (Reason, bool) {
 
 // ValidateUserScanRoot reports whether path is acceptable as an explicit
 // user-supplied deep-scan root (purge). It rejects empty paths, UNC, relative
-// forms, 8.3 short names, volume roots (e.g. C:\), and well-known system trees
-// (Windows, Program Files) without reading the filesystem. Callers must still
-// verify the path exists, is a directory, and is not a reparse point.
+// forms, 8.3 short names, volume roots (e.g. C:\), well-known system trees
+// (Windows, Program Files), and the current user's profile directory without
+// reading the candidate filesystem tree. Callers must still verify the path
+// exists, is a directory, and is not a reparse point.
+//
+// Project paths under the profile (e.g. %USERPROFILE%\Projects\foo) remain
+// allowed; only the profile root itself is rejected as too broad.
 //
 // A failed reason uses code "dangerous_root" for policy rejections so purge can
 // fail closed before any partial scan of system trees.
@@ -147,7 +151,47 @@ func ValidateUserScanRoot(path string) (Reason, bool) {
 			return reject("dangerous_root", "system paths such as Windows and Program Files cannot be used as purge roots")
 		}
 	}
+	if isCurrentUserProfileRoot(cleaned) {
+		return reject("dangerous_root", "user profile roots cannot be used as purge roots; supply a project or workspace directory")
+	}
 	return Reason{}, true
+}
+
+// isCurrentUserProfileRoot reports whether cleaned (filepath.Clean + lower) is
+// exactly the current user's home / USERPROFILE directory. Descendants are not
+// matched so ordinary project paths under the profile stay valid.
+func isCurrentUserProfileRoot(cleaned string) bool {
+	for _, candidate := range currentUserProfileRoots() {
+		if candidate != "" && cleaned == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func currentUserProfileRoots() []string {
+	var roots []string
+	seen := make(map[string]struct{}, 2)
+	add := func(raw string) {
+		raw = strings.TrimSpace(stripLongPathPrefix(raw))
+		if raw == "" {
+			return
+		}
+		normalized := strings.ToLower(filepath.Clean(raw))
+		if normalized == "" || !filepath.IsAbs(normalized) {
+			return
+		}
+		if _, exists := seen[normalized]; exists {
+			return
+		}
+		seen[normalized] = struct{}{}
+		roots = append(roots, normalized)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		add(home)
+	}
+	add(os.Getenv("USERPROFILE"))
+	return roots
 }
 
 // isVolumeRootPath reports whether cleaned (filepath.Clean + lower) is a drive

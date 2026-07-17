@@ -119,7 +119,14 @@ func TestExecuteRespectsProtectionFilter(t *testing.T) {
 
 func TestDryRunRejectsDangerousRootsWithoutScanning(t *testing.T) {
 	// Policy rejection is path-form based (no filesystem read of system trees).
-	for _, root := range []string{`C:\`, `C:\Windows`, `C:\Program Files`, `C:\Windows\Temp`} {
+	roots := []string{`C:\`, `C:\Windows`, `C:\Program Files`, `C:\Windows\Temp`}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		roots = append(roots, home)
+	}
+	if profile := os.Getenv("USERPROFILE"); profile != "" {
+		roots = append(roots, profile)
+	}
+	for _, root := range roots {
 		result := purge.DryRun(context.Background(), purge.Options{Root: root})
 		if result.Status != purge.StatusError {
 			t.Fatalf("root %q status = %q, want error", root, result.Status)
@@ -130,7 +137,8 @@ func TestDryRunRejectsDangerousRootsWithoutScanning(t *testing.T) {
 		msg := strings.ToLower(result.Message)
 		if !strings.Contains(msg, "dangerous_root") &&
 			!strings.Contains(msg, "volume") &&
-			!strings.Contains(msg, "system") {
+			!strings.Contains(msg, "system") &&
+			!strings.Contains(msg, "user profile") {
 			t.Fatalf("root %q message = %q, want dangerous-root style error", root, result.Message)
 		}
 	}

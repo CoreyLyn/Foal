@@ -118,6 +118,29 @@ func TestValidateUserScanRootRejectsDangerousRoots(t *testing.T) {
 	}
 }
 
+func TestValidateUserScanRootRejectsUserProfileRoot(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("user home unavailable")
+	}
+	variants := []string{home, strings.ToUpper(home)}
+	if profile := os.Getenv("USERPROFILE"); profile != "" {
+		variants = append(variants, profile, `\\?\`+profile)
+	}
+	for _, path := range variants {
+		reason, ok := pathsafe.ValidateUserScanRoot(path)
+		if ok {
+			t.Fatalf("ValidateUserScanRoot(%q) ok=true, want dangerous_root", path)
+		}
+		if reason.Code != "dangerous_root" {
+			t.Fatalf("code = %q, want dangerous_root (message=%q)", reason.Code, reason.Message)
+		}
+		if !strings.Contains(strings.ToLower(reason.Message), "user profile") {
+			t.Fatalf("message = %q, want user profile wording", reason.Message)
+		}
+	}
+}
+
 func TestValidateUserScanRootAllowsOrdinaryProjectPaths(t *testing.T) {
 	root := t.TempDir()
 	reason, ok := pathsafe.ValidateUserScanRoot(root)
@@ -129,6 +152,14 @@ func TestValidateUserScanRootAllowsOrdinaryProjectPaths(t *testing.T) {
 	reason, ok = pathsafe.ValidateUserScanRoot(proj)
 	if !ok {
 		t.Fatalf("ValidateUserScanRoot project path = %#v, false; want ok", reason)
+	}
+	// Paths under the real user profile must still be accepted as project roots.
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		underHome := filepath.Join(home, "Projects", "foal-sample")
+		reason, ok = pathsafe.ValidateUserScanRoot(underHome)
+		if !ok {
+			t.Fatalf("ValidateUserScanRoot under home = %#v, false; want ok", reason)
+		}
 	}
 }
 

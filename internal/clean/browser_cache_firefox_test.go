@@ -621,8 +621,21 @@ func TestFirefoxAbsoluteProfilePathsAreIgnoredNotGuessed(t *testing.T) {
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
 	})
-	if len(result.Opportunities) != 0 || len(result.Errors) != 0 {
-		t.Fatalf("absolute profile produced opportunity or noise: %#v", result)
+	// Never invent candidates from absolute Path values, but surface a recoverable
+	// catalog-unknown diagnostic when the catalog exists and every profile is out of scope.
+	if len(result.Opportunities) != 0 {
+		t.Fatalf("absolute profile produced opportunity: %#v", result.Opportunities)
+	}
+	if len(result.Errors) != 1 || result.Errors[0].Code != "browser_profile_catalog_unknown" {
+		t.Fatalf("want single browser_profile_catalog_unknown diagnostic, got %#v", result.Errors)
+	}
+	if result.Errors[0].Recoverable != true {
+		t.Fatalf("diagnostic must be recoverable: %#v", result.Errors[0])
+	}
+	// Path-free / catalog-root only — must not echo the absolute profile path.
+	if strings.Contains(result.Errors[0].Message, `D:\Portable`) ||
+		strings.Contains(result.Errors[0].Path, `D:\Portable`) {
+		t.Fatalf("diagnostic must not leak absolute profile path: %#v", result.Errors[0])
 	}
 }
 

@@ -28,6 +28,8 @@ func TestD3DDryRunReportsPermanentPlannedActionWithoutAuthorization(t *testing.T
 		// Dry-run must not require permanent authorization.
 		AllowPermanentDeletion: false,
 		OptIn:                  []string{clean.OpportunityCategoryD3DShaderCache},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 		DiscoverOpportunities: func(context.Context) clean.OpportunityDiscoveryResult {
 			return clean.OpportunityDiscoveryResult{
 				Opportunities: []clean.Opportunity{{

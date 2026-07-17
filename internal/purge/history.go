@@ -23,9 +23,11 @@ func recordHistorySession(ctx context.Context, opts Options, result Result, star
 		EndedAt:   endedAt.UTC(),
 		Mode:      result.Mode,
 		Aggregate: history.AggregateOutcomes{
-			CandidateCount:          result.Totals.CandidateCount,
-			DeletedCount:            result.Totals.DeletedCount,
-			SkippedCount:            result.Totals.SkippedCount + result.Totals.FailedCount,
+			CandidateCount: result.Totals.CandidateCount,
+			DeletedCount:   result.Totals.DeletedCount,
+			// Skipped and failed are disjoint: do not fold FailedCount into
+			// SkippedCount. Consumers may sum skipped+error without double-counting.
+			SkippedCount:            result.Totals.SkippedCount,
 			ErrorCount:              result.Totals.FailedCount,
 			CandidateBytes:          result.Totals.Bytes,
 			PermanentlyDeletedBytes: result.Totals.PermanentlyDeletedBytes,

@@ -311,11 +311,13 @@ func TestAMDGPUShaderCaches_DryRunReportsPermanentWithoutAuthorization(t *testin
 		AllowPermanentDeletion: false,
 		OptIn:                  []string{clean.OpportunityCategoryAMDGPUShaderCaches},
 		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
+			TempDir:            t.TempDir(),
 			LocalAppDataDir:    localAppData,
 			LocalAppDataLowDir: t.TempDir(),
 		},
-		// Disable host default sandbox noise.
-		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+		// Avoid host package-manager tool probes and default sandbox noise.
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 	if len(result.OptInCandidates) != 1 {
 		t.Fatalf("candidates = %#v", result.OptInCandidates)
@@ -354,10 +356,12 @@ func TestIntelGPUShaderCache_DryRunReportsPermanentWithoutAuthorization(t *testi
 		AllowPermanentDeletion: false,
 		OptIn:                  []string{clean.OpportunityCategoryIntelGPUShaderCache},
 		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
+			TempDir:            t.TempDir(),
 			LocalAppDataDir:    t.TempDir(),
 			LocalAppDataLowDir: localLow,
 		},
-		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 	if len(result.OptInCandidates) != 1 || result.OptInCandidates[0].Path != root {
 		t.Fatalf("candidates = %#v", result.OptInCandidates)
@@ -521,10 +525,12 @@ func TestAMDGPUShaderCaches_ProtectionSuppressesCandidate(t *testing.T) {
 		OptIn:     []string{clean.OpportunityCategoryAMDGPUShaderCaches},
 		Validator: pathsafe.NewValidator([]string{dx}),
 		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
+			TempDir:            t.TempDir(),
 			LocalAppDataDir:    localAppData,
 			LocalAppDataLowDir: t.TempDir(),
 		},
-		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 	if len(result.OptInCandidates) != 1 || result.OptInCandidates[0].Path != ogl {
 		t.Fatalf("candidates = %#v, want only unprotected OglCache", result.OptInCandidates)
@@ -539,10 +545,12 @@ func TestIntelGPUShaderCache_ProtectionSuppressesCandidate(t *testing.T) {
 		OptIn:     []string{clean.OpportunityCategoryIntelGPUShaderCache},
 		Validator: pathsafe.NewValidator([]string{root}),
 		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
+			TempDir:            t.TempDir(),
 			LocalAppDataDir:    t.TempDir(),
 			LocalAppDataLowDir: localLow,
 		},
-		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 	if len(result.OptInCandidates) != 0 {
 		t.Fatalf("candidates = %#v, want protection suppression", result.OptInCandidates)
