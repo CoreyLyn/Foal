@@ -1308,7 +1308,7 @@ func (m eagerCleanModel) confirmationFooterLines() []string {
 		"Fresh execution cannot introduce a deletion action type that was not disclosed above.",
 	}
 	if m.selectionIncludesPermanent() {
-		lines = append(lines, "Permanent deletion is irreversible and cannot be recovered from the Recycle Bin.")
+		lines = append(lines, confirmationPermanentIrreversibleWarning)
 	}
 	// Recycle Bin-only wording when that group is present; never claim free space.
 	if _, recycle := m.confirmationActionGroups(); len(recycle) > 0 {
