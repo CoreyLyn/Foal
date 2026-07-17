@@ -21,11 +21,13 @@ func detectSupportedBrowserApplications(ctx context.Context, snapshot func(conte
 		return []RunningApplicationState{
 			{Application: ApplicationGoogleChrome, State: RunningApplicationStateUnknown, Message: message},
 			{Application: ApplicationMicrosoftEdge, State: RunningApplicationStateUnknown, Message: message},
+			{Application: ApplicationMozillaFirefox, State: RunningApplicationStateUnknown, Message: message},
 		}
 	}
 	return []RunningApplicationState{
 		classifyBrowserProcess(ApplicationGoogleChrome, "chrome.exe", snapshotResult.Names),
 		classifyBrowserProcess(ApplicationMicrosoftEdge, "msedge.exe", snapshotResult.Names),
+		classifyBrowserProcess(ApplicationMozillaFirefox, "firefox.exe", snapshotResult.Names),
 	}
 }
 
@@ -54,6 +56,7 @@ func detectSupportedApplications(ctx context.Context, snapshot func(context.Cont
 		states := []RunningApplicationState{
 			{Application: ApplicationGoogleChrome, State: RunningApplicationStateUnknown, Message: message},
 			{Application: ApplicationMicrosoftEdge, State: RunningApplicationStateUnknown, Message: message},
+			{Application: ApplicationMozillaFirefox, State: RunningApplicationStateUnknown, Message: message},
 		}
 		for _, app := range developerApps {
 			states = append(states, RunningApplicationState{
@@ -74,6 +77,7 @@ func detectSupportedApplications(ctx context.Context, snapshot func(context.Cont
 	states := []RunningApplicationState{
 		classifyBrowserProcess(ApplicationGoogleChrome, "chrome.exe", snapshotResult.Names),
 		classifyBrowserProcess(ApplicationMicrosoftEdge, "msedge.exe", snapshotResult.Names),
+		classifyBrowserProcess(ApplicationMozillaFirefox, "firefox.exe", snapshotResult.Names),
 	}
 	for _, app := range developerApps {
 		states = append(states, classifyProcessByExecutables(app.id, app.executables, snapshotResult.Names))

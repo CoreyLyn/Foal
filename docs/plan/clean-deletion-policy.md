@@ -24,7 +24,7 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 | `inet_cache` | Opt-in | Not proven | No | `move_to_recycle_bin` | The current whole INetCache root is broader than proven disposable content; an exact allowlist requires a new decision. |
 | `d3d_shader_cache` | Opt-in | Proven | Yes | `delete_permanently` | Regenerating shader cache under the exact current-user root. |
 | `nvidia_dx_cache` | Opt-in | Proven | Yes | `delete_permanently` | Regenerating NVIDIA DX cache under the exact current-user root. |
-| `browser_cache` | Opt-in | Proven | Yes | `delete_permanently` | Only allowlisted Chrome/Edge profile cache roots; browser must be idle before and after complete inspection. |
+| `browser_cache` | Opt-in | Proven | Yes | `delete_permanently` | Only allowlisted Chrome/Edge (`Cache`/`Code Cache`/`GPUCache`) and Firefox (`cache2`) profile cache roots; each browser must be idle before and after complete inspection. |
 | `vscode_cache` | Opt-in | Proven | Yes | `delete_permanently` | Only allowlisted regenerating roots under the standard Code directory; Code must be idle before and after inspection. Re-fetch impact remains visible. |
 | `cursor_cache` | Opt-in | Proven | Yes | `delete_permanently` | Only allowlisted regenerating roots under the standard Cursor directory; Cursor must be idle before and after inspection. Re-fetch impact remains visible. |
 | `npm-cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact npm content-addressed cache; existing resolver and shared-runtime caveats remain. |

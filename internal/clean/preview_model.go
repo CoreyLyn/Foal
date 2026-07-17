@@ -336,7 +336,7 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		displayName := applicationDisplayName(state.Application)
 		nameKind := "cache review"
 		reasonKind := "cache review"
-		if state.Application == ApplicationGoogleChrome || state.Application == ApplicationMicrosoftEdge {
+		if isBrowserApplication(state.Application) {
 			nameKind = "browser review"
 			reasonKind = "browser cache review"
 		}
@@ -420,6 +420,8 @@ func applicationDisplayName(application string) string {
 		return "Google Chrome"
 	case ApplicationMicrosoftEdge:
 		return "Microsoft Edge"
+	case ApplicationMozillaFirefox:
+		return "Mozilla Firefox"
 	default:
 		if app, ok := developerApplicationDefinition(application); ok {
 			return app.displayName

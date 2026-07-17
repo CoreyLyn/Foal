@@ -269,6 +269,7 @@ type RunningApplicationStatus string
 const (
 	ApplicationGoogleChrome               = "google_chrome"
 	ApplicationMicrosoftEdge              = "microsoft_edge"
+	ApplicationMozillaFirefox             = "mozilla_firefox"
 	ApplicationGo                         = "go"
 	ApplicationCargo                      = "cargo"
 	ApplicationDotNet                     = "dotnet"

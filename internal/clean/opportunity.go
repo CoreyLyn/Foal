@@ -51,7 +51,13 @@ type OpportunityDiscoveryOptions struct {
 }
 
 type BrowserCacheDiscoveryOptions struct {
+	// LocalAppDataDir overrides %LOCALAPPDATA% for tests. Empty uses the process
+	// environment. Chromium User Data and Firefox Local cache trees resolve here.
 	LocalAppDataDir string
+	// RoamingAppDataDir overrides %APPDATA% for tests. Empty uses the process
+	// environment. Firefox profiles.ini catalog resolves under this root.
+	// Chromium browsers ignore this field.
+	RoamingAppDataDir string
 }
 
 type OpportunityDiscoveryResult struct {
