@@ -729,12 +729,33 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		t.Fatal("dev-caches must not enable grok-build-update-residue")
 	}
 	foundDevCachesGroup := false
+	foundCLIAgentsGroup := false
 	for _, name := range valid {
 		if name == clean.DevCacheCategoryAll {
 			foundDevCachesGroup = true
 		}
+		if name == clean.CLIAgentCategoryGroup {
+			foundCLIAgentsGroup = true
+		}
 	}
 	if !foundDevCachesGroup {
 		t.Fatal("valid names missing dev-caches group token")
+	}
+	if !foundCLIAgentsGroup {
+		t.Fatal("valid names missing cli-agents group token")
+	}
+
+	// cli-agents expands product-scoped CLI-agent residue only (catalog order).
+	cliEnabled, cliInvalid, _ := clean.NormalizedOptInSet([]string{clean.CLIAgentCategoryGroup})
+	if len(cliInvalid) != 0 {
+		t.Fatalf("cli-agents invalid = %#v", cliInvalid)
+	}
+	if len(cliEnabled) != 1 || !cliEnabled[clean.CategoryGrokBuildUpdateResidue] {
+		t.Fatalf("cli-agents enabled = %#v, want only grok-build-update-residue", cliEnabled)
+	}
+	for _, id := range wantDevCachesGroup {
+		if cliEnabled[id] {
+			t.Fatalf("cli-agents must not enable cache category %q", id)
+		}
 	}
 }

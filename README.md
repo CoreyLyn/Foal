@@ -71,7 +71,7 @@ foal uninstall --json
 - Chrome/Edge/Firefox `browser_cache` when the browser is idle before and after complete profile cache inspection
 - VS Code `vscode_cache` and Cursor `cursor_cache` when the editor is idle before and after exact allowlisted root inspection under standard Roaming AppData `Code` or `Cursor`
 
-Observed opportunity bytes stay separate from `Potential space`. The Recycle Bin is permanently excluded from opportunity discovery. Developer-tool caches remain Review suggestions by default, or become Opt-in candidates via `--opt-in <name>`, `--opt-in dev-caches`, `--opt-in all`, or Clean TUI selection. Administrator-only caches (SoftwareDistribution, Delivery Optimization) are permission-boundary notices only.
+Observed opportunity bytes stay separate from `Potential space`. The Recycle Bin is permanently excluded from opportunity discovery. Developer-tool caches remain Review suggestions by default, or become Opt-in candidates via `--opt-in <name>`, `--opt-in dev-caches`, `--opt-in all`, or Clean TUI selection. Product-scoped CLI-agent residue categories (currently `grok-build-update-residue`) are selected via exact name, `--opt-in cli-agents`, `--opt-in all`, or Clean TUI selection — never via `dev-caches`. The `cli-agents` token expands independently registered CLI-agent categories only; it is not a mega-category and does not imply all CLI-agent data is cache or safe to delete. Administrator-only caches (SoftwareDistribution, Delivery Optimization) are permission-boundary notices only.
 
 **Clean does not discover or delete project artifacts** (`node_modules`, `target`, `dist`, and similar rebuildable project directories) by default or via ordinary Clean `--opt-in` catalog rows. Dry-run may show a presentation-only Review clue pointing at `foal analyze` / `foal purge`. Use [`foal purge`](#purge) for explicit-root project artifact preview and deletion.
 
@@ -89,9 +89,9 @@ Structured developer-cache highlights:
 - `jetbrains-ide-caches`: exact `caches`/`index` (and Rider `resharper-host`) under supported IntelliJ-platform product-version roots; Local History excluded; independent product idle gates
 - `visual-studio-caches`: exact `ComponentModelCache` under current-user 14.0+ instance hives and shared `Roslyn` under `%LOCALAPPDATA%\Microsoft\VisualStudio`; devenv idle gate; Settings/Extensions/ProgramData excluded
 
-CLI-agent residue (not a `dev-caches` member):
+CLI-agent residue (not a `dev-caches` member; use exact name, `cli-agents`, or `all`):
 
-- `grok-build-update-residue`: exact lowercase updater backups under `$GROK_HOME\bin` (`grok.exe.old`, `agent.exe.old`, and anchored `*.exe.old.<pid>-<seq>.old`); Grok idle before and after; recent `downloads\grok-*` witnesses fail closed and are never candidates; default CLI Clean performs no Grok probing
+- `grok-build-update-residue`: exact lowercase updater backups under `$GROK_HOME\bin` (`grok.exe.old`, `agent.exe.old`, and anchored `*.exe.old.<pid>-<seq>.old`); Grok idle before and after; recent `downloads\grok-*` witnesses fail closed and are never candidates; default CLI Clean performs no Grok probing. Claude Code, Codex CLI, Antigravity CLI, and Gemini CLI remain research-only and are not catalog categories.
 
 Prefer non-destructive examples such as `foal clean --dry-run --json` in docs and verification.
 

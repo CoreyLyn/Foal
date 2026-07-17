@@ -90,6 +90,7 @@ func grokBuildUpdateResidueCategoryEntry(definition CleanupCategoryDefinition) c
 		definition:          definition,
 		resolverKind:        categoryResolverGrokBuildUpdateResidue,
 		resolver:            grokBuildUpdateResidueResolver{},
+		cliAgentProduct:     true, // participates in `cli-agents` selection group only
 		runningApplications: []string{ApplicationGrokBuild},
 	}
 }

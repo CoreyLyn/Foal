@@ -3,8 +3,10 @@ package clean_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -100,7 +102,7 @@ func TestGrokBuildUpdateResidue_CatalogAndSelection(t *testing.T) {
 		t.Fatal("permanent category must start selected when measurable")
 	}
 
-	for _, token := range []string{clean.CategoryGrokBuildUpdateResidue, "all"} {
+	for _, token := range []string{clean.CategoryGrokBuildUpdateResidue, clean.CLIAgentCategoryGroup, "all"} {
 		enabled, invalid, _ := clean.NormalizedOptInSet([]string{token})
 		if len(invalid) != 0 {
 			t.Fatalf("%s invalid = %#v", token, invalid)
@@ -119,6 +121,74 @@ func TestGrokBuildUpdateResidue_CatalogAndSelection(t *testing.T) {
 	enabled, _, _ = clean.NormalizedOptInSet([]string{clean.CategoryGrokBuildUpdateResidue})
 	if len(enabled) != 1 || !enabled[clean.CategoryGrokBuildUpdateResidue] {
 		t.Fatalf("solo opt-in = %#v", enabled)
+	}
+}
+
+func TestCLIAgentsSelectionGroup(t *testing.T) {
+	// cli-agents expands independently registered CLI-agent categories only.
+	enabled, invalid, valid := clean.NormalizedOptInSet([]string{clean.CLIAgentCategoryGroup})
+	if len(invalid) != 0 {
+		t.Fatalf("cli-agents invalid = %#v", invalid)
+	}
+	if len(enabled) != 1 || !enabled[clean.CategoryGrokBuildUpdateResidue] {
+		t.Fatalf("cli-agents enabled = %#v, want only grok-build-update-residue", enabled)
+	}
+	// No developer-cache or Application cache leakage.
+	for _, id := range []string{
+		clean.DevCacheCategoryNPM,
+		clean.OpportunityCategoryVSCodeCache,
+		clean.OpportunityCategoryCursorCache,
+		clean.OpportunityCategoryD3DShaderCache,
+	} {
+		if enabled[id] {
+			t.Fatalf("cli-agents must not enable %q", id)
+		}
+	}
+	foundGroup := false
+	for _, name := range valid {
+		if name == clean.CLIAgentCategoryGroup {
+			foundGroup = true
+			break
+		}
+	}
+	if !foundGroup {
+		t.Fatal("valid names missing cli-agents group token")
+	}
+
+	// Deterministic catalog order via additive plan expansion.
+	plan, planInvalid := clean.CompileAdditiveCategoryPlan([]string{clean.CLIAgentCategoryGroup})
+	if len(planInvalid) != 0 {
+		t.Fatalf("plan invalid = %#v", planInvalid)
+	}
+	// Default + expanded CLI-agent categories only.
+	want := []string{clean.DefaultCategoryFoalOwnedTempSandboxes, clean.CategoryGrokBuildUpdateResidue}
+	if !reflect.DeepEqual(plan.Categories, want) {
+		t.Fatalf("cli-agents plan = %#v, want %#v", plan.Categories, want)
+	}
+
+	// Composes with dev-caches without either group becoming a mega-category.
+	combined, _, _ := clean.NormalizedOptInSet([]string{clean.DevCacheCategoryAll, clean.CLIAgentCategoryGroup})
+	if !combined[clean.CategoryGrokBuildUpdateResidue] {
+		t.Fatal("cli-agents + dev-caches must enable grok residue")
+	}
+	if !combined[clean.DevCacheCategoryNPM] {
+		t.Fatal("cli-agents + dev-caches must enable npm-cache")
+	}
+
+	// Exact plan rejects the group token.
+	_, err := clean.CompileExactCategoryPlan([]string{clean.CLIAgentCategoryGroup})
+	if err == nil {
+		t.Fatal("exact plan must reject cli-agents group token")
+	}
+	var planErr *clean.CategoryPlanError
+	if !errors.As(err, &planErr) || len(planErr.Rejections) == 0 || planErr.Rejections[0].Reason != "group" {
+		t.Fatalf("exact plan rejection = %v, want group", err)
+	}
+
+	// Backward-compatible invalid token handling.
+	_, inv, _ := clean.NormalizedOptInSet([]string{"not-a-real-token"})
+	if len(inv) != 1 || inv[0] != "not-a-real-token" {
+		t.Fatalf("invalid = %#v", inv)
 	}
 }
 

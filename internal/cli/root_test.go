@@ -2153,7 +2153,10 @@ func TestCleanOptInInvalidName(t *testing.T) {
 		"puppeteer-browsers",
 		"electron-cache",
 		"jetbrains-ide-caches",
+		"visual-studio-caches",
+		"grok-build-update-residue",
 		"dev-caches",
+		"cli-agents",
 		"all",
 	}
 	for _, name := range validNames {
@@ -2441,6 +2444,27 @@ func TestHelpDocumentsAllowPermanent(t *testing.T) {
 		"d3d_shader_cache",
 		"--dry-run",
 		"--execute",
+	} {
+		if !strings.Contains(strings.ToLower(out), strings.ToLower(want)) {
+			t.Fatalf("help missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestHelpDocumentsCLIAgentsGroupToken(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--help"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"cli-agents",
+		"dev-caches",
+		"all",
+		"not a mega-category",
+		"does not",
+		"safe to delete",
 	} {
 		if !strings.Contains(strings.ToLower(out), strings.ToLower(want)) {
 			t.Fatalf("help missing %q:\n%s", want, out)

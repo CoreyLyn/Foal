@@ -390,6 +390,12 @@ type categoryCatalogEntry struct {
 	resolverKind        categoryResolverKind
 	resolver            categoryResolver
 	previewSafetyNote   categorySafetyNoteResolver
+	// cliAgentProduct marks an independently registered product-scoped CLI-agent
+	// category for the `cli-agents` selection group. The group token expands
+	// these entries only; it owns no resolver, candidates, or deletion action.
+	// Membership is explicit catalog registration (never inferred from report
+	// group, path shape, or cache-like names).
+	cliAgentProduct bool
 	// existenceRoots lists exact fixed roots for existence-opportunity
 	// categories. Empty means no fixed-root discovery (user_temp).
 	existenceRoots      []existenceRootSpec
@@ -1001,6 +1007,8 @@ func developerCacheCategoryIDs() []string {
 // developerToolsOptInCategoryIDs returns Developer tools opt-in categories for
 // the `dev-caches` group: registered developer-cache categories plus idle
 // Application cache opportunity categories (derived from catalog policy).
+// CLI-agent product categories are intentionally excluded (updater residue is
+// not a cache).
 func developerToolsOptInCategoryIDs() []string {
 	var identifiers []string
 	for _, entry := range canonicalCategoryEntries {
@@ -1010,7 +1018,23 @@ func developerToolsOptInCategoryIDs() []string {
 		if entry.definition.ReportCategory != ReportCategoryDeveloperTools {
 			continue
 		}
+		if entry.cliAgentProduct {
+			continue
+		}
 		if entry.resolverKind == categoryResolverDeveloperCache || entry.resolverKind == categoryResolverApplicationCache {
+			identifiers = append(identifiers, entry.definition.Identifier)
+		}
+	}
+	return identifiers
+}
+
+// cliAgentCategoryIDs returns independently registered product-scoped CLI-agent
+// categories for the `cli-agents` selection group in deterministic catalog
+// order. The token owns no resolver, candidates, or deletion action.
+func cliAgentCategoryIDs() []string {
+	var identifiers []string
+	for _, entry := range canonicalCategoryEntries {
+		if entry.cliAgentProduct {
 			identifiers = append(identifiers, entry.definition.Identifier)
 		}
 	}

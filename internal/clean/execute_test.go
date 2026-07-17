@@ -1023,6 +1023,9 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 	if !found["dev-caches"] {
 		t.Fatalf("valid names missing \"dev-caches\"")
 	}
+	if !found[clean.CLIAgentCategoryGroup] {
+		t.Fatalf("valid names missing %q", clean.CLIAgentCategoryGroup)
+	}
 }
 
 func TestOptInIndividualCategories(t *testing.T) {
@@ -1062,9 +1065,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// 12 opportunity + 17 dev caches + grok-build-update-residue + "dev-caches" + "all" = 32
-	if len(valid) != 32 {
-		t.Fatalf("expected 32 valid names, got %d: %v", len(valid), valid)
+	// 12 opportunity + 17 dev caches + grok-build-update-residue + "dev-caches" + "cli-agents" + "all" = 33
+	if len(valid) != 33 {
+		t.Fatalf("expected 33 valid names, got %d: %v", len(valid), valid)
 	}
 }
 
