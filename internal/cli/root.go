@@ -35,7 +35,7 @@ var commands = []commandSpec{
 	{name: "version", description: "Report Foal build and runtime metadata."},
 	{name: "analyze", description: "Inspect disk usage and cleanup opportunities without changing files."},
 	{name: "clean", description: "Preview or execute conservative cleanup; permanent categories need per-run --allow-permanent."},
-	{name: "purge", description: "Preview or permanently delete rebuildable project artifacts under one explicit root."},
+	{name: "purge", description: "Preview or permanently delete rebuildable project artifacts under explicit root(s)."},
 	{name: "status", description: "Report a read-only system and Foal state snapshot."},
 	{name: "history", description: "Show previous Foal operation records."},
 	{name: "uninstall", description: "Preview application uninstall evidence without executing uninstallers."},
@@ -227,14 +227,26 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			})
 		}
 		recorder, _ := newHistoryRecorder()
+		protectionConfig := loadProtectionConfiguration()
 		purgeOptions := purge.Options{
-			Root:                   invocation.root,
+			Roots:                  append([]string(nil), invocation.roots...),
 			AllowPermanentDeletion: invocation.allowPermanent,
+			Validator:              protectionConfig.Validator,
 			HistoryRecorder:        recorder,
 			CommandParameters: history.CommandParameters{
 				Command: "purge",
 				Args:    append([]string(nil), args...),
 			},
+		}
+		if protectionConfig.LoadError != nil {
+			purgeOptions.ProtectionLoadError = &purge.Issue{
+				Code:        protectionConfig.LoadError.Code,
+				Message:     protectionConfig.LoadError.Message,
+				Recoverable: protectionConfig.LoadError.Recoverable,
+			}
+			if purgeOptions.ProtectionLoadError.Code == "" {
+				purgeOptions.ProtectionLoadError.Code = purge.IssueProtectionFileLoadFailed
+			}
 		}
 		var result purge.Result
 		if invocation.execute {
@@ -457,14 +469,14 @@ type cleanInvocation struct {
 }
 
 type purgeInvocation struct {
-	root           string
+	roots          []string
 	execute        bool
 	allowPermanent bool
 }
 
 func validatePurgeArgs(args []string) (purgeInvocation, error) {
 	var invocation purgeInvocation
-	var root string
+	var roots []string
 	dryRun := false
 	execute := false
 	allowPermanent := false
@@ -484,22 +496,19 @@ func validatePurgeArgs(args []string) (purgeInvocation, error) {
 			if strings.HasPrefix(arg, "-") {
 				return invocation, fmt.Errorf("unknown purge option: %s", arg)
 			}
-			if root != "" {
-				return invocation, fmt.Errorf("purge accepts exactly one explicit root; multi-root is not available in this slice")
-			}
-			root = arg
+			roots = append(roots, arg)
 		}
 	}
 	if dryRun && execute {
 		return invocation, fmt.Errorf("purge accepts either --dry-run or --execute, not both")
 	}
-	if strings.TrimSpace(root) == "" {
+	if len(roots) == 0 {
 		return invocation, fmt.Errorf("purge requires an explicit root path (example: foal purge .\\my-project); refusing to scan without a user-supplied root")
 	}
 	if allowPermanent && !execute && !dryRun {
 		// Flag alone with root defaults to dry-run (non-mutating); allow without error.
 	}
-	return purgeInvocation{root: root, execute: execute, allowPermanent: allowPermanent}, nil
+	return purgeInvocation{roots: roots, execute: execute, allowPermanent: allowPermanent}, nil
 }
 
 func validateCleanArgs(args []string) (cleanInvocation, error) {
@@ -581,7 +590,8 @@ func helpText() string {
 	builder.WriteString("                       and is never used as a Recycle Bin fallback.\n")
 	builder.WriteString("  --opt-in <name>      Include an opt-in category (repeatable; or \"all\" / \"dev-caches\").\n")
 	builder.WriteString("\nPurge options:\n")
-	builder.WriteString("  <root>               Required explicit project/workspace root to scan (never implied).\n")
+	builder.WriteString("  <root> [root...]     Required explicit project/workspace root(s) to scan (never implied).\n")
+	builder.WriteString("                       Multiple roots must each be valid; volume roots and system paths are rejected.\n")
 	builder.WriteString("  --dry-run            Preview only (default). Reports planned permanent deletion without mutation.\n")
 	builder.WriteString("  --execute            Fresh rediscovery then permanent deletion of matching artifacts.\n")
 	builder.WriteString("  --allow-permanent    Per-run authorization for permanent deletion (with --execute).\n")
@@ -595,7 +605,7 @@ func helpText() string {
 	builder.WriteString("  foal clean --execute --opt-in d3d_shader_cache --allow-permanent\n")
 	builder.WriteString("  foal clean --execute --opt-in playwright-browsers --allow-permanent\n")
 	builder.WriteString("  foal purge .\\my-project\n")
-	builder.WriteString("  foal purge --json .\\my-project\n")
+	builder.WriteString("  foal purge --json .\\proj-a .\\proj-b\n")
 	builder.WriteString("  foal purge --execute --allow-permanent .\\my-project\n")
 	builder.WriteString("  foal.exe analyze\n")
 	return builder.String()

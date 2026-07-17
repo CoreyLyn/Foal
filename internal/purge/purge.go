@@ -1,6 +1,7 @@
 // Package purge implements the independent Project artifact purge flow.
-// Dry-run previews allowlisted rebuildable directories under one explicit root;
-// execute rediscovers, authorizes permanent deletion per run, and mutates.
+// Dry-run previews allowlisted rebuildable directories under one or more
+// explicit user-supplied roots; execute rediscovers, authorizes permanent
+// deletion per run, and mutates. Roots are never implied.
 package purge
 
 import (
@@ -35,6 +36,9 @@ const (
 	IssuePermanentDeletionNotAuthorized = "permanent_deletion_not_authorized"
 	IssuePermanentDeleteFailed          = "permanent_delete_failed"
 	IssueContextCanceled                = "context_canceled"
+	IssueDangerousRoot                  = "dangerous_root"
+	IssueProtectedPath                  = "protected_path"
+	IssueProtectionFileLoadFailed       = "protection_file_load_failed"
 
 	// defaultDescendantLimit matches Clean opportunity inspection ceilings.
 	defaultDescendantLimit = 100_000
@@ -60,9 +64,12 @@ var (
 	errReparsePoint    = errors.New("purge inspection encountered a reparse point")
 )
 
-// Options configures dry-run discovery or execute mutation under one explicit root.
+// Options configures dry-run discovery or execute mutation under explicit roots.
 type Options struct {
-	// Root is required. Empty root is an error; Foal never invents a system-drive scan.
+	// Roots are required user-supplied scan roots (one or more). When empty,
+	// Root is used as a single-root convenience. Foal never invents defaults.
+	Roots []string
+	// Root is the single-root convenience field. Prefer Roots for multi-root.
 	Root string
 	// DescendantLimit caps descendants inspected while measuring one candidate.
 	// Zero selects the default (100_000).
@@ -75,8 +82,12 @@ type Options struct {
 	AllowPermanentDeletion bool
 	// PermanentRemover is injectable for tests; nil uses ordinary filesystem removal.
 	PermanentRemover delete.PermanentRemover
-	// Validator is applied immediately before each permanent delete.
+	// Validator carries user Protection rules and is applied during discovery
+	// (omit protected artifacts) and immediately before each permanent delete.
 	Validator pathsafe.Validator
+	// ProtectionLoadError fail-closes before any scan when Protection config
+	// could not be loaded (same policy as Clean).
+	ProtectionLoadError *Issue
 	// HistoryRecorder optionally records purge sessions (distinct from Clean).
 	HistoryRecorder history.Recorder
 	// CommandParameters identify the purge invocation in History.
@@ -85,9 +96,12 @@ type Options struct {
 
 // Result is the JSON-contract read model for purge dry-run and execute.
 type Result struct {
-	Status     string        `json:"status"`
-	Mode       string        `json:"mode"`
-	Root       string        `json:"root,omitempty"`
+	Status string `json:"status"`
+	Mode   string `json:"mode"`
+	// Root is set when exactly one scan root was used (single-root back-compat).
+	Root string `json:"root,omitempty"`
+	// Roots lists every validated scan root (always set on successful discovery).
+	Roots      []string      `json:"roots,omitempty"`
 	Candidates []Candidate   `json:"candidates"`
 	Deleted    []DeletedItem `json:"deleted"`
 	Failed     []FailedItem  `json:"failed"`
@@ -170,6 +184,7 @@ func DryRun(ctx context.Context, opts Options) Result {
 		Status:     StatusPreview,
 		Mode:       ModeDryRun,
 		Root:       preview.root,
+		Roots:      append([]string(nil), preview.roots...),
 		Candidates: preview.candidates,
 		Deleted:    []DeletedItem{},
 		Failed:     []FailedItem{},
@@ -183,16 +198,61 @@ func DryRun(ctx context.Context, opts Options) Result {
 }
 
 type discoveryPreview struct {
+	// root is the sole root when len(roots)==1 (back-compat for Result.Root).
 	root       string
+	roots      []string
 	candidates []Candidate
 	skipped    []Skipped
 }
 
-// discover validates the root and finds candidates. On hard error or cancel,
-// ok is false and errResult is ready to return.
+func requestedRoots(opts Options) []string {
+	roots := make([]string, 0, len(opts.Roots)+1)
+	for _, r := range opts.Roots {
+		if trimmed := strings.TrimSpace(r); trimmed != "" {
+			roots = append(roots, trimmed)
+		}
+	}
+	if len(roots) == 0 {
+		if trimmed := strings.TrimSpace(opts.Root); trimmed != "" {
+			roots = append(roots, trimmed)
+		}
+	}
+	return roots
+}
+
+func errorResult(mode string, start time.Time, roots []string, message string) Result {
+	result := Result{
+		Status:     StatusError,
+		Mode:       mode,
+		Candidates: []Candidate{},
+		Deleted:    []DeletedItem{},
+		Failed:     []FailedItem{},
+		Skipped:    []Skipped{},
+		Message:    message,
+		ElapsedMS:  time.Since(start).Milliseconds(),
+	}
+	if len(roots) == 1 {
+		result.Root = roots[0]
+		result.Roots = []string{roots[0]}
+	} else if len(roots) > 1 {
+		result.Roots = append([]string(nil), roots...)
+	}
+	return result
+}
+
+// discover validates all roots first (fail-closed; no partial scan when any root
+// is invalid/dangerous), then finds candidates under each. On hard error or
+// cancel, ok is false and errResult is ready to return.
 func discover(ctx context.Context, opts Options, mode string, start time.Time) (discoveryPreview, Result, bool) {
-	root := strings.TrimSpace(opts.Root)
-	if root == "" {
+	if opts.ProtectionLoadError != nil {
+		msg := opts.ProtectionLoadError.Message
+		if msg == "" {
+			msg = "protection configuration could not be loaded"
+		}
+		code := opts.ProtectionLoadError.Code
+		if code == "" {
+			code = IssueProtectionFileLoadFailed
+		}
 		return discoveryPreview{}, Result{
 			Status:     StatusError,
 			Mode:       mode,
@@ -200,65 +260,55 @@ func discover(ctx context.Context, opts Options, mode string, start time.Time) (
 			Deleted:    []DeletedItem{},
 			Failed:     []FailedItem{},
 			Skipped:    []Skipped{},
-			Message:    "purge requires an explicit root path; refusing to scan without a user-supplied root",
+			Message:    code + ": " + msg,
 			ElapsedMS:  time.Since(start).Milliseconds(),
 		}, false
 	}
 
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return discoveryPreview{}, Result{
-			Status:     StatusError,
-			Mode:       mode,
-			Root:       root,
-			Candidates: []Candidate{},
-			Deleted:    []DeletedItem{},
-			Failed:     []FailedItem{},
-			Skipped:    []Skipped{},
-			Message:    "invalid purge root: " + err.Error(),
-			ElapsedMS:  time.Since(start).Milliseconds(),
-		}, false
+	rawRoots := requestedRoots(opts)
+	if len(rawRoots) == 0 {
+		return discoveryPreview{}, errorResult(mode, start, nil,
+			"purge requires an explicit root path; refusing to scan without a user-supplied root"), false
 	}
 
-	info, err := os.Lstat(absRoot)
-	if err != nil {
-		return discoveryPreview{}, Result{
-			Status:     StatusError,
-			Mode:       mode,
-			Root:       absRoot,
-			Candidates: []Candidate{},
-			Deleted:    []DeletedItem{},
-			Failed:     []FailedItem{},
-			Skipped:    []Skipped{},
-			Message:    "purge root not found or inaccessible: " + err.Error(),
-			ElapsedMS:  time.Since(start).Milliseconds(),
-		}, false
-	}
-	if isReparsePoint(info) {
-		return discoveryPreview{}, Result{
-			Status:     StatusError,
-			Mode:       mode,
-			Root:       absRoot,
-			Candidates: []Candidate{},
-			Deleted:    []DeletedItem{},
-			Failed:     []FailedItem{},
-			Skipped:    []Skipped{},
-			Message:    "purge root is a reparse point or link and cannot be scanned",
-			ElapsedMS:  time.Since(start).Milliseconds(),
-		}, false
-	}
-	if !info.IsDir() {
-		return discoveryPreview{}, Result{
-			Status:     StatusError,
-			Mode:       mode,
-			Root:       absRoot,
-			Candidates: []Candidate{},
-			Deleted:    []DeletedItem{},
-			Failed:     []FailedItem{},
-			Skipped:    []Skipped{},
-			Message:    "purge root must be a directory",
-			ElapsedMS:  time.Since(start).Milliseconds(),
-		}, false
+	// Phase 1: resolve + policy-validate every root before any tree walk.
+	// Any failure rejects the whole run so system trees are never partially scanned.
+	absRoots := make([]string, 0, len(rawRoots))
+	seen := make(map[string]struct{}, len(rawRoots))
+	for _, root := range rawRoots {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return discoveryPreview{}, errorResult(mode, start, []string{root},
+				"invalid purge root: "+err.Error()), false
+		}
+		if reason, ok := pathsafe.ValidateUserScanRoot(absRoot); !ok {
+			code := reason.Code
+			if code == "" {
+				code = IssueDangerousRoot
+			}
+			return discoveryPreview{}, errorResult(mode, start, []string{absRoot},
+				code+": "+reason.Message), false
+		}
+		info, err := os.Lstat(absRoot)
+		if err != nil {
+			return discoveryPreview{}, errorResult(mode, start, []string{absRoot},
+				"purge root not found or inaccessible: "+err.Error()), false
+		}
+		if isReparsePoint(info) {
+			return discoveryPreview{}, errorResult(mode, start, []string{absRoot},
+				"purge root is a reparse point or link and cannot be scanned"), false
+		}
+		if !info.IsDir() {
+			return discoveryPreview{}, errorResult(mode, start, []string{absRoot},
+				"purge root must be a directory"), false
+		}
+		identity := pathsafe.NormalizePathForIdentity(absRoot)
+		if _, dup := seen[identity]; dup {
+			// Same root twice is not an error; ignore duplicates for discovery.
+			continue
+		}
+		seen[identity] = struct{}{}
+		absRoots = append(absRoots, absRoot)
 	}
 
 	limit := opts.DescendantLimit
@@ -270,43 +320,74 @@ func discover(ctx context.Context, opts Options, mode string, start time.Time) (
 		walkDir = filepath.WalkDir
 	}
 
-	scanner := &discovery{
-		root:       absRoot,
-		limit:      limit,
-		walkDir:    walkDir,
-		candidates: nil,
-		skipped:    nil,
+	var allCandidates []Candidate
+	var allSkipped []Skipped
+	for _, absRoot := range absRoots {
+		if ctx.Err() != nil {
+			break
+		}
+		scanner := &discovery{
+			root:      absRoot,
+			limit:     limit,
+			walkDir:   walkDir,
+			validator: opts.Validator,
+		}
+		scanner.discover(ctx, absRoot)
+		allCandidates = append(allCandidates, scanner.candidates...)
+		allSkipped = append(allSkipped, scanner.skipped...)
+		if scanner.canceled {
+			return discoveryPreview{}, Result{
+				Status:     StatusCanceled,
+				Mode:       mode,
+				Root:       singleRootField(absRoots),
+				Roots:      append([]string(nil), absRoots...),
+				Candidates: []Candidate{},
+				Deleted:    []DeletedItem{},
+				Failed:     []FailedItem{},
+				Totals:     Totals{},
+				Skipped:    allSkipped,
+				Message:    "purge discovery canceled; no partial preview claimed",
+				ElapsedMS:  time.Since(start).Milliseconds(),
+			}, false
+		}
 	}
-	scanner.discover(ctx, absRoot)
 
-	if ctx.Err() != nil || scanner.canceled {
-		// Cancellation during discovery: no partial success claim.
+	if ctx.Err() != nil {
 		return discoveryPreview{}, Result{
 			Status:     StatusCanceled,
 			Mode:       mode,
-			Root:       absRoot,
+			Root:       singleRootField(absRoots),
+			Roots:      append([]string(nil), absRoots...),
 			Candidates: []Candidate{},
 			Deleted:    []DeletedItem{},
 			Failed:     []FailedItem{},
 			Totals:     Totals{},
-			Skipped:    scanner.skipped,
+			Skipped:    allSkipped,
 			Message:    "purge discovery canceled; no partial preview claimed",
 			ElapsedMS:  time.Since(start).Milliseconds(),
 		}, false
 	}
 
-	sort.SliceStable(scanner.candidates, func(i, j int) bool {
-		if scanner.candidates[i].RelativePath == scanner.candidates[j].RelativePath {
-			return scanner.candidates[i].Path < scanner.candidates[j].Path
+	sort.SliceStable(allCandidates, func(i, j int) bool {
+		if allCandidates[i].Path == allCandidates[j].Path {
+			return allCandidates[i].RelativePath < allCandidates[j].RelativePath
 		}
-		return scanner.candidates[i].RelativePath < scanner.candidates[j].RelativePath
+		return allCandidates[i].Path < allCandidates[j].Path
 	})
 
 	return discoveryPreview{
-		root:       absRoot,
-		candidates: scanner.candidates,
-		skipped:    scanner.skipped,
+		root:       singleRootField(absRoots),
+		roots:      absRoots,
+		candidates: allCandidates,
+		skipped:    allSkipped,
 	}, Result{}, true
+}
+
+func singleRootField(roots []string) string {
+	if len(roots) == 1 {
+		return roots[0]
+	}
+	return ""
 }
 
 func totalsFromPreview(candidates []Candidate, skipped []Skipped) Totals {
@@ -351,18 +432,18 @@ func RenderPreviewReport(result Result) string {
 		return b.String()
 	}
 
-	b.WriteString(fmt.Sprintf("Root: %s\n", result.Root))
+	b.WriteString(formatRootsLine(result))
 	b.WriteString(fmt.Sprintf("Candidates: %d\n", result.Totals.CandidateCount))
 	b.WriteString(fmt.Sprintf("Measured bytes: %d\n", result.Totals.Bytes))
 	b.WriteString("Planned action: permanent deletion (requires --execute --allow-permanent)\n")
 	if len(result.Candidates) == 0 {
-		b.WriteString("No allowlisted project artifacts found under this root.\n")
+		b.WriteString("No allowlisted project artifacts found under the supplied root(s).\n")
 	} else {
 		b.WriteString("\n")
 		for _, c := range result.Candidates {
-			path := c.RelativePath
-			if path == "" {
-				path = c.Path
+			path := c.Path
+			if c.RelativePath != "" && len(result.Roots) <= 1 {
+				path = c.RelativePath
 			}
 			b.WriteString(fmt.Sprintf("  %-12s %10d  %s\n", c.Kind, c.Bytes, path))
 		}
@@ -370,7 +451,17 @@ func RenderPreviewReport(result Result) string {
 	if len(result.Skipped) > 0 {
 		b.WriteString("\nSkipped:\n")
 		for _, s := range result.Skipped {
-			b.WriteString(fmt.Sprintf("  %s (%s)\n", s.Path, s.Reason))
+			// Protected paths: reason only (avoid advertising protected locations
+			// as if they were selectable). Other skips may include path context.
+			if s.Reason == IssueProtectedPath {
+				b.WriteString(fmt.Sprintf("  (%s) %s\n", s.Reason, s.Detail))
+				continue
+			}
+			label := s.Path
+			if label == "" {
+				label = s.Kind
+			}
+			b.WriteString(fmt.Sprintf("  %s (%s)\n", label, s.Reason))
 		}
 	}
 	for _, notice := range result.Notices {
@@ -408,7 +499,7 @@ func RenderExecuteReport(result Result) string {
 	} else {
 		b.WriteString("Execution complete.\n")
 	}
-	b.WriteString(fmt.Sprintf("Root: %s\n", result.Root))
+	b.WriteString(formatRootsLine(result))
 	b.WriteString(fmt.Sprintf("Deleted: %d, skipped: %d, failed: %d.\n",
 		result.Totals.DeletedCount, result.Totals.SkippedCount, result.Totals.FailedCount))
 	b.WriteString(fmt.Sprintf("Permanently deleted: %d bytes. Affected: %d bytes.\n",
@@ -427,6 +518,25 @@ func RenderExecuteReport(result Result) string {
 	return b.String()
 }
 
+func formatRootsLine(result Result) string {
+	roots := result.Roots
+	if len(roots) == 0 && result.Root != "" {
+		roots = []string{result.Root}
+	}
+	if len(roots) == 0 {
+		return "Root: (none)\n"
+	}
+	if len(roots) == 1 {
+		return fmt.Sprintf("Root: %s\n", roots[0])
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Roots (%d):\n", len(roots)))
+	for _, r := range roots {
+		b.WriteString(fmt.Sprintf("  %s\n", r))
+	}
+	return b.String()
+}
+
 // IsArtifactDirectoryName reports whether name is an exact v1 allowlisted final component.
 func IsArtifactDirectoryName(name string) bool {
 	_, ok := artifactDirectoryNames[name]
@@ -437,6 +547,7 @@ type discovery struct {
 	root       string
 	limit      int
 	walkDir    func(string, fs.WalkDirFunc) error
+	validator  pathsafe.Validator
 	candidates []Candidate
 	skipped    []Skipped
 	canceled   bool
@@ -458,7 +569,7 @@ func (d *discovery) discover(ctx context.Context, path string) {
 
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		d.skip(path, classifyError(err), err.Error())
+		d.skip(path, "", classifyError(err), err.Error())
 		return
 	}
 
@@ -469,11 +580,11 @@ func (d *discovery) discover(ctx context.Context, path string) {
 		childPath := filepath.Join(path, entry.Name())
 		info, err := entry.Info()
 		if err != nil {
-			d.skip(childPath, classifyError(err), err.Error())
+			d.skip(childPath, "", classifyError(err), err.Error())
 			continue
 		}
 		if isReparsePoint(info) {
-			d.skip(childPath, "reparse_point", "not traversed")
+			d.skip(childPath, "", "reparse_point", "not traversed")
 			continue
 		}
 		if !info.IsDir() {
@@ -493,13 +604,21 @@ func (d *discovery) measureCandidate(ctx context.Context, path, kind string) {
 	if d.checkCancel(ctx) {
 		return
 	}
+	// Protection is deny-only: omit before measurement/totals so protected
+	// artifacts never enter selectable or deletable candidate sets.
+	if d.validator.IsUserProtected(path) {
+		// Path omitted from skipped.Path to avoid leaking protected locations as
+		// selectable-looking entries; kind + stable reason remain for contracts.
+		d.skip("", kind, IssueProtectedPath, "omitted by user-defined Protection rule")
+		return
+	}
 	bytes, err := measureTree(ctx, path, d.limit, d.walkDir)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			d.canceled = true
 			return
 		}
-		d.skip(path, classifyMeasureError(err), err.Error())
+		d.skip(path, kind, classifyMeasureError(err), err.Error())
 		return
 	}
 	rel, err := filepath.Rel(d.root, path)
@@ -515,12 +634,19 @@ func (d *discovery) measureCandidate(ctx context.Context, path, kind string) {
 	})
 }
 
-func (d *discovery) skip(path, reason, detail string) {
-	d.skipped = append(d.skipped, Skipped{
+func (d *discovery) skip(path, kind, reason, detail string) {
+	s := Skipped{
 		Path:   path,
+		Kind:   kind,
 		Reason: reason,
 		Detail: detail,
-	})
+	}
+	// Planned action only applies to allowlisted artifact outcomes (protection
+	// omit / measure fail), not incidental traversal skips (reparse, read errors).
+	if kind != "" {
+		s.PlannedAction = PlannedActionDeletePermanently
+	}
+	d.skipped = append(d.skipped, s)
 }
 
 func (d *discovery) checkCancel(ctx context.Context) bool {

@@ -103,8 +103,63 @@ func (v Validator) IsUserProtected(path string) bool {
 	return false
 }
 
+// Built-in system trees that must never be cleaned or used as deep-scan roots.
+var builtInProtectedSystemRoots = []string{
+	`c:\windows`,
+	`c:\program files`,
+	`c:\program files (x86)`,
+}
+
 func ValidateDeletePath(path string) (Reason, bool) {
 	return Validator{}.ValidateDeletePath(path)
+}
+
+// ValidateUserScanRoot reports whether path is acceptable as an explicit
+// user-supplied deep-scan root (purge). It rejects empty paths, UNC, relative
+// forms, 8.3 short names, volume roots (e.g. C:\), and well-known system trees
+// (Windows, Program Files) without reading the filesystem. Callers must still
+// verify the path exists, is a directory, and is not a reparse point.
+//
+// A failed reason uses code "dangerous_root" for policy rejections so purge can
+// fail closed before any partial scan of system trees.
+func ValidateUserScanRoot(path string) (Reason, bool) {
+	if strings.TrimSpace(path) == "" {
+		return reject("empty_path", "scan root cannot be empty")
+	}
+
+	normalized := stripLongPathPrefix(path)
+	cleaned := strings.ToLower(filepath.Clean(normalized))
+
+	if strings.HasPrefix(cleaned, `\\`) {
+		return reject("unc_path", "UNC paths cannot be used as purge roots")
+	}
+	if !filepath.IsAbs(cleaned) {
+		return reject("relative_path", "scan root must be absolute")
+	}
+	if containsShortNameSegment(cleaned) {
+		return reject("short_name_path", "8.3 short-name paths cannot be used as purge roots")
+	}
+	if isVolumeRootPath(cleaned) {
+		return reject("dangerous_root", "volume roots cannot be used as purge roots; supply a project or workspace directory")
+	}
+	for _, protected := range builtInProtectedSystemRoots {
+		if cleaned == protected || strings.HasPrefix(cleaned, protected+string(filepath.Separator)) {
+			return reject("dangerous_root", "system paths such as Windows and Program Files cannot be used as purge roots")
+		}
+	}
+	return Reason{}, true
+}
+
+// isVolumeRootPath reports whether cleaned (filepath.Clean + lower) is a drive
+// volume root such as c:\ or c:.
+func isVolumeRootPath(cleaned string) bool {
+	vol := strings.ToLower(filepath.VolumeName(cleaned))
+	if vol == "" {
+		return false
+	}
+	rest := strings.TrimPrefix(cleaned, vol)
+	rest = strings.Trim(rest, `/\`)
+	return rest == ""
 }
 
 func (v Validator) ValidateDeletePath(path string) (Reason, bool) {
@@ -131,11 +186,7 @@ func (v Validator) ValidateDeletePath(path string) (Reason, bool) {
 		}
 	}
 
-	for _, protected := range []string{
-		`c:\windows`,
-		`c:\program files`,
-		`c:\program files (x86)`,
-	} {
+	for _, protected := range builtInProtectedSystemRoots {
 		if cleaned == protected || strings.HasPrefix(cleaned, protected+`\`) {
 			return reject("protected_path", "protected system paths cannot be cleaned by Foal")
 		}
