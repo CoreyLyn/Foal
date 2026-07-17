@@ -637,6 +637,168 @@ func uniqueActiveCategories(events []clean.ExecutionProgress, phase clean.Execut
 	return out
 }
 
+func TestExecuteReportsCategoryCompletionBeforeFinalResult(t *testing.T) {
+	root := t.TempDir()
+	recycleA := writeTestFile(t, root, "a.tmp", "aa")
+	recycleB := writeTestFile(t, root, "b.tmp", "bb")
+	permanentC := writeTestFile(t, root, "c.tmp", "cc")
+	const (
+		ruleA = "test_rule_a"
+		ruleB = "test_rule_b"
+		ruleC = "test_rule_c"
+	)
+	var events []clean.ExecutionProgress
+	result := clean.Execute(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
+		CategoryPlannedActions: map[string]clean.DeletionAction{
+			ruleA: clean.DeletionActionMoveToRecycleBin,
+			ruleB: clean.DeletionActionMoveToRecycleBin,
+			ruleC: clean.DeletionActionDeletePermanently,
+		},
+		Rules: []clean.Rule{
+			{ID: ruleA, DefaultEnabled: true, CandidatePaths: []string{recycleA}},
+			{ID: ruleB, DefaultEnabled: true, CandidatePaths: []string{recycleB}},
+			{ID: ruleC, DefaultEnabled: true, CandidatePaths: []string{permanentC}},
+		},
+		RecycleBinAdapter: &recordingRecycleBinAdapter{},
+		PermanentRemover:  &recordingPermanentRemover{},
+		RecycleBinCapacityProbe: func(string) (clean.RecycleBinVolumeConfig, error) {
+			return clean.RecycleBinVolumeConfig{Volume: "v", MaxCapacity: 1 << 60}, nil
+		},
+		ProgressReporter: func(p clean.ExecutionProgress) {
+			events = append(events, p)
+		},
+	})
+	if result.Totals.DeletedCount != 3 {
+		t.Fatalf("deleted = %d, want 3; result=%#v", result.Totals.DeletedCount, result)
+	}
+
+	// Completions must arrive before phase Complete; ActiveCategory still works.
+	var (
+		completions        []clean.ExecutionProgress
+		sawActiveRecycle   bool
+		sawActivePermanent bool
+		completePhaseIndex = -1
+	)
+	for i, e := range events {
+		if e.Phase == clean.ExecutionPhaseComplete && completePhaseIndex < 0 {
+			completePhaseIndex = i
+		}
+		if e.ActiveCategory == ruleA && e.Phase == clean.ExecutionPhaseRecycleBinOperations {
+			sawActiveRecycle = true
+		}
+		if e.ActiveCategory == ruleC && e.Phase == clean.ExecutionPhasePermanentOperations {
+			sawActivePermanent = true
+		}
+		if clean.HasCategoryCompletion(e) {
+			completions = append(completions, e)
+			if strings.Contains(e.CompletedCategory, `\`) {
+				t.Fatalf("CompletedCategory must be path-free: %#v", e)
+			}
+			if e.ActiveCategory != "" && strings.Contains(e.ActiveCategory, `\`) {
+				t.Fatalf("ActiveCategory must be path-free: %#v", e)
+			}
+		}
+	}
+	if !sawActiveRecycle || !sawActivePermanent {
+		t.Fatalf("ActiveCategory missing: recycle=%v permanent=%v", sawActiveRecycle, sawActivePermanent)
+	}
+	if completePhaseIndex < 0 {
+		t.Fatal("missing completion phase")
+	}
+
+	byID := map[string]clean.ExecutionProgress{}
+	for _, c := range completions {
+		byID[c.CompletedCategory] = c
+	}
+	for _, id := range []string{ruleA, ruleB, ruleC} {
+		c, ok := byID[id]
+		if !ok {
+			t.Fatalf("missing completion for %s; completions=%#v events=%#v", id, completions, events)
+		}
+		if c.CompletedState != clean.CategoryExecutionCleaned {
+			t.Fatalf("%s state = %q, want cleaned", id, c.CompletedState)
+		}
+		if c.CompletedDeletedCount != 1 || c.CompletedAffectedBytes <= 0 {
+			t.Fatalf("%s metrics = %#v", id, c)
+		}
+	}
+	// Completions for A/B/C must precede the Complete phase marker in the stream.
+	for _, id := range []string{ruleA, ruleB, ruleC} {
+		idx := -1
+		for i, e := range events {
+			if e.CompletedCategory == id {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 || idx >= completePhaseIndex {
+			t.Fatalf("completion for %q must precede Complete (idx=%d complete=%d)", id, idx, completePhaseIndex)
+		}
+	}
+	// Progress must not leak into JSON Result.
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "CompletedCategory") || strings.Contains(string(encoded), "completed_category") {
+		t.Fatalf("completion progress leaked into Result JSON: %s", encoded)
+	}
+}
+
+func TestExecuteReportsEmptyAfterResolveWhenSelectedCategoryHasNoCandidates(t *testing.T) {
+	// Exact plan with a catalog permanent category that resolves to nothing.
+	// Mid-flight empty completion must fire during Scanning, before mutation.
+	id := clean.DevCacheCategoryGo
+	var events []clean.ExecutionProgress
+	plan, err := clean.CompileExactCategoryPlan([]string{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := clean.Execute(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
+		Plan:                   &plan,
+		// Force empty resolution for this category.
+		DevCachePathResolver: func(category string) []string {
+			if category == id {
+				return nil
+			}
+			return nil
+		},
+		ProgressReporter: func(p clean.ExecutionProgress) {
+			events = append(events, p)
+		},
+	})
+	_ = result
+
+	var emptyCompletion *clean.ExecutionProgress
+	completeIdx := -1
+	for i, e := range events {
+		if e.Phase == clean.ExecutionPhaseComplete && completeIdx < 0 {
+			completeIdx = i
+		}
+		if e.CompletedCategory == id {
+			cp := e
+			emptyCompletion = &cp
+			if e.CompletedState != clean.CategoryExecutionEmpty {
+				t.Fatalf("empty completion state = %q", e.CompletedState)
+			}
+			if e.CompletedAffectedBytes != 0 || e.CompletedDeletedCount != 0 {
+				t.Fatalf("empty must not invent success: %#v", e)
+			}
+			if completeIdx >= 0 && i >= completeIdx {
+				t.Fatalf("empty completion must precede Complete")
+			}
+			if e.Phase != clean.ExecutionPhaseScanning {
+				t.Fatalf("empty-after-resolve phase = %q, want scanning", e.Phase)
+			}
+		}
+	}
+	if emptyCompletion == nil {
+		t.Fatalf("missing empty completion for %s; events=%#v", id, events)
+	}
+}
+
 func containsAllStrings(have []string, want ...string) bool {
 	set := make(map[string]bool, len(have))
 	for _, s := range have {

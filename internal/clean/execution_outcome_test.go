@@ -361,6 +361,46 @@ func TestSumAndCountExecutionOutcomes(t *testing.T) {
 	}
 }
 
+func TestProjectProvisionalCategoryOutcomeMatchesFinalMapping(t *testing.T) {
+	id := clean.DefaultCategoryFoalOwnedTempSandboxes
+	result := clean.Result{
+		Status: "ok",
+		Deleted: []clean.DeletedItem{{
+			Path: `C:\Temp\a`, Bytes: 5, Rule: id, Action: string(clean.DeletionActionMoveToRecycleBin),
+		}},
+		Skipped: []clean.SkippedItem{{
+			Path: `C:\Temp\b`, Bytes: 1, Rule: id,
+			Reason: clean.StructuredIssue{Code: "protected_path", Message: "protected", Recoverable: true, Rule: id},
+		}},
+	}
+	provisional := clean.ProjectProvisionalCategoryOutcome(id, result)
+	final := clean.ProjectCategoryExecutionOutcomes([]string{id}, result)
+	if len(final) != 1 {
+		t.Fatalf("final = %#v", final)
+	}
+	if provisional.State != final[0].State || provisional.State != clean.CategoryExecutionPartial {
+		t.Fatalf("provisional=%#v final=%#v", provisional, final[0])
+	}
+	if provisional.AffectedBytes != 5 || provisional.DeletedCount != 1 || provisional.SkippedCount != 1 {
+		t.Fatalf("metrics = %#v", provisional)
+	}
+	if clean.HasCategoryCompletion(clean.ExecutionProgress{}) {
+		t.Fatal("empty progress must not report completion")
+	}
+	if !clean.HasCategoryCompletion(clean.ExecutionProgress{
+		CompletedCategory: id,
+		CompletedState:    clean.CategoryExecutionCleaned,
+	}) {
+		t.Fatal("terminal completion should report")
+	}
+	if clean.HasCategoryCompletion(clean.ExecutionProgress{
+		CompletedCategory: id,
+		CompletedState:    clean.CategoryExecutionCleaning,
+	}) {
+		t.Fatal("in-progress state must not count as completion")
+	}
+}
+
 func assertOutcomePathFree(t *testing.T, outcomes []clean.CategoryExecutionOutcome, forbidden ...string) {
 	t.Helper()
 	for _, outcome := range outcomes {

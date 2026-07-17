@@ -869,11 +869,32 @@ func (m *eagerCleanModel) applyExactExecutionProgress(msg eagerExactExecutionPro
 	}
 	m.executionProgress = msg.progress
 	m.spinnerFrame++
-	// Observation-only: ActiveCategory becomes rechecking/ready/cleaning;
-	// categories not yet reached stay waiting. Once a row leaves waiting it
-	// keeps its last in-progress state until the authoritative Result (Slice C
-	// does not invent mid-flight cleaned/skipped). Progress never authorizes
-	// work or changes Result.
+	// Observation-only. Slice D: CompletedCategory projects a provisional
+	// terminal once shared Clean finished that category's work for this run.
+	// ActiveCategory becomes rechecking/ready/cleaning for open rows. Final
+	// Result always overwrites provisional terminals completely. Progress
+	// never authorizes work.
+	if clean.HasCategoryCompletion(msg.progress) {
+		completedID := msg.progress.CompletedCategory
+		for i := range m.executionOutcomes {
+			if m.executionOutcomes[i].Identifier != completedID {
+				continue
+			}
+			// Never regress a provisional terminal back to waiting/in-progress.
+			// A second completion for the same id is ignored (shared Clean
+			// dedupes); final Result still replaces the whole projection.
+			if clean.IsTerminalExecutionState(m.executionOutcomes[i].State) {
+				break
+			}
+			m.executionOutcomes[i].State = msg.progress.CompletedState
+			m.executionOutcomes[i].AffectedBytes = msg.progress.CompletedAffectedBytes
+			m.executionOutcomes[i].RecycleBinMovedBytes = msg.progress.CompletedRecycleBinMovedBytes
+			m.executionOutcomes[i].PermanentlyDeletedBytes = msg.progress.CompletedPermanentlyDeletedBytes
+			m.executionOutcomes[i].DeletedCount = msg.progress.CompletedDeletedCount
+			m.executionOutcomes[i].SkippedCount = msg.progress.CompletedSkippedCount
+			break
+		}
+	}
 	active := msg.progress.ActiveCategory
 	phase := msg.progress.Phase
 	for i := range m.executionOutcomes {
@@ -913,8 +934,8 @@ func (m *eagerCleanModel) applyExactExecuted(msg eagerExactExecutedMsg) {
 		return
 	}
 	m.executionResult = msg.result
-	// Terminal outcomes come only from the authoritative final Result over the
-	// frozen selection. Item-level Result/History remain the source of truth.
+	// Authoritative final Result completely replaces any mid-flight provisional
+	// category terminals. Item-level Result/History remain the source of truth.
 	m.executionOutcomes = clean.ProjectCategoryExecutionOutcomes(m.frozenCategories, msg.result)
 	m.phase = eagerPhaseResult
 	m.viewportOffset = 0
@@ -1504,10 +1525,12 @@ func (m eagerCleanModel) resultFooterStyleLines() []tuiStyleLine {
 func (m eagerCleanModel) executionFooterLine() string {
 	terminal := clean.CountTerminalExecutionOutcomes(m.executionOutcomes)
 	total := len(m.executionOutcomes)
-	// In-progress progress cannot invent successful move bytes; only the final
-	// Result (and its projection) contributes totals.
+	// Mid-flight: Processed counts provisional terminals; Affected sums only
+	// successful bytes already recorded on those provisional outcomes (honest
+	// partial, never invented). Final Result view uses the full split footer.
 	if m.phase != eagerPhaseResult {
-		return fmt.Sprintf("Processed: %d/%d · Affected (processed): 0 KB", terminal, total)
+		affected := clean.SumExecutionAffectedBytes(m.executionOutcomes)
+		return fmt.Sprintf("Processed: %d/%d · Affected (processed): %s", terminal, total, cleanFormatBytes(affected))
 	}
 	recycle, permanent, affected := m.resultTotals()
 	return fmt.Sprintf(

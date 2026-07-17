@@ -48,6 +48,11 @@ func runExecute(ctx context.Context, opts Options) Result {
 	// Phase 2: fresh resolve defaults + selected opt-ins
 	executionCandidates := resolveExecuteCandidates(ctx, opts, categoryPlan, &result)
 
+	// Categories with no queued candidates are provisionally terminal after
+	// resolve (empty / skipped / failed from evidence already on result).
+	// Mutation phases never see them again.
+	completedCategories := reportResolvedCategoryCompletions(opts, categoryPlan, executionCandidates, &result)
+
 	// Phase 3: partition Recycle Bin vs permanent
 	recycleBinCandidates, permanentCandidates := partitionByPlannedAction(executionCandidates)
 
@@ -62,11 +67,11 @@ func runExecute(ctx context.Context, opts Options) Result {
 	if adapter == nil {
 		adapter = delete.WindowsRecycleBinAdapter{}
 	}
-	executeRecycleBinCandidateGroups(ctx, opts, adapter, executionGroups, &result)
+	executeRecycleBinCandidateGroups(ctx, opts, adapter, executionGroups, &result, completedCategories)
 
 	// Phase 6: mutate permanent last (per-category progress then mutation)
 	if len(permanentCandidates) > 0 {
-		executePermanentCandidates(ctx, opts, permanentCandidates, &result)
+		executePermanentCandidates(ctx, opts, permanentCandidates, &result, completedCategories)
 	}
 
 	// Phase 7: history + completion
@@ -145,6 +150,58 @@ func reportExecutionProgress(reporter ProgressReporter, phase ExecutionPhase, ac
 	reporter(ExecutionProgress{Phase: phase, ActiveCategory: activeCategory})
 }
 
+// reportCategoryCompletion emits a provisional mid-flight terminal for one
+// category. completed tracks ids already reported so resolve and mutate do not
+// double-complete. Panics in the reporter are recovered.
+func reportCategoryCompletion(reporter ProgressReporter, phase ExecutionPhase, outcome CategoryExecutionOutcome, completed map[string]bool) {
+	id := strings.TrimSpace(outcome.Identifier)
+	if reporter == nil || id == "" || !IsTerminalExecutionState(outcome.State) {
+		return
+	}
+	if completed != nil {
+		if completed[id] {
+			return
+		}
+		completed[id] = true
+	}
+	defer func() { _ = recover() }()
+	reporter(ExecutionProgress{
+		Phase:                            phase,
+		CompletedCategory:                id,
+		CompletedState:                   outcome.State,
+		CompletedAffectedBytes:           outcome.AffectedBytes,
+		CompletedRecycleBinMovedBytes:    outcome.RecycleBinMovedBytes,
+		CompletedPermanentlyDeletedBytes: outcome.PermanentlyDeletedBytes,
+		CompletedDeletedCount:            outcome.DeletedCount,
+		CompletedSkippedCount:            outcome.SkippedCount,
+	})
+}
+
+// reportResolvedCategoryCompletions marks selected categories with zero queued
+// execution candidates as provisionally terminal after fresh resolve. Returns
+// the completion set so mutate phases can record finished work without
+// re-emitting. Path-free; never invents success for categories still pending.
+func reportResolvedCategoryCompletions(opts Options, plan CategoryPlan, candidates []actionExecutionCandidate, result *Result) map[string]bool {
+	completed := make(map[string]bool)
+	if result == nil {
+		return completed
+	}
+	hasCandidate := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.rule != "" {
+			hasCandidate[candidate.rule] = true
+		}
+	}
+	for _, id := range plan.Categories {
+		if id == "" || hasCandidate[id] {
+			continue
+		}
+		outcome := ProjectProvisionalCategoryOutcome(id, *result)
+		reportCategoryCompletion(opts.ProgressReporter, ExecutionPhaseScanning, outcome, completed)
+	}
+	return completed
+}
+
 // actionExecutionCandidate is one freshly resolved candidate with its planned
 // deletion action for the action-aware execution seam.
 type actionExecutionCandidate struct {
@@ -210,9 +267,19 @@ func prepareRecycleBinCandidateGroups(opts Options, candidates []actionExecution
 	return recycleBinCandidateGroups{byVolume: groups, order: volumeOrder}
 }
 
-func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter delete.Adapter, groups recycleBinCandidateGroups, result *Result) {
+func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter delete.Adapter, groups recycleBinCandidateGroups, result *Result, completed map[string]bool) {
 	// Volume grouping is the safety model (aggregate capacity). Progress only
 	// marks each category when its candidates are first touched in this phase.
+	// A category completes only after every volume that holds its candidates
+	// has finished (success, skip, or capacity rejection).
+	remainingByCategory := make(map[string]int)
+	for _, volume := range groups.order {
+		for _, candidate := range groups.byVolume[volume].candidates {
+			if candidate.rule != "" {
+				remainingByCategory[candidate.rule]++
+			}
+		}
+	}
 	reportedCategory := make(map[string]bool)
 	reportRecycleCategory := func(candidates []actionExecutionCandidate) {
 		for _, candidate := range candidates {
@@ -224,6 +291,26 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 			reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseRecycleBinOperations, id)
 		}
 	}
+	finishVolumeCategories := func(candidates []actionExecutionCandidate) {
+		if result == nil {
+			return
+		}
+		finished := make(map[string]bool)
+		for _, candidate := range candidates {
+			id := candidate.rule
+			if id == "" {
+				continue
+			}
+			remainingByCategory[id]--
+			if remainingByCategory[id] == 0 {
+				finished[id] = true
+			}
+		}
+		for id := range finished {
+			outcome := ProjectProvisionalCategoryOutcome(id, *result)
+			reportCategoryCompletion(opts.ProgressReporter, ExecutionPhaseRecycleBinOperations, outcome, completed)
+		}
+	}
 
 	for _, volume := range groups.order {
 		group := groups.byVolume[volume]
@@ -231,14 +318,17 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 		case group.unsafe:
 			reportRecycleCategory(group.candidates)
 			skipRecycleBinVolume(result, group.candidates, recycleBinCapacityProbeFailedIssueCode, "Recycle Bin capacity state is unknown; skipping this volume rather than risking permanent deletion")
+			finishVolumeCategories(group.candidates)
 			continue
 		case group.config.NukeOnDelete:
 			reportRecycleCategory(group.candidates)
 			skipRecycleBinVolume(result, group.candidates, recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted")
+			finishVolumeCategories(group.candidates)
 			continue
 		case group.config.CurrentUsage > group.config.MaxCapacity || group.totalBytes > group.config.MaxCapacity-group.config.CurrentUsage:
 			reportRecycleCategory(group.candidates)
 			skipRecycleBinVolume(result, group.candidates, recycleBinCapacityIssueCode, "Selected candidates exceed the remaining Recycle Bin capacity for this volume")
+			finishVolumeCategories(group.candidates)
 			continue
 		}
 
@@ -272,6 +362,7 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 				Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
 			})
 		}
+		finishVolumeCategories(group.candidates)
 	}
 }
 
@@ -283,13 +374,15 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 // category-owned identity validation, then the shared permanent remover.
 // Category rejection is a recoverable skip that keeps delete_permanently as the
 // planned action and never falls back to the Recycle Bin.
-func executePermanentCandidates(ctx context.Context, opts Options, candidates []actionExecutionCandidate, result *Result) {
+func executePermanentCandidates(ctx context.Context, opts Options, candidates []actionExecutionCandidate, result *Result, completed map[string]bool) {
 	if len(candidates) == 0 {
 		return
 	}
 	permanentAction := string(DeletionActionDeletePermanently)
 	// Progress at category boundaries only (first-seen rule order). Mutation
 	// order and safety model stay candidate-list order within each category.
+	// Each category has one planned action, so finishing its permanent batch
+	// is a full mid-flight completion boundary.
 	groups := groupCandidatesByCategory(candidates)
 	if !opts.AllowPermanentDeletion {
 		for _, group := range groups {
@@ -308,6 +401,10 @@ func executePermanentCandidates(ctx context.Context, opts Options, candidates []
 						candidate.rule,
 					),
 				})
+			}
+			if result != nil {
+				outcome := ProjectProvisionalCategoryOutcome(group.rule, *result)
+				reportCategoryCompletion(opts.ProgressReporter, ExecutionPhasePermanentOperations, outcome, completed)
 			}
 		}
 		return
@@ -367,6 +464,10 @@ func executePermanentCandidates(ctx context.Context, opts Options, candidates []
 					Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
 				})
 			}
+		}
+		if result != nil {
+			outcome := ProjectProvisionalCategoryOutcome(group.rule, *result)
+			reportCategoryCompletion(opts.ProgressReporter, ExecutionPhasePermanentOperations, outcome, completed)
 		}
 	}
 }

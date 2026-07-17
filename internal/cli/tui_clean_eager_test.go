@@ -2053,14 +2053,162 @@ func TestEagerCleanExecutionProgressActiveCategoryWaitingVsActive(t *testing.T) 
 	if !strings.Contains(content, "Fresh scanning · "+optInLabel) {
 		t.Fatalf("header should follow new active:\n%s", content)
 	}
-	// Progress must not invent cleaned/skipped mid-flight.
-	for _, banned := range []string{"cleaned", "skipped", "failed", "partial"} {
-		// Only check body rows via states, not footer copy.
-		_ = banned
-	}
+	// ActiveCategory alone must not invent terminal outcomes (needs CompletedCategory).
 	for _, o := range model.executionOutcomes {
 		if clean.IsTerminalExecutionState(o.State) {
-			t.Fatalf("progress must not invent terminal state: %#v", o)
+			t.Fatalf("ActiveCategory must not invent terminal state: %#v", o)
+		}
+	}
+}
+
+func TestEagerCleanExecutionMidFlightCompletionAndFinalOverwrite(t *testing.T) {
+	defaultID := clean.DefaultCategoryFoalOwnedTempSandboxes
+	optInID := clean.OpportunityCategoryCrashDumps
+	var defaultLabel, optInLabel string
+	catalog := clean.CanonicalCleanupCategoryCatalog()
+	if s, ok := catalog.Summary(defaultID); ok {
+		defaultLabel = s.Label
+	}
+	if s, ok := catalog.Summary(optInID); ok {
+		optInLabel = s.Label
+	}
+
+	model := newEagerCleanModel(100, 40)
+	model.phase = eagerPhaseExecuting
+	model.executionStarted = true
+	model.executionStartedAt = time.Now()
+	model.frozenCategories = []string{defaultID, optInID}
+	model.executionOutcomes = initialExecutionOutcomes(model.frozenCategories)
+	model.execFollowActive = true
+	model.execTrackedActive = -1
+
+	// waiting → active rechecking for default
+	_ = model.applyExactExecutionProgress(eagerExactExecutionProgressMsg{
+		progress: clean.ExecutionProgress{
+			Phase:          clean.ExecutionPhaseScanning,
+			ActiveCategory: defaultID,
+		},
+	})
+	// provisional empty completion for default after resolve
+	_ = model.applyExactExecutionProgress(eagerExactExecutionProgressMsg{
+		progress: clean.ExecutionProgress{
+			Phase:             clean.ExecutionPhaseScanning,
+			CompletedCategory: defaultID,
+			CompletedState:    clean.CategoryExecutionEmpty,
+		},
+	})
+	byID := map[string]clean.CategoryExecutionState{}
+	for _, o := range model.executionOutcomes {
+		byID[o.Identifier] = o.State
+	}
+	if byID[defaultID] != clean.CategoryExecutionEmpty {
+		t.Fatalf("default provisional = %q, want empty", byID[defaultID])
+	}
+	if byID[optInID] != clean.CategoryExecutionWaiting {
+		t.Fatalf("opt-in still waiting = %q", byID[optInID])
+	}
+	content := model.content()
+	if !strings.Contains(content, "Processed: 1/2") {
+		t.Fatalf("Processed should count provisional terminal:\n%s", content)
+	}
+	if !strings.Contains(content, defaultLabel+" · empty") {
+		t.Fatalf("empty row missing:\n%s", content)
+	}
+	// Never regress provisional terminal back to waiting on later active events.
+	_ = model.applyExactExecutionProgress(eagerExactExecutionProgressMsg{
+		progress: clean.ExecutionProgress{
+			Phase:          clean.ExecutionPhaseRecycleBinOperations,
+			ActiveCategory: optInID,
+		},
+	})
+	for _, o := range model.executionOutcomes {
+		if o.Identifier == defaultID && o.State != clean.CategoryExecutionEmpty {
+			t.Fatalf("provisional empty regressed: %#v", o)
+		}
+		if o.Identifier == optInID && o.State != clean.CategoryExecutionCleaning {
+			t.Fatalf("active opt-in = %q, want cleaning", o.State)
+		}
+	}
+	// cleaned provisional with honest bytes → Processed 2/2 and Affected sum
+	_ = model.applyExactExecutionProgress(eagerExactExecutionProgressMsg{
+		progress: clean.ExecutionProgress{
+			Phase:                         clean.ExecutionPhaseRecycleBinOperations,
+			CompletedCategory:             optInID,
+			CompletedState:                clean.CategoryExecutionCleaned,
+			CompletedAffectedBytes:        4096,
+			CompletedRecycleBinMovedBytes: 4096,
+			CompletedDeletedCount:         1,
+		},
+	})
+	content = model.content()
+	if !strings.Contains(content, "Processed: 2/2") {
+		t.Fatalf("both provisional terminals:\n%s", content)
+	}
+	if !strings.Contains(content, optInLabel+" · cleaned") {
+		t.Fatalf("cleaned row missing:\n%s", content)
+	}
+	if !strings.Contains(content, "Affected (processed): 4 KB") &&
+		!strings.Contains(content, "Affected (processed): 4.0 KB") {
+		// cleanFormatBytes may render 4096 as "4 KB"
+		if !strings.Contains(content, "Affected (processed):") {
+			t.Fatalf("affected footer missing:\n%s", content)
+		}
+		// Accept any honest non-zero formatting of 4096.
+		if strings.Contains(content, "Affected (processed): 0 KB") {
+			t.Fatalf("must surface provisional affected bytes:\n%s", content)
+		}
+	}
+	if strings.Contains(content, `C:\`) {
+		t.Fatalf("path leaked:\n%s", content)
+	}
+
+	// Final Result completely overwrites provisional projections (even if wrong).
+	model.applyExactExecuted(eagerExactExecutedMsg{result: clean.Result{
+		Status: "ok",
+		Mode:   "execute",
+		Deleted: []clean.DeletedItem{{
+			Path:   `C:\Temp\real`,
+			Bytes:  100,
+			Rule:   defaultID,
+			Action: string(clean.DeletionActionMoveToRecycleBin),
+		}},
+		// opt-in ends skipped, not cleaned — must replace mid-flight cleaned.
+		Skipped: []clean.SkippedItem{{
+			Path: `C:\Temp\skip`,
+			Bytes: 1,
+			Rule:  optInID,
+			Reason: clean.StructuredIssue{
+				Code: "protected_path", Message: "protected", Recoverable: true, Rule: optInID,
+			},
+		}},
+	}})
+	if model.phase != eagerPhaseResult {
+		t.Fatalf("phase = %v", model.phase)
+	}
+	byID = map[string]clean.CategoryExecutionState{}
+	for _, o := range model.executionOutcomes {
+		byID[o.Identifier] = o.State
+	}
+	if byID[defaultID] != clean.CategoryExecutionCleaned {
+		t.Fatalf("final default = %q, want cleaned (overwrite empty)", byID[defaultID])
+	}
+	if byID[optInID] != clean.CategoryExecutionSkipped {
+		t.Fatalf("final opt-in = %q, want skipped (overwrite cleaned)", byID[optInID])
+	}
+	content = model.content()
+	if !strings.Contains(content, "Processed: 2/2") {
+		t.Fatalf("result processed:\n%s", content)
+	}
+	if strings.Contains(content, `C:\Temp`) {
+		t.Fatalf("path leaked in result:\n%s", content)
+	}
+	// Overwrite must not keep provisional 4096 as the opt-in success bytes.
+	for _, o := range model.executionOutcomes {
+		if o.Identifier == optInID && o.AffectedBytes != 0 {
+			t.Fatalf("skipped opt-in must have 0 affected after overwrite: %#v", o)
+		}
+		if o.Identifier == defaultID && o.AffectedBytes != 100 {
+			t.Fatalf("default affected after overwrite = %d, want 100", o.AffectedBytes)
 		}
 	}
 }

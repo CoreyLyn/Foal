@@ -119,9 +119,25 @@ const (
 // ActiveCategory is a path-free canonical category id for the boundary the
 // pipeline is entering (empty when the phase is not category-scoped, e.g.
 // aggregate Recycle Bin safety or completion).
+//
+// CompletedCategory, when non-empty, is a provisional mid-flight terminal for
+// one category whose resolve+mutate work for this run has finished (or resolve
+// proved empty/skip with no queued candidates). Empty CompletedCategory means
+// no completion in this event. Final Result always overwrites provisional
+// projections via ProjectCategoryExecutionOutcomes.
 type ExecutionProgress struct {
 	Phase          ExecutionPhase
 	ActiveCategory string
+
+	// Slice D mid-flight provisional completion (path-free). Zero-value fields
+	// mean "no completion on this event".
+	CompletedCategory                string
+	CompletedState                   CategoryExecutionState
+	CompletedAffectedBytes           int64
+	CompletedRecycleBinMovedBytes    int64
+	CompletedPermanentlyDeletedBytes int64
+	CompletedDeletedCount            int
+	CompletedSkippedCount            int
 }
 
 type ProgressReporter func(ExecutionProgress)

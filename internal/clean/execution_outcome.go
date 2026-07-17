@@ -3,16 +3,18 @@ package clean
 import "strings"
 
 // CategoryExecutionState is the path-free lifecycle for one selected category
-// during shared Clean execution and its terminal projection from the final
-// Result. In-progress values (waiting, rechecking, ready, cleaning) come from
-// shared phase observations plus ActiveCategory; terminal values come only
-// from the authoritative Result.
+// during shared Clean execution and its terminal projection. In-progress values
+// (waiting, rechecking, ready, cleaning) come from shared phase observations
+// plus ActiveCategory. Provisional terminal values may also arrive mid-flight
+// via ExecutionProgress.CompletedCategory once that category's work for the
+// run is finished; the authoritative final Result always overwrites them.
 type CategoryExecutionState string
 
 const (
 	// CategoryExecutionWaiting is selected but not yet the ActiveCategory
-	// during shared execution. Distinct from preview waiting; progress alone
-	// never promotes waiting to a terminal outcome (Slice D territory).
+	// during shared execution. Distinct from preview waiting. Progress promotes
+	// waiting to a provisional terminal only after shared Clean finishes that
+	// category's resolve+mutate (or empty/skip with no further work).
 	CategoryExecutionWaiting    CategoryExecutionState = "waiting"
 	CategoryExecutionRechecking CategoryExecutionState = "rechecking"
 	CategoryExecutionReady      CategoryExecutionState = "ready"
@@ -79,7 +81,8 @@ func InProgressExecutionState(phase ExecutionPhase) CategoryExecutionState {
 // waiting unless already advanced (callers preserve prior non-waiting state).
 // Empty ActiveCategory means the phase is not category-scoped (e.g. aggregate
 // Recycle Bin safety): every still-open category receives the phase mapping.
-// Progress never invents terminal outcomes or Affected bytes.
+// This helper never invents terminal outcomes; use CompletedCategory fields or
+// ProjectCategoryExecutionOutcomes for terminals.
 func ProjectInProgressCategoryState(phase ExecutionPhase, activeCategory, categoryID string) CategoryExecutionState {
 	if activeCategory != "" && activeCategory != categoryID {
 		return CategoryExecutionWaiting
@@ -87,10 +90,37 @@ func ProjectInProgressCategoryState(phase ExecutionPhase, activeCategory, catego
 	return InProgressExecutionState(phase)
 }
 
+// ProjectProvisionalCategoryOutcome maps items already recorded on result for
+// one category onto a mid-flight terminal projection. It reuses the same
+// evidence mapping as the final Result projection so provisional states match
+// final rules for that category's finished work. Call only after that
+// category's resolve+mutate path for this run is done (or resolve proved empty
+// with no candidates queued). The final Result still overwrites at the end.
+func ProjectProvisionalCategoryOutcome(categoryID string, result Result) CategoryExecutionOutcome {
+	id := strings.TrimSpace(categoryID)
+	if id == "" {
+		return CategoryExecutionOutcome{}
+	}
+	outcomes := ProjectCategoryExecutionOutcomes([]string{id}, result)
+	if len(outcomes) == 0 {
+		return CategoryExecutionOutcome{Identifier: id, State: CategoryExecutionEmpty}
+	}
+	return outcomes[0]
+}
+
+// HasCategoryCompletion reports whether progress carries a usable mid-flight
+// terminal observation for one category.
+func HasCategoryCompletion(progress ExecutionProgress) bool {
+	return strings.TrimSpace(progress.CompletedCategory) != "" &&
+		IsTerminalExecutionState(progress.CompletedState)
+}
+
 // ProjectCategoryExecutionOutcomes maps the authoritative final Result onto the
 // frozen exact selection in selection order. Categories absent from the Result
-// with no attributed items are empty. Progress observations never feed this
-// projection; only Deleted, Skipped, and Errors (by Rule) do.
+// with no attributed items are empty. Mid-flight progress never feeds this
+// projection; only Deleted, Failed, Skipped, and Errors (by Rule) do. Callers
+// must replace any provisional progress outcomes with this projection when the
+// final Result arrives.
 func ProjectCategoryExecutionOutcomes(selected []string, result Result) []CategoryExecutionOutcome {
 	if len(selected) == 0 {
 		return nil
