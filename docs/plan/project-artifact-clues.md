@@ -30,11 +30,15 @@ The hard constraint: a default `foal clean --dry-run` must **not** go hunting fo
 - `analyze.Result` / `ChildResult` — add a way to flag a recognized rebuildable artifact among top children (an artifact-kind field on `ChildResult`, or a clues array on `Result`). Test through the public `analyze` entry point with a constructed directory tree; prior art: existing analyze tests.
 - Clean preview read-model projection (`NewPreviewReadModel`) — inject the constant pointer `ReviewClue`; the renderer and TUI already render the Review clues section. Prior art: the clean preview projection/render tests, and `TestPreviewReportRendersReviewOnlySectionsWithoutExecutionSemantics`.
 
-## Out of scope
+## Out of scope (this slice)
 
-- Any deletion or opt-in execution of project artifacts (Foal only labels/points; this stays read-only).
-- Deep/recursive artifact discovery.
-- Configurable scan roots (Mole's `purge_paths`).
+- Deletion of project artifacts through ordinary Clean default or catalog opt-in rows (this slice stays read-only labels/points).
+- Deep/recursive artifact discovery in `analyze`.
+- Configurable multi-root defaults analogous to Mole's `purge_paths` without an explicit user root.
+
+## Later direction (ADR 0019)
+
+An independent **Project artifact purge flow** (separate command or dedicated flow, not default Clean discovery) may reclaim rebuildable artifacts under a user-supplied root after selection and confirmation. That work needs its own design/PRD; it does not reopen default disk-wide project scanning.
 
 ## How to turn this into a PRD later
 
