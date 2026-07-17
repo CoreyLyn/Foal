@@ -75,10 +75,12 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 
 Every new executable cleanup rule must provide all of the following before registration:
 
+- one resolver adapter bound at the private canonical category registration point; do not add caller-side category-ID dispatch or parallel family booleans;
 - an explicit planned action and permanent-delete eligibility decision;
 - evidence and rationale covering ownership, exact layout, regenerability, and excluded state;
 - fresh resolution, Protection, reparse-point, and immediate validation behavior;
 - applicable running-application or shared-runtime gates;
 - rebuild, re-download, offline, or other impact notices;
+- any eager-preview impact notice bound on the same private category registration rather than a downstream category switch;
 - the intended TUI initial-selection behavior derived from the same policy;
 - contract tests for the action, authorization, failure, cancellation, Result, and History semantics.

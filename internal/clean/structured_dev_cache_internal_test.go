@@ -210,7 +210,8 @@ func TestValidateDeveloperCacheRegistryRejectsChildDiscoveryOnNonDevCache(t *tes
 			CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable,
 			DeletionActionMoveToRecycleBin,
 		),
-		opportunity: true,
+		resolverKind: categoryResolverExistenceOpportunity,
+		resolver:     existenceOpportunityResolver{},
 		discoverChildren: func(context.Context, string) []string {
 			return nil
 		},
@@ -235,11 +236,10 @@ func TestDeveloperCacheEntryWithChildrenBindsPolicy(t *testing.T) {
 		discover,
 		nil,
 	)
-	if !entry.developerCache || entry.discoverChildren == nil {
+	if entry.resolverKind != categoryResolverDeveloperCache || entry.discoverChildren == nil {
 		t.Fatalf("entry missing structured policy: %#v", entry)
 	}
 	if got := entry.discoverChildren(context.Background(), `C:\root`); len(got) != 1 {
 		t.Fatalf("discoverChildren = %#v", got)
 	}
 }
-

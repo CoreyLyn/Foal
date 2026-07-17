@@ -61,10 +61,10 @@ func (e *EagerPreviewUnavailable) Error() string {
 // Clean TUI eager preview. It never carries candidate paths, protected paths,
 // private resolver details, or raw path-bearing operating-system errors.
 type CategoryPreviewObservation struct {
-	Identifier           string               `json:"identifier"`
-	Label                string               `json:"label"`
-	ReportCategory       ReportCategory       `json:"report_category"`
-	Eligibility          CategoryEligibility  `json:"eligibility"`
+	Identifier     string              `json:"identifier"`
+	Label          string              `json:"label"`
+	ReportCategory ReportCategory      `json:"report_category"`
+	Eligibility    CategoryEligibility `json:"eligibility"`
 	// PlannedAction is the catalog-owned deletion action for this executable
 	// category. Non-executable categories never appear in the eager queue.
 	PlannedAction        DeletionAction       `json:"planned_action,omitempty"`
@@ -257,45 +257,26 @@ func ProjectCategoryPreview(resolution CategoryResolution) CategoryPreviewObserv
 	if factors.SuccessCount > 0 {
 		obs.CandidateCount = factors.SuccessCount
 		obs.Bytes = safeBytes
-		vsixImpact := resolutionIncludesCachedExtensionVSIXs(resolution)
-		obs.SafetyNote = categoryPreviewSafetyNote(summary.Identifier, true, vsixImpact)
+		obs.SafetyNote = categoryPreviewSafetyNote(summary.Identifier, resolution)
 	}
 	return obs
 }
 
-// categoryPreviewSafetyNote returns optional shared impact vocabulary for
-// categories that already publish notices on the dry-run surface. Empty when
-// there is no shared note or no safe candidates to associate it with.
-//
-// Application-cache VSIX re-fetch impact is path-sensitive: callers pass
-// includeVSIXImpact when any safe candidate is an exact CachedExtensionVSIXs root.
-func categoryPreviewSafetyNote(identifier string, hasSafeCandidates bool, includeVSIXImpact bool) string {
-	if !hasSafeCandidates {
+// categoryPreviewSafetyNote dispatches through the canonical private
+// registration. Categories without a registered note remain silent.
+func categoryPreviewSafetyNote(identifier string, resolution CategoryResolution) string {
+	entry, ok := canonicalCategoryEntry(identifier)
+	if !ok || entry.previewSafetyNote == nil {
 		return ""
 	}
-	switch identifier {
-	case DevCacheCategoryUV:
-		return uvCacheOptInImpactNotice
-	case DevCacheCategoryNuGetGlobalPackages:
-		return nugetGlobalPackagesOptInImpactNotice
-	case DevCacheCategoryBun:
-		return bunCacheOptInImpactNotice
-	case DevCacheCategoryPlaywright:
-		return playwrightBrowsersOptInImpactNotice
-	case DevCacheCategoryPuppeteerBrowsers:
-		return puppeteerBrowsersOptInImpactNotice
-	case DevCacheCategoryElectron:
-		return electronCacheOptInImpactNotice
-	case DevCacheCategoryJetBrainsIDECaches:
-		return jetbrainsIDECachesOptInImpactNotice
-	case OpportunityCategoryVSCodeCache, OpportunityCategoryCursorCache:
-		if includeVSIXImpact {
-			return applicationCacheCachedExtensionVSIXsImpactNotice
-		}
-		return ""
-	default:
-		return ""
+	return entry.previewSafetyNote(resolution)
+}
+
+func applicationCachePreviewSafetyNote(resolution CategoryResolution) string {
+	if resolutionIncludesCachedExtensionVSIXs(resolution) {
+		return applicationCacheCachedExtensionVSIXsImpactNotice
 	}
+	return ""
 }
 
 func resolutionIncludesCachedExtensionVSIXs(resolution CategoryResolution) bool {

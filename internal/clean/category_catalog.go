@@ -304,20 +304,63 @@ var applicationCacheApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationCursor, displayName: "Cursor", executables: []string{"Cursor.exe"}},
 }
 
-// categoryCatalogEntry is the private canonical registration point. Public
-// catalog projections expose only path-free definition fields. Developer-cache
-// entries additionally bind a path resolver, optional structured child candidate
-// discovery policy, optional Review suggestion tool keys, and the applications
-// required by the running-application policy. Application-cache entries bind an
-// idle Application cache policy id.
+// categoryCatalogEntry is the private canonical registration point. Every
+// executable category binds one resolver adapter here; callers never dispatch
+// by category identifier or combine independent family booleans. Public catalog
+// projections expose only path-free definition fields. Developer-cache entries
+// additionally bind path/child discovery policy, Review suggestion keys, and
+// running applications. Application-cache entries bind an idle-cache policy id.
 //
 // Path resolvers, allowlists, structural matchers, and executable paths never
 // appear on public CleanupCategoryDefinition / CleanupCategorySummary.
+type categoryResolverKind string
+
+const (
+	categoryResolverDefault              categoryResolverKind = "default"
+	categoryResolverExistenceOpportunity categoryResolverKind = "existence-opportunity"
+	categoryResolverBrowserCache         categoryResolverKind = "browser-cache"
+	categoryResolverApplicationCache     categoryResolverKind = "application-cache"
+	categoryResolverDeveloperCache       categoryResolverKind = "developer-cache"
+	categoryResolverNonExecutable        categoryResolverKind = "non-executable"
+)
+
+type categoryResolver interface {
+	resolve(context.Context, Options, string, *categoryCoreResult)
+}
+
+type defaultCategoryResolver struct{}
+type existenceOpportunityResolver struct{}
+type browserCacheResolver struct{}
+type applicationCacheResolver struct{}
+type developerCacheResolver struct{}
+
+func (defaultCategoryResolver) resolve(ctx context.Context, opts Options, category string, core *categoryCoreResult) {
+	resolveDefaultCategory(ctx, opts, category, core)
+}
+
+func (existenceOpportunityResolver) resolve(ctx context.Context, opts Options, category string, core *categoryCoreResult) {
+	resolveExistenceOpportunityCategory(ctx, opts, category, core)
+}
+
+func (browserCacheResolver) resolve(ctx context.Context, opts Options, _ string, core *categoryCoreResult) {
+	resolveBrowserCacheCategory(ctx, opts, core)
+}
+
+func (applicationCacheResolver) resolve(ctx context.Context, opts Options, category string, core *categoryCoreResult) {
+	resolveApplicationCacheCategory(ctx, opts, category, core)
+}
+
+func (developerCacheResolver) resolve(ctx context.Context, opts Options, category string, core *categoryCoreResult) {
+	resolveDeveloperCacheCategory(ctx, opts, category, core)
+}
+
+type categorySafetyNoteResolver func(CategoryResolution) string
+
 type categoryCatalogEntry struct {
 	definition            CleanupCategoryDefinition
-	opportunity           bool
-	developerCache        bool
-	applicationCache      bool
+	resolverKind          categoryResolverKind
+	resolver              categoryResolver
+	previewSafetyNote     categorySafetyNoteResolver
 	fixedLocalAppDataPath []string
 	runningApplications   []string
 	// resolvePaths resolves env/default roots for a developer-cache category.
@@ -346,6 +389,58 @@ type categoryCatalogEntry struct {
 	applicationCachePolicyID string
 }
 
+func defaultCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogEntry {
+	return categoryCatalogEntry{
+		definition:   definition,
+		resolverKind: categoryResolverDefault,
+		resolver:     defaultCategoryResolver{},
+	}
+}
+
+func existenceOpportunityEntry(definition CleanupCategoryDefinition, fixedLocalAppDataPath ...string) categoryCatalogEntry {
+	return categoryCatalogEntry{
+		definition:            definition,
+		resolverKind:          categoryResolverExistenceOpportunity,
+		resolver:              existenceOpportunityResolver{},
+		fixedLocalAppDataPath: append([]string(nil), fixedLocalAppDataPath...),
+	}
+}
+
+func browserCacheCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogEntry {
+	return categoryCatalogEntry{
+		definition:   definition,
+		resolverKind: categoryResolverBrowserCache,
+		resolver:     browserCacheResolver{},
+	}
+}
+
+func applicationCacheCategoryEntry(
+	definition CleanupCategoryDefinition,
+	policyID string,
+	runningApplications ...string,
+) categoryCatalogEntry {
+	return categoryCatalogEntry{
+		definition:               definition,
+		resolverKind:             categoryResolverApplicationCache,
+		resolver:                 applicationCacheResolver{},
+		applicationCachePolicyID: policyID,
+		runningApplications:      append([]string(nil), runningApplications...),
+	}
+}
+
+func nonExecutableCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogEntry {
+	return categoryCatalogEntry{definition: definition, resolverKind: categoryResolverNonExecutable}
+}
+
+func withPreviewSafetyNote(entry categoryCatalogEntry, note categorySafetyNoteResolver) categoryCatalogEntry {
+	entry.previewSafetyNote = note
+	return entry
+}
+
+func staticPreviewSafetyNote(note string) categorySafetyNoteResolver {
+	return func(CategoryResolution) string { return note }
+}
+
 func developerCacheEntry(
 	definition CleanupCategoryDefinition,
 	resolvePaths func(devCachePathDependencies) []string,
@@ -354,7 +449,8 @@ func developerCacheEntry(
 ) categoryCatalogEntry {
 	return categoryCatalogEntry{
 		definition:            definition,
-		developerCache:        true,
+		resolverKind:          categoryResolverDeveloperCache,
+		resolver:              developerCacheResolver{},
 		resolvePaths:          resolvePaths,
 		reviewSuggestionTools: append([]string(nil), reviewSuggestionTools...),
 		runningApplications:   append([]string(nil), runningApplications...),
@@ -397,17 +493,17 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
 	// 18 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
 	// Over-broad whole-root system caches stay Recycle Bin until exact allowlists exist.
-	{definition: categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)},
-	{definition: categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true},
-	{definition: categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"CrashDumps"}},
-	{definition: categoryDefinition(OpportunityCategoryWindowsErrorReporting, "Windows Error Reporting", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "WER"}},
-	{definition: categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "Explorer"}},
-	{definition: categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), opportunity: true, fixedLocalAppDataPath: []string{"Microsoft", "Windows", "INetCache"}},
-	{definition: categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), opportunity: true, fixedLocalAppDataPath: []string{"D3DSCache"}},
-	{definition: categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), opportunity: true, fixedLocalAppDataPath: []string{"NVIDIA", "DXCache"}},
-	{definition: categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, DeletionActionDeletePermanently), opportunity: true},
-	{
-		definition: categoryDefinition(
+	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "CrashDumps"),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryWindowsErrorReporting, "Windows Error Reporting", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "Microsoft", "Windows", "WER"),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "Microsoft", "Windows", "Explorer"),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "Microsoft", "Windows", "INetCache"),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), "D3DSCache"),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), "NVIDIA", "DXCache"),
+	browserCacheCategoryEntry(categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, DeletionActionDeletePermanently)),
+	withPreviewSafetyNote(applicationCacheCategoryEntry(
+		categoryDefinition(
 			OpportunityCategoryVSCodeCache,
 			"VS Code cache",
 			ReportCategoryDeveloperTools,
@@ -415,13 +511,11 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
 			DeletionActionDeletePermanently,
 		),
-		opportunity:              true,
-		applicationCache:         true,
-		applicationCachePolicyID: applicationCachePolicyVSCode,
-		runningApplications:      []string{ApplicationVisualStudioCode},
-	},
-	{
-		definition: categoryDefinition(
+		applicationCachePolicyVSCode,
+		ApplicationVisualStudioCode,
+	), applicationCachePreviewSafetyNote),
+	withPreviewSafetyNote(applicationCacheCategoryEntry(
+		categoryDefinition(
 			OpportunityCategoryCursorCache,
 			"Cursor cache",
 			ReportCategoryDeveloperTools,
@@ -429,11 +523,9 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
 			DeletionActionDeletePermanently,
 		),
-		opportunity:              true,
-		applicationCache:         true,
-		applicationCachePolicyID: applicationCachePolicyCursor,
-		runningApplications:      []string{ApplicationCursor},
-	},
+		applicationCachePolicyCursor,
+		ApplicationCursor,
+	), applicationCachePreviewSafetyNote),
 	// Package and build caches: proven regenerable roots; env/default
 	// resolvers, gates, and impact notices unchanged.
 	developerCacheEntry(
@@ -464,60 +556,60 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		[]string{"dotnet"},
 		ApplicationDotNet, ApplicationNuGet,
 	),
-	developerCacheEntry(
+	withPreviewSafetyNote(developerCacheEntry(
 		categoryDefinition(DevCacheCategoryNuGetGlobalPackages, "NuGet global packages", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveNuGetGlobalPackagesPaths,
 		[]string{"dotnet"},
 		ApplicationDotNet, ApplicationNuGet,
-	),
+	), staticPreviewSafetyNote(nugetGlobalPackagesOptInImpactNotice)),
 	developerCacheEntry(
 		categoryDefinition(DevCacheCategoryCorepack, "Corepack cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolveCorepackOptInCachePaths,
 		[]string{"corepack"},
 	),
-	developerCacheEntry(
+	withPreviewSafetyNote(developerCacheEntry(
 		categoryDefinition(DevCacheCategoryUV, "uv cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveUVCachePaths,
 		[]string{"uv"},
 		ApplicationUV,
-	),
-	developerCacheEntry(
+	), staticPreviewSafetyNote(uvCacheOptInImpactNotice)),
+	withPreviewSafetyNote(developerCacheEntry(
 		categoryDefinition(DevCacheCategoryBun, "Bun cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveBunCachePaths,
 		[]string{"bun"},
 		ApplicationBun,
-	),
+	), staticPreviewSafetyNote(bunCacheOptInImpactNotice)),
 	// Playwright global browser binaries: structured child discovery under the
 	// env/default root. Shared-runtime policy: do not attribute node/chrome/etc.
 	// as Playwright-owned. Permanent deletion; no Review suggestion probe.
-	developerCacheEntryWithChildren(
+	withPreviewSafetyNote(developerCacheEntryWithChildren(
 		categoryDefinition(DevCacheCategoryPlaywright, "Playwright browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolvePlaywrightBrowserPaths,
 		discoverPlaywrightBrowserChildren,
 		nil,
-	),
+	), staticPreviewSafetyNote(playwrightBrowsersOptInImpactNotice)),
 	// Puppeteer browser binaries: shared-runtime (Node/Python/Chrome/Firefox are
 	// not attributable). Structured children under env/default root only; root
 	// and product parents are never candidates (ADR 0011). Permanent deletion.
-	developerCacheEntryWithChildren(
+	withPreviewSafetyNote(developerCacheEntryWithChildren(
 		categoryDefinition(DevCacheCategoryPuppeteerBrowsers, "Puppeteer browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolvePuppeteerCachePaths,
 		discoverPuppeteerBrowserChildren,
 		nil,
-	),
+	), staticPreviewSafetyNote(puppeteerBrowsersOptInImpactNotice)),
 	// Electron download cache: whole-root under env/default only. Shared-runtime
 	// (Node/Electron hosts are not attributable). Permanent deletion; no
 	// Review suggestion probe and no invented Electron cleanup command.
-	developerCacheEntry(
+	withPreviewSafetyNote(developerCacheEntry(
 		categoryDefinition(DevCacheCategoryElectron, "Electron cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolveElectronCachePaths,
 		nil,
-	),
+	), staticPreviewSafetyNote(electronCacheOptInImpactNotice)),
 	// JetBrains IDE system caches: product-scoped roots under %LOCALAPPDATA%\JetBrains
 	// with structured children (caches/index; Rider also resharper-host). Distinctive-
 	// process policy; each product identity gates independently via
 	// DevCacheRootScope.Application. Permanent deletion; no Review probe.
-	developerCacheEntryWithProductScopedChildren(
+	withPreviewSafetyNote(developerCacheEntryWithProductScopedChildren(
 		categoryDefinition(DevCacheCategoryJetBrainsIDECaches, "JetBrains IDE caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveJetBrainsIDECacheRootScopes,
 		discoverJetBrainsIDECacheChildren,
@@ -528,9 +620,9 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		ApplicationCLion, ApplicationDataGrip, ApplicationDataSpell,
 		ApplicationGoLand, ApplicationRustRover, ApplicationAqua,
 		ApplicationMPS, ApplicationWriterside, ApplicationRider,
-	),
+	), staticPreviewSafetyNote(jetbrainsIDECachesOptInImpactNotice)),
 	// Non-executable permission boundary: actionless and cannot enter execution.
-	{definition: categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable, "")},
+	nonExecutableCategoryEntry(categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable, "")),
 }
 
 func categoryDefinition(identifier, label string, reportCategory ReportCategory, eligibility CategoryEligibility, runningPolicy RunningApplicationPolicy, plannedAction DeletionAction) CleanupCategoryDefinition {
@@ -548,6 +640,9 @@ func categoryDefinition(identifier, label string, reportCategory ReportCategory,
 var canonicalCleanupCategoryCatalog = mustCleanupCategoryCatalog(canonicalCategoryEntries)
 
 func init() {
+	if err := validateCategoryResolverRegistry(canonicalCategoryEntries); err != nil {
+		panic(err)
+	}
 	// Private developer-cache validation runs after package-level vars (including
 	// the Review suggestion allowlist) are initialized.
 	if err := validateDeveloperCacheRegistry(canonicalCategoryEntries, developerApplicationDefinitions, reviewSuggestionAllowlist); err != nil {
@@ -556,6 +651,37 @@ func init() {
 	if err := validateApplicationCacheRegistry(canonicalCategoryEntries, applicationCacheApplicationDefinitions, applicationCachePolicies); err != nil {
 		panic(err)
 	}
+}
+
+func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
+	for _, entry := range entries {
+		id := entry.definition.Identifier
+		executable := isExecutableCategoryEligibility(entry.definition.Eligibility)
+		if executable && entry.resolver == nil {
+			return fmt.Errorf("executable cleanup category %q is missing a resolver", id)
+		}
+		if !executable && entry.resolver != nil {
+			return fmt.Errorf("non-executable cleanup category %q must not register a resolver", id)
+		}
+		switch entry.resolverKind {
+		case categoryResolverDefault:
+			if entry.definition.Eligibility != CategoryEligibilityDefault {
+				return fmt.Errorf("default resolver category %q must use default eligibility", id)
+			}
+		case categoryResolverExistenceOpportunity, categoryResolverBrowserCache,
+			categoryResolverApplicationCache, categoryResolverDeveloperCache:
+			if entry.definition.Eligibility != CategoryEligibilityOptIn {
+				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
+			}
+		case categoryResolverNonExecutable:
+			if executable {
+				return fmt.Errorf("executable cleanup category %q must register a resolver kind", id)
+			}
+		default:
+			return fmt.Errorf("cleanup category %q has unsupported resolver kind %q", id, entry.resolverKind)
+		}
+	}
+	return nil
 }
 
 func mustCleanupCategoryCatalog(entries []categoryCatalogEntry) CleanupCategoryCatalog {
@@ -608,7 +734,7 @@ func validateDeveloperCacheRegistry(
 	}
 
 	for _, entry := range entries {
-		if !entry.developerCache {
+		if entry.resolverKind != categoryResolverDeveloperCache {
 			if entry.resolvePaths != nil {
 				return fmt.Errorf("non-developer-cache category %q must not register a path resolver", entry.definition.Identifier)
 			}
@@ -618,7 +744,7 @@ func validateDeveloperCacheRegistry(
 			if len(entry.reviewSuggestionTools) > 0 {
 				return fmt.Errorf("non-developer-cache category %q must not register Review suggestion tools", entry.definition.Identifier)
 			}
-			if entry.applicationCache {
+			if entry.resolverKind == categoryResolverApplicationCache {
 				// Application-cache categories are validated separately.
 				continue
 			}
@@ -690,12 +816,14 @@ func selectableCategoryIDs() []string {
 func opportunityCategoryIDs(includeGated bool) []string {
 	var identifiers []string
 	for _, entry := range canonicalCategoryEntries {
-		if !entry.opportunity {
-			continue
-		}
-		// Browser and idle Application cache categories use dedicated gated
-		// discovery; the generic existence/user-temp scanner must omit them.
-		if !includeGated && (entry.definition.Identifier == OpportunityCategoryBrowserCache || entry.applicationCache) {
+		switch entry.resolverKind {
+		case categoryResolverExistenceOpportunity:
+			// Always included.
+		case categoryResolverBrowserCache, categoryResolverApplicationCache:
+			if !includeGated {
+				continue
+			}
+		default:
 			continue
 		}
 		identifiers = append(identifiers, entry.definition.Identifier)
@@ -706,7 +834,7 @@ func opportunityCategoryIDs(includeGated bool) []string {
 func developerCacheCategoryIDs() []string {
 	var identifiers []string
 	for _, entry := range canonicalCategoryEntries {
-		if entry.developerCache {
+		if entry.resolverKind == categoryResolverDeveloperCache {
 			identifiers = append(identifiers, entry.definition.Identifier)
 		}
 	}
@@ -725,7 +853,7 @@ func developerToolsOptInCategoryIDs() []string {
 		if entry.definition.ReportCategory != ReportCategoryDeveloperTools {
 			continue
 		}
-		if entry.developerCache || entry.applicationCache {
+		if entry.resolverKind == categoryResolverDeveloperCache || entry.resolverKind == categoryResolverApplicationCache {
 			identifiers = append(identifiers, entry.definition.Identifier)
 		}
 	}
@@ -735,7 +863,7 @@ func developerToolsOptInCategoryIDs() []string {
 func applicationCacheCategoryIDs() []string {
 	var identifiers []string
 	for _, entry := range canonicalCategoryEntries {
-		if entry.applicationCache {
+		if entry.resolverKind == categoryResolverApplicationCache {
 			identifiers = append(identifiers, entry.definition.Identifier)
 		}
 	}
@@ -744,7 +872,7 @@ func applicationCacheCategoryIDs() []string {
 
 func isApplicationCacheCategory(category string) bool {
 	entry, ok := canonicalCategoryEntry(category)
-	return ok && entry.applicationCache
+	return ok && entry.resolverKind == categoryResolverApplicationCache
 }
 
 // validateApplicationCacheRegistry rejects incomplete application-cache
@@ -784,19 +912,13 @@ func validateApplicationCacheRegistry(
 	}
 
 	for _, entry := range entries {
-		if !entry.applicationCache {
+		if entry.resolverKind != categoryResolverApplicationCache {
 			if entry.applicationCachePolicyID != "" {
 				return fmt.Errorf("non-application-cache category %q must not register an application cache policy", entry.definition.Identifier)
 			}
 			continue
 		}
 		id := entry.definition.Identifier
-		if !entry.opportunity {
-			return fmt.Errorf("application-cache category %q must be an opportunity", id)
-		}
-		if entry.developerCache {
-			return fmt.Errorf("application-cache category %q must not also be a developer-cache", id)
-		}
 		if entry.definition.RunningApplicationPolicy != RunningApplicationPolicyApplicationIdleBeforeAfter {
 			return fmt.Errorf("application-cache category %q must use application-idle-before-and-after-inspection policy", id)
 		}
@@ -878,7 +1000,7 @@ func developerApplicationDefinition(id string) (supportedApplicationDefinition, 
 
 func applicationCacheEntry(identifier string) (categoryCatalogEntry, bool) {
 	entry, ok := canonicalCategoryEntry(identifier)
-	if !ok || !entry.applicationCache {
+	if !ok || entry.resolverKind != categoryResolverApplicationCache {
 		return categoryCatalogEntry{}, false
 	}
 	return entry, true

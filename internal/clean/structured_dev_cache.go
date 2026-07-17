@@ -32,7 +32,7 @@ func resolveDevCacheRootScopes(opts Options, category string) []DevCacheRootScop
 		return normalizeDevCacheRootScopes(opts.DevCacheRootScopeResolver(category))
 	}
 	entry, ok := canonicalCategoryEntry(category)
-	if ok && entry.developerCache && entry.resolveRootScopes != nil {
+	if ok && entry.resolverKind == categoryResolverDeveloperCache && entry.resolveRootScopes != nil {
 		return normalizeDevCacheRootScopes(entry.resolveRootScopes(devCachePathDependencies{
 			lookupEnv:   os.LookupEnv,
 			userHomeDir: os.UserHomeDir,
@@ -84,7 +84,7 @@ func resolveDevCacheChildCandidates(ctx context.Context, opts Options, category,
 		return opts.DevCacheChildDiscoverer(ctx, category, root)
 	}
 	entry, ok := canonicalCategoryEntry(category)
-	if !ok || !entry.developerCache || entry.discoverChildren == nil {
+	if !ok || entry.resolverKind != categoryResolverDeveloperCache || entry.discoverChildren == nil {
 		return nil, false
 	}
 	return entry.discoverChildren(ctx, root), true
@@ -94,7 +94,7 @@ func resolveDevCacheChildCandidates(ctx context.Context, opts Options, category,
 // privately registers a child discovery policy for the category.
 func categoryHasStructuredDevCacheDiscovery(category string) bool {
 	entry, ok := canonicalCategoryEntry(category)
-	return ok && entry.developerCache && entry.discoverChildren != nil
+	return ok && entry.resolverKind == categoryResolverDeveloperCache && entry.discoverChildren != nil
 }
 
 // isStrictDescendantPath reports whether path is a strict descendant of root

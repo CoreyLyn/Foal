@@ -5,6 +5,62 @@ import (
 	"testing"
 )
 
+func TestCanonicalExecutableCategoriesBindResolvers(t *testing.T) {
+	for _, entry := range canonicalCategoryEntries {
+		executable := isExecutableCategoryEligibility(entry.definition.Eligibility)
+		if executable && entry.resolver == nil {
+			t.Errorf("executable category %q has no bound resolver", entry.definition.Identifier)
+		}
+		if !executable && entry.resolver != nil {
+			t.Errorf("non-executable category %q has a bound resolver", entry.definition.Identifier)
+		}
+	}
+}
+
+func TestValidateCategoryResolverRegistryRejectsInvalidBindings(t *testing.T) {
+	executable := categoryDefinition(
+		"future-cache", "Future cache", ReportCategoryDeveloperTools,
+		CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime,
+		DeletionActionDeletePermanently,
+	)
+	nonExecutable := categoryDefinition(
+		"future-notice", "Future notice", ReportCategorySystem,
+		CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable, "",
+	)
+
+	tests := []struct {
+		name  string
+		entry categoryCatalogEntry
+	}{
+		{
+			name:  "executable without resolver",
+			entry: categoryCatalogEntry{definition: executable, resolverKind: categoryResolverDeveloperCache},
+		},
+		{
+			name: "non-executable with resolver",
+			entry: categoryCatalogEntry{
+				definition: nonExecutable, resolverKind: categoryResolverNonExecutable,
+				resolver: developerCacheResolver{},
+			},
+		},
+		{
+			name: "opt-in with default resolver",
+			entry: categoryCatalogEntry{
+				definition: executable, resolverKind: categoryResolverDefault,
+				resolver: defaultCategoryResolver{},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateCategoryResolverRegistry([]categoryCatalogEntry{tt.entry}); err == nil {
+				t.Fatal("expected invalid resolver binding")
+			}
+		})
+	}
+}
+
 func TestValidateDeveloperCacheRegistryRejectsIncompleteEntries(t *testing.T) {
 	apps := []supportedApplicationDefinition{
 		{id: ApplicationGo, displayName: "Go", executables: []string{"go.exe"}},
@@ -23,9 +79,10 @@ func TestValidateDeveloperCacheRegistryRejectsIncompleteEntries(t *testing.T) {
 
 	t.Run("missing resolver", func(t *testing.T) {
 		entries := []categoryCatalogEntry{{
-			definition:          baseDef,
-			developerCache:      true,
-			runningApplications: []string{ApplicationGo},
+			definition:            baseDef,
+			resolverKind:          categoryResolverDeveloperCache,
+			resolver:              developerCacheResolver{},
+			runningApplications:   []string{ApplicationGo},
 			reviewSuggestionTools: []string{"go"},
 		}}
 		if err := validateDeveloperCacheRegistry(entries, apps, allowlist); err == nil {
@@ -133,7 +190,7 @@ func TestCanonicalDeveloperCacheRegistryBindsResolvers(t *testing.T) {
 			t.Fatalf("%s paths = %#v, want [%q]", category, paths, wantPath)
 		}
 		entry, ok := canonicalCategoryEntry(category)
-		if !ok || !entry.developerCache || entry.resolvePaths == nil {
+		if !ok || entry.resolverKind != categoryResolverDeveloperCache || entry.resolvePaths == nil {
 			t.Fatalf("%s missing registered developer-cache rule", category)
 		}
 	}

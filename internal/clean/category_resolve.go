@@ -51,53 +51,25 @@ func resolveCategoryCore(ctx context.Context, opts Options, identifier string) (
 		return categoryCoreResult{}, fmt.Errorf("category %q is not independently resolvable", identifier)
 	}
 	canonicalID := plan.Categories[0]
-	summary, _ := canonicalCleanupCategoryCatalog.Summary(canonicalID)
+	entry, ok := canonicalCategoryEntry(canonicalID)
+	if !ok || entry.resolver == nil {
+		return categoryCoreResult{}, fmt.Errorf("category %q is not independently resolvable", identifier)
+	}
 
 	core := categoryCoreResult{
 		Identifier:  canonicalID,
-		Eligibility: summary.Eligibility,
+		Eligibility: entry.definition.Eligibility,
 	}
-
-	switch summary.Eligibility {
-	case CategoryEligibilityDefault:
-		result := newCleanResultSkeleton("dry_run", opts)
-		appendDefaultCandidates(ctx, opts, map[string]bool{canonicalID: true}, true, &result)
-		core.DefaultCandidates = append(core.DefaultCandidates, result.Candidates...)
-		core.Skipped = append(core.Skipped, result.Skipped...)
-		core.Diagnostics = append(core.Diagnostics, result.Errors...)
-	case CategoryEligibilityOptIn:
-		resolveOptInCategoryInto(ctx, opts, canonicalID, &core)
-	default:
-		return categoryCoreResult{}, fmt.Errorf("category %q is not independently resolvable", identifier)
-	}
+	entry.resolver.resolve(ctx, opts, canonicalID, &core)
 	return core, nil
 }
 
-// resolveOptInCategoryInto fills core for one opt-in category. Dispatch is
-// catalog-bound: developer caches, existence opportunities, browser cache, or
-// Application cache. Unknown opt-in IDs that pass CompileExactCategoryPlan but
-// match no resolver produce an empty core (fail closed / no invented work).
-func resolveOptInCategoryInto(ctx context.Context, opts Options, category string, core *categoryCoreResult) {
-	if isDevCacheCategory(category) {
-		resolveDeveloperCacheCategory(ctx, opts, category, core)
-		return
-	}
-	for _, id := range opportunityCategoryIDs(false) {
-		if id == category {
-			resolveExistenceOpportunityCategory(ctx, opts, category, core)
-			return
-		}
-	}
-	if category == OpportunityCategoryBrowserCache {
-		resolveBrowserCacheCategory(ctx, opts, core)
-		return
-	}
-	for _, id := range applicationCacheCategoryIDs() {
-		if id == category {
-			resolveApplicationCacheCategory(ctx, opts, category, core)
-			return
-		}
-	}
+func resolveDefaultCategory(ctx context.Context, opts Options, category string, core *categoryCoreResult) {
+	result := newCleanResultSkeleton("dry_run", opts)
+	appendDefaultCandidates(ctx, opts, map[string]bool{category: true}, true, &result)
+	core.DefaultCandidates = append(core.DefaultCandidates, result.Candidates...)
+	core.Skipped = append(core.Skipped, result.Skipped...)
+	core.Diagnostics = append(core.Diagnostics, result.Errors...)
 }
 
 // projectCategoryCoreToResolution maps the internal core to the public

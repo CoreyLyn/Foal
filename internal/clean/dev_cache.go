@@ -45,7 +45,7 @@ type devCachePathDependencies struct {
 // cache category binds its resolver at the private registration point.
 func resolveDevCachePaths(category string, deps devCachePathDependencies) []string {
 	entry, ok := canonicalCategoryEntry(category)
-	if !ok || !entry.developerCache || entry.resolvePaths == nil {
+	if !ok || entry.resolverKind != categoryResolverDeveloperCache || entry.resolvePaths == nil {
 		return nil
 	}
 	return entry.resolvePaths(deps)
@@ -235,5 +235,5 @@ func devCacheCategories() []string {
 // isDevCacheCategory checks if a category is a dev cache category.
 func isDevCacheCategory(category string) bool {
 	entry, ok := canonicalCategoryEntry(category)
-	return ok && entry.developerCache
+	return ok && entry.resolverKind == categoryResolverDeveloperCache
 }
