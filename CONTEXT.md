@@ -76,6 +76,26 @@ _Avoid_: JSON status code, byte-derived progress percentage, cleanup authorizati
 Presentation-only item summaries used by interactive Foal views to keep grouped review lists scannable. The Clean TUI may show a short item name, marker, count, size, or status while keeping full paths and contract fields in CLI, JSON, history, or other existing detailed review surfaces; compact labels do not remove evidence from shared models, bypass protected-path suppression, or make browser profile and cache-directory paths part of the primary TUI.
 _Avoid_: lossy read model, path suppression bypass, browser profile listing by default, execution manifest
 
+**Clean TUI dual-channel presentation**:
+A presentation-only encoding on the category-first Clean TUI that separates reclaimable-byte magnitude from deletion-action risk so the same red danger cue is never used for both. Magnitude uses tiered emphasis on trusted byte tokens only; risk uses confirmation grouping, permanent-deletion warnings, compact planned-action markers, and a selection-footer permanent notice.
+_Avoid_: red means large, whole-row magnitude color, magnitude implies danger, color as sole risk cue, execution authorization by color
+
+**Clean TUI magnitude emphasis**:
+Presentation-only styling of a trusted measured or affected byte token by absolute size using 1024-based thresholds: neutral below 100 MiB, attention (amber/yellow) from 100 MiB inclusive to 1 GiB exclusive, and strong (orange, not pure red) at 1 GiB and above. Zero-byte, empty, skipped, and unfinished/pending values receive no magnitude color; bold may remain when color is unavailable (`NO_COLOR` or weak terminals).
+_Avoid_: red for gigabytes, relative free-disk thresholds, unfinished-byte estimates, whole-row tint from size, freed-disk claim
+
+**Clean TUI planned-action marker**:
+A compact path-free preview label projecting a category's catalog Planned deletion action as `perm` (permanent deletion) or `bin` (Recycle Bin) without choosing or overriding that action. Markers are not red; Hints may explain `perm=permanent · bin=Recycle Bin`.
+_Avoid_: P/R-only without legend as the sole form, whole-row permanent red, TUI-owned action, marker as authorization
+
+**Clean TUI permanent-selection notice**:
+A footer sentence shown only while the current Clean TUI cleanup selection includes at least one permanent-delete category, stating that the selection includes permanent deletion, distinct from magnitude totals and from confirmation's irreversible warning.
+_Avoid_: always-visible permanent chrome, red magnitude total, silent permanent selection
+
+**TUI restricted token styling**:
+A narrow presentation exception that may apply ANSI/style sequences to individual path-free tokens (byte sizes, planned-action markers, confirmation warnings) after a plain-text frame is built, while keeping the plain frame the source of truth for tests and copy. It does not authorize whole-row rainbow styling or embed escapes inside asserted contract text.
+_Avoid_: arbitrary mid-line decoration, styled strings as test oracles, style-owned domain state
+
 **Report category**:
 A presentation grouping that organizes mixed Clean review states by a user-recognizable domain such as `System`, `User essentials`, `Browsers`, or `Developer tools`. A Report category may contain default candidates, skipped-by-default opportunities, running-application skips, review clues, suggestions, or inspection diagnostics; the category never changes an item's execution eligibility, JSON status, or contribution to Potential space.
 _Avoid_: cleanup rule group, execution authorization, JSON status
