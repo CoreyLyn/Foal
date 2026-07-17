@@ -11,6 +11,12 @@ import (
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
+type recordingHistoryRecorder struct{}
+
+func (*recordingHistoryRecorder) Record(context.Context, history.SessionRecord, []history.ItemRecord) error {
+	return nil
+}
+
 func TestEagerCleanModelQueueIsCatalogDerived(t *testing.T) {
 	model := newEagerCleanModel(120, 40)
 	queue := clean.EagerPreviewQueue()

@@ -13,6 +13,43 @@ import (
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
+
+// cleanFormatBytes formats byte counts for path-free Clean TUI chrome.
+func cleanFormatBytes(bytes int64) string {
+	if bytes <= 0 {
+		return "0 KB"
+	}
+	if bytes < 1024 {
+		return "<1 KB"
+	}
+
+	const (
+		kilobyte = int64(1024)
+		megabyte = 1024 * kilobyte
+		gigabyte = 1024 * megabyte
+	)
+
+	value := float64(bytes) / float64(kilobyte)
+	unit := "KB"
+	if bytes >= gigabyte {
+		value = float64(bytes) / float64(gigabyte)
+		unit = "GB"
+	} else if bytes >= megabyte {
+		value = float64(bytes) / float64(megabyte)
+		unit = "MB"
+	}
+
+	formatted := strings.TrimSuffix(fmt.Sprintf("%.1f", value), ".0")
+	return formatted + " " + unit
+}
+
+// cleanExecutionStream carries progress then the final Result for one exact
+// Clean execution started from the category-first confirmation path.
+type cleanExecutionStream struct {
+	progress <-chan clean.ExecutionProgress
+	result   <-chan clean.Result
+}
+
 // nextEagerGeneration assigns unique Clean session generations so stale stream
 // messages from a canceled or superseded session cannot mutate a later model
 // that happens to reuse a small per-model counter.
