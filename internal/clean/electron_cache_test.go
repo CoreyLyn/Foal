@@ -158,6 +158,8 @@ func TestElectronCache_WholeRootOnlyNoSiblings(t *testing.T) {
 		DevCachePathResolver:      func(string) []string { return []string{cacheRoot} },
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
+		// Isolate from host TEMP foal-* pollution when asserting frozen defaults.
+		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 	if len(result.OptInCandidates) != 1 {
 		t.Fatalf("candidates = %#v, want only resolved root", result.OptInCandidates)

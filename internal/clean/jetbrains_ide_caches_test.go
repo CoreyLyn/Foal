@@ -198,6 +198,7 @@ func TestJetBrainsIDECaches_EditionPrefixesDiscoverCachesAndIndex(t *testing.T) 
 		DetectRunningApplications: idleJetBrainsDetector(),
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 
 	if len(result.OptInCandidates) != len(wantPaths) {

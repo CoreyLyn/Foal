@@ -359,13 +359,31 @@ func (developerCacheResolver) resolve(ctx context.Context, opts Options, categor
 
 type categorySafetyNoteResolver func(CategoryResolution) string
 
+// existenceRootBase selects the current-user base directory for an existence-
+// observed fixed root. Paths are exact allowlisted joins only.
+type existenceRootBase string
+
+const (
+	existenceRootLocalAppData    existenceRootBase = "local-app-data"
+	existenceRootLocalAppDataLow existenceRootBase = "local-app-data-low"
+)
+
+// existenceRootSpec is one exact relative root under a known current-user base.
+// Missing bases or missing roots are silent absence (no incomplete result).
+type existenceRootSpec struct {
+	base     existenceRootBase
+	segments []string
+}
+
 type categoryCatalogEntry struct {
-	definition            CleanupCategoryDefinition
-	resolverKind          categoryResolverKind
-	resolver              categoryResolver
-	previewSafetyNote     categorySafetyNoteResolver
-	fixedLocalAppDataPath []string
-	runningApplications   []string
+	definition          CleanupCategoryDefinition
+	resolverKind        categoryResolverKind
+	resolver            categoryResolver
+	previewSafetyNote   categorySafetyNoteResolver
+	// existenceRoots lists exact fixed roots for existence-opportunity
+	// categories. Empty means no fixed-root discovery (user_temp).
+	existenceRoots      []existenceRootSpec
+	runningApplications []string
 	// resolvePaths resolves env/default roots for a developer-cache category.
 	// Required when developerCache is true unless resolveRootScopes is set;
 	// ignored when resolveRootScopes is non-nil. Root resolution never
@@ -401,11 +419,31 @@ func defaultCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogE
 }
 
 func existenceOpportunityEntry(definition CleanupCategoryDefinition, fixedLocalAppDataPath ...string) categoryCatalogEntry {
+	var roots []existenceRootSpec
+	if len(fixedLocalAppDataPath) > 0 {
+		roots = []existenceRootSpec{{
+			base:     existenceRootLocalAppData,
+			segments: append([]string(nil), fixedLocalAppDataPath...),
+		}}
+	}
+	return existenceOpportunityRootsEntry(definition, roots...)
+}
+
+// existenceOpportunityRootsEntry registers an existence-opportunity category
+// with one or more exact fixed roots under Local AppData and/or LocalLow.
+func existenceOpportunityRootsEntry(definition CleanupCategoryDefinition, roots ...existenceRootSpec) categoryCatalogEntry {
+	copied := make([]existenceRootSpec, len(roots))
+	for i, root := range roots {
+		copied[i] = existenceRootSpec{
+			base:     root.base,
+			segments: append([]string(nil), root.segments...),
+		}
+	}
 	return categoryCatalogEntry{
-		definition:            definition,
-		resolverKind:          categoryResolverExistenceOpportunity,
-		resolver:              existenceOpportunityResolver{},
-		fixedLocalAppDataPath: append([]string(nil), fixedLocalAppDataPath...),
+		definition:     definition,
+		resolverKind:   categoryResolverExistenceOpportunity,
+		resolver:       existenceOpportunityResolver{},
+		existenceRoots: copied,
 	}
 }
 
@@ -494,7 +532,7 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 21 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
+	// 23 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
 	// Over-broad whole-root system caches stay Recycle Bin until exact allowlists exist.
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
@@ -504,6 +542,24 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "Microsoft", "Windows", "INetCache"),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), "D3DSCache"),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), "NVIDIA", "DXCache"),
+	// AMD GPU/shader caches: exact allowlisted children under Local AMD (+ optional
+	// LocalLow AMD\DxCache). Parent AMD and non-allowlisted siblings are never candidates.
+	// Evidence: docs/research/amd-intel-gpu-shader-caches.md (#234/#238).
+	withPreviewSafetyNote(existenceOpportunityRootsEntry(
+		categoryDefinition(OpportunityCategoryAMDGPUShaderCaches, "AMD GPU shader caches", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently),
+		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"AMD", "DxCache"}},
+		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"AMD", "DxcCache"}},
+		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"AMD", "Dx9Cache"}},
+		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"AMD", "OglCache"}},
+		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"AMD", "VkCache"}},
+		existenceRootSpec{base: existenceRootLocalAppDataLow, segments: []string{"AMD", "DxCache"}},
+	), staticPreviewSafetyNote(gpuShaderCacheOptInImpactNotice)),
+	// Intel GPU shader cache: exact LocalLow Intel\ShaderCache only. Local Intel
+	// tree and ProgramData copies are never executable discovery roots.
+	withPreviewSafetyNote(existenceOpportunityRootsEntry(
+		categoryDefinition(OpportunityCategoryIntelGPUShaderCache, "Intel GPU shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently),
+		existenceRootSpec{base: existenceRootLocalAppDataLow, segments: []string{"Intel", "ShaderCache"}},
+	), staticPreviewSafetyNote(gpuShaderCacheOptInImpactNotice)),
 	browserCacheCategoryEntry(categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, DeletionActionDeletePermanently)),
 	withPreviewSafetyNote(applicationCacheCategoryEntry(
 		categoryDefinition(

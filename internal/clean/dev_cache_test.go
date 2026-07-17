@@ -72,6 +72,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.OpportunityCategoryINetCache,
 			clean.OpportunityCategoryD3DShaderCache,
 			clean.OpportunityCategoryNVIDIADXCache,
+			clean.OpportunityCategoryAMDGPUShaderCaches,
+			clean.OpportunityCategoryIntelGPUShaderCache,
 			clean.OpportunityCategoryBrowserCache,
 			clean.OpportunityCategoryVSCodeCache,
 			clean.OpportunityCategoryCursorCache,
@@ -104,8 +106,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"all\"", cat)
 			}
 		}
-		if len(enabled) != 10+16 {
-			t.Fatalf("expected 26 enabled categories (10+16), got %d", len(enabled))
+		if len(enabled) != 12+16 {
+			t.Fatalf("expected 28 enabled categories (12+16), got %d", len(enabled))
 		}
 	})
 

@@ -62,6 +62,7 @@ func TestStructuredDevCacheDiscovery_IndependentChildrenNotRoot(t *testing.T) {
 		DevCacheChildDiscoverer:   structuredDiscoverer("rev-a", "rev-b"),
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 
 	if len(result.OptInCandidates) != 2 {

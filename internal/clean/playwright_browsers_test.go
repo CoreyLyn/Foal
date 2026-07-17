@@ -99,6 +99,7 @@ func TestPlaywrightBrowsersOptInDiscoversAllowedComponents(t *testing.T) {
 		DevCachePathResolver:      func(string) []string { return []string{browsersRoot} },
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
 
 	if len(result.OptInCandidates) != len(wantBytes) {
