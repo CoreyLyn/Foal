@@ -1,6 +1,8 @@
 package clean
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,21 +20,44 @@ const (
 	browserCacheRuleID = OpportunityCategoryBrowserCache
 )
 
-var browserCacheDirectoryKinds = []string{"Cache", "Code Cache", "GPUCache"}
+type browserProfileCatalogKind int
+
+const (
+	browserProfileCatalogLocalState browserProfileCatalogKind = iota
+	browserProfileCatalogProfilesINI
+)
 
 type browserCacheConfig struct {
-	application      string
-	localAppDataPath []string
+	application         string
+	localAppDataPath    []string
+	roamingAppDataPath  []string
+	catalogKind         browserProfileCatalogKind
+	cacheDirectoryKinds []string
 }
 
+// browserCacheConfigs registers every supported browser under the single
+// browser_cache category. Chromium entries use Local State under Local AppData
+// User Data. Firefox uses profiles.ini under Roaming and regenerable cache2
+// under the matching Local profile tree.
 var browserCacheConfigs = []browserCacheConfig{
 	{
-		application:      ApplicationGoogleChrome,
-		localAppDataPath: []string{"Google", "Chrome", "User Data"},
+		application:         ApplicationGoogleChrome,
+		localAppDataPath:    []string{"Google", "Chrome", "User Data"},
+		catalogKind:         browserProfileCatalogLocalState,
+		cacheDirectoryKinds: []string{"Cache", "Code Cache", "GPUCache"},
 	},
 	{
-		application:      ApplicationMicrosoftEdge,
-		localAppDataPath: []string{"Microsoft", "Edge", "User Data"},
+		application:         ApplicationMicrosoftEdge,
+		localAppDataPath:    []string{"Microsoft", "Edge", "User Data"},
+		catalogKind:         browserProfileCatalogLocalState,
+		cacheDirectoryKinds: []string{"Cache", "Code Cache", "GPUCache"},
+	},
+	{
+		application:         ApplicationMozillaFirefox,
+		localAppDataPath:    []string{"Mozilla", "Firefox"},
+		roamingAppDataPath:  []string{"Mozilla", "Firefox"},
+		catalogKind:         browserProfileCatalogProfilesINI,
+		cacheDirectoryKinds: []string{"cache2"},
 	},
 }
 
@@ -59,13 +84,17 @@ func discoverChromeBrowserCache(ctx context.Context, opts BrowserCacheDiscoveryO
 }
 
 func discoverBrowserCache(ctx context.Context, config browserCacheConfig, opts BrowserCacheDiscoveryOptions, validator pathsafe.Validator) browserCacheDiscoveryResult {
+	if config.catalogKind == browserProfileCatalogProfilesINI {
+		return discoverFirefoxBrowserCache(ctx, config, opts, validator)
+	}
+	return discoverChromiumBrowserCache(ctx, config, opts, validator)
+}
+
+func discoverChromiumBrowserCache(ctx context.Context, config browserCacheConfig, opts BrowserCacheDiscoveryOptions, validator pathsafe.Validator) browserCacheDiscoveryResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	localAppDataDir := opts.LocalAppDataDir
-	if localAppDataDir == "" {
-		localAppDataDir = os.Getenv("LOCALAPPDATA")
-	}
+	localAppDataDir := browserCacheLocalAppDataDir(opts)
 	if localAppDataDir == "" {
 		return browserCacheDiscoveryResult{}
 	}
@@ -90,6 +119,72 @@ func discoverBrowserCache(ctx context.Context, config browserCacheConfig, opts B
 		return browserCacheDiscoveryResult{}
 	}
 
+	return inspectBrowserProfiles(ctx, config, userDataRoot, userDataRoot, profiles, validator, func(profile browserProfileCatalogEntry) string {
+		dir := profile.id
+		if profile.relativePath != "" {
+			dir = profile.relativePath
+		}
+		return filepath.Join(userDataRoot, filepath.FromSlash(dir))
+	})
+}
+
+func discoverFirefoxBrowserCache(ctx context.Context, config browserCacheConfig, opts BrowserCacheDiscoveryOptions, validator pathsafe.Validator) browserCacheDiscoveryResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	roamingAppDataDir := browserCacheRoamingAppDataDir(opts)
+	localAppDataDir := browserCacheLocalAppDataDir(opts)
+	if roamingAppDataDir == "" || localAppDataDir == "" {
+		return browserCacheDiscoveryResult{}
+	}
+	catalogRoot := browserRoamingRoot(roamingAppDataDir, config)
+	localRoot := browserUserDataRoot(localAppDataDir, config)
+
+	for _, root := range []string{catalogRoot, localRoot} {
+		suppressed, protectedRulePaths := browserDiscoverySuppressed(root, validator)
+		if suppressed {
+			return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: protectedRulePaths}
+		}
+	}
+
+	if _, err := os.Lstat(catalogRoot); errors.Is(err, fs.ErrNotExist) {
+		return browserCacheDiscoveryResult{}
+	} else if err != nil {
+		diagnostic := browserCacheDiagnostic(catalogRoot, classifyError(err), err.Error())
+		return browserCacheDiscoveryResult{diagnostic: &diagnostic}
+	}
+
+	profiles, err := readFirefoxProfilesINI(catalogRoot)
+	if err != nil {
+		diagnostic := browserCacheDiagnostic(catalogRoot, "browser_profile_catalog_unknown", err.Error())
+		return browserCacheDiscoveryResult{diagnostic: &diagnostic}
+	}
+	if len(profiles) == 0 {
+		return browserCacheDiscoveryResult{}
+	}
+
+	// Opportunity path is the Local Firefox root where regenerable caches live.
+	return inspectBrowserProfiles(ctx, config, localRoot, localRoot, profiles, validator, func(profile browserProfileCatalogEntry) string {
+		dir := profile.id
+		if profile.relativePath != "" {
+			dir = profile.relativePath
+		}
+		return filepath.Join(localRoot, filepath.FromSlash(dir))
+	})
+}
+
+// inspectBrowserProfiles measures allowlisted cache directories under each
+// resolved profile path. One incomplete or protected path discards the whole
+// browser summary (complete-or-discard).
+func inspectBrowserProfiles(
+	ctx context.Context,
+	config browserCacheConfig,
+	opportunityPath string,
+	protectionRoot string,
+	profiles []browserProfileCatalogEntry,
+	validator pathsafe.Validator,
+	profilePath func(browserProfileCatalogEntry) string,
+) browserCacheDiscoveryResult {
 	detail := BrowserCacheOpportunityDetail{
 		Browser:      config.application,
 		ProfileCount: len(profiles),
@@ -97,20 +192,20 @@ func discoverBrowserCache(ctx context.Context, config browserCacheConfig, opts B
 	}
 	var total int64
 	for _, profile := range profiles {
-		profilePath := filepath.Join(userDataRoot, profile.id)
-		if validator.IsUserProtected(profilePath) {
-			return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: browserProtectedRulePaths(userDataRoot, validator)}
+		resolvedProfilePath := profilePath(profile)
+		if validator.IsUserProtected(resolvedProfilePath) {
+			return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: browserProtectedRulePaths(protectionRoot, validator)}
 		}
 		profileDetail := BrowserCacheProfileDetail{
 			ID:     profile.id,
 			Name:   profile.name,
-			Path:   profilePath,
-			Caches: make([]BrowserCacheDirectory, 0, len(browserCacheDirectoryKinds)),
+			Path:   resolvedProfilePath,
+			Caches: make([]BrowserCacheDirectory, 0, len(config.cacheDirectoryKinds)),
 		}
-		for _, kind := range browserCacheDirectoryKinds {
-			cachePath := filepath.Join(profilePath, kind)
+		for _, kind := range config.cacheDirectoryKinds {
+			cachePath := filepath.Join(resolvedProfilePath, kind)
 			if validator.IsUserProtected(cachePath) {
-				return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: browserProtectedRulePaths(userDataRoot, validator)}
+				return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: browserProtectedRulePaths(protectionRoot, validator)}
 			}
 			if _, err := os.Lstat(cachePath); errors.Is(err, fs.ErrNotExist) {
 				profileDetail.Caches = append(profileDetail.Caches, BrowserCacheDirectory{Kind: kind, Path: cachePath})
@@ -138,7 +233,7 @@ func discoverBrowserCache(ctx context.Context, config browserCacheConfig, opts B
 	}
 	return browserCacheDiscoveryResult{opportunity: &Opportunity{
 		Category:     OpportunityCategoryBrowserCache,
-		Path:         userDataRoot,
+		Path:         opportunityPath,
 		Bytes:        total,
 		Status:       OpportunityStatus,
 		Reason:       OpportunityReason,
@@ -146,16 +241,24 @@ func discoverBrowserCache(ctx context.Context, config browserCacheConfig, opts B
 	}}
 }
 
-type chromeProfileCatalogEntry struct {
+type browserProfileCatalogEntry struct {
+	// id is the stable profile identity reported in JSON (Chromium Local State
+	// key, or Firefox profiles.ini relative Path).
 	id   string
 	name string
+	// relativePath is the directory under the browser root used to resolve the
+	// profile on disk. Empty means id itself is the directory name (Chromium).
+	relativePath string
 }
 
-func readChromeProfileCatalog(userDataRoot string) ([]chromeProfileCatalogEntry, error) {
+// chromeProfileCatalogEntry is retained for older chrome-named call sites.
+type chromeProfileCatalogEntry = browserProfileCatalogEntry
+
+func readChromeProfileCatalog(userDataRoot string) ([]browserProfileCatalogEntry, error) {
 	return readBrowserProfileCatalog(userDataRoot, browserCacheConfigs[0])
 }
 
-func readBrowserProfileCatalog(userDataRoot string, config browserCacheConfig) ([]chromeProfileCatalogEntry, error) {
+func readBrowserProfileCatalog(userDataRoot string, config browserCacheConfig) ([]browserProfileCatalogEntry, error) {
 	data, err := os.ReadFile(filepath.Join(userDataRoot, "Local State"))
 	if err != nil {
 		return nil, err
@@ -167,17 +270,118 @@ func readBrowserProfileCatalog(userDataRoot string, config browserCacheConfig) (
 	if localState.Profile.InfoCache == nil {
 		return nil, fmt.Errorf("%s Local State profile catalog is missing", applicationDisplayName(config.application))
 	}
-	profiles := make([]chromeProfileCatalogEntry, 0, len(localState.Profile.InfoCache))
+	profiles := make([]browserProfileCatalogEntry, 0, len(localState.Profile.InfoCache))
 	for id, profile := range localState.Profile.InfoCache {
 		if isExcludedBrowserProfileID(id) {
 			continue
 		}
-		profiles = append(profiles, chromeProfileCatalogEntry{id: id, name: profile.Name})
+		profiles = append(profiles, browserProfileCatalogEntry{id: id, name: profile.Name})
 	}
 	sort.Slice(profiles, func(i, j int) bool {
 		return profiles[i].id < profiles[j].id
 	})
 	return profiles, nil
+}
+
+// readFirefoxProfilesINI enumerates ordinary relative profiles from Mozilla's
+// profiles.ini. Absolute or path-escaping Path values are ignored (fail-closed
+// catalog evidence only). A missing or unreadable file is an error so callers
+// can emit browser_profile_catalog_unknown rather than guess profile folders.
+func readFirefoxProfilesINI(catalogRoot string) ([]browserProfileCatalogEntry, error) {
+	data, err := os.ReadFile(filepath.Join(catalogRoot, "profiles.ini"))
+	if err != nil {
+		return nil, err
+	}
+	profiles, err := parseFirefoxProfilesINI(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s profiles.ini catalog is invalid: %w", applicationDisplayName(ApplicationMozillaFirefox), err)
+	}
+	return profiles, nil
+}
+
+func parseFirefoxProfilesINI(data []byte) ([]browserProfileCatalogEntry, error) {
+	// Empty file is invalid catalog evidence — not a silent empty profile list.
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, errors.New("empty profiles.ini")
+	}
+
+	type section struct {
+		name string
+		kv   map[string]string
+	}
+	var sections []section
+	var current *section
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			name := strings.TrimSpace(line[1 : len(line)-1])
+			sections = append(sections, section{name: name, kv: map[string]string{}})
+			current = &sections[len(sections)-1]
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		current.kv[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	var profiles []browserProfileCatalogEntry
+	for _, sec := range sections {
+		if !isFirefoxProfileSection(sec.name) {
+			continue
+		}
+		pathValue := strings.TrimSpace(sec.kv["Path"])
+		if pathValue == "" {
+			continue
+		}
+		isRelative := strings.TrimSpace(sec.kv["IsRelative"])
+		// Only relative catalog paths under the standard root are in scope.
+		if isRelative == "0" || filepath.IsAbs(pathValue) {
+			continue
+		}
+		rel := filepath.ToSlash(filepath.Clean(pathValue))
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+			continue
+		}
+		// Keep the catalog Path as id so multi-profile layouts stay unique and
+		// Local mirror joins remain exact (Profiles/<folder>).
+		profiles = append(profiles, browserProfileCatalogEntry{
+			id:           rel,
+			name:         strings.TrimSpace(sec.kv["Name"]),
+			relativePath: rel,
+		})
+	}
+	sort.Slice(profiles, func(i, j int) bool {
+		return profiles[i].id < profiles[j].id
+	})
+	return profiles, nil
+}
+
+func isFirefoxProfileSection(name string) bool {
+	if !strings.HasPrefix(name, "Profile") {
+		return false
+	}
+	suffix := name[len("Profile"):]
+	if suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func isExcludedChromeProfileID(id string) bool {
@@ -195,6 +399,26 @@ func chromeUserDataRoot(localAppDataDir string) string {
 func browserUserDataRoot(localAppDataDir string, config browserCacheConfig) string {
 	pathParts := append([]string{localAppDataDir}, config.localAppDataPath...)
 	return filepath.Join(pathParts...)
+}
+
+func browserRoamingRoot(roamingAppDataDir string, config browserCacheConfig) string {
+	pathParts := append([]string{roamingAppDataDir}, config.roamingAppDataPath...)
+	return filepath.Join(pathParts...)
+}
+
+// browserDiscoveryRoots returns the path roots used for Protection pre-checks
+// before a browser gate runs discovery.
+func browserDiscoveryRoots(config browserCacheConfig, opts BrowserCacheDiscoveryOptions) []string {
+	var roots []string
+	if local := browserCacheLocalAppDataDir(opts); local != "" && len(config.localAppDataPath) > 0 {
+		roots = append(roots, browserUserDataRoot(local, config))
+	}
+	if config.catalogKind == browserProfileCatalogProfilesINI {
+		if roaming := browserCacheRoamingAppDataDir(opts); roaming != "" && len(config.roamingAppDataPath) > 0 {
+			roots = append(roots, browserRoamingRoot(roaming, config))
+		}
+	}
+	return roots
 }
 
 func browserCacheDiagnostic(path, code, message string) StructuredIssue {
@@ -233,4 +457,15 @@ func sameOrDescendantCaseInsensitive(path, root string) bool {
 		return true
 	}
 	return strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+// isBrowserApplication reports whether application is a supported browser_cache
+// logical application (Chrome, Edge, or Firefox).
+func isBrowserApplication(application string) bool {
+	for _, config := range browserCacheConfigs {
+		if config.application == application {
+			return true
+		}
+	}
+	return false
 }

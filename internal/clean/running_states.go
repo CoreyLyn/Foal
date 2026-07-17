@@ -65,7 +65,7 @@ func projectRunningApplicationStates(states []RunningApplicationState, identitie
 }
 
 // browserRunningApplicationIdentities returns the supported browser identities
-// gated by browser-cache resolution (currently Chrome and Edge).
+// gated by browser-cache resolution (Chrome, Edge, and Firefox).
 func browserRunningApplicationIdentities() []string {
 	identities := make([]string, 0, len(browserCacheConfigs))
 	for _, config := range browserCacheConfigs {

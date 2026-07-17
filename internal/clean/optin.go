@@ -416,11 +416,16 @@ func resolveBrowserCacheCategory(ctx context.Context, opts Options, core *catego
 		projectRunningApplicationStates(preStates, browserRunningApplicationIdentities()...)...,
 	)
 	for _, config := range browserCacheConfigs {
-		if localAppDataDir := browserCacheLocalAppDataDir(opts.BrowserCacheDiscoveryOptions); localAppDataDir != "" {
-			if suppressed, protectedRulePaths := browserDiscoverySuppressed(browserUserDataRoot(localAppDataDir, config), opts.Validator); suppressed {
+		suppressedForBrowser := false
+		for _, root := range browserDiscoveryRoots(config, opts.BrowserCacheDiscoveryOptions) {
+			if suppressed, protectedRulePaths := browserDiscoverySuppressed(root, opts.Validator); suppressed {
 				core.SuppressedProtectionPaths = append(core.SuppressedProtectionPaths, protectedRulePaths...)
-				continue
+				suppressedForBrowser = true
+				break
 			}
+		}
+		if suppressedForBrowser {
+			continue
 		}
 		outcome := gate.gateBrowser(ctx, config.application, preStates, func() browserCacheDiscoveryResult {
 			return discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)

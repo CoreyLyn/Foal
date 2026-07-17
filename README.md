@@ -65,7 +65,7 @@ foal uninstall --json
 
 - Idle user-temp entries as `user_temp`
 - Existence-observed current-user roots: `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache`, `d3d_shader_cache`, `nvidia_dx_cache`
-- Chrome/Edge `browser_cache` when the browser is idle before and after complete profile cache inspection
+- Chrome/Edge/Firefox `browser_cache` when the browser is idle before and after complete profile cache inspection
 - VS Code `vscode_cache` and Cursor `cursor_cache` when the editor is idle before and after exact allowlisted root inspection under standard Roaming AppData `Code` or `Cursor`
 
 Observed opportunity bytes stay separate from `Potential space`. The Recycle Bin is permanently excluded from opportunity discovery. Developer-tool caches remain Review suggestions by default, or become Opt-in candidates via `--opt-in <name>`, `--opt-in dev-caches`, `--opt-in all`, or Clean TUI selection. Administrator-only caches (SoftwareDistribution, Delivery Optimization) are permission-boundary notices only.

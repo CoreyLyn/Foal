@@ -52,6 +52,13 @@ func browserCacheLocalAppDataDir(opts BrowserCacheDiscoveryOptions) string {
 	return os.Getenv("LOCALAPPDATA")
 }
 
+func browserCacheRoamingAppDataDir(opts BrowserCacheDiscoveryOptions) string {
+	if opts.RoamingAppDataDir != "" {
+		return opts.RoamingAppDataDir
+	}
+	return os.Getenv("APPDATA")
+}
+
 func runningApplicationStateFor(states []RunningApplicationState, application string) (RunningApplicationState, bool) {
 	for _, state := range states {
 		if state.Application == application {
@@ -113,7 +120,7 @@ func runningApplicationUnknownIssue(state RunningApplicationState) StructuredIss
 		message = applicationDisplayName(state.Application) + " process state could not be determined; cache review was skipped."
 	}
 	rule := "cache_review"
-	if state.Application == ApplicationGoogleChrome || state.Application == ApplicationMicrosoftEdge {
+	if isBrowserApplication(state.Application) {
 		rule = "browser_review"
 	}
 	return issue(runningApplicationDetectionIssueCode, message, true, "", rule)
