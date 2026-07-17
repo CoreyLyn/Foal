@@ -246,8 +246,8 @@ type eagerCleanModel struct {
 	execFollowActive  bool
 	execTrackedActive int // last known active execution outcome index; -1 none
 
-	phase                 eagerCleanPhase
-	frozenCategories      []string
+	phase            eagerCleanPhase
+	frozenCategories []string
 	// frozenAllowPermanent is the per-run permanent authorization disclosed by
 	// the strengthened confirmation for the frozen exact selection.
 	frozenAllowPermanent  bool
@@ -1063,6 +1063,9 @@ func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
 		return lines
 	default:
 		lines := make([]eagerBodyLine, 0, len(m.rows)+4)
+		// Plain-frame byte column alignment for complete/partial rows only.
+		// Catalog/display order is preserved; size never reorders categories.
+		leftWidth, byteWidth := eagerPreviewByteColumnWidths(m.rows)
 		currentGroup := clean.ReportCategory("")
 		for i, row := range m.rows {
 			if row.ReportCategory != currentGroup {
@@ -1078,8 +1081,9 @@ func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
 				cursor = ">"
 			}
 			// Cursor (>) and checkbox ([x]/[ ]) stay independent of scan markers.
+			label := eagerPreviewRowLabelAligned(row, leftWidth, byteWidth)
 			lines = append(lines, eagerBodyLine{
-				text:         fmt.Sprintf("  %s %s %s %s", cursor, m.checkbox(row), m.rowMarker(row), m.rowLabel(row)),
+				text:         fmt.Sprintf("  %s %s %s %s", cursor, m.checkbox(row), m.rowMarker(row), label),
 				rowIndex:     i,
 				outcomeIndex: -1,
 			})

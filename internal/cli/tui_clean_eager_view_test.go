@@ -180,9 +180,9 @@ func TestEagerExecutionMarkersAndLabelsPure(t *testing.T) {
 func TestEagerResultTotalsPure(t *testing.T) {
 	result := clean.Result{
 		Totals: clean.Totals{
-			RecycleBinMovedBytes:     10,
-			PermanentlyDeletedBytes:  20,
-			AffectedBytes:            30,
+			RecycleBinMovedBytes:    10,
+			PermanentlyDeletedBytes: 20,
+			AffectedBytes:           30,
 		},
 	}
 	recycle, permanent, affected := eagerResultTotals(result, nil)
@@ -265,6 +265,174 @@ func TestEagerSelectionSummaryLinePure(t *testing.T) {
 	}
 	if got := eagerSelectionSummaryLine(1, 0, 0); got != "Selected: 1 categories · 0 KB" {
 		t.Fatalf("collapsed summary = %q", got)
+	}
+}
+
+func TestCleanMagnitudeTierBoundaries(t *testing.T) {
+	const (
+		mib = int64(1024 * 1024)
+		gib = int64(1024 * 1024 * 1024)
+	)
+	tests := []struct {
+		name  string
+		bytes int64
+		want  cleanMagnitudeTier
+	}{
+		{name: "zero", bytes: 0, want: cleanMagnitudeNone},
+		{name: "negative", bytes: -1, want: cleanMagnitudeNone},
+		{name: "one byte", bytes: 1, want: cleanMagnitudeNeutral},
+		{name: "just below 100 MiB", bytes: 100*mib - 1, want: cleanMagnitudeNeutral},
+		{name: "exactly 100 MiB", bytes: 100 * mib, want: cleanMagnitudeAttention},
+		{name: "mid attention", bytes: 500 * mib, want: cleanMagnitudeAttention},
+		{name: "just below 1 GiB", bytes: gib - 1, want: cleanMagnitudeAttention},
+		{name: "exactly 1 GiB", bytes: gib, want: cleanMagnitudeStrong},
+		{name: "multi GiB", bytes: 3 * gib, want: cleanMagnitudeStrong},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cleanMagnitudeTierFromBytes(tt.bytes); got != tt.want {
+				t.Fatalf("cleanMagnitudeTierFromBytes(%d) = %v, want %v", tt.bytes, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanMagnitudeTierFromFormattedToken(t *testing.T) {
+	tests := []struct {
+		token string
+		want  cleanMagnitudeTier
+	}{
+		{token: "0 KB", want: cleanMagnitudeNone},
+		{token: "<1 KB", want: cleanMagnitudeNeutral},
+		{token: "2 KB", want: cleanMagnitudeNeutral},
+		{token: "99.9 MB", want: cleanMagnitudeNeutral},
+		{token: "100 MB", want: cleanMagnitudeAttention},
+		{token: "512 MB", want: cleanMagnitudeAttention},
+		{token: "1 GB", want: cleanMagnitudeStrong},
+		{token: "3 GB", want: cleanMagnitudeStrong},
+	}
+	for _, tt := range tests {
+		t.Run(tt.token, func(t *testing.T) {
+			if got := cleanMagnitudeTierFromFormattedToken(tt.token); got != tt.want {
+				t.Fatalf("token %q tier = %v, want %v", tt.token, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEagerPreviewByteColumnAlignment(t *testing.T) {
+	rows := []eagerCategoryRow{
+		{Label: "Short", State: clean.CategoryPreviewComplete, CandidateCount: 1, Bytes: 2048},
+		{Label: "Much Longer Category Label", State: clean.CategoryPreviewPartial, CandidateCount: 12, Bytes: 3 * 1024 * 1024 * 1024},
+		{Label: "Waiting", State: clean.CategoryPreviewWaiting},
+		{Label: "Empty", State: clean.CategoryPreviewEmpty},
+	}
+	leftWidth, byteWidth := eagerPreviewByteColumnWidths(rows)
+	if leftWidth == 0 || byteWidth == 0 {
+		t.Fatalf("widths left=%d byte=%d", leftWidth, byteWidth)
+	}
+
+	complete := eagerPreviewRowLabelAligned(rows[0], leftWidth, byteWidth)
+	partial := eagerPreviewRowLabelAligned(rows[1], leftWidth, byteWidth)
+	// Plain fragments remain findable (oracle).
+	if !strings.Contains(complete, "Short") || !strings.Contains(complete, "2 KB") {
+		t.Fatalf("complete = %q", complete)
+	}
+	if !strings.Contains(partial, "3 GB") || !strings.Contains(partial, "partial") {
+		t.Fatalf("partial = %q", partial)
+	}
+	// Byte tokens start at the same column in the plain frame.
+	idxComplete := strings.Index(complete, "2 KB")
+	idxPartial := strings.Index(partial, "3 GB")
+	if idxComplete < 0 || idxPartial < 0 || idxComplete != idxPartial {
+		t.Fatalf("byte columns misaligned: complete@%d %q partial@%d %q", idxComplete, complete, idxPartial, partial)
+	}
+	// Non-measured states invent no byte field.
+	waiting := eagerPreviewRowLabelAligned(rows[2], leftWidth, byteWidth)
+	if strings.Contains(waiting, "KB") || strings.Contains(waiting, "MB") || strings.Contains(waiting, "GB") {
+		t.Fatalf("waiting invented bytes: %q", waiting)
+	}
+	empty := eagerPreviewRowLabelAligned(rows[3], leftWidth, byteWidth)
+	if strings.Contains(empty, "0 KB") {
+		t.Fatalf("empty invented zero magnitude field: %q", empty)
+	}
+}
+
+func TestStyleMagnitudeTokenNoColorAndHues(t *testing.T) {
+	attention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, true)
+	strong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, true)
+	if attention == "100 MB" || strong == "1 GB" {
+		t.Fatal("colored path should decorate attention/strong tokens")
+	}
+	// Plain fragments must remain inside the styled token.
+	if !strings.Contains(attention, "100 MB") || !strings.Contains(strong, "1 GB") {
+		t.Fatalf("styled tokens lost plain fragments: %q %q", attention, strong)
+	}
+	// Strong must not use pure red CSI (31 / 91) as the size cue.
+	if strings.Contains(strong, "[31m") || strings.Contains(strong, "[91m") {
+		t.Fatalf("strong magnitude must not use pure red: %q", strong)
+	}
+
+	noColorAttention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, false)
+	noColorStrong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, false)
+	if !strings.Contains(noColorAttention, "100 MB") || !strings.Contains(noColorStrong, "1 GB") {
+		t.Fatalf("NO_COLOR path lost fragments: %q %q", noColorAttention, noColorStrong)
+	}
+	// Without color, no amber/orange foreground; bold may remain.
+	if strings.Contains(noColorAttention, "214") || strings.Contains(noColorStrong, "208") {
+		t.Fatalf("NO_COLOR path leaked magnitude hues: %q %q", noColorAttention, noColorStrong)
+	}
+
+	// Zero/none and neutral stay plain (no invented magnitude color).
+	if got := styleMagnitudeTokenWithColor("0 KB", cleanMagnitudeNone, true); got != "0 KB" {
+		t.Fatalf("none tier = %q", got)
+	}
+	if got := styleMagnitudeTokenWithColor("2 KB", cleanMagnitudeNeutral, true); got != "2 KB" {
+		t.Fatalf("neutral tier = %q", got)
+	}
+}
+
+func TestStylizeFrameMagnitudeOnPreviewAndSelected(t *testing.T) {
+	plain := strings.Join([]string{
+		"Foal Clean",
+		"  > [x] ✓ Big · 1 item(s) · 1 GB",
+		"    [ ] ✓ Mid · 1 item(s) · 100 MB",
+		"    [ ] … Wait · waiting",
+		"Selected: 1 categories · 1 GB",
+		"Hints: space toggle",
+	}, "\n")
+	if strings.Contains(plain, "\x1b[") {
+		t.Fatal("plain frame must stay free of escapes")
+	}
+	styled := stylizeFrame(plain)
+	// Plain fragments remain the contract.
+	for _, want := range []string{"1 GB", "100 MB", "waiting", "Selected: 1 categories", "Hints: space toggle"} {
+		if !strings.Contains(styled, want) {
+			t.Fatalf("styled frame missing plain fragment %q:\n%q", want, styled)
+		}
+	}
+	// Magnitude applied to measured preview/selected bytes, not waiting.
+	if !strings.Contains(styled, "\x1b[") {
+		t.Fatal("styled frame should include magnitude or reverse escapes when color enabled")
+	}
+	// Waiting line has no byte token to color.
+	for _, line := range strings.Split(styled, "\n") {
+		if strings.Contains(line, "waiting") && cleanByteTokenPattern.MatchString(line) {
+			t.Fatalf("waiting line should not gain a byte token: %q", line)
+		}
+	}
+}
+
+func TestStylizeFrameMagnitudeRespectsNoColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	plain := "    [x] ✓ Cache · 1 item(s) · 1 GB\nSelected: 1 categories · 1 GB\n"
+	styled := stylizeFrame(plain)
+	if !strings.Contains(styled, "1 GB") {
+		t.Fatalf("NO_COLOR path lost plain fragment:\n%q", styled)
+	}
+	// Hues (256-color orange/amber indexes used by magnitude styles) must not appear.
+	if strings.Contains(styled, "208") || strings.Contains(styled, "214") {
+		t.Fatalf("NO_COLOR path leaked magnitude hues:\n%q", styled)
 	}
 }
 
