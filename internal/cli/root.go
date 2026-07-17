@@ -35,7 +35,7 @@ var commands = []commandSpec{
 	{name: "version", description: "Report Foal build and runtime metadata."},
 	{name: "analyze", description: "Inspect disk usage and cleanup opportunities without changing files."},
 	{name: "clean", description: "Preview or execute conservative cleanup; permanent categories need per-run --allow-permanent."},
-	{name: "purge", description: "Preview rebuildable project artifacts under one explicit root (dry-run only in this slice)."},
+	{name: "purge", description: "Preview or permanently delete rebuildable project artifacts under one explicit root."},
 	{name: "status", description: "Report a read-only system and Foal state snapshot."},
 	{name: "history", description: "Show previous Foal operation records."},
 	{name: "uninstall", description: "Preview application uninstall evidence without executing uninstallers."},
@@ -45,6 +45,7 @@ var (
 	dryRunClean                 = clean.DryRun
 	executeClean                = clean.Execute
 	dryRunPurge                 = purge.DryRun
+	executePurge                = purge.Execute
 	loadProtectionConfiguration = clean.LoadProtectionConfiguration
 	newHistoryRecorder          = func() (history.Recorder, error) {
 		recorder, err := history.NewDefaultFileRecorder()
@@ -225,7 +226,22 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 				Args:        args,
 			})
 		}
-		result := dryRunPurge(context.Background(), purge.Options{Root: invocation.root})
+		recorder, _ := newHistoryRecorder()
+		purgeOptions := purge.Options{
+			Root:                   invocation.root,
+			AllowPermanentDeletion: invocation.allowPermanent,
+			HistoryRecorder:        recorder,
+			CommandParameters: history.CommandParameters{
+				Command: "purge",
+				Args:    append([]string(nil), args...),
+			},
+		}
+		var result purge.Result
+		if invocation.execute {
+			result = executePurge(context.Background(), purgeOptions)
+		} else {
+			result = dryRunPurge(context.Background(), purgeOptions)
+		}
 		if opts.json {
 			code := writeJSON(stdout, envelope{Command: command, Result: result})
 			if code != exitOK {
@@ -236,7 +252,11 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			}
 			return exitOK
 		}
-		_, _ = fmt.Fprint(stdout, purge.RenderPreviewReport(result))
+		if invocation.execute {
+			_, _ = fmt.Fprint(stdout, purge.RenderExecuteReport(result))
+		} else {
+			_, _ = fmt.Fprint(stdout, purge.RenderPreviewReport(result))
+		}
 		if result.Status == purge.StatusError {
 			return exitUsage
 		}
@@ -437,18 +457,29 @@ type cleanInvocation struct {
 }
 
 type purgeInvocation struct {
-	root string
+	root           string
+	execute        bool
+	allowPermanent bool
 }
 
 func validatePurgeArgs(args []string) (purgeInvocation, error) {
 	var invocation purgeInvocation
 	var root string
+	dryRun := false
+	execute := false
+	allowPermanent := false
 	for _, arg := range args {
 		switch arg {
 		case "--dry-run":
 			// Default is already dry-run; accept explicit flag for clarity.
+			dryRun = true
 		case "--execute":
-			return invocation, fmt.Errorf("purge execute is not available in this slice; use dry-run preview only")
+			execute = true
+		case "--allow-permanent":
+			// Per-run permanent-deletion authorization (same vocabulary as Clean).
+			// Dry-run accepts the flag without authorizing mutation; execute without
+			// it skips candidates with permanent_deletion_not_authorized.
+			allowPermanent = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return invocation, fmt.Errorf("unknown purge option: %s", arg)
@@ -459,10 +490,16 @@ func validatePurgeArgs(args []string) (purgeInvocation, error) {
 			root = arg
 		}
 	}
+	if dryRun && execute {
+		return invocation, fmt.Errorf("purge accepts either --dry-run or --execute, not both")
+	}
 	if strings.TrimSpace(root) == "" {
 		return invocation, fmt.Errorf("purge requires an explicit root path (example: foal purge .\\my-project); refusing to scan without a user-supplied root")
 	}
-	return purgeInvocation{root: root}, nil
+	if allowPermanent && !execute && !dryRun {
+		// Flag alone with root defaults to dry-run (non-mutating); allow without error.
+	}
+	return purgeInvocation{root: root, execute: execute, allowPermanent: allowPermanent}, nil
 }
 
 func validateCleanArgs(args []string) (cleanInvocation, error) {
@@ -545,7 +582,12 @@ func helpText() string {
 	builder.WriteString("  --opt-in <name>      Include an opt-in category (repeatable; or \"all\" / \"dev-caches\").\n")
 	builder.WriteString("\nPurge options:\n")
 	builder.WriteString("  <root>               Required explicit project/workspace root to scan (never implied).\n")
-	builder.WriteString("  --dry-run            Preview only (default). No mutation in this slice.\n")
+	builder.WriteString("  --dry-run            Preview only (default). Reports planned permanent deletion without mutation.\n")
+	builder.WriteString("  --execute            Fresh rediscovery then permanent deletion of matching artifacts.\n")
+	builder.WriteString("  --allow-permanent    Per-run authorization for permanent deletion (with --execute).\n")
+	builder.WriteString("                       Without it, candidates are skipped; nothing is deleted.\n")
+	builder.WriteString("                       Permanent deletion is ordinary filesystem removal (not secure erasure).\n")
+	builder.WriteString("                       Removing project artifacts requires reinstall/rebuild afterward.\n")
 	builder.WriteString("\nExamples:\n")
 	builder.WriteString("  foal status --json\n")
 	builder.WriteString("  foal clean --dry-run\n")
@@ -554,6 +596,7 @@ func helpText() string {
 	builder.WriteString("  foal clean --execute --opt-in playwright-browsers --allow-permanent\n")
 	builder.WriteString("  foal purge .\\my-project\n")
 	builder.WriteString("  foal purge --json .\\my-project\n")
+	builder.WriteString("  foal purge --execute --allow-permanent .\\my-project\n")
 	builder.WriteString("  foal.exe analyze\n")
 	return builder.String()
 }
