@@ -654,12 +654,15 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		resolvePipCachePaths,
 		[]string{"pip"},
 	),
-	developerCacheEntry(
+	// Cargo registry cache + unpacked sources: multi-root allowlist under
+	// CARGO_HOME (registry/cache, registry/src only). Distinctive-process idle
+	// gate (cargo.exe). Permanent; re-fetch impact disclosed.
+	withPreviewSafetyNote(developerCacheEntry(
 		categoryDefinition(DevCacheCategoryCargo, "Cargo cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveCargoCachePaths,
 		nil,
 		ApplicationCargo,
-	),
+	), staticPreviewSafetyNote(cargoCacheOptInImpactNotice)),
 	developerCacheEntry(
 		categoryDefinition(DevCacheCategoryNuGet, "NuGet cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveNuGetCachePaths,

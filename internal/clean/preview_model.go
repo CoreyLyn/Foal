@@ -147,6 +147,12 @@ const yarnCacheOptInImpactNotice = "Opt-in yarn cache cleanup may require re-dow
 // Modules must be re-downloaded; offline / private module sources may fail to restore.
 const goModCacheOptInImpactNotice = "Opt-in Go module cache cleanup requires re-downloading modules. Offline workflows and private or removed module sources may fail to restore."
 
+// cargoCacheOptInImpactNotice is shown when cargo-cache is an Opt-in candidate.
+// Allowlisted registry/cache (.crate archives) and registry/src (unpacked crate
+// sources) re-download/re-extract on the next build; offline and private-registry
+// workflows may be affected.
+const cargoCacheOptInImpactNotice = "Opt-in Cargo cache cleanup may require re-downloading crate archives and re-extracting crate sources. Offline builds and private-registry packages may be affected."
+
 // playwrightBrowsersOptInImpactNotice is shown when playwright-browsers has
 // Opt-in candidates. Installations are re-downloadable but may be large, needed
 // offline, or in use by active automation; Foal does not stop processes.
@@ -259,7 +265,7 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPNPMOptIn, hasYarnOptIn, hasGoModCacheOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasVisualStudioOptIn, hasApplicationCacheVSIX bool
+	var hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPNPMOptIn, hasYarnOptIn, hasGoModCacheOptIn, hasCargoOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasVisualStudioOptIn, hasApplicationCacheVSIX bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case DevCacheCategoryUV:
@@ -274,6 +280,8 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			hasYarnOptIn = true
 		case DevCacheCategoryGoModCache:
 			hasGoModCacheOptIn = true
+		case DevCacheCategoryCargo:
+			hasCargoOptIn = true
 		case DevCacheCategoryPlaywright:
 			hasPlaywrightOptIn = true
 		case DevCacheCategoryPuppeteerBrowsers:
@@ -330,6 +338,12 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
 			Message: goModCacheOptInImpactNotice,
+		})
+	}
+	if hasCargoOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: cargoCacheOptInImpactNotice,
 		})
 	}
 	if hasPlaywrightOptIn {

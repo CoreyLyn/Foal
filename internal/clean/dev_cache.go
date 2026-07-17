@@ -151,24 +151,55 @@ func resolvePipCachePaths(deps devCachePathDependencies) []string {
 	return nil
 }
 
-func resolveCargoCachePaths(deps devCachePathDependencies) []string {
-	// cargo: CARGO_HOME -> %USERPROFILE%\.cargo\registry\cache
-	var cargoHome string
-	if path, ok := deps.lookupEnv("CARGO_HOME"); ok && path != "" {
-		cargoHome = path
-	} else if userProfile, ok := deps.lookupEnv("USERPROFILE"); ok && userProfile != "" {
-		cargoHome = deps.joinPath(userProfile, ".cargo")
-	} else if home, err := deps.userHomeDir(); err == nil && home != "" {
-		if deps.goos == "windows" {
-			cargoHome = deps.joinPath(home, ".cargo")
-		} else {
-			cargoHome = deps.joinPath(home, ".cargo")
+// cargoCacheAllowlistedRelatives are the exact regenerable roots under CARGO_HOME
+// (or default ~/.cargo). Cargo Book documents both as re-fetchable cache material:
+//   - registry/cache: downloaded .crate gzip archives
+//   - registry/src: unpacked crate sources rustc reads (re-extracted from cache)
+// See https://doc.rust-lang.org/cargo/guide/cargo-home.html
+//
+// Never candidates (explicit exclusions, not walked from .cargo):
+//   bin/, config.toml, credentials.toml, .crates.toml, .crates2.json,
+//   registry/index, whole CARGO_HOME / .cargo, project target/, sccache.
+// git/db and git/checkouts are regenerable per Cargo Book but are deferred from
+// this allowlist until a separate explicit include decision (issue #258 v1).
+var cargoCacheAllowlistedRelatives = [][]string{
+	{"registry", "cache"},
+	{"registry", "src"},
+}
+
+// resolveCargoHome returns non-blank CARGO_HOME, else %USERPROFILE%\.cargo /
+// user home .cargo. Blank/whitespace CARGO_HOME falls through. Never runs cargo.
+func resolveCargoHome(deps devCachePathDependencies) string {
+	if path, ok := deps.lookupEnv("CARGO_HOME"); ok {
+		if trimmed := strings.TrimSpace(path); trimmed != "" {
+			return trimmed
 		}
 	}
-	if cargoHome != "" {
-		return []string{deps.joinPath(cargoHome, "registry", "cache")}
+	if userProfile, ok := deps.lookupEnv("USERPROFILE"); ok && userProfile != "" {
+		return deps.joinPath(userProfile, ".cargo")
 	}
-	return nil
+	if home, err := deps.userHomeDir(); err == nil && home != "" {
+		return deps.joinPath(home, ".cargo")
+	}
+	return ""
+}
+
+func resolveCargoCachePaths(deps devCachePathDependencies) []string {
+	// cargo: non-blank CARGO_HOME else default ~/.cargo, then only exact
+	// allowlisted regenerable children (registry/cache, registry/src).
+	// Missing children are silent absence at measure time; no parent fallback.
+	cargoHome := resolveCargoHome(deps)
+	if cargoHome == "" {
+		return nil
+	}
+	out := make([]string, 0, len(cargoCacheAllowlistedRelatives))
+	for _, rel := range cargoCacheAllowlistedRelatives {
+		parts := make([]string, 0, 1+len(rel))
+		parts = append(parts, cargoHome)
+		parts = append(parts, rel...)
+		out = append(out, deps.joinPath(parts...))
+	}
+	return out
 }
 
 func resolveNuGetCachePaths(deps devCachePathDependencies) []string {

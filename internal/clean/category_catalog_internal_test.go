@@ -170,27 +170,32 @@ func TestCanonicalDeveloperCacheRegistryBindsResolvers(t *testing.T) {
 		goos: "windows",
 	}
 
-	want := map[string]string{
-		DevCacheCategoryNPM:                 `C:\Users\test\AppData\Local\npm-cache`,
-		DevCacheCategoryPNPM:                `C:\Users\test\AppData\Local\pnpm\store`,
-		DevCacheCategoryYarn:                `C:\Users\test\AppData\Local\Yarn\Cache`,
-		DevCacheCategoryGo:                  `C:\Users\test\AppData\Local\go-build`,
-		DevCacheCategoryGoModCache:          `C:\Users\test\go\pkg\mod`,
-		DevCacheCategoryPip:                 `C:\Users\test\AppData\Local\pip\Cache`,
-		DevCacheCategoryCargo:               `C:\Users\test\.cargo\registry\cache`,
-		DevCacheCategoryNuGet:               `C:\Users\test\AppData\Local\NuGet\v3-cache`,
-		DevCacheCategoryNuGetGlobalPackages: `C:\Users\test\.nuget\packages`,
-		DevCacheCategoryCorepack:            `C:\Users\test\AppData\Local\node\corepack\v1`,
-		DevCacheCategoryUV:                  `C:\Users\test\AppData\Local\uv\cache`,
-		DevCacheCategoryBun:                 `C:\Users\test\.bun\install\cache`,
-		DevCacheCategoryPlaywright:          `C:\Users\test\AppData\Local\ms-playwright`,
-		DevCacheCategoryPuppeteerBrowsers:   `C:\Users\test\.cache\puppeteer`,
-		DevCacheCategoryElectron:            `C:\Users\test\AppData\Local\electron\Cache`,
+	want := map[string][]string{
+		DevCacheCategoryNPM:                 {`C:\Users\test\AppData\Local\npm-cache`},
+		DevCacheCategoryPNPM:                {`C:\Users\test\AppData\Local\pnpm\store`},
+		DevCacheCategoryYarn:                {`C:\Users\test\AppData\Local\Yarn\Cache`},
+		DevCacheCategoryGo:                  {`C:\Users\test\AppData\Local\go-build`},
+		DevCacheCategoryGoModCache:          {`C:\Users\test\go\pkg\mod`},
+		DevCacheCategoryPip:                 {`C:\Users\test\AppData\Local\pip\Cache`},
+		DevCacheCategoryCargo:               {`C:\Users\test\.cargo\registry\cache`, `C:\Users\test\.cargo\registry\src`},
+		DevCacheCategoryNuGet:               {`C:\Users\test\AppData\Local\NuGet\v3-cache`},
+		DevCacheCategoryNuGetGlobalPackages: {`C:\Users\test\.nuget\packages`},
+		DevCacheCategoryCorepack:            {`C:\Users\test\AppData\Local\node\corepack\v1`},
+		DevCacheCategoryUV:                  {`C:\Users\test\AppData\Local\uv\cache`},
+		DevCacheCategoryBun:                 {`C:\Users\test\.bun\install\cache`},
+		DevCacheCategoryPlaywright:          {`C:\Users\test\AppData\Local\ms-playwright`},
+		DevCacheCategoryPuppeteerBrowsers:   {`C:\Users\test\.cache\puppeteer`},
+		DevCacheCategoryElectron:            {`C:\Users\test\AppData\Local\electron\Cache`},
 	}
-	for category, wantPath := range want {
+	for category, wantPaths := range want {
 		paths := resolveDevCachePaths(category, deps)
-		if len(paths) != 1 || paths[0] != wantPath {
-			t.Fatalf("%s paths = %#v, want [%q]", category, paths, wantPath)
+		if len(paths) != len(wantPaths) {
+			t.Fatalf("%s paths = %#v, want %#v", category, paths, wantPaths)
+		}
+		for i := range wantPaths {
+			if paths[i] != wantPaths[i] {
+				t.Fatalf("%s paths = %#v, want %#v", category, paths, wantPaths)
+			}
 		}
 		entry, ok := canonicalCategoryEntry(category)
 		if !ok || entry.resolverKind != categoryResolverDeveloperCache || entry.resolvePaths == nil {

@@ -384,6 +384,103 @@ func TestDevCachePathResolution(t *testing.T) {
 		}
 	})
 
+	t.Run("cargo multi-root: CARGO_HOME allowlists registry/cache and registry/src only", func(t *testing.T) {
+		deps := devCachePathDependencies{
+			lookupEnv: func(key string) (string, bool) {
+				if key == "CARGO_HOME" {
+					return `C:\custom\cargo-home`, true
+				}
+				if key == "USERPROFILE" {
+					return `C:\Users\test`, true
+				}
+				return "", false
+			},
+			joinPath: func(parts ...string) string {
+				return strings.Join(parts, `\`)
+			},
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryCargo, deps)
+		want := []string{
+			`C:\custom\cargo-home\registry\cache`,
+			`C:\custom\cargo-home\registry\src`,
+		}
+		if len(paths) != len(want) {
+			t.Fatalf("CARGO_HOME paths = %#v, want %#v", paths, want)
+		}
+		for i := range want {
+			if paths[i] != want[i] {
+				t.Fatalf("CARGO_HOME paths = %#v, want %#v", paths, want)
+			}
+		}
+		// Structural: never whole home, bin, index, git, or config siblings.
+		for _, p := range paths {
+			for _, banned := range []string{
+				`C:\custom\cargo-home`,
+				`C:\custom\cargo-home\bin`,
+				`C:\custom\cargo-home\registry\index`,
+				`C:\custom\cargo-home\git\db`,
+				`C:\custom\cargo-home\git\checkouts`,
+				`C:\custom\cargo-home\config.toml`,
+			} {
+				if p == banned {
+					t.Fatalf("non-allowlisted path returned: %q", p)
+				}
+			}
+		}
+
+		// Whitespace-only CARGO_HOME falls through to USERPROFILE\.cargo.
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "CARGO_HOME" {
+				return "   ", true
+			}
+			if key == "USERPROFILE" {
+				return `C:\Users\test`, true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryCargo, deps)
+		want = []string{
+			`C:\Users\test\.cargo\registry\cache`,
+			`C:\Users\test\.cargo\registry\src`,
+		}
+		if len(paths) != len(want) {
+			t.Fatalf("blank CARGO_HOME default paths = %#v, want %#v", paths, want)
+		}
+		for i := range want {
+			if paths[i] != want[i] {
+				t.Fatalf("blank CARGO_HOME default paths = %#v, want %#v", paths, want)
+			}
+		}
+
+		// USERPROFILE missing: userHomeDir fallback.
+		deps.lookupEnv = func(string) (string, bool) { return "", false }
+		deps.userHomeDir = func() (string, error) {
+			return `C:\Users\from-home`, nil
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryCargo, deps)
+		want = []string{
+			`C:\Users\from-home\.cargo\registry\cache`,
+			`C:\Users\from-home\.cargo\registry\src`,
+		}
+		if len(paths) != len(want) {
+			t.Fatalf("userHomeDir cargo paths = %#v, want %#v", paths, want)
+		}
+		for i := range want {
+			if paths[i] != want[i] {
+				t.Fatalf("userHomeDir cargo paths = %#v, want %#v", paths, want)
+			}
+		}
+
+		// No home resolution: silent absence.
+		deps.userHomeDir = func() (string, error) {
+			return "", os.ErrNotExist
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryCargo, deps)
+		if len(paths) != 0 {
+			t.Fatalf("expected silent absence, got %#v", paths)
+		}
+	})
+
 	t.Run("env-wins: nuget global packages uses NUGET_PACKAGES only when set", func(t *testing.T) {
 		// Env set: only env path is returned
 		deps := devCachePathDependencies{
