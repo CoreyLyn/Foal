@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/history"
 )
@@ -16,6 +18,43 @@ type recordingHistoryRecorder struct{}
 
 func (*recordingHistoryRecorder) Record(context.Context, history.SessionRecord, []history.ItemRecord) error {
 	return nil
+}
+
+// exactExecutionStartedFrom peels beginExactExecution's tea.Batch (execute +
+// tick) and returns the start message without waiting on the spinner tick sleep.
+func exactExecutionStartedFrom(t *testing.T, cmd tea.Cmd) eagerExactExecutionStartedMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("nil execution cmd")
+	}
+	msg := cmd()
+	if started, ok := msg.(eagerExactExecutionStartedMsg); ok {
+		return started
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("execution cmd msg = %T, want Batch or start", msg)
+	}
+	// Run children in parallel so the immediate start msg is not blocked by
+	// tea.Tick's sleep on the companion tick command.
+	ch := make(chan tea.Msg, len(batch))
+	for _, child := range batch {
+		child := child
+		go func() { ch <- child() }()
+	}
+	deadline := time.After(2 * time.Second)
+	for i := 0; i < len(batch); i++ {
+		select {
+		case m := <-ch:
+			if started, ok := m.(eagerExactExecutionStartedMsg); ok {
+				return started
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for eagerExactExecutionStartedMsg")
+		}
+	}
+	t.Fatal("execution batch missing eagerExactExecutionStartedMsg")
+	return eagerExactExecutionStartedMsg{}
 }
 
 func TestCleanFormatBytes(t *testing.T) {
@@ -1635,7 +1674,7 @@ func TestEagerCleanSecondEnterInvokesExactExecutionOnce(t *testing.T) {
 	}
 
 	// Drive the async handoff.
-	started := cmd().(eagerExactExecutionStartedMsg)
+	started := exactExecutionStartedFrom(t, cmd)
 	wait := model.applyExactExecutionStarted(started)
 	if wait == nil {
 		t.Fatal("expected wait command after start")
@@ -1845,7 +1884,7 @@ func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) 
 	}
 
 	// Drive progress projections through shared phases.
-	started := cmd().(eagerExactExecutionStartedMsg)
+	started := exactExecutionStartedFrom(t, cmd)
 	wait := model.applyExactExecutionStarted(started)
 	phases := []string{"Fresh scanning", "Recycle Bin safety check", "Moving to Recycle Bin"}
 	states := []string{"rechecking", "ready", "cleaning"}
@@ -1946,7 +1985,7 @@ func TestEagerCleanExecutionTerminalOutcomesAndMixedPartial(t *testing.T) {
 	}
 	_, _ = model.handleKey("enter")
 	_, cmd := model.handleKey("enter")
-	started := cmd().(eagerExactExecutionStartedMsg)
+	started := exactExecutionStartedFrom(t, cmd)
 	wait := model.applyExactExecutionStarted(started)
 	for model.phase == eagerPhaseExecuting {
 		msg := wait()
@@ -2058,7 +2097,7 @@ func TestEagerCleanExecutionEmptyCleanedFailedCanceled(t *testing.T) {
 			}
 			_, _ = model.handleKey("enter")
 			_, cmd := model.handleKey("enter")
-			started := cmd().(eagerExactExecutionStartedMsg)
+			started := exactExecutionStartedFrom(t, cmd)
 			wait := model.applyExactExecutionStarted(started)
 			for model.phase == eagerPhaseExecuting {
 				msg := wait()
@@ -2122,7 +2161,7 @@ func TestEagerCleanActiveExecutionCancelKeysAndRepeatedCtrlC(t *testing.T) {
 	}
 	_, _ = model.handleKey("enter")
 	_, cmd := model.handleKey("enter")
-	started := cmd().(eagerExactExecutionStartedMsg)
+	started := exactExecutionStartedFrom(t, cmd)
 	// Capture cancel so repeated Ctrl+C can be observed without force exit.
 	cancelCalls := 0
 	baseCancel := model.cancelExecution
@@ -2303,7 +2342,7 @@ func TestEagerCleanExecutionCannotAlterFrozenAuthorization(t *testing.T) {
 	model.selectAllSelectable()
 	model.rows[0].Selected = true
 
-	started := cmd().(eagerExactExecutionStartedMsg)
+	started := exactExecutionStartedFrom(t, cmd)
 	wait := model.applyExactExecutionStarted(started)
 	for model.phase == eagerPhaseExecuting {
 		msg := wait()
@@ -2455,7 +2494,7 @@ func TestEagerCleanViewportConfirmationAndResultScrollOnly(t *testing.T) {
 		t.Fatalf("start exec: phase=%v", model.phase)
 	}
 	// Drain to result.
-	started := cmd().(eagerExactExecutionStartedMsg)
+	started := exactExecutionStartedFrom(t, cmd)
 	wait := model.applyExactExecutionStarted(started)
 	for model.phase == eagerPhaseExecuting {
 		msg := wait()
@@ -3004,7 +3043,7 @@ func TestEagerCleanConfirmationGroupsMixedActionsAndHandoff(t *testing.T) {
 		t.Fatalf("frozen = %#v", model.frozenCategories)
 	}
 	// Drive handoff.
-	started := cmd().(eagerExactExecutionStartedMsg)
+	started := exactExecutionStartedFrom(t, cmd)
 	wait := model.applyExactExecutionStarted(started)
 	for model.phase == eagerPhaseExecuting {
 		msg := wait()
@@ -3110,7 +3149,7 @@ func TestEagerCleanResultProjectsMixedOutcomesAndPartialRisk(t *testing.T) {
 	model.finished = true
 	_, _ = model.handleKey("enter")
 	_, cmd := model.handleKey("enter")
-	started := cmd().(eagerExactExecutionStartedMsg)
+	started := exactExecutionStartedFrom(t, cmd)
 	wait := model.applyExactExecutionStarted(started)
 	for model.phase == eagerPhaseExecuting {
 		msg := wait()
@@ -3323,7 +3362,7 @@ func TestEagerCleanProductionPermanentCategoriesInitialSelectionAndConfirmation(
 	if !stringSlicesEqual(model.frozenCategories, wantFrozen) {
 		t.Fatalf("frozen = %#v, want %#v", model.frozenCategories, wantFrozen)
 	}
-	started := cmd().(eagerExactExecutionStartedMsg)
+	started := exactExecutionStartedFrom(t, cmd)
 	wait := model.applyExactExecutionStarted(started)
 	for model.phase == eagerPhaseExecuting {
 		msg := wait()
@@ -3529,7 +3568,7 @@ func TestEagerCleanGrokBuildUpdateResidueRowSelectionAndHandoff(t *testing.T) {
 		}
 	}
 	// Drive the tea.Cmd handoff so shared Clean receives the frozen plan.
-	started := cmd().(eagerExactExecutionStartedMsg)
+	started := exactExecutionStartedFrom(t, cmd)
 	wait := model.applyExactExecutionStarted(started)
 	for model.phase == eagerPhaseExecuting {
 		msg := wait()
@@ -3557,4 +3596,172 @@ func TestEagerCleanGrokBuildUpdateResidueRowSelectionAndHandoff(t *testing.T) {
 	}
 	result := model.content()
 	assertNoPath(t, result)
+}
+
+func TestEagerCleanExecutionRestartsSpinnerTicksAndElapsed(t *testing.T) {
+	// Hold execution open so ticks matter while Fresh scanning is in progress.
+	release := make(chan struct{})
+	original := runExactCleanSelection
+	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
+		if reporter != nil {
+			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning})
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return clean.Result{Status: "ok", Mode: "execute"}
+	}
+	t.Cleanup(func() {
+		close(release)
+		runExactCleanSelection = original
+	})
+
+	fixedNow := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	model := newEagerCleanModel(100, 40)
+	model.now = func() time.Time { return fixedNow }
+	// markEagerQueueTerminal owns generation=1 for deterministic observations.
+	markEagerQueueTerminal(&model, true)
+	model.finished = true // preview finished; tick chain already dead
+	gen := model.generation
+	for i := range model.rows {
+		model.rows[i].Selected = i == 0
+	}
+
+	_, _ = model.handleKey("enter")
+	if model.phase != eagerPhaseConfirmation {
+		t.Fatalf("phase=%v, want confirmation", model.phase)
+	}
+	// Confirmation must not keep the preview tick chain alive.
+	if cmd := model.applyTick(eagerPreviewTickMsg{generation: gen, frame: 3}); cmd != nil {
+		t.Fatal("confirmation phase must not reschedule ticks")
+	}
+
+	nav, cmd := model.handleKey("enter")
+	if nav != eagerPreviewNavNone || cmd == nil || model.phase != eagerPhaseExecuting {
+		t.Fatalf("start execution: nav=%v cmd=%v phase=%v", nav, cmd, model.phase)
+	}
+	if model.executionStartedAt.IsZero() {
+		t.Fatal("executionStartedAt must be set when execute begins")
+	}
+
+	// Peel tea.Batch(execute, tick) without serial tick sleep blocking start.
+	batchMsg := cmd()
+	batch, ok := batchMsg.(tea.BatchMsg)
+	if !ok || len(batch) < 2 {
+		t.Fatalf("beginExactExecution must return tea.Batch(execute, tick), got %T len=%d", batchMsg, len(batch))
+	}
+	ch := make(chan tea.Msg, len(batch))
+	for _, child := range batch {
+		child := child
+		go func() { ch <- child() }()
+	}
+	var started eagerExactExecutionStartedMsg
+	var tickMsg eagerPreviewTickMsg
+	gotStart, gotTick := false, false
+	deadline := time.After(eagerPreviewTickInterval + time.Second)
+	for i := 0; i < len(batch); i++ {
+		select {
+		case m := <-ch:
+			switch m := m.(type) {
+			case eagerExactExecutionStartedMsg:
+				started = m
+				gotStart = true
+			case eagerPreviewTickMsg:
+				tickMsg = m
+				gotTick = true
+			}
+		case <-deadline:
+			t.Fatal("timeout expanding execution batch")
+		}
+	}
+	if !gotStart || !gotTick {
+		t.Fatalf("batch must include start and tick (start=%v tick=%v)", gotStart, gotTick)
+	}
+	if tickMsg.generation != gen {
+		t.Fatalf("tick generation = %d, want %d", tickMsg.generation, gen)
+	}
+	_ = model.applyExactExecutionStarted(started)
+
+	// Ticks advance the frame while executing.
+	next := model.applyTick(tickMsg)
+	if next == nil {
+		t.Fatal("executing phase must reschedule ticks")
+	}
+	if model.spinnerFrame != tickMsg.frame {
+		t.Fatalf("spinnerFrame = %d, want %d", model.spinnerFrame, tickMsg.frame)
+	}
+	wantFrame := eagerPreviewSpinnerFrames[model.spinnerFrame%len(eagerPreviewSpinnerFrames)]
+	content := model.content()
+	if !strings.Contains(content, wantFrame) {
+		t.Fatalf("content missing spinner %q:\n%s", wantFrame, content)
+	}
+	if !strings.Contains(content, "Fresh scanning") || !strings.Contains(content, "0s") {
+		t.Fatalf("execution header missing phase/elapsed:\n%s", content)
+	}
+
+	// Elapsed uses execution start, not preview start.
+	fixedNow = fixedNow.Add(12 * time.Second)
+	content = model.content()
+	if !strings.Contains(content, "12s") {
+		t.Fatalf("expected 12s elapsed after execution start:\n%s", content)
+	}
+	if !strings.Contains(content, eagerExecutionStillScanningReassurance) {
+		t.Fatalf("expected still-working reassurance after threshold:\n%s", content)
+	}
+
+	// Stale generation must not mutate or reschedule.
+	frameBeforeStale := model.spinnerFrame
+	if cmd := model.applyTick(eagerPreviewTickMsg{generation: gen + 99, frame: 99}); cmd != nil {
+		t.Fatal("stale tick must not reschedule")
+	}
+	if model.spinnerFrame != frameBeforeStale {
+		t.Fatalf("stale tick mutated spinnerFrame to %d", model.spinnerFrame)
+	}
+
+	// Result stops the continuous tick need.
+	model.applyExactExecuted(eagerExactExecutedMsg{result: clean.Result{Status: "ok", Mode: "execute"}})
+	if model.phase != eagerPhaseResult {
+		t.Fatalf("phase=%v, want result", model.phase)
+	}
+	if cmd := model.applyTick(eagerPreviewTickMsg{generation: gen, frame: model.spinnerFrame + 1}); cmd != nil {
+		t.Fatal("result phase must not keep tick chain alive")
+	}
+}
+
+func TestEagerCleanExecutionElapsedIgnoresPreviewStartedAt(t *testing.T) {
+	fixedNow := time.Date(2026, 7, 18, 15, 0, 0, 0, time.UTC)
+	model := newEagerCleanModel(80, 24)
+	model.now = func() time.Time { return fixedNow }
+	model.startedAt = fixedNow.Add(-5 * time.Minute) // long preview
+	model.phase = eagerPhaseExecuting
+	model.executionStarted = true
+	model.executionStartedAt = fixedNow.Add(-4 * time.Second)
+	model.executionProgress = clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning}
+	model.executionOutcomes = []clean.CategoryExecutionOutcome{{
+		Identifier: "user_temp",
+		Label:      "User temp",
+		State:      clean.CategoryExecutionRechecking,
+	}}
+
+	line := model.executionHeaderLine()
+	if !strings.Contains(line, "4s") {
+		t.Fatalf("want execution elapsed 4s, got %q", line)
+	}
+	if strings.Contains(line, "300s") || strings.Contains(line, "5m") {
+		t.Fatalf("must not use preview startedAt: %q", line)
+	}
+	if !strings.Contains(line, eagerExecutionStillScanningReassurance) {
+		t.Fatalf("want reassurance at >=3s scanning: %q", line)
+	}
+
+	// Other phases keep elapsed but drop scanning reassurance.
+	model.executionProgress.Phase = clean.ExecutionPhasePermanentOperations
+	line = model.executionHeaderLine()
+	if !strings.Contains(line, "Permanent deletion") || !strings.Contains(line, "4s") {
+		t.Fatalf("permanent phase header = %q", line)
+	}
+	if strings.Contains(line, eagerExecutionStillScanningReassurance) {
+		t.Fatalf("reassurance only for Fresh scanning: %q", line)
+	}
 }

@@ -3,8 +3,16 @@ package cli
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+)
+
+// Execution chrome: keep the header visibly alive during long Fresh scanning /
+// permanent deletion without inventing percentages or path-backed progress.
+const (
+	eagerExecutionStillWorkingThreshold    = 3 * time.Second
+	eagerExecutionStillScanningReassurance = "Still re-checking selected categories…"
 )
 
 // tui_clean_eager_view.go holds pure path-free presentation and selection
@@ -422,6 +430,27 @@ func eagerResultTotals(result clean.Result, outcomes []clean.CategoryExecutionOu
 		affected = recycle + permanent
 	}
 	return recycle, permanent, affected
+}
+
+// eagerExecutionElapsedLabel formats whole seconds since execution start.
+func eagerExecutionElapsedLabel(elapsed time.Duration) string {
+	seconds := int(elapsed.Seconds())
+	if seconds < 0 {
+		seconds = 0
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
+// eagerExecutionHeaderLine formats path-free execution chrome: spinner, phase,
+// elapsed since execute began, and an optional still-working reassurance.
+// No byte-derived percentages or candidate paths.
+func eagerExecutionHeaderLine(spinnerFrame int, phaseLabel, elapsed, reassurance string) string {
+	spinner := eagerPreviewSpinnerFrames[spinnerFrame%len(eagerPreviewSpinnerFrames)]
+	line := fmt.Sprintf("%s %s · %s", spinner, phaseLabel, elapsed)
+	if reassurance != "" {
+		line += " · " + reassurance
+	}
+	return line
 }
 
 // eagerPreviewHeaderLine formats the path-free scanning/complete header without

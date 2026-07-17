@@ -426,11 +426,27 @@ func TestPrimaryCleanConfirmationExecutionResultPathFree(t *testing.T) {
 	if model.clean.phase != eagerPhaseExecuting || cmd == nil {
 		t.Fatalf("second enter must start execution: phase=%v cmd=%v", model.clean.phase, cmd != nil)
 	}
-	// Drive execution stream to result.
-	msg := cmd()
-	model, cmd = applyRootMsgs(t, model, msg)
+	// Drive execution stream to result. beginExactExecution batches execute +
+	// spinner tick; only the start/progress/result chain advances the phase.
+	var waitCmd tea.Cmd
+	for _, msg := range expandTeaCmd(cmd) {
+		var next tea.Cmd
+		model, next = applyRootMsgs(t, model, msg)
+		switch msg.(type) {
+		case eagerPreviewTickMsg:
+			// Apply once for chrome; do not follow the continuous tick re-arm.
+		default:
+			waitCmd = next
+		}
+	}
+	cmd = waitCmd
 	for cmd != nil && model.clean.phase == eagerPhaseExecuting {
-		msg = cmd()
+		msg := cmd()
+		// Skip pure tick sleeps if a stray tick is ever chained here.
+		if _, ok := msg.(eagerPreviewTickMsg); ok {
+			model, _ = applyRootMsgs(t, model, msg)
+			continue
+		}
 		model, cmd = applyRootMsgs(t, model, msg)
 	}
 	if model.clean.phase != eagerPhaseResult {

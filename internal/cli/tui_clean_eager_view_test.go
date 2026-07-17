@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 )
@@ -437,6 +438,27 @@ func TestEagerSelectionSummaryLinePure(t *testing.T) {
 	}
 	if got := eagerSelectionSummaryLine(1, 0, 0); got != "Selected: 1 categories · 0 KB" {
 		t.Fatalf("collapsed summary = %q", got)
+	}
+}
+
+func TestEagerExecutionHeaderLinePure(t *testing.T) {
+	if got := eagerExecutionElapsedLabel(12 * time.Second); got != "12s" {
+		t.Fatalf("elapsed = %q", got)
+	}
+	if got := eagerExecutionElapsedLabel(-time.Second); got != "0s" {
+		t.Fatalf("negative elapsed = %q", got)
+	}
+	line := eagerExecutionHeaderLine(1, "Fresh scanning", "12s", "")
+	want := fmt.Sprintf("%s Fresh scanning · 12s", eagerPreviewSpinnerFrames[1%len(eagerPreviewSpinnerFrames)])
+	if line != want {
+		t.Fatalf("header = %q, want %q", line, want)
+	}
+	withNote := eagerExecutionHeaderLine(0, "Fresh scanning", "3s", eagerExecutionStillScanningReassurance)
+	if !strings.Contains(withNote, "3s") || !strings.Contains(withNote, eagerExecutionStillScanningReassurance) {
+		t.Fatalf("reassurance header = %q", withNote)
+	}
+	if strings.Contains(withNote, "%") {
+		t.Fatalf("must not invent percentages: %q", withNote)
 	}
 }
 

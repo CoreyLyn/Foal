@@ -250,8 +250,11 @@ type eagerCleanModel struct {
 	frozenCategories []string
 	// frozenAllowPermanent is the per-run permanent authorization disclosed by
 	// the strengthened confirmation for the frozen exact selection.
-	frozenAllowPermanent  bool
-	executionStarted      bool
+	frozenAllowPermanent bool
+	executionStarted     bool
+	// executionStartedAt is wall-clock start of the confirmed execute path.
+	// Elapsed execution chrome uses this, never preview startedAt.
+	executionStartedAt    time.Time
 	executionResult       clean.Result
 	executionProgress     clean.ExecutionProgress
 	executionOutcomes     []clean.CategoryExecutionOutcome
@@ -343,6 +346,7 @@ func (m *eagerCleanModel) start() tea.Cmd {
 	m.frozenCategories = nil
 	m.frozenAllowPermanent = false
 	m.executionStarted = false
+	m.executionStartedAt = time.Time{}
 	m.executionResult = clean.Result{}
 	m.executionProgress = clean.ExecutionProgress{}
 	m.executionOutcomes = nil
@@ -794,6 +798,7 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 	m.frozenCategories = append([]string(nil), plan.Categories...)
 	m.frozenAllowPermanent = allowPermanent
 	m.executionStarted = true
+	m.executionStartedAt = m.now()
 	m.cancellationRequested = false
 	m.executionOutcomes = nil
 	m.executionProgress = clean.ExecutionProgress{}
@@ -806,9 +811,13 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 	m.syncExecutionViewport()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelExecution = cancel
-	// Single command keeps the Bubble Tea handoff seam simple for tests and
-	// production; the header spinner advances on progress observations and ticks.
-	return eagerPreviewNavNone, executeExactCleanSelectionCmd(ctx, m.frozenCategories, m.frozenAllowPermanent)
+	// Preview/confirmation already stopped the tick chain (finished=true or
+	// non-executing phase). Restart ticks with the execute handoff so the
+	// header spinner stays alive through long Fresh scanning / deletion.
+	return eagerPreviewNavNone, tea.Batch(
+		executeExactCleanSelectionCmd(ctx, m.frozenCategories, m.frozenAllowPermanent),
+		tickEagerPreviewCmd(m.generation, m.spinnerFrame),
+	)
 }
 
 // selectionIncludesPermanent reports whether the current exact selection
@@ -1325,8 +1334,38 @@ func (m *eagerCleanModel) syncExecutionViewport() {
 }
 
 func (m eagerCleanModel) executionHeaderLine() string {
-	spinner := eagerPreviewSpinnerFrames[m.spinnerFrame%len(eagerPreviewSpinnerFrames)]
-	return fmt.Sprintf("%s %s", spinner, sharedExecutionPhaseLabel(m.executionProgress.Phase))
+	phase := m.executionProgress.Phase
+	reassurance := ""
+	if (phase == "" || phase == clean.ExecutionPhaseScanning) &&
+		m.executionElapsed() >= eagerExecutionStillWorkingThreshold {
+		reassurance = eagerExecutionStillScanningReassurance
+	}
+	return eagerExecutionHeaderLine(
+		m.spinnerFrame,
+		sharedExecutionPhaseLabel(phase),
+		m.executionElapsedLabel(),
+		reassurance,
+	)
+}
+
+// executionElapsed is duration since confirmed execute began (not preview).
+func (m eagerCleanModel) executionElapsed() time.Duration {
+	if m.executionStartedAt.IsZero() {
+		return 0
+	}
+	now := m.now
+	if now == nil {
+		now = time.Now
+	}
+	d := now().Sub(m.executionStartedAt)
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+func (m eagerCleanModel) executionElapsedLabel() string {
+	return eagerExecutionElapsedLabel(m.executionElapsed())
 }
 
 func sharedExecutionPhaseLabel(phase clean.ExecutionPhase) string {
