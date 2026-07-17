@@ -162,8 +162,8 @@ func TestGateApplicationCachePreIdleRequired(t *testing.T) {
 		t.Fatal("discover must not run when pre-state missing")
 		return applicationCacheDiscoveryResult{}
 	})
-	if outcome.preIdle {
-		t.Fatal("preIdle should be false without pre-state")
+	if outcome.discoveryRan || outcome.proceed {
+		t.Fatal("discoveryRan/proceed should be false without pre-state")
 	}
 	outcome = gate.gateApplicationCache(context.Background(), ApplicationVisualStudioCode, []RunningApplicationState{
 		{Application: ApplicationVisualStudioCode, State: RunningApplicationStateRunning},
@@ -171,8 +171,11 @@ func TestGateApplicationCachePreIdleRequired(t *testing.T) {
 		t.Fatal("discover must not run when running")
 		return applicationCacheDiscoveryResult{}
 	})
-	if outcome.preIdle {
-		t.Fatal("preIdle should be false when running")
+	if outcome.discoveryRan || outcome.proceed {
+		t.Fatal("discoveryRan/proceed should be false when running")
+	}
+	if len(outcome.runningStates) != 1 || outcome.runningStates[0].State != RunningApplicationStateRunning {
+		t.Fatalf("runningStates = %#v, want projected running pre-state", outcome.runningStates)
 	}
 }
 
@@ -193,11 +196,14 @@ func TestGateApplicationCachePostDiscard(t *testing.T) {
 			}},
 		}
 	})
-	if !outcome.preIdle || outcome.postIdle {
-		t.Fatalf("outcome = %#v, want pre idle and post not idle", outcome)
+	if !outcome.discoveryRan || outcome.proceed {
+		t.Fatalf("outcome = %#v, want discoveryRan and not proceed", outcome)
 	}
 	if len(outcome.discovery.opportunities) != 1 {
 		t.Fatalf("discovery should retain measured data for caller discard: %#v", outcome.discovery)
+	}
+	if len(outcome.runningStates) != 1 || outcome.runningStates[0].State != RunningApplicationStateRunning {
+		t.Fatalf("runningStates = %#v, want post running superseding pre", outcome.runningStates)
 	}
 	if calls != 1 {
 		t.Fatalf("post detect calls = %d", calls)
@@ -226,8 +232,11 @@ func TestGateApplicationCacheIndependentEditorApplications(t *testing.T) {
 			}},
 		}
 	})
-	if !outcome.preIdle || !outcome.postIdle || discoverCalls != 1 {
+	if !outcome.discoveryRan || !outcome.proceed || discoverCalls != 1 {
 		t.Fatalf("outcome = %#v discoverCalls=%d, want idle Cursor despite running VS Code", outcome, discoverCalls)
+	}
+	if len(outcome.runningStates) != 1 || outcome.runningStates[0].Application != ApplicationCursor {
+		t.Fatalf("runningStates = %#v, want only Cursor", outcome.runningStates)
 	}
 
 	// VS Code gate ignores Cursor running state on both pre and post checks.
@@ -249,8 +258,11 @@ func TestGateApplicationCacheIndependentEditorApplications(t *testing.T) {
 			}},
 		}
 	})
-	if !outcome.preIdle || !outcome.postIdle {
+	if !outcome.discoveryRan || !outcome.proceed {
 		t.Fatalf("outcome = %#v, want idle VS Code despite running Cursor", outcome)
+	}
+	if len(outcome.runningStates) != 1 || outcome.runningStates[0].Application != ApplicationVisualStudioCode {
+		t.Fatalf("runningStates = %#v, want only VS Code", outcome.runningStates)
 	}
 }
 

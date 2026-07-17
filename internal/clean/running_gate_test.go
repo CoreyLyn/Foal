@@ -70,6 +70,9 @@ func TestGateDevCacheRootNoneTierAlwaysProceeds(t *testing.T) {
 		if !outcome.proceed || outcome.skipReason != nil || outcome.bytes != 42 {
 			t.Fatalf("none-tier %q: outcome = %+v, want proceed with 42 bytes", category, outcome)
 		}
+		if len(outcome.runningStates) != 0 {
+			t.Fatalf("none-tier %q: runningStates should be empty, got %#v", category, outcome.runningStates)
+		}
 		if !measureCalled {
 			t.Fatalf("none-tier %q: measure should run", category)
 		}
@@ -115,6 +118,9 @@ func TestGateDevCacheRootStateSequences(t *testing.T) {
 		if *detectCalls != 1 {
 			t.Fatalf("idle→idle: post detect calls = %d, want 1", *detectCalls)
 		}
+		if len(outcome.runningStates) != 1 || outcome.runningStates[0].State != RunningApplicationStateIdle {
+			t.Fatalf("idle→idle: runningStates = %#v, want projected idle go", outcome.runningStates)
+		}
 	})
 
 	t.Run("idle to running discards measurement", func(t *testing.T) {
@@ -129,6 +135,10 @@ func TestGateDevCacheRootStateSequences(t *testing.T) {
 		if outcome.skipReason.Code != devToolRunningIssueCode {
 			t.Errorf("skip code = %q, want %q", outcome.skipReason.Code, devToolRunningIssueCode)
 		}
+		// Post running supersedes pre idle on the projected outcome.
+		if len(outcome.runningStates) != 1 || outcome.runningStates[0].State != RunningApplicationStateRunning {
+			t.Fatalf("idle→running: runningStates = %#v, want post running", outcome.runningStates)
+		}
 	})
 
 	t.Run("idle to unknown discards measurement", func(t *testing.T) {
@@ -139,6 +149,10 @@ func TestGateDevCacheRootStateSequences(t *testing.T) {
 		})
 		if outcome.proceed || outcome.skipReason == nil || outcome.bytes != 0 {
 			t.Fatalf("idle→unknown: outcome = %+v, want skip discard bytes", outcome)
+		}
+		// Dev-cache unknown is skipReason, not Errors diagnostics.
+		if len(outcome.diagnostics) != 0 {
+			t.Fatalf("idle→unknown: diagnostics = %#v, want empty (skipReason surface)", outcome.diagnostics)
 		}
 	})
 
@@ -174,6 +188,9 @@ func TestGateDevCacheRootStateSequences(t *testing.T) {
 		}
 		if detectCalled {
 			t.Fatal("running-at-start: post detect must not run")
+		}
+		if len(outcome.runningStates) != 1 || outcome.runningStates[0].State != RunningApplicationStateRunning {
+			t.Fatalf("running-at-start: runningStates = %#v, want pre running projected", outcome.runningStates)
 		}
 	})
 
@@ -269,18 +286,24 @@ func TestGateBrowserPreNotIdleSkipsDiscovery(t *testing.T) {
 	} {
 		discoverCalled = false
 		outcome := g.gateBrowser(context.Background(), ApplicationGoogleChrome, []RunningApplicationState{pre}, discover)
-		if outcome.preIdle {
-			t.Fatalf("pre %v: preIdle = true, want false", pre.State)
+		if outcome.discoveryRan || outcome.proceed {
+			t.Fatalf("pre %v: discoveryRan/proceed = true, want false", pre.State)
 		}
 		if discoverCalled {
 			t.Fatalf("pre %v: discover should not run", pre.State)
 		}
+		if len(outcome.runningStates) != 1 || outcome.runningStates[0].State != pre.State {
+			t.Fatalf("pre %v: runningStates = %#v, want projected pre state", pre.State, outcome.runningStates)
+		}
 	}
-	// absent pre-state -> preIdle false, no discover
+	// absent pre-state -> no discovery, no projected state
 	discoverCalled = false
 	outcome := g.gateBrowser(context.Background(), ApplicationGoogleChrome, nil, discover)
-	if outcome.preIdle || discoverCalled {
-		t.Fatalf("absent pre-state: preIdle=%v discoverCalled=%v, want false/false", outcome.preIdle, discoverCalled)
+	if outcome.discoveryRan || outcome.proceed || discoverCalled {
+		t.Fatalf("absent pre-state: discoveryRan=%v proceed=%v discoverCalled=%v, want false", outcome.discoveryRan, outcome.proceed, discoverCalled)
+	}
+	if len(outcome.runningStates) != 0 {
+		t.Fatalf("absent pre-state: runningStates = %#v, want empty", outcome.runningStates)
 	}
 }
 
@@ -304,11 +327,11 @@ func TestGateBrowserNotCleanDiscoverySkipsPostCheck(t *testing.T) {
 		postCalled = false
 		discovery := tc.discovery
 		outcome := g.gateBrowser(context.Background(), ApplicationGoogleChrome, pre, func() browserCacheDiscoveryResult { return discovery })
-		if !outcome.preIdle {
-			t.Fatalf("%s: preIdle = false, want true", tc.name)
+		if !outcome.discoveryRan {
+			t.Fatalf("%s: discoveryRan = false, want true", tc.name)
 		}
-		if !outcome.postIdle {
-			t.Errorf("%s: postIdle = false, want true (no post-check on not-clean discovery)", tc.name)
+		if outcome.proceed {
+			t.Errorf("%s: proceed = true, want false (not-clean discovery is not reclaimable)", tc.name)
 		}
 		if postCalled {
 			t.Errorf("%s: post detect should not run", tc.name)
@@ -325,14 +348,17 @@ func TestGateBrowserCleanPostIdle(t *testing.T) {
 	outcome := g.gateBrowser(context.Background(), ApplicationGoogleChrome, []RunningApplicationState{
 		{Application: ApplicationGoogleChrome, State: RunningApplicationStateIdle},
 	}, discover)
-	if !outcome.preIdle || !outcome.postIdle {
-		t.Fatalf("clean+post-idle: preIdle=%v postIdle=%v, want true/true", outcome.preIdle, outcome.postIdle)
+	if !outcome.discoveryRan || !outcome.proceed {
+		t.Fatalf("clean+post-idle: discoveryRan=%v proceed=%v, want true/true", outcome.discoveryRan, outcome.proceed)
 	}
 	if outcome.discovery.opportunity != opp {
 		t.Error("discovery not passed through")
 	}
-	if outcome.postState != nil || outcome.postDiagnostic != nil {
-		t.Error("postState/diagnostic should be nil when postIdle")
+	if len(outcome.diagnostics) != 0 {
+		t.Errorf("diagnostics should be empty when proceed: %#v", outcome.diagnostics)
+	}
+	if len(outcome.runningStates) != 1 || outcome.runningStates[0].State != RunningApplicationStateIdle {
+		t.Fatalf("runningStates = %#v, want idle chrome", outcome.runningStates)
 	}
 }
 
@@ -341,43 +367,77 @@ func TestGateBrowserPostNotIdle(t *testing.T) {
 	discover := func() browserCacheDiscoveryResult { return browserCacheDiscoveryResult{opportunity: opp} }
 	pre := []RunningApplicationState{{Application: ApplicationGoogleChrome, State: RunningApplicationStateIdle}}
 
-	// post running -> postIdle false, postState set, no diagnostic
+	// post running -> proceed false, projected running state, no diagnostic
 	g := runningGate{detect: func(context.Context) []RunningApplicationState {
 		return []RunningApplicationState{{Application: ApplicationGoogleChrome, State: RunningApplicationStateRunning}}
 	}}
 	outcome := g.gateBrowser(context.Background(), ApplicationGoogleChrome, pre, discover)
-	if outcome.postIdle {
-		t.Fatal("post running: postIdle = true, want false")
+	if outcome.proceed {
+		t.Fatal("post running: proceed = true, want false")
 	}
-	if outcome.postState == nil || outcome.postState.State != RunningApplicationStateRunning {
-		t.Fatalf("post running: postState = %+v, want running", outcome.postState)
+	if !outcome.discoveryRan {
+		t.Fatal("post running: discoveryRan = false, want true")
 	}
-	if outcome.postDiagnostic != nil {
-		t.Error("post running: diagnostic should be nil")
+	if len(outcome.runningStates) != 1 || outcome.runningStates[0].State != RunningApplicationStateRunning {
+		t.Fatalf("post running: runningStates = %#v, want running", outcome.runningStates)
+	}
+	if len(outcome.diagnostics) != 0 {
+		t.Errorf("post running: diagnostics should be empty: %#v", outcome.diagnostics)
 	}
 
-	// post unknown -> postIdle false, postState set, diagnostic set (fail-closed)
+	// post unknown -> proceed false, projected unknown, diagnostic set (fail-closed)
 	g = runningGate{detect: func(context.Context) []RunningApplicationState {
 		return []RunningApplicationState{{Application: ApplicationGoogleChrome, State: RunningApplicationStateUnknown, Message: "snap failed"}}
 	}}
 	outcome = g.gateBrowser(context.Background(), ApplicationGoogleChrome, pre, discover)
-	if outcome.postIdle {
-		t.Fatal("post unknown: postIdle = true, want false")
+	if outcome.proceed {
+		t.Fatal("post unknown: proceed = true, want false")
 	}
-	if outcome.postState == nil || outcome.postState.State != RunningApplicationStateUnknown {
-		t.Fatalf("post unknown: postState = %+v, want unknown", outcome.postState)
+	if len(outcome.runningStates) != 1 || outcome.runningStates[0].State != RunningApplicationStateUnknown {
+		t.Fatalf("post unknown: runningStates = %#v, want unknown", outcome.runningStates)
 	}
-	if outcome.postDiagnostic == nil || outcome.postDiagnostic.Code != runningApplicationDetectionIssueCode {
-		t.Fatalf("post unknown: diagnostic = %+v, want code %q", outcome.postDiagnostic, runningApplicationDetectionIssueCode)
+	if len(outcome.diagnostics) != 1 || outcome.diagnostics[0].Code != runningApplicationDetectionIssueCode {
+		t.Fatalf("post unknown: diagnostics = %#v, want code %q", outcome.diagnostics, runningApplicationDetectionIssueCode)
 	}
 
-	// post absent -> postIdle false, no postState, no diagnostic
+	// post absent -> proceed false, keep pre idle projection, no diagnostic
 	g = runningGate{detect: func(context.Context) []RunningApplicationState { return nil }}
 	outcome = g.gateBrowser(context.Background(), ApplicationGoogleChrome, pre, discover)
-	if outcome.postIdle {
-		t.Fatal("post absent: postIdle = true, want false")
+	if outcome.proceed {
+		t.Fatal("post absent: proceed = true, want false")
 	}
-	if outcome.postState != nil || outcome.postDiagnostic != nil {
-		t.Fatalf("post absent: postState=%+v diagnostic=%+v, want nil/nil", outcome.postState, outcome.postDiagnostic)
+	if len(outcome.runningStates) != 1 || outcome.runningStates[0].State != RunningApplicationStateIdle {
+		t.Fatalf("post absent: runningStates = %#v, want pre idle retained", outcome.runningStates)
+	}
+	if len(outcome.diagnostics) != 0 {
+		t.Fatalf("post absent: diagnostics = %#v, want empty", outcome.diagnostics)
+	}
+}
+
+func TestRunningGateOutcomeApplyMergesStatesAndDiagnostics(t *testing.T) {
+	var states []RunningApplicationState
+	var diags []StructuredIssue
+	outcome := runningGateOutcome{
+		runningStates: []RunningApplicationState{
+			{Application: ApplicationGoogleChrome, State: RunningApplicationStateRunning},
+		},
+		diagnostics: []StructuredIssue{{Code: runningApplicationDetectionIssueCode, Message: "x"}},
+	}
+	outcome.apply(&states, &diags)
+	if len(states) != 1 || states[0].Application != ApplicationGoogleChrome {
+		t.Fatalf("states = %#v", states)
+	}
+	if len(diags) != 1 {
+		t.Fatalf("diags = %#v", diags)
+	}
+	// Later post observation supersedes without reordering.
+	runningGateOutcome{
+		runningStates: []RunningApplicationState{
+			{Application: ApplicationGoogleChrome, State: RunningApplicationStateIdle},
+			{Application: ApplicationMicrosoftEdge, State: RunningApplicationStateIdle},
+		},
+	}.apply(&states, nil)
+	if len(states) != 2 || states[0].State != RunningApplicationStateIdle || states[1].Application != ApplicationMicrosoftEdge {
+		t.Fatalf("merged states = %#v", states)
 	}
 }

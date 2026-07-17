@@ -103,7 +103,7 @@ func TestAppendStructuredDevCacheCandidatesInspectionLimit(t *testing.T) {
 		return nil
 	}
 
-	var res optInResolution
+	var res categoryCoreResult
 	appendStructuredDevCacheCandidates(
 		context.Background(),
 		Options{},
@@ -117,14 +117,14 @@ func TestAppendStructuredDevCacheCandidatesInspectionLimit(t *testing.T) {
 			descendantLimit: 2,
 		},
 	)
-	if len(res.candidates) != 0 {
-		t.Fatalf("candidates = %#v, want none over inspection ceiling", res.candidates)
+	if len(res.OptInCandidates) != 0 {
+		t.Fatalf("candidates = %#v, want none over inspection ceiling", res.OptInCandidates)
 	}
-	if len(res.diagnostics) == 0 {
+	if len(res.Diagnostics) == 0 {
 		t.Fatal("expected inspection-limit diagnostic")
 	}
-	if res.diagnostics[0].Code != "inspection_limit_exceeded" {
-		t.Fatalf("diagnostic code = %q, want inspection_limit_exceeded", res.diagnostics[0].Code)
+	if res.Diagnostics[0].Code != "inspection_limit_exceeded" {
+		t.Fatalf("diagnostic code = %q, want inspection_limit_exceeded", res.Diagnostics[0].Code)
 	}
 	if walkCalls == 0 {
 		t.Fatal("expected walk to run")
@@ -147,7 +147,7 @@ func TestAppendStructuredDevCacheCandidatesCanceledSiblingIndependence(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var res optInResolution
+	var res categoryCoreResult
 	calls := 0
 	fakeWalk := func(path string, fn fs.WalkDirFunc) error {
 		calls++
@@ -173,10 +173,10 @@ func TestAppendStructuredDevCacheCandidatesCanceledSiblingIndependence(t *testin
 		},
 	)
 
-	if len(res.candidates) != 1 || res.candidates[0].Path != first {
-		t.Fatalf("candidates = %#v, want first complete sibling retained", res.candidates)
+	if len(res.OptInCandidates) != 1 || res.OptInCandidates[0].Path != first {
+		t.Fatalf("candidates = %#v, want first complete sibling retained", res.OptInCandidates)
 	}
-	if len(res.diagnostics) == 0 {
+	if len(res.Diagnostics) == 0 {
 		t.Fatal("expected cancel diagnostic for second child")
 	}
 }

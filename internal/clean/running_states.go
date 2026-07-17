@@ -1,5 +1,11 @@
 package clean
 
+// running_states.go is part of the running-gate module (see running_gate.go).
+// These pure helpers merge and project RunningApplicationState slices by
+// canonical application identity. Gate outcomes already apply them so category
+// resolvers rarely call project helpers directly; multi-category merges and
+// Result aggregation still use mergeRunningApplicationStates.
+
 // mergeRunningApplicationStates projects observed running-application states
 // into existing by canonical application identity.
 //

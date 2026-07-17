@@ -8,13 +8,22 @@ import (
 
 // runningGate centralizes running-application gating: the tier table (which
 // opt-in categories need which check), the three-state fail-closed rule
-// (unknown never means idle), browser pre/discover/post, and distinctive-
-// process developer-cache pre/measure/post. Discovery and measurement are
-// injected so the gate is testable without filesystem access.
+// (unknown never means idle), browser pre/discover/post, Application cache
+// pre/inspect/post, and distinctive-process developer-cache pre/measure/post.
+// Discovery and measurement are injected so the gate is testable without
+// filesystem access.
 //
-// Two consumers cross this seam: the opt-in candidate resolver and the dry-run
-// review projection. The running/idle/unknown rule and the tier policy live
-// here once, not re-derived at each call site.
+// Outcomes already carry projected RunningStates for the scoped applications
+// and structured unknown Diagnostics where the surface reports them as Errors.
+// Callers merge/append via runningGateOutcome.apply; they must not re-derive
+// fail-closed policy or re-project post states ad hoc.
+//
+// Single consumer of the gate semantics is resolveCategoryCore (and its
+// per-category helpers). Opt-in merge and dry-run review only project the
+// resulting categoryCoreResult. The running/idle/unknown rule and the tier
+// policy live here once, not re-derived at each surface.
+//
+// State merge/project helpers in running_states.go are part of this module.
 type runningGate struct {
 	// detect returns the current running-application states. Used for the
 	// browser post-discovery re-check and the distinctive-process developer-
@@ -35,6 +44,82 @@ const (
 	// root becomes an Opt-in candidate.
 	runningGateTierBeforeAfter
 )
+
+// runningGateOutcome is the shared base of every running-application gate
+// result. Gate methods fill projected RunningStates and (when applicable)
+// unknown Diagnostics so consumers stop re-implementing merge/project policy.
+//
+// Three-state semantics (ADR 0007 / 0010): running, idle, and unknown are
+// distinct; unknown never means idle. Shared-runtime categories use
+// runningGateTierNone and never spuriously trigger distinctive-process
+// detection (ADR 0008). Product-scoped JetBrains gates pass a single
+// application identity so each logical product stays independent (ADR 0017).
+type runningGateOutcome struct {
+	// proceed is true when the injected work may surface reclaimable evidence.
+	// False for pre fail-closed, post discard, measurement failure, or
+	// discovery that is not clean enough to reclaim.
+	proceed bool
+	// runningStates are the authoritative projected observations for the
+	// applications this gate scoped. When a post re-check ran, post
+	// supersedes pre for matching identities without reordering.
+	// Callers merge as-is; empty when the gate did not observe any scoped app.
+	runningStates []RunningApplicationState
+	// diagnostics are recoverable unknown-state issues already built for
+	// scoped applications observed as Unknown when the surface reports them
+	// as Result.Errors (browser / Application cache). Distinctive-process
+	// developer-cache gates leave this empty and use skipReason (SkippedItem)
+	// instead for the same fail-closed signal.
+	diagnostics []StructuredIssue
+}
+
+// apply merges projected running states and unknown diagnostics into the
+// destinations. Nil destinations are skipped. Safe on a zero outcome.
+func (o runningGateOutcome) apply(dstStates *[]RunningApplicationState, dstDiag *[]StructuredIssue) {
+	if dstStates != nil && len(o.runningStates) > 0 {
+		*dstStates = mergeRunningApplicationStates(*dstStates, o.runningStates...)
+	}
+	if dstDiag != nil && len(o.diagnostics) > 0 {
+		*dstDiag = append(*dstDiag, o.diagnostics...)
+	}
+}
+
+// measureGateOutcome is the gate result around an injected size measurement
+// (whole-root developer caches and product-scoped roots that measure one path).
+type measureGateOutcome struct {
+	runningGateOutcome
+	// bytes is the measured size when proceed is true. Post-gate discards do
+	// not expose measured bytes here so callers cannot reclaim them.
+	bytes int64
+	// measureErr is set when measurement failed or was canceled. When set,
+	// proceed is false, skipReason is nil, and the post re-check did not run
+	// (cancellation must not be re-authorized by a second idle check).
+	measureErr error
+	// skipReason is the structured skip reason when a tool is running, unknown,
+	// or missing required state on the pre- or post-check. nil when proceed is
+	// true or when measurement failed without a gate skip.
+	skipReason *StructuredIssue
+}
+
+// browserGateOutcome is the result of gating a browser cache discovery.
+type browserGateOutcome struct {
+	runningGateOutcome
+	// discoveryRan is true when the browser was idle before discovery and
+	// discovery executed. When false, discovery is zero and proceed is false.
+	discoveryRan bool
+	// discovery is the injected discovery result when discoveryRan is true.
+	discovery browserCacheDiscoveryResult
+}
+
+// applicationCacheGateOutcome is the result of gating idle Application cache
+// discovery with pre/inspect/post application process checks.
+type applicationCacheGateOutcome struct {
+	runningGateOutcome
+	// discoveryRan is true when the application was idle before discovery and
+	// discovery executed. When false, discovery is zero and proceed is false.
+	discoveryRan bool
+	// discovery is the injected discovery result when discoveryRan is true.
+	discovery applicationCacheDiscoveryResult
+}
 
 // devCacheGateTier returns the gate tier for a developer-tool cache category.
 func devCacheGateTier(category string) runningGateTier {
@@ -68,30 +153,6 @@ func devCacheCategoryToApplications(category string) []string {
 		return nil
 	}
 	return append([]string(nil), entry.runningApplications...)
-}
-
-// devCacheGateOutcome is the result of gating a developer-cache root through
-// the tier-appropriate running-application checks around measurement.
-type devCacheGateOutcome struct {
-	// proceed is true when the root may become an Opt-in candidate: either the
-	// category has no running-application tier, or every related application
-	// was idle before and after a successful measurement.
-	proceed bool
-	// bytes is the measured size when proceed is true. Post-gate discards do
-	// not expose measured bytes here so callers cannot reclaim them.
-	bytes int64
-	// measureErr is set when measurement failed or was canceled. When set,
-	// proceed is false, skipReason is nil, and the post re-check did not run
-	// (cancellation must not be re-authorized by a second idle check).
-	measureErr error
-	// skipReason is the structured skip reason when a tool is running, unknown,
-	// or missing required state on the pre- or post-check. nil when proceed is
-	// true or when measurement failed without a gate skip.
-	skipReason *StructuredIssue
-	// postStates is the post-measurement detector snapshot when a post re-check
-	// ran. Callers may project product-scoped identities from it; nil when the
-	// post re-check did not run.
-	postStates []RunningApplicationState
 }
 
 // appsIdleForDevCache reports whether every application tied to the category is
@@ -130,6 +191,22 @@ func gateApplicationsForDevCacheScope(category string, scope DevCacheRootScope) 
 	return nil, false
 }
 
+// observeDevCacheApps projects scoped application identities from a detector
+// snapshot and evaluates fail-closed idle. Used by multi-child structured
+// developer-cache paths that cannot wrap a single measure function, and by
+// whole-root measure gates for shared projection policy.
+//
+// Returns idle=false with skipReason when any app is running, unknown, or
+// missing. runningStates always hold the projected observations so callers can
+// report product-scoped identities even when the gate fails.
+func observeDevCacheApps(apps []string, path, category string, states []RunningApplicationState) (idle bool, projected []RunningApplicationState, skipReason *StructuredIssue) {
+	projected = projectRunningApplicationStates(states, apps...)
+	if ok, reason := appsIdleForApplications(apps, path, category, states); !ok {
+		return false, projected, reason
+	}
+	return true, projected, nil
+}
+
 // gateDevCacheRoot applies the developer-cache running-application gate around
 // an injected measurement for one resolved root using category-wide applications.
 //
@@ -143,7 +220,7 @@ func (g runningGate) gateDevCacheRoot(
 	category, path string,
 	preStates []RunningApplicationState,
 	measure func() (int64, error),
-) devCacheGateOutcome {
+) measureGateOutcome {
 	if devCacheGateTier(category) == runningGateTierNone {
 		return g.gateDevCacheApplications(ctx, category, path, nil, false, preStates, measure)
 	}
@@ -152,8 +229,9 @@ func (g runningGate) gateDevCacheRoot(
 
 // gateDevCacheApplications applies pre/measure/post gating for an explicit
 // application list. When useGate is false the measurement runs immediately.
-// postStates are returned when a post re-check ran so callers can project the
-// latest authoritative observation for product-scoped identities.
+// Outcome.runningStates project the scoped apps (pre, then post supersedes)
+// whenever useGate is true so product-scoped callers can apply them without
+// re-projecting.
 func (g runningGate) gateDevCacheApplications(
 	ctx context.Context,
 	category, path string,
@@ -161,35 +239,52 @@ func (g runningGate) gateDevCacheApplications(
 	useGate bool,
 	preStates []RunningApplicationState,
 	measure func() (int64, error),
-) devCacheGateOutcome {
+) measureGateOutcome {
 	if !useGate {
 		bytes, err := measure()
 		if err != nil {
-			return devCacheGateOutcome{measureErr: err}
+			return measureGateOutcome{measureErr: err}
 		}
-		return devCacheGateOutcome{proceed: true, bytes: bytes}
+		return measureGateOutcome{runningGateOutcome: runningGateOutcome{proceed: true}, bytes: bytes}
 	}
 
-	if idle, reason := appsIdleForApplications(apps, path, category, preStates); !idle {
-		return devCacheGateOutcome{skipReason: reason}
+	idle, projected, reason := observeDevCacheApps(apps, path, category, preStates)
+	if !idle {
+		return measureGateOutcome{
+			runningGateOutcome: runningGateOutcome{runningStates: projected},
+			skipReason:         reason,
+		}
 	}
 
 	bytes, err := measure()
 	if err != nil {
 		// Incomplete measurement: do not run the post re-check and do not
-		// surface partial bytes as reclaimable evidence.
-		return devCacheGateOutcome{measureErr: err}
+		// surface partial bytes as reclaimable evidence. Keep pre projection.
+		return measureGateOutcome{
+			runningGateOutcome: runningGateOutcome{runningStates: projected},
+			measureErr:         err,
+		}
 	}
 
 	var postStates []RunningApplicationState
 	if g.detect != nil {
 		postStates = g.detect(ctx)
 	}
-	if idle, reason := appsIdleForApplications(apps, path, category, postStates); !idle {
+	postIdle, postProjected, postReason := observeDevCacheApps(apps, path, category, postStates)
+	// Post projection supersedes pre for matching identities; merge preserves
+	// first-seen order among the scoped apps.
+	merged := mergeRunningApplicationStates(projected, postProjected...)
+	if !postIdle {
 		// Discard the successful measurement: no candidate bytes.
-		return devCacheGateOutcome{skipReason: reason, postStates: postStates}
+		return measureGateOutcome{
+			runningGateOutcome: runningGateOutcome{runningStates: merged},
+			skipReason:         postReason,
+		}
 	}
-	return devCacheGateOutcome{proceed: true, bytes: bytes, postStates: postStates}
+	return measureGateOutcome{
+		runningGateOutcome: runningGateOutcome{proceed: true, runningStates: merged},
+		bytes:              bytes,
+	}
 }
 
 // devToolRunningSkipIssue builds the skip reason for a dev cache gated out by a
@@ -209,25 +304,25 @@ func devToolRunningSkipIssue(apps []string, path, category string) StructuredIss
 	return issue(devToolRunningIssueCode, message, true, path, category)
 }
 
-// browserGateOutcome is the result of gating a browser cache discovery.
-type browserGateOutcome struct {
-	// preIdle is false when the browser was not idle before discovery
-	// (running, unknown, or absent from preStates). When false, discovery was
-	// not run and the other fields are zero.
-	preIdle bool
-	// discovery is the injected discovery result. Zero-valued when preIdle is
-	// false.
-	discovery browserCacheDiscoveryResult
-	// postIdle is false when the browser was not idle after discovery. Only
-	// meaningful when preIdle is true and discovery was clean (not suppressed,
-	// no diagnostic, no incomplete); true otherwise (no post re-check ran).
-	postIdle bool
-	// postState is the post-discovery state when postIdle is false and the
-	// state was present. nil when the state was absent or postIdle is true.
-	postState *RunningApplicationState
-	// postDiagnostic is the unknown-state error when postIdle is false and the
-	// post state was unknown. nil otherwise.
-	postDiagnostic *StructuredIssue
+// projectSingleApplicationState returns the state for application when present.
+func projectSingleApplicationState(states []RunningApplicationState, application string) []RunningApplicationState {
+	if state, ok := runningApplicationStateFor(states, application); ok {
+		return []RunningApplicationState{state}
+	}
+	return nil
+}
+
+// unknownDiagnosticsForStates builds recoverable unknown-state diagnostics for
+// any projected state that is Unknown. Used by browser / Application cache
+// gates so callers append diagnostics without re-deriving the issue shape.
+func unknownDiagnosticsForStates(states []RunningApplicationState) []StructuredIssue {
+	var out []StructuredIssue
+	for _, state := range states {
+		if state.State == RunningApplicationStateUnknown {
+			out = append(out, runningApplicationUnknownIssue(state))
+		}
+	}
+	return out
 }
 
 // gateBrowser runs the pre/discover/post running-application gate around an
@@ -239,65 +334,87 @@ type browserGateOutcome struct {
 // post re-check runs even when the opportunity is empty, so a browser that
 // starts during discovery is still reported. The gate requires g.detect != nil;
 // callers only gate browsers when a detector is present.
+//
+// Outcome.runningStates always project the scoped browser identity when present
+// in preStates (and post supersedes on re-check). Outcome.diagnostics hold
+// unknown-state issues when a post re-check observed Unknown.
 func (g runningGate) gateBrowser(ctx context.Context, application string, preStates []RunningApplicationState, discover func() browserCacheDiscoveryResult) browserGateOutcome {
+	preProjected := projectSingleApplicationState(preStates, application)
 	preState, ok := runningApplicationStateFor(preStates, application)
 	if !ok || preState.State != RunningApplicationStateIdle {
-		return browserGateOutcome{preIdle: false}
+		// Pre fail-closed: still surface the projected pre state (running /
+		// unknown) so category resolution can report it. Unknown pre-state
+		// diagnostics for review are emitted from RunningStates by the review
+		// projector; opt-in does not invent Errors from pre alone.
+		return browserGateOutcome{
+			runningGateOutcome: runningGateOutcome{runningStates: preProjected},
+		}
 	}
 	discovery := discover()
 	if discovery.suppressed || discovery.diagnostic != nil || discovery.incomplete != nil {
-		return browserGateOutcome{preIdle: true, discovery: discovery, postIdle: true}
+		// Not-clean discovery: no post re-check, no reclaimable proceed.
+		return browserGateOutcome{
+			runningGateOutcome: runningGateOutcome{runningStates: preProjected},
+			discoveryRan:       true,
+			discovery:          discovery,
+		}
 	}
 	postStates := g.detect(ctx)
+	postProjected := projectSingleApplicationState(postStates, application)
+	merged := mergeRunningApplicationStates(preProjected, postProjected...)
 	postState, ok := runningApplicationStateFor(postStates, application)
 	if !ok {
-		return browserGateOutcome{preIdle: true, discovery: discovery, postIdle: false}
+		return browserGateOutcome{
+			runningGateOutcome: runningGateOutcome{runningStates: merged},
+			discoveryRan:       true,
+			discovery:          discovery,
+		}
 	}
 	if postState.State != RunningApplicationStateIdle {
-		outcome := browserGateOutcome{preIdle: true, discovery: discovery, postIdle: false, postState: &postState}
-		if postState.State == RunningApplicationStateUnknown {
-			diagnostic := runningApplicationUnknownIssue(postState)
-			outcome.postDiagnostic = &diagnostic
+		return browserGateOutcome{
+			runningGateOutcome: runningGateOutcome{
+				runningStates: merged,
+				diagnostics:   unknownDiagnosticsForStates(postProjected),
+			},
+			discoveryRan: true,
+			discovery:    discovery,
 		}
-		return outcome
 	}
-	return browserGateOutcome{preIdle: true, discovery: discovery, postIdle: true}
-}
-
-// applicationCacheGateOutcome is the result of gating idle Application cache
-// discovery with pre/inspect/post application process checks.
-type applicationCacheGateOutcome struct {
-	// preIdle is false when the application was not idle before discovery.
-	// Discovery was not run and other fields are zero.
-	preIdle bool
-	// discovery is the injected discovery result when preIdle is true.
-	discovery applicationCacheDiscoveryResult
-	// postIdle is false when the application was not idle after discovery.
-	// When discovery is canceled, post re-check is skipped (postIdle false,
-	// postState nil) so measured roots cannot be reauthorized.
-	postIdle bool
-	// postState is set when postIdle is false and a post state was present.
-	postState *RunningApplicationState
-	// postDiagnostic is set for unknown post state.
-	postDiagnostic *StructuredIssue
+	return browserGateOutcome{
+		runningGateOutcome: runningGateOutcome{proceed: true, runningStates: merged},
+		discoveryRan:       true,
+		discovery:          discovery,
+	}
 }
 
 // gateApplicationCache runs pre/discover/post idle gating around an injected
 // Application cache discovery for one logical application.
+//
+// Outcome.runningStates project the scoped application (pre, then post
+// supersedes). Outcome.diagnostics hold unknown post-state issues. When
+// discovery is canceled, post re-check is skipped so measured roots cannot be
+// reauthorized (proceed stays false).
 func (g runningGate) gateApplicationCache(
 	ctx context.Context,
 	application string,
 	preStates []RunningApplicationState,
 	discover func() applicationCacheDiscoveryResult,
 ) applicationCacheGateOutcome {
+	preProjected := projectSingleApplicationState(preStates, application)
 	preState, ok := runningApplicationStateFor(preStates, application)
 	if !ok || preState.State != RunningApplicationStateIdle {
-		return applicationCacheGateOutcome{preIdle: false}
+		return applicationCacheGateOutcome{
+			runningGateOutcome: runningGateOutcome{runningStates: preProjected},
+		}
 	}
 	discovery := discover()
 	if discovery.canceled {
 		// Incomplete/canceled scan: do not post-check reauthorize.
-		return applicationCacheGateOutcome{preIdle: true, discovery: discovery, postIdle: false}
+		return applicationCacheGateOutcome{
+			runningGateOutcome: runningGateOutcome{runningStates: preProjected},
+			discoveryRan:       true,
+			discovery:          discovery,
+		}
 	}
 	// Post re-check always runs after a non-canceled discovery so an app that
 	// starts during root inspection discards every measured root.
@@ -305,17 +422,29 @@ func (g runningGate) gateApplicationCache(
 	if g.detect != nil {
 		postStates = g.detect(ctx)
 	}
+	postProjected := projectSingleApplicationState(postStates, application)
+	merged := mergeRunningApplicationStates(preProjected, postProjected...)
 	postState, ok := runningApplicationStateFor(postStates, application)
 	if !ok {
-		return applicationCacheGateOutcome{preIdle: true, discovery: discovery, postIdle: false}
+		return applicationCacheGateOutcome{
+			runningGateOutcome: runningGateOutcome{runningStates: merged},
+			discoveryRan:       true,
+			discovery:          discovery,
+		}
 	}
 	if postState.State != RunningApplicationStateIdle {
-		outcome := applicationCacheGateOutcome{preIdle: true, discovery: discovery, postIdle: false, postState: &postState}
-		if postState.State == RunningApplicationStateUnknown {
-			diagnostic := runningApplicationUnknownIssue(postState)
-			outcome.postDiagnostic = &diagnostic
+		return applicationCacheGateOutcome{
+			runningGateOutcome: runningGateOutcome{
+				runningStates: merged,
+				diagnostics:   unknownDiagnosticsForStates(postProjected),
+			},
+			discoveryRan: true,
+			discovery:    discovery,
 		}
-		return outcome
 	}
-	return applicationCacheGateOutcome{preIdle: true, discovery: discovery, postIdle: true}
+	return applicationCacheGateOutcome{
+		runningGateOutcome: runningGateOutcome{proceed: true, runningStates: merged},
+		discoveryRan:       true,
+		discovery:          discovery,
+	}
 }

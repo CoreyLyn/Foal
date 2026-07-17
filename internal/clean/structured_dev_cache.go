@@ -155,11 +155,14 @@ func evaluateStructuredDevCacheChild(category, root, child string, lstat func(st
 func appendStructuredDevCacheCandidates(
 	ctx context.Context,
 	opts Options,
-	res *optInResolution,
+	core *categoryCoreResult,
 	category, root string,
 	rawChildren []string,
 	deps structuredDevCacheMeasureDependencies,
 ) {
+	if core == nil {
+		return
+	}
 	if deps.lstat == nil {
 		deps.lstat = os.Lstat
 	}
@@ -174,7 +177,7 @@ func appendStructuredDevCacheCandidates(
 	for _, child := range children {
 		select {
 		case <-ctx.Done():
-			res.diagnostics = append(res.diagnostics, issue("context_canceled", ctx.Err().Error(), true, child, category))
+			core.Diagnostics = append(core.Diagnostics, issue("context_canceled", ctx.Err().Error(), true, child, category))
 			return
 		default:
 		}
@@ -184,13 +187,13 @@ func appendStructuredDevCacheCandidates(
 			continue
 		}
 		if safety.rejectReason != nil {
-			res.diagnostics = append(res.diagnostics, *safety.rejectReason)
+			core.Diagnostics = append(core.Diagnostics, *safety.rejectReason)
 			continue
 		}
 
 		if opts.Validator.IsUserProtected(child) {
-			res.suppressedProtectionPaths = append(
-				res.suppressedProtectionPaths,
+			core.SuppressedProtectionPaths = append(
+				core.SuppressedProtectionPaths,
 				structuredDevCacheProtectedRulePaths(child, opts.Validator)...,
 			)
 			continue
@@ -198,7 +201,7 @@ func appendStructuredDevCacheCandidates(
 
 		inspection, err := inspectOpportunity(ctx, child, deps.descendantLimit, deps.walkDir)
 		if err != nil {
-			res.diagnostics = append(res.diagnostics, incompleteInspection(
+			core.Diagnostics = append(core.Diagnostics, incompleteInspection(
 				category, child, classifyOpportunityInspectionError(err), err.Error(),
 			).Reason)
 			// Sibling independence: incomplete/canceled child contributes zero
@@ -207,7 +210,7 @@ func appendStructuredDevCacheCandidates(
 			continue
 		}
 
-		res.candidates = append(res.candidates, OptInCandidate{
+		core.OptInCandidates = append(core.OptInCandidates, OptInCandidate{
 			Path:          child,
 			Bytes:         inspection.bytes,
 			Category:      category,

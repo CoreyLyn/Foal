@@ -11,6 +11,9 @@ import (
 // Both dry-run preview and execute consume the same resolution so preview and
 // execute agree on what is cleanable. It is produced fresh per run; execute
 // never trusts dry-run's resolved paths (ADR-0008 fresh-scan).
+//
+// Construction composes single-category resolveCategoryCore results so gate,
+// protection, and measurement policy live in one place.
 type optInResolution struct {
 	// candidates are the opt-in candidate paths that survived running-app
 	// gating and protection, fresh-measured. A Browser cache candidate is an
@@ -35,18 +38,6 @@ type optInResolution struct {
 	// resolution. dry-run applies them to its ProtectionRules display;
 	// execute ignores them.
 	suppressedProtectionPaths []string
-}
-
-// optedInOpportunityCategories returns the non-browser opportunity categories
-// enabled by the plan.
-func optedInOpportunityCategories(plan map[string]bool) []string {
-	var enabled []string
-	for _, c := range opportunityCategoryIDs(false) {
-		if plan[c] {
-			enabled = append(enabled, c)
-		}
-	}
-	return enabled
 }
 
 // optedOutOpportunityCategories returns the non-browser opportunity categories
@@ -84,20 +75,42 @@ func normalizeAndDeduplicatePaths(paths []string) []string {
 // resolveOptInCandidates turns an opt-in plan into the concrete deletable
 // Opt-in candidate paths for a run. Only opted-in categories are scanned
 // (ADR-0008: non-opted-in categories stay omitted from execute); the dry-run
-// review projection scans the rest separately. Running-application gating is
-// delegated to runningGate. The plan is computed once by the caller.
+// review projection scans the rest separately via the same single-category
+// core. Each planned category is resolved independently then merged.
 func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]bool) optInResolution {
 	var res optInResolution
 	if len(plan) == 0 {
 		return res
 	}
+	for _, category := range orderedPlanCategories(plan) {
+		core, err := resolveCategoryCore(ctx, opts, category)
+		if err != nil {
+			// Plan keys are canonical opt-in IDs from planning; unexpected
+			// rejection is reported as a recoverable diagnostic and skipped.
+			res.diagnostics = append(res.diagnostics, issue(
+				"category_resolution_failed",
+				err.Error(),
+				true,
+				"",
+				category,
+			))
+			continue
+		}
+		mergeCategoryCoreIntoOptInResolution(&res, core)
+	}
+	return res
+}
 
+// resolveDeveloperCacheCategory resolves one developer-tool cache category into
+// core. Each root scope is gated and measured independently so discarding one
+// scope never authorizes or double-counts another. Structured child discovery
+// never treats the root as a candidate; product-scoped scopes apply
+// idle-before-and-after only for that logical application identity.
+func resolveDeveloperCacheCategory(ctx context.Context, opts Options, category string, core *categoryCoreResult) {
+	if core == nil || !isDevCacheCategory(category) {
+		return
+	}
 	hasDetector := opts.DetectRunningApplications != nil
-	// Distinctive-process developer caches need a pre-measurement snapshot and
-	// a post-measurement re-check. Shared-runtime selections alone must not
-	// trigger developer-tool detection (ADR-0008 attribution policy). Product-
-	// scoped roots may also require detection; load lazily on first gated root.
-	needsDistinctiveDetection := hasDetector && planNeedsDistinctiveProcessDetection(plan)
 	var devCachePreStates []RunningApplicationState
 	devCacheDetectLoaded := false
 	devCacheGate := runningGate{}
@@ -105,169 +118,106 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 		if !hasDetector || devCacheDetectLoaded {
 			return
 		}
-		// Pre-states gate distinctive and product-scoped roots. Category-wide
-		// distinctive gates keep current reporting policy (no projection into
-		// RunningApplications). Product-scoped gates project only their identities.
 		devCachePreStates = opts.DetectRunningApplications(ctx)
 		devCacheGate.detect = opts.DetectRunningApplications
 		devCacheDetectLoaded = true
 	}
-	if needsDistinctiveDetection {
+	// Distinctive-process and product-scoped roots load detection lazily.
+	// Shared-runtime alone must not trigger developer-tool detection
+	// (ADR-0008 attribution policy).
+	if hasDetector && devCacheGateTier(category) == runningGateTierBeforeAfter {
 		ensureDevCacheDetection()
 	}
 
-	// Developer-tool caches. Each root scope is gated and measured independently
-	// so discarding one scope never authorizes or double-counts another.
-	// Categories with structured child discovery (or injected structured mode)
-	// never treat the root as a candidate; each surviving child is independent.
-	// Product-scoped scopes (non-empty Application) apply idle-before-and-after
-	// only for that logical application identity.
-	for _, category := range developerCacheCategoryIDs() {
-		if !plan[category] {
+	scopes := resolveDevCacheRootScopes(opts, category)
+	for _, scope := range scopes {
+		path := scope.Path
+		if path == "" {
 			continue
 		}
-		scopes := resolveDevCacheRootScopes(opts, category)
-		for _, scope := range scopes {
-			path := scope.Path
-			if path == "" {
-				continue
-			}
-			if opts.Validator.IsUserProtected(path) {
-				// Protected root: do not discover children or measure the root.
-				// Protection never authorizes siblings under another root.
-				res.suppressedProtectionPaths = append(
-					res.suppressedProtectionPaths,
-					structuredDevCacheProtectedRulePaths(path, opts.Validator)...,
-				)
-				continue
-			}
+		if opts.Validator.IsUserProtected(path) {
+			// Protected root: do not discover children or measure the root.
+			// Protection never authorizes siblings under another root.
+			core.SuppressedProtectionPaths = append(
+				core.SuppressedProtectionPaths,
+				structuredDevCacheProtectedRulePaths(path, opts.Validator)...,
+			)
+			continue
+		}
 
-			apps, useGate := gateApplicationsForDevCacheScope(category, scope)
-			productScoped := scope.Application != ""
-			if useGate && hasDetector {
-				ensureDevCacheDetection()
-			}
-			// Product-scoped and category-wide distinctive gates require a loaded
-			// detector snapshot when a detector is present. Without a detector,
-			// shared-runtime and test paths measure directly (fail open only for
-			// process state; protection/validation still apply).
-			applyGate := useGate && hasDetector && devCacheDetectLoaded
+		apps, useGate := gateApplicationsForDevCacheScope(category, scope)
+		productScoped := scope.Application != ""
+		if useGate && hasDetector {
+			ensureDevCacheDetection()
+		}
+		// Product-scoped and category-wide distinctive gates require a loaded
+		// detector snapshot when a detector is present. Without a detector,
+		// shared-runtime and test paths measure directly (fail open only for
+		// process state; protection/validation still apply).
+		applyGate := useGate && hasDetector && devCacheDetectLoaded
 
-			children, structured := resolveDevCacheChildCandidates(ctx, opts, category, path)
-			if structured {
-				resolveStructuredDevCacheRoot(ctx, opts, &res, category, scope, children, apps, applyGate, productScoped, devCacheGate, devCachePreStates)
-				continue
-			}
+		children, structured := resolveDevCacheChildCandidates(ctx, opts, category, path)
+		if structured {
+			resolveStructuredDevCacheRoot(ctx, opts, core, category, scope, children, apps, applyGate, productScoped, devCacheGate, devCachePreStates)
+			continue
+		}
 
-			// Whole-root mode: the resolved root is the single candidate.
-			if applyGate {
-				if productScoped {
-					// Project pre observation for product identity (scoped, latest).
-					recordProductScopedRunningStates(&res, apps, devCachePreStates)
-				}
-				outcome := devCacheGate.gateDevCacheApplications(ctx, category, path, apps, true, devCachePreStates, func() (int64, error) {
-					return measureBytes(ctx, path)
-				})
-				if productScoped && len(outcome.postStates) > 0 {
-					recordProductScopedRunningStates(&res, apps, outcome.postStates)
-				}
-				if outcome.measureErr != nil {
-					if ctx.Err() != nil {
-						res.diagnostics = append(res.diagnostics, issue("context_canceled", ctx.Err().Error(), true, path, category))
-					}
-					continue
-				}
-				if !outcome.proceed {
-					if outcome.skipReason != nil {
-						// Structured safety skip without reclaimable bytes: pre
-						// gate never measured; post gate discarded the measure.
-						res.skipped = append(res.skipped, SkippedItem{
-							Path:          path,
-							Bytes:         0,
-							Rule:          category,
-							PlannedAction: plannedActionForOpts(opts, category),
-							Reason:        *outcome.skipReason,
-						})
-					}
-					continue
-				}
-				res.candidates = append(res.candidates, OptInCandidate{
-					Path:          path,
-					Bytes:         outcome.bytes,
-					Category:      category,
-					PlannedAction: plannedActionForOpts(opts, category),
-				})
-				continue
+		// Whole-root mode: the resolved root is the single candidate.
+		if applyGate {
+			outcome := devCacheGate.gateDevCacheApplications(ctx, category, path, apps, true, devCachePreStates, func() (int64, error) {
+				return measureBytes(ctx, path)
+			})
+			// Product-scoped gates report only their logical application
+			// identities; category-wide distinctive-process gates keep skip
+			// reasons without projecting shared tool noise into RunningStates.
+			if productScoped {
+				outcome.apply(&core.RunningStates, nil)
 			}
-
-			bytes, err := measureBytes(ctx, path)
-			if err != nil {
-				// Failed or canceled measurement yields no candidate; non-canceled
-				// unrelated roots continue. Cancellation shows as recoverable diagnostic.
+			if outcome.measureErr != nil {
 				if ctx.Err() != nil {
-					res.diagnostics = append(res.diagnostics, issue("context_canceled", ctx.Err().Error(), true, path, category))
+					core.Diagnostics = append(core.Diagnostics, issue("context_canceled", ctx.Err().Error(), true, path, category))
 				}
 				continue
 			}
-			res.candidates = append(res.candidates, OptInCandidate{
+			if !outcome.proceed {
+				if outcome.skipReason != nil {
+					// Structured safety skip without reclaimable bytes: pre
+					// gate never measured; post gate discarded the measure.
+					core.Skipped = append(core.Skipped, SkippedItem{
+						Path:          path,
+						Bytes:         0,
+						Rule:          category,
+						PlannedAction: plannedActionForOpts(opts, category),
+						Reason:        *outcome.skipReason,
+					})
+				}
+				continue
+			}
+			core.OptInCandidates = append(core.OptInCandidates, OptInCandidate{
 				Path:          path,
-				Bytes:         bytes,
+				Bytes:         outcome.bytes,
 				Category:      category,
 				PlannedAction: plannedActionForOpts(opts, category),
 			})
+			continue
 		}
-	}
 
-	// Opportunity categories (opted-in only).
-	optedInCats := optedInOpportunityCategories(plan)
-	if len(optedInCats) > 0 {
-		discovery := discoverOpportunitiesForCategories(ctx, opts, optedInCats)
-		for _, opportunity := range discovery.Opportunities {
-			opportunity.Category = normalizedOpportunityCategory(opportunity.Category)
-			if opts.Validator.IsUserProtected(opportunity.Path) {
-				// Retain path-free exclusion evidence for eager preview; the
-				// protected path itself never leaves ProjectCategoryPreview.
-				res.suppressedProtectionPaths = append(res.suppressedProtectionPaths, opportunity.Path)
-				continue
+		bytes, err := measureBytes(ctx, path)
+		if err != nil {
+			// Failed or canceled measurement yields no candidate; non-canceled
+			// unrelated roots continue. Cancellation shows as recoverable diagnostic.
+			if ctx.Err() != nil {
+				core.Diagnostics = append(core.Diagnostics, issue("context_canceled", ctx.Err().Error(), true, path, category))
 			}
-			candidate := OptInCandidate{
-				Path:          opportunity.Path,
-				Bytes:         opportunity.Bytes,
-				Category:      opportunity.Category,
-				PlannedAction: plannedActionForOpts(opts, opportunity.Category),
-			}
-			if opportunity.Category == OpportunityCategoryUserTemp {
-				candidate.IsUserTemp = true
-				candidate.LatestModified = opportunity.LatestModifiedAt.Unix()
-				candidate.IdleDays = opportunity.IdleDays
-			}
-			res.candidates = append(res.candidates, candidate)
+			continue
 		}
-		for _, incomplete := range discovery.Incomplete {
-			incomplete.Category = normalizedOpportunityCategory(incomplete.Category)
-			if opts.Validator.IsUserProtected(incomplete.Path) {
-				res.suppressedProtectionPaths = append(res.suppressedProtectionPaths, incomplete.Path)
-				continue
-			}
-			res.diagnostics = append(res.diagnostics, incomplete.Reason)
-		}
+		core.OptInCandidates = append(core.OptInCandidates, OptInCandidate{
+			Path:          path,
+			Bytes:         bytes,
+			Category:      category,
+			PlannedAction: plannedActionForOpts(opts, category),
+		})
 	}
-
-	// Browser cache (opted-in only) - individual cache directories.
-	if plan[OpportunityCategoryBrowserCache] && hasDetector {
-		resolveBrowserOptInCandidates(ctx, opts, &res)
-	}
-
-	// Idle Application cache categories (opted-in only) - one candidate per root.
-	if hasDetector {
-		for _, category := range applicationCacheCategoryIDs() {
-			if plan[category] {
-				resolveApplicationCacheOptInCandidates(ctx, opts, category, &res)
-			}
-		}
-	}
-
-	return res
 }
 
 // resolveStructuredDevCacheRoot discovers and measures independent child
@@ -279,7 +229,7 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 func resolveStructuredDevCacheRoot(
 	ctx context.Context,
 	opts Options,
-	res *optInResolution,
+	core *categoryCoreResult,
 	category string,
 	scope DevCacheRootScope,
 	children []string,
@@ -291,12 +241,15 @@ func resolveStructuredDevCacheRoot(
 ) {
 	root := scope.Path
 	if applyGate {
+		// Pre observation uses the same project + fail-closed helper as the
+		// whole-root measure gate so product-scoped reporting stays consistent.
+		idle, projected, reason := observeDevCacheApps(apps, root, category, devCachePreStates)
 		if productScoped {
-			recordProductScopedRunningStates(res, apps, devCachePreStates)
+			runningGateOutcome{runningStates: projected}.apply(&core.RunningStates, nil)
 		}
-		if idle, reason := appsIdleForApplications(apps, root, category, devCachePreStates); !idle {
+		if !idle {
 			if reason != nil {
-				res.skipped = append(res.skipped, SkippedItem{
+				core.Skipped = append(core.Skipped, SkippedItem{
 					Path:          root,
 					Bytes:         0,
 					Rule:          category,
@@ -308,9 +261,9 @@ func resolveStructuredDevCacheRoot(
 		}
 	}
 
-	start := len(res.candidates)
-	appendStructuredDevCacheCandidates(ctx, opts, res, category, root, children, structuredDevCacheMeasureDependencies{})
-	if len(res.candidates) == start {
+	start := len(core.OptInCandidates)
+	appendStructuredDevCacheCandidates(ctx, opts, core, category, root, children, structuredDevCacheMeasureDependencies{})
+	if len(core.OptInCandidates) == start {
 		return
 	}
 
@@ -321,14 +274,16 @@ func resolveStructuredDevCacheRoot(
 	if devCacheGate.detect != nil {
 		postStates = devCacheGate.detect(ctx)
 	}
+	idle, projected, reason := observeDevCacheApps(apps, root, category, postStates)
 	if productScoped {
-		recordProductScopedRunningStates(res, apps, postStates)
+		// Post supersedes pre for matching identities via merge-in-place.
+		runningGateOutcome{runningStates: projected}.apply(&core.RunningStates, nil)
 	}
-	if idle, reason := appsIdleForApplications(apps, root, category, postStates); !idle {
+	if !idle {
 		// Discard all children measured under this root scope.
-		res.candidates = res.candidates[:start]
+		core.OptInCandidates = core.OptInCandidates[:start]
 		if reason != nil {
-			res.skipped = append(res.skipped, SkippedItem{
+			core.Skipped = append(core.Skipped, SkippedItem{
 				Path:          root,
 				Bytes:         0,
 				Rule:          category,
@@ -339,23 +294,53 @@ func resolveStructuredDevCacheRoot(
 	}
 }
 
-// recordProductScopedRunningStates projects product-scoped application
-// observations into the resolution. Match is by canonical identity only;
-// later observations replace earlier ones in place without reordering.
-func recordProductScopedRunningStates(res *optInResolution, apps []string, states []RunningApplicationState) {
-	if res == nil || len(apps) == 0 || len(states) == 0 {
+// resolveExistenceOpportunityCategory discovers one non-browser, non-application
+// opportunity category and dual-projects surviving paths into Opportunities
+// (review) and OptInCandidates (execute). Protection removes candidates only.
+func resolveExistenceOpportunityCategory(ctx context.Context, opts Options, category string, core *categoryCoreResult) {
+	if core == nil {
 		return
 	}
-	for _, app := range apps {
-		if state, found := runningApplicationStateFor(states, app); found {
-			res.runningStates = mergeRunningApplicationStates(res.runningStates, state)
+	discovery := discoverOpportunitiesForCategories(ctx, opts, []string{category})
+	for _, opportunity := range discovery.Opportunities {
+		opportunity.Category = normalizedOpportunityCategory(opportunity.Category)
+		if opts.Validator.IsUserProtected(opportunity.Path) {
+			// Retain path-free exclusion evidence for eager preview; the
+			// protected path itself never leaves ProjectCategoryPreview.
+			core.SuppressedProtectionPaths = append(core.SuppressedProtectionPaths, opportunity.Path)
+			continue
 		}
+		core.Opportunities = append(core.Opportunities, opportunity)
+		candidate := OptInCandidate{
+			Path:          opportunity.Path,
+			Bytes:         opportunity.Bytes,
+			Category:      opportunity.Category,
+			PlannedAction: plannedActionForOpts(opts, opportunity.Category),
+		}
+		if opportunity.Category == OpportunityCategoryUserTemp {
+			candidate.IsUserTemp = true
+			candidate.LatestModified = opportunity.LatestModifiedAt.Unix()
+			candidate.IdleDays = opportunity.IdleDays
+		}
+		core.OptInCandidates = append(core.OptInCandidates, candidate)
+	}
+	for _, incomplete := range discovery.Incomplete {
+		incomplete.Category = normalizedOpportunityCategory(incomplete.Category)
+		if opts.Validator.IsUserProtected(incomplete.Path) {
+			core.SuppressedProtectionPaths = append(core.SuppressedProtectionPaths, incomplete.Path)
+			continue
+		}
+		core.IncompleteInspections = append(core.IncompleteInspections, incomplete)
+		core.Diagnostics = append(core.Diagnostics, incomplete.Reason)
 	}
 }
 
-// resolveApplicationCacheOptInCandidates gates one Application cache category
-// and appends independent Opt-in candidates for each measured root.
-func resolveApplicationCacheOptInCandidates(ctx context.Context, opts Options, category string, res *optInResolution) {
+// resolveApplicationCacheCategory gates one Application cache category and
+// dual-projects measured roots into Opportunities and OptInCandidates.
+func resolveApplicationCacheCategory(ctx context.Context, opts Options, category string, core *categoryCoreResult) {
+	if core == nil || opts.DetectRunningApplications == nil {
+		return
+	}
 	entry, ok := applicationCacheEntry(category)
 	if !ok || len(entry.runningApplications) == 0 {
 		return
@@ -368,8 +353,8 @@ func resolveApplicationCacheOptInCandidates(ctx context.Context, opts Options, c
 	if roaming := applicationCacheRoamingAppDataDir(opts.ApplicationCacheDiscoveryOptions); roaming != "" {
 		userDataRoot := applicationCacheUserDataRoot(roaming, policy)
 		if opts.Validator.IsUserProtected(userDataRoot) {
-			res.suppressedProtectionPaths = append(
-				res.suppressedProtectionPaths,
+			core.SuppressedProtectionPaths = append(
+				core.SuppressedProtectionPaths,
 				applicationCacheProtectedRulePaths(userDataRoot, opts.Validator)...,
 			)
 			return
@@ -378,40 +363,34 @@ func resolveApplicationCacheOptInCandidates(ctx context.Context, opts Options, c
 
 	gate := runningGate{detect: opts.DetectRunningApplications}
 	preStates := opts.DetectRunningApplications(ctx)
-	// Surface only the application identity owned by this selected category.
-	if state, found := runningApplicationStateFor(preStates, application); found {
-		res.runningStates = mergeRunningApplicationStates(res.runningStates, state)
-	}
-
 	outcome := gate.gateApplicationCache(ctx, application, preStates, func() applicationCacheDiscoveryResult {
 		return resolveApplicationCacheDiscovery(ctx, opts, policyID)
 	})
-	if !outcome.preIdle {
+	// Gate already projects the scoped editor identity (pre + post supersede)
+	// and builds unknown diagnostics when post state is Unknown.
+	outcome.apply(&core.RunningStates, &core.Diagnostics)
+	if !outcome.discoveryRan {
 		return
 	}
 	discovery := outcome.discovery
-	res.suppressedProtectionPaths = append(res.suppressedProtectionPaths, discovery.suppressedProtectionPaths...)
+	core.SuppressedProtectionPaths = append(core.SuppressedProtectionPaths, discovery.suppressedProtectionPaths...)
 	for _, incomplete := range discovery.incompletes {
 		if opts.Validator.IsUserProtected(incomplete.Path) {
 			continue
 		}
-		res.diagnostics = append(res.diagnostics, incomplete.Reason)
+		core.IncompleteInspections = append(core.IncompleteInspections, incomplete)
+		core.Diagnostics = append(core.Diagnostics, incomplete.Reason)
 	}
-	if discovery.canceled || !outcome.postIdle {
-		if outcome.postState != nil {
-			// Post-measurement supersedes pre-measurement for this identity.
-			res.runningStates = mergeRunningApplicationStates(res.runningStates, *outcome.postState)
-		}
-		if outcome.postDiagnostic != nil {
-			res.diagnostics = append(res.diagnostics, *outcome.postDiagnostic)
-		}
+	if discovery.canceled || !outcome.proceed {
+		// States/diagnostics already applied; discard measured roots.
 		return
 	}
 	for _, opportunity := range discovery.opportunities {
 		if opts.Validator.IsUserProtected(opportunity.Path) {
 			continue
 		}
-		res.candidates = append(res.candidates, OptInCandidate{
+		core.Opportunities = append(core.Opportunities, opportunity)
+		core.OptInCandidates = append(core.OptInCandidates, OptInCandidate{
 			Path:          opportunity.Path,
 			Bytes:         opportunity.Bytes,
 			Category:      category,
@@ -420,68 +399,69 @@ func resolveApplicationCacheOptInCandidates(ctx context.Context, opts Options, c
 	}
 }
 
-// resolveBrowserOptInCandidates gates each supported browser's cache discovery
-// on running-application state and appends individual cache-directory
-// candidates (pre-state, discover, post-state). Suppressed, diagnostic, and
-// incomplete outcomes become diagnostics; running/unknown outcomes become
-// running states and diagnostics. All artifacts surface in both modes.
-func resolveBrowserOptInCandidates(ctx context.Context, opts Options, res *optInResolution) {
+// resolveBrowserCacheCategory gates each supported browser's cache discovery
+// on running-application state. Dual-projects: full Opportunity aggregates for
+// review and individual regenerating cache directories for opt-in execution.
+func resolveBrowserCacheCategory(ctx context.Context, opts Options, core *categoryCoreResult) {
+	if core == nil || opts.DetectRunningApplications == nil {
+		return
+	}
 	gate := runningGate{detect: opts.DetectRunningApplications}
 	preStates := opts.DetectRunningApplications(ctx)
-	// Report only supported browser identities gated by this path, even when
-	// the shared detector returns developer-tool or editor states.
-	res.runningStates = mergeRunningApplicationStates(
-		res.runningStates,
+	// Seed all supported browser identities from the shared pre snapshot so
+	// protected or never-gated browsers still appear. Per-browser gate outcomes
+	// then supersede with post observations and unknown diagnostics.
+	core.RunningStates = mergeRunningApplicationStates(
+		core.RunningStates,
 		projectRunningApplicationStates(preStates, browserRunningApplicationIdentities()...)...,
 	)
 	for _, config := range browserCacheConfigs {
 		if localAppDataDir := browserCacheLocalAppDataDir(opts.BrowserCacheDiscoveryOptions); localAppDataDir != "" {
 			if suppressed, protectedRulePaths := browserDiscoverySuppressed(browserUserDataRoot(localAppDataDir, config), opts.Validator); suppressed {
-				res.suppressedProtectionPaths = append(res.suppressedProtectionPaths, protectedRulePaths...)
+				core.SuppressedProtectionPaths = append(core.SuppressedProtectionPaths, protectedRulePaths...)
 				continue
 			}
 		}
 		outcome := gate.gateBrowser(ctx, config.application, preStates, func() browserCacheDiscoveryResult {
 			return discoverBrowserCache(ctx, config, opts.BrowserCacheDiscoveryOptions, opts.Validator)
 		})
-		if !outcome.preIdle {
+		// Projected post state + unknown diagnostics come from the gate only.
+		outcome.apply(&core.RunningStates, &core.Diagnostics)
+		if !outcome.discoveryRan {
 			continue
 		}
 		discovery := outcome.discovery
 		if discovery.suppressed {
-			res.suppressedProtectionPaths = append(res.suppressedProtectionPaths, discovery.suppressedProtectionPaths...)
+			core.SuppressedProtectionPaths = append(core.SuppressedProtectionPaths, discovery.suppressedProtectionPaths...)
 			continue
 		}
 		if discovery.diagnostic != nil {
-			res.diagnostics = append(res.diagnostics, *discovery.diagnostic)
+			core.Diagnostics = append(core.Diagnostics, *discovery.diagnostic)
 			continue
 		}
 		if discovery.incomplete != nil {
 			if !browserOpportunityPathProtected(opts.Validator, discovery.incomplete) {
-				res.diagnostics = append(res.diagnostics, discovery.incomplete.Reason)
+				core.IncompleteInspections = append(core.IncompleteInspections, *discovery.incomplete)
+				core.Diagnostics = append(core.Diagnostics, discovery.incomplete.Reason)
 			}
 			continue
 		}
-		if !outcome.postIdle {
-			if outcome.postState != nil {
-				res.runningStates = mergeRunningApplicationStates(res.runningStates, *outcome.postState)
-			}
-			if outcome.postDiagnostic != nil {
-				res.diagnostics = append(res.diagnostics, *outcome.postDiagnostic)
-			}
+		if !outcome.proceed {
+			// Post fail-closed: states/diagnostics already applied; no reclaim.
 			continue
 		}
 		if discovery.opportunity == nil || browserOpportunityProtected(opts.Validator, *discovery.opportunity) {
 			continue
 		}
-		appendBrowserCacheCandidates(opts, res, discovery.opportunity)
+		core.Opportunities = append(core.Opportunities, *discovery.opportunity)
+		appendBrowserCacheCandidates(opts, core, discovery.opportunity)
 	}
 }
 
 // appendBrowserCacheCandidates appends one Opt-in candidate per non-empty
 // regenerating cache directory across the browser's profiles.
-func appendBrowserCacheCandidates(opts Options, res *optInResolution, opportunity *Opportunity) {
-	if opportunity.BrowserCache == nil {
+func appendBrowserCacheCandidates(opts Options, core *categoryCoreResult, opportunity *Opportunity) {
+	if core == nil || opportunity == nil || opportunity.BrowserCache == nil {
 		return
 	}
 	for _, profile := range opportunity.BrowserCache.Profiles {
@@ -489,7 +469,7 @@ func appendBrowserCacheCandidates(opts Options, res *optInResolution, opportunit
 			if cache.Bytes <= 0 {
 				continue
 			}
-			res.candidates = append(res.candidates, OptInCandidate{
+			core.OptInCandidates = append(core.OptInCandidates, OptInCandidate{
 				Path:          cache.Path,
 				Bytes:         cache.Bytes,
 				Category:      OpportunityCategoryBrowserCache,

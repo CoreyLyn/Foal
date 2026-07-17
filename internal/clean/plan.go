@@ -176,46 +176,16 @@ func ScannableCategoryIDs() []string {
 }
 
 // ResolveCategory resolves exactly one canonical default or opt-in category
-// without scanning unrelated categories. It reuses shared protection, running-
-// application gates, env/default-root resolution, and measurement policy.
-// Preview paths returned here never authorize execution.
+// without scanning unrelated categories. It is a thin public projector over
+// resolveCategoryCore (shared protection, running-application gates,
+// env/default-root resolution, and measurement policy). Preview paths returned
+// here never authorize execution.
 func ResolveCategory(ctx context.Context, opts Options, identifier string) (CategoryResolution, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	plan, err := CompileExactCategoryPlan([]string{identifier})
+	core, err := resolveCategoryCore(ctx, opts, identifier)
 	if err != nil {
 		return CategoryResolution{}, err
 	}
-	if len(plan.Categories) != 1 {
-		return CategoryResolution{}, fmt.Errorf("category %q is not independently resolvable", identifier)
-	}
-	canonicalID := plan.Categories[0]
-	summary, _ := canonicalCleanupCategoryCatalog.Summary(canonicalID)
-
-	resolution := CategoryResolution{
-		Identifier:  canonicalID,
-		Eligibility: summary.Eligibility,
-	}
-
-	switch summary.Eligibility {
-	case CategoryEligibilityDefault:
-		result := newCleanResultSkeleton("dry_run", opts)
-		appendDefaultCandidates(ctx, opts, map[string]bool{canonicalID: true}, true, &result)
-		resolution.Candidates = append(resolution.Candidates, result.Candidates...)
-		resolution.Skipped = append(resolution.Skipped, result.Skipped...)
-		resolution.Diagnostics = append(resolution.Diagnostics, result.Errors...)
-	case CategoryEligibilityOptIn:
-		optIn := resolveOptInCandidates(ctx, opts, map[string]bool{canonicalID: true})
-		resolution.OptInCandidates = append(resolution.OptInCandidates, optIn.candidates...)
-		resolution.Skipped = append(resolution.Skipped, optIn.skipped...)
-		resolution.RunningStates = mergeRunningApplicationStates(resolution.RunningStates, optIn.runningStates...)
-		resolution.Diagnostics = append(resolution.Diagnostics, optIn.diagnostics...)
-		resolution.SuppressedProtectionPaths = append(resolution.SuppressedProtectionPaths, optIn.suppressedProtectionPaths...)
-	default:
-		return CategoryResolution{}, fmt.Errorf("category %q is not independently resolvable", identifier)
-	}
-	return resolution, nil
+	return projectCategoryCoreToResolution(core), nil
 }
 
 // effectiveCategoryPlan returns opts.Plan when set; otherwise compiles the
