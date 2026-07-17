@@ -78,6 +78,22 @@ type DevCacheRootScopeResolver func(category string) []DevCacheRootScope
 
 // DevCacheChildDiscoverer is defined in structured_dev_cache.go.
 
+// PermanentIdentityCandidate is the fresh candidate context a category-owned
+// pre-mutation validator may inspect. It is not an authorization token and does
+// not expand the candidate set.
+type PermanentIdentityCandidate struct {
+	Path     string
+	Bytes    int64
+	Category string
+}
+
+// PermanentIdentityValidator re-checks that a permanent candidate still has the
+// category-specific identity that authorized discovery (for example exact
+// basename under an exact direct parent). It must not mutate the filesystem or
+// own permanent removal. ok=false yields a recoverable skip with the original
+// category, bytes, and delete_permanently planned action.
+type PermanentIdentityValidator func(candidate PermanentIdentityCandidate) (pathsafe.Reason, bool)
+
 // ExecutionPhase identifies an observation-only stage of shared Clean execution.
 type ExecutionPhase string
 
@@ -126,6 +142,15 @@ type Options struct {
 	// Nil selects delete.FilesystemPermanentRemover.
 	PermanentRemover        delete.PermanentRemover
 	RecycleBinCapacityProbe RecycleBinCapacityProbe
+	// PermanentIdentityValidators optionally re-checks category-owned identity
+	// immediately before each permanent removal, after PathSafe validation.
+	// Keyed by category/rule ID. Missing or nil entry means PathSafe-only for
+	// that category (existing permanent categories need no registration).
+	// Validators must not mutate or own the remover. Rejection is a recoverable
+	// skip that preserves delete_permanently planned action and never falls
+	// back to the Recycle Bin. Production categories may also register via the
+	// package-private permanent identity registry; Options injects override tests.
+	PermanentIdentityValidators map[string]PermanentIdentityValidator
 
 	// --- history / detailed list ---
 	HistoryRecorder   history.Recorder

@@ -52,6 +52,13 @@ type PermanentResult struct {
 	Items []PermanentItem
 }
 
+// PreMutationValidator optionally re-checks candidate identity after PathSafe
+// validation and immediately before permanent removal. Returning ok=false is a
+// recoverable pre-mutation skip: the remover is not called and PartialRisk stays
+// false. Validators must not mutate the filesystem or own deletion.
+// A nil validator is a no-op (PathSafe-only composition).
+type PreMutationValidator func(candidate Candidate) (pathsafe.Reason, bool)
+
 // ExecutePermanent permanently removes candidates with immediate path validation and
 // cooperative cancellation. It never moves items to the Recycle Bin.
 func ExecutePermanent(ctx context.Context, candidates []Candidate, remover PermanentRemover) PermanentResult {
@@ -59,7 +66,16 @@ func ExecutePermanent(ctx context.Context, candidates []Candidate, remover Perma
 }
 
 // ExecutePermanentWithValidator is ExecutePermanent with an explicit pathsafe.Validator.
+// Categories without extra identity checks use this PathSafe-only path.
 func ExecutePermanentWithValidator(ctx context.Context, candidates []Candidate, remover PermanentRemover, validator pathsafe.Validator) PermanentResult {
+	return ExecutePermanentWithHooks(ctx, candidates, remover, validator, nil)
+}
+
+// ExecutePermanentWithHooks composes PathSafe validation with an optional
+// category-owned pre-mutation check immediately before each removal.
+// Ordering per candidate: cancel check → PathSafe → PreMutation (if non-nil) → Remove.
+// A pre-mutation rejection never falls back to the Recycle Bin.
+func ExecutePermanentWithHooks(ctx context.Context, candidates []Candidate, remover PermanentRemover, validator pathsafe.Validator, preMutation PreMutationValidator) PermanentResult {
 	if remover == nil {
 		remover = FilesystemPermanentRemover{}
 	}
@@ -88,6 +104,18 @@ func ExecutePermanentWithValidator(ctx context.Context, candidates []Candidate, 
 				Reason: reason,
 			})
 			continue
+		}
+
+		if preMutation != nil {
+			if reason, ok := preMutation(candidate); !ok {
+				result.Items = append(result.Items, PermanentItem{
+					Path:   candidate.Path,
+					Bytes:  candidate.Bytes,
+					Kind:   PermanentOutcomeSkipped,
+					Reason: reason,
+				})
+				continue
+			}
 		}
 
 		err := remover.Remove(ctx, candidate.Path)

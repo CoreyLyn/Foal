@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/CoreyLyn/Foal/internal/core/delete"
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 )
 
 // Execute runs shared Clean mutation for the effective category plan.
@@ -252,6 +253,11 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 // executePermanentCandidates runs authorized permanent removal only through the
 // permanent remover. Missing authorization skips with a stable reason and never
 // reroutes work to the Recycle Bin. Local failures do not block siblings.
+//
+// Immediate pre-mutation composition (per candidate): PathSafe, then optional
+// category-owned identity validation, then the shared permanent remover.
+// Category rejection is a recoverable skip that keeps delete_permanently as the
+// planned action and never falls back to the Recycle Bin.
 func executePermanentCandidates(ctx context.Context, opts Options, candidates []actionExecutionCandidate, result *Result) {
 	if len(candidates) == 0 {
 		return
@@ -288,7 +294,8 @@ func executePermanentCandidates(ctx context.Context, opts Options, candidates []
 		byPath[candidate.candidate.Path] = candidate
 	}
 
-	permanentResult := delete.ExecutePermanentWithValidator(ctx, deleteCandidates, remover, opts.Validator)
+	preMutation := composePermanentPreMutation(opts, byPath)
+	permanentResult := delete.ExecutePermanentWithHooks(ctx, deleteCandidates, remover, opts.Validator, preMutation)
 	for _, item := range permanentResult.Items {
 		candidate := byPath[item.Path]
 		switch item.Kind {
@@ -318,7 +325,7 @@ func executePermanentCandidates(ctx context.Context, opts Options, candidates []
 				Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
 			})
 		default:
-			// Pre-mutation skips (protection, reparse, hardlink, validation).
+			// Pre-mutation skips (protection, reparse, hardlink, category identity).
 			result.Skipped = append(result.Skipped, SkippedItem{
 				Path:          item.Path,
 				Bytes:         item.Bytes,
@@ -327,6 +334,42 @@ func executePermanentCandidates(ctx context.Context, opts Options, candidates []
 				Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
 			})
 		}
+	}
+}
+
+// composePermanentPreMutation builds the optional delete-layer hook that
+// dispatches to category-owned validators. Returns nil when no candidate has a
+// registered validator so existing PathSafe-only categories keep the same
+// shared remover path with no extra hook call.
+func composePermanentPreMutation(opts Options, byPath map[string]actionExecutionCandidate) delete.PreMutationValidator {
+	hasValidator := false
+	for _, candidate := range byPath {
+		if lookupPermanentIdentityValidator(opts, candidate.rule) != nil {
+			hasValidator = true
+			break
+		}
+	}
+	if !hasValidator {
+		return nil
+	}
+	return func(candidate delete.Candidate) (pathsafe.Reason, bool) {
+		meta, ok := byPath[candidate.Path]
+		if !ok {
+			// Unexpected path: fail closed without mutation.
+			return pathsafe.Reason{
+				Code:    "identity_mismatch",
+				Message: "permanent candidate context is unavailable for identity validation",
+			}, false
+		}
+		validator := lookupPermanentIdentityValidator(opts, meta.rule)
+		if validator == nil {
+			return pathsafe.Reason{}, true
+		}
+		return validator(PermanentIdentityCandidate{
+			Path:     candidate.Path,
+			Bytes:    candidate.Bytes,
+			Category: meta.rule,
+		})
 	}
 }
 
