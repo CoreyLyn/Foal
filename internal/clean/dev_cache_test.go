@@ -21,6 +21,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPNPM,
 			clean.DevCacheCategoryYarn,
 			clean.DevCacheCategoryGo,
+			clean.DevCacheCategoryGoModCache,
 			clean.DevCacheCategoryPip,
 			clean.DevCacheCategoryCargo,
 			clean.DevCacheCategoryNuGet,
@@ -41,8 +42,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"dev-caches\"", cat)
 			}
 		}
-		if len(enabled) != 18 {
-			t.Fatalf("expected 18 enabled developer-tools categories, got %d", len(enabled))
+		if len(enabled) != 19 {
+			t.Fatalf("expected 19 enabled developer-tools categories, got %d", len(enabled))
 		}
 		// Verify valid names include dev categories and dev-caches
 		found := make(map[string]bool)
@@ -83,6 +84,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPNPM,
 			clean.DevCacheCategoryYarn,
 			clean.DevCacheCategoryGo,
+			clean.DevCacheCategoryGoModCache,
 			clean.DevCacheCategoryPip,
 			clean.DevCacheCategoryCargo,
 			clean.DevCacheCategoryNuGet,
@@ -106,8 +108,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"all\"", cat)
 			}
 		}
-		if len(enabled) != 12+16 {
-			t.Fatalf("expected 28 enabled categories (12+16), got %d", len(enabled))
+		if len(enabled) != 12+17 {
+			t.Fatalf("expected 29 enabled categories (12+17), got %d", len(enabled))
 		}
 	})
 
@@ -117,6 +119,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPNPM,
 			clean.DevCacheCategoryYarn,
 			clean.DevCacheCategoryGo,
+			clean.DevCacheCategoryGoModCache,
 			clean.DevCacheCategoryPip,
 			clean.DevCacheCategoryCargo,
 			clean.DevCacheCategoryNuGet,
@@ -208,6 +211,7 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryPNPM,
 			clean.DevCacheCategoryYarn,
 			clean.DevCacheCategoryGo,
+			clean.DevCacheCategoryGoModCache,
 			clean.DevCacheCategoryPip,
 			clean.DevCacheCategoryCargo,
 			clean.DevCacheCategoryNuGet,
@@ -266,10 +270,10 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 			DiscoverReviewSuggestions: noReviewSuggestions,
 		})
 
-		// 12 whole-root + 1 playwright install child + 1 puppeteer install child
+		// 13 whole-root + 1 playwright install child + 1 puppeteer install child
 		// (vscode/cursor need detector).
-		if len(result.OptInCandidates) != 14 {
-			t.Fatalf("expected 14 opt-in candidates, got %d: %#v", len(result.OptInCandidates), result.OptInCandidates)
+		if len(result.OptInCandidates) != 15 {
+			t.Fatalf("expected 15 opt-in candidates, got %d: %#v", len(result.OptInCandidates), result.OptInCandidates)
 		}
 	})
 
@@ -519,6 +523,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			clean.DevCacheCategoryPNPM,
 			clean.DevCacheCategoryYarn,
 			clean.DevCacheCategoryGo,
+			clean.DevCacheCategoryGoModCache,
 			clean.DevCacheCategoryPip,
 			clean.DevCacheCategoryCargo,
 			clean.DevCacheCategoryNuGet,
@@ -600,16 +605,16 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 			}},
 		})
 
-		// All 14 discovered developer-cache candidates are permanent
-		// (11 package/build whole-roots + electron + playwright install + puppeteer install).
+		// All 15 discovered developer-cache candidates are permanent
+		// (12 package/build whole-roots + electron + playwright install + puppeteer install).
 		if len(recycle.paths) != 0 {
 			t.Fatalf("recycle paths = %d: %v, want none (all dev caches permanent)", len(recycle.paths), recycle.paths)
 		}
-		if len(permanent.paths) != 14 {
-			t.Fatalf("permanent paths = %d: %v, want 14", len(permanent.paths), permanent.paths)
+		if len(permanent.paths) != 15 {
+			t.Fatalf("permanent paths = %d: %v, want 15", len(permanent.paths), permanent.paths)
 		}
-		if result.Totals.OptInDeletedCount != 14 {
-			t.Fatalf("expected OptInDeletedCount 14, got %d", result.Totals.OptInDeletedCount)
+		if result.Totals.OptInDeletedCount != 15 {
+			t.Fatalf("expected OptInDeletedCount 15, got %d", result.Totals.OptInDeletedCount)
 		}
 		if result.Totals.PermanentlyDeletedBytes == 0 {
 			t.Fatal("expected non-zero permanently_deleted_bytes for permanent dev caches")

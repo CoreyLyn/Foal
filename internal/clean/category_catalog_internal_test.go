@@ -175,6 +175,7 @@ func TestCanonicalDeveloperCacheRegistryBindsResolvers(t *testing.T) {
 		DevCacheCategoryPNPM:                `C:\Users\test\AppData\Local\pnpm\store`,
 		DevCacheCategoryYarn:                `C:\Users\test\AppData\Local\Yarn\Cache`,
 		DevCacheCategoryGo:                  `C:\Users\test\AppData\Local\go-build`,
+		DevCacheCategoryGoModCache:          `C:\Users\test\go\pkg\mod`,
 		DevCacheCategoryPip:                 `C:\Users\test\AppData\Local\pip\Cache`,
 		DevCacheCategoryCargo:               `C:\Users\test\.cargo\registry\cache`,
 		DevCacheCategoryNuGet:               `C:\Users\test\AppData\Local\NuGet\v3-cache`,

@@ -964,6 +964,7 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 		clean.DevCacheCategoryPNPM,
 		clean.DevCacheCategoryYarn,
 		clean.DevCacheCategoryGo,
+		clean.DevCacheCategoryGoModCache,
 		clean.DevCacheCategoryPip,
 		clean.DevCacheCategoryCargo,
 		clean.DevCacheCategoryNuGet,
@@ -1050,9 +1051,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// Should have 12 opportunity categories + 16 dev caches + "dev-caches" + "all" = 30
-	if len(valid) != 30 {
-		t.Fatalf("expected 30 valid names, got %d: %v", len(valid), valid)
+	// Should have 12 opportunity categories + 17 dev caches + "dev-caches" + "all" = 31
+	if len(valid) != 31 {
+		t.Fatalf("expected 31 valid names, got %d: %v", len(valid), valid)
 	}
 }
 
@@ -1995,6 +1996,154 @@ func TestExecuteOptInGoCacheCleansWhenGoIdle(t *testing.T) {
 	}
 	if result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
 		t.Fatalf("action = %q", result.Deleted[0].Action)
+	}
+}
+
+// TestExecuteOptInGoModCacheSkipsWhenGoRunning verifies go-modcache shares Go idle gate.
+func TestExecuteOptInGoModCacheSkipsWhenGoRunning(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "go-modcache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachePath, "data.bin"), []byte("mod"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter: &recordingRecycleBinAdapter{},
+		PermanentRemover:  &recordingPermanentRemover{},
+		OptIn:             []string{clean.DevCacheCategoryGoModCache},
+		DevCachePathResolver: func(category string) []string {
+			if category == clean.DevCacheCategoryGoModCache {
+				return []string{cachePath}
+			}
+			return nil
+		},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{{
+				Application: clean.ApplicationGo,
+				State:       clean.RunningApplicationStateRunning,
+			}}
+		},
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("expected OptInDeletedCount 0 when Go is running, got %d", result.Totals.OptInDeletedCount)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "dev_tool_running" {
+		t.Fatalf("skipped = %#v, want dev_tool_running", result.Skipped)
+	}
+	if _, err := os.Lstat(cachePath); err != nil {
+		t.Fatalf("module cache must remain when Go is running: %v", err)
+	}
+}
+
+// TestExecuteOptInGoModCacheCleansWhenGoIdle verifies permanent delete with auth.
+func TestExecuteOptInGoModCacheCleansWhenGoIdle(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "go-modcache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachePath, "data.bin"), []byte("mod!!"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
+		Rules: []clean.Rule{{
+			ID:             "test_rule",
+			DefaultEnabled: false,
+		}},
+		RecycleBinAdapter: recycle,
+		PermanentRemover:  permanent,
+		OptIn:             []string{clean.DevCacheCategoryGoModCache},
+		DevCachePathResolver: func(category string) []string {
+			if category == clean.DevCacheCategoryGoModCache {
+				return []string{cachePath}
+			}
+			return nil
+		},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{{
+				Application: clean.ApplicationGo,
+				State:       clean.RunningApplicationStateIdle,
+			}}
+		},
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	if len(recycle.paths) != 0 {
+		t.Fatalf("go-modcache must not use Recycle Bin: %v", recycle.paths)
+	}
+	if len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+		t.Fatalf("permanent paths = %v, want [%q]", permanent.paths, cachePath)
+	}
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("expected OptInDeletedCount 1, got %d", result.Totals.OptInDeletedCount)
+	}
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+		t.Fatalf("deleted = %#v", result.Deleted)
+	}
+	if result.Deleted[0].Rule != clean.DevCacheCategoryGoModCache {
+		t.Fatalf("deleted rule = %q", result.Deleted[0].Rule)
+	}
+	if result.Totals.PermanentlyDeletedBytes == 0 {
+		t.Fatalf("permanently_deleted_bytes = 0")
+	}
+}
+
+// TestExecuteOptInGoModCacheWithoutAllowPermanentSkips verifies auth gate.
+func TestExecuteOptInGoModCacheWithoutAllowPermanentSkips(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "go-modcache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachePath, "data.bin"), []byte("mod"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	permanent := &recordingPermanentRemover{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion: false,
+		OptIn:                  []string{clean.DevCacheCategoryGoModCache},
+		DevCachePathResolver: func(category string) []string {
+			if category == clean.DevCacheCategoryGoModCache {
+				return []string{cachePath}
+			}
+			return nil
+		},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{{
+				Application: clean.ApplicationGo,
+				State:       clean.RunningApplicationStateIdle,
+			}}
+		},
+		PermanentRemover:          permanent,
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+
+	if len(permanent.paths) != 0 {
+		t.Fatalf("permanent remover called without auth: %v", permanent.paths)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "permanent_deletion_not_authorized" {
+		t.Fatalf("skipped = %#v", result.Skipped)
+	}
+	if _, err := os.Lstat(cachePath); err != nil {
+		t.Fatalf("unauthorized permanent path must remain: %v", err)
 	}
 }
 

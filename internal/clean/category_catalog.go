@@ -641,6 +641,14 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		[]string{"go"},
 		ApplicationGo,
 	),
+	// Go module download cache: separate from go-cache (GOCACHE / go-build).
+	// Distinctive-process idle gate shares ApplicationGo with the build cache.
+	withPreviewSafetyNote(developerCacheEntry(
+		categoryDefinition(DevCacheCategoryGoModCache, "Go module cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		resolveGoModCachePaths,
+		[]string{"go"},
+		ApplicationGo,
+	), staticPreviewSafetyNote(goModCacheOptInImpactNotice)),
 	developerCacheEntry(
 		categoryDefinition(DevCacheCategoryPip, "pip cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
 		resolvePipCachePaths,

@@ -19,6 +19,7 @@ const (
 	DevCacheCategoryPNPM                = "pnpm-cache"
 	DevCacheCategoryYarn                = "yarn-cache"
 	DevCacheCategoryGo                  = "go-cache"
+	DevCacheCategoryGoModCache          = "go-modcache"
 	DevCacheCategoryPip                 = "pip-cache"
 	DevCacheCategoryCargo               = "cargo-cache"
 	DevCacheCategoryNuGet               = "nuget-cache"

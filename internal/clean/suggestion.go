@@ -83,16 +83,12 @@ var reviewSuggestionAllowlist = map[string]reviewSuggestionTool{
 		}},
 	},
 	"go": {
+		// Module cache is executable Opt-in go-modcache; keep only build-cache Review.
 		probes: []reviewSuggestionProbe{
 			{
 				label:        "Go build cache",
 				queryArgs:    []string{"env", "GOCACHE"},
 				cleanCommand: "go clean -cache",
-			},
-			{
-				label:        "Go module cache",
-				queryArgs:    []string{"env", "GOMODCACHE"},
-				cleanCommand: "go clean -modcache",
 			},
 		},
 	},

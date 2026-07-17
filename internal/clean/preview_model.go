@@ -143,6 +143,10 @@ const pnpmCacheOptInImpactNotice = "Opt-in pnpm store cleanup may require re-dow
 // and can slow the next install offline.
 const yarnCacheOptInImpactNotice = "Opt-in yarn cache cleanup may require re-downloading dependencies. Offline installs and private-registry packages may be affected."
 
+// goModCacheOptInImpactNotice is shown when go-modcache is an Opt-in candidate.
+// Modules must be re-downloaded; offline / private module sources may fail to restore.
+const goModCacheOptInImpactNotice = "Opt-in Go module cache cleanup requires re-downloading modules. Offline workflows and private or removed module sources may fail to restore."
+
 // playwrightBrowsersOptInImpactNotice is shown when playwright-browsers has
 // Opt-in candidates. Installations are re-downloadable but may be large, needed
 // offline, or in use by active automation; Foal does not stop processes.
@@ -255,7 +259,7 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPNPMOptIn, hasYarnOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasVisualStudioOptIn, hasApplicationCacheVSIX bool
+	var hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPNPMOptIn, hasYarnOptIn, hasGoModCacheOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasVisualStudioOptIn, hasApplicationCacheVSIX bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case DevCacheCategoryUV:
@@ -268,6 +272,8 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			hasPNPMOptIn = true
 		case DevCacheCategoryYarn:
 			hasYarnOptIn = true
+		case DevCacheCategoryGoModCache:
+			hasGoModCacheOptIn = true
 		case DevCacheCategoryPlaywright:
 			hasPlaywrightOptIn = true
 		case DevCacheCategoryPuppeteerBrowsers:
@@ -318,6 +324,12 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
 			Message: yarnCacheOptInImpactNotice,
+		})
+	}
+	if hasGoModCacheOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: goModCacheOptInImpactNotice,
 		})
 	}
 	if hasPlaywrightOptIn {

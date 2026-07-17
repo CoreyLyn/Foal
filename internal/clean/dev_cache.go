@@ -120,6 +120,26 @@ func resolveGoCachePaths(deps devCachePathDependencies) []string {
 	return nil
 }
 
+func resolveGoModCachePaths(deps devCachePathDependencies) []string {
+	// go module cache: non-blank GOMODCACHE -> %USERPROFILE%\go\pkg\mod
+	// (official default when GOPATH is the user home go tree). Blank/whitespace
+	// GOMODCACHE falls through. Never GOPATH/pkg siblings, GOROOT, tool binaries,
+	// or project vendor/. Foal owns path resolution and deletion; never runs
+	// go clean -modcache.
+	if path, ok := deps.lookupEnv("GOMODCACHE"); ok {
+		if trimmed := strings.TrimSpace(path); trimmed != "" {
+			return []string{trimmed}
+		}
+	}
+	if userProfile, ok := deps.lookupEnv("USERPROFILE"); ok && userProfile != "" {
+		return []string{deps.joinPath(userProfile, "go", "pkg", "mod")}
+	}
+	if home, err := deps.userHomeDir(); err == nil && home != "" {
+		return []string{deps.joinPath(home, "go", "pkg", "mod")}
+	}
+	return nil
+}
+
 func resolvePipCachePaths(deps devCachePathDependencies) []string {
 	// pip: PIP_CACHE_DIR -> %LOCALAPPDATA%\pip\Cache
 	if path, ok := deps.lookupEnv("PIP_CACHE_DIR"); ok && path != "" {

@@ -20,6 +20,7 @@ func packageBuildPermanentCategories() []string {
 		clean.DevCacheCategoryPNPM,
 		clean.DevCacheCategoryYarn,
 		clean.DevCacheCategoryGo,
+		clean.DevCacheCategoryGoModCache,
 		clean.DevCacheCategoryPip,
 		clean.DevCacheCategoryCargo,
 		clean.DevCacheCategoryNuGet,
@@ -56,6 +57,7 @@ func TestPackageBuildCachesPreserveRunningApplicationPolicies(t *testing.T) {
 		clean.DevCacheCategoryPNPM:                clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryYarn:                clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryGo:                  clean.RunningApplicationPolicyDistinctiveProcessIdle,
+		clean.DevCacheCategoryGoModCache:          clean.RunningApplicationPolicyDistinctiveProcessIdle,
 		clean.DevCacheCategoryPip:                 clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryCargo:               clean.RunningApplicationPolicyDistinctiveProcessIdle,
 		clean.DevCacheCategoryNuGet:               clean.RunningApplicationPolicyDistinctiveProcessIdle,
@@ -487,6 +489,43 @@ func TestNuGetGlobalPackagesImpactNoticePreserved(t *testing.T) {
 	}
 }
 
+func TestGoModCacheImpactNoticePreservedWithPermanentAction(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "go-modcache")
+	if err := os.Mkdir(cachePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachePath, "data.bin"), []byte("mod"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		OptIn: []string{clean.DevCacheCategoryGoModCache},
+		DevCachePathResolver: func(category string) []string {
+			if category == clean.DevCacheCategoryGoModCache {
+				return []string{cachePath}
+			}
+			return nil
+		},
+		DetectRunningApplications: idleSnapshotForPackageBuildCategory(clean.DevCacheCategoryGoModCache),
+		DiscoverOpportunities:     noOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+	})
+	if len(result.OptInCandidates) != 1 {
+		t.Fatalf("opt-in candidates = %#v", result.OptInCandidates)
+	}
+	model := clean.NewPreviewReadModel(result)
+	found := false
+	for _, notice := range model.Notices {
+		if notice.Kind == "opt_in_impact" && strings.Contains(notice.Message, "re-downloading modules") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notices = %#v, want go-modcache re-download impact notice", model.Notices)
+	}
+}
+
 func TestUVCacheImpactNoticePreservedWithPermanentAction(t *testing.T) {
 	root := t.TempDir()
 	cachePath := filepath.Join(root, "uv-cache")
@@ -529,6 +568,7 @@ func TestUVCacheImpactNoticePreservedWithPermanentAction(t *testing.T) {
 func idleSnapshotForPackageBuildCategory(category string) func(context.Context) []clean.RunningApplicationState {
 	apps := map[string][]string{
 		clean.DevCacheCategoryGo:                  {clean.ApplicationGo},
+		clean.DevCacheCategoryGoModCache:          {clean.ApplicationGo},
 		clean.DevCacheCategoryCargo:               {clean.ApplicationCargo},
 		clean.DevCacheCategoryNuGet:               {clean.ApplicationDotNet, clean.ApplicationNuGet},
 		clean.DevCacheCategoryNuGetGlobalPackages: {clean.ApplicationDotNet, clean.ApplicationNuGet},

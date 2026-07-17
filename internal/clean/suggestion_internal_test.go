@@ -120,7 +120,7 @@ func TestDiscoverReviewSuggestionsQueriesInstalledToolCaches(t *testing.T) {
 	}
 }
 
-func TestDiscoverReviewSuggestionsEmitsDistinctGoCacheSuggestions(t *testing.T) {
+func TestDiscoverReviewSuggestionsEmitsGoBuildCacheOnly(t *testing.T) {
 	executable := `C:\Program Files\Go\bin\go.exe`
 	buildCache := `C:\Users\corey\AppData\Local\go-build`
 	moduleCache := `C:\Users\corey\go\pkg\mod`
@@ -141,8 +141,6 @@ func TestDiscoverReviewSuggestionsEmitsDistinctGoCacheSuggestions(t *testing.T) 
 			switch strings.Join(args, " ") {
 			case "env GOCACHE":
 				return []byte(buildCache + "\r\n"), nil
-			case "env GOMODCACHE":
-				return []byte(moduleCache + "\r\n"), nil
 			default:
 				t.Fatalf("unexpected query args: %#v", args)
 				return nil, nil
@@ -153,12 +151,11 @@ func TestDiscoverReviewSuggestionsEmitsDistinctGoCacheSuggestions(t *testing.T) 
 		},
 	})
 
-	if !equalStrings(queries, []string{"env GOCACHE", "env GOMODCACHE"}) {
-		t.Fatalf("queries = %#v, want exact Go cache queries", queries)
+	if !equalStrings(queries, []string{"env GOCACHE"}) {
+		t.Fatalf("queries = %#v, want only Go build cache query (module cache is opt-in go-modcache)", queries)
 	}
 	want := []ReviewSuggestion{
 		{Tool: "go", Label: "Go build cache", Command: "go clean -cache", CachePath: buildCache},
-		{Tool: "go", Label: "Go module cache", Command: "go clean -modcache", CachePath: moduleCache},
 	}
 	if len(result) != len(want) {
 		t.Fatalf("suggestions = %#v, want %#v", result, want)
@@ -341,7 +338,10 @@ func TestDiscoverReviewSuggestionsParsesLocalizedDotnetNugetCacheOutput(t *testi
 	}
 }
 
-func TestDiscoverReviewSuggestionsKeepsExistingGoCacheAfterOtherProbeFailsOrIsAbsent(t *testing.T) {
+func TestDiscoverReviewSuggestionsOmitsGoModuleCacheProbe(t *testing.T) {
+	// go-modcache is an executable Opt-in category; Review must not double-recommend
+	// the same tree via go clean -modcache.
+	buildCache := `C:\Users\corey\AppData\Local\go-build`
 	moduleCache := `C:\Users\corey\go\pkg\mod`
 	result := discoverReviewSuggestions(context.Background(), []string{"go"}, reviewSuggestionDependencies{
 		lookPath: func(string) (string, error) {
@@ -350,8 +350,9 @@ func TestDiscoverReviewSuggestionsKeepsExistingGoCacheAfterOtherProbeFailsOrIsAb
 		runQuery: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			switch strings.Join(args, " ") {
 			case "env GOCACHE":
-				return nil, errors.New("GOCACHE query failed")
+				return []byte(buildCache), nil
 			case "env GOMODCACHE":
+				t.Fatalf("must not query GOMODCACHE after go-modcache promotion")
 				return []byte(moduleCache), nil
 			default:
 				t.Fatalf("unexpected query args: %#v", args)
@@ -359,15 +360,15 @@ func TestDiscoverReviewSuggestionsKeepsExistingGoCacheAfterOtherProbeFailsOrIsAb
 			}
 		},
 		pathExists: func(path string) bool {
-			return path == moduleCache
+			return path == buildCache || path == moduleCache
 		},
 	})
 
 	want := ReviewSuggestion{
 		Tool:      "go",
-		Label:     "Go module cache",
-		Command:   "go clean -modcache",
-		CachePath: moduleCache,
+		Label:     "Go build cache",
+		Command:   "go clean -cache",
+		CachePath: buildCache,
 	}
 	if len(result) != 1 || result[0] != want {
 		t.Fatalf("suggestions = %#v, want only %#v", result, want)
