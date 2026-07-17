@@ -145,7 +145,7 @@ func TestEagerPreviewMarkersAndLabelsPure(t *testing.T) {
 		Bytes:          2048,
 		PlannedAction:  clean.DeletionActionMoveToRecycleBin,
 	}
-	if got := eagerPreviewRowLabel(row); got != "bin · Temp · 2 item(s) · 2 KB" {
+	if got := eagerPreviewRowLabel(row); got != "Temp · 2 item(s) · 2 KB" {
 		t.Fatalf("label = %q", got)
 	}
 	if got := eagerCheckbox(true); got != "[x]" {
@@ -162,18 +162,7 @@ func TestEagerPreviewMarkersAndLabelsPure(t *testing.T) {
 	}
 }
 
-func TestEagerPlannedActionMarkersProjectCatalogOnly(t *testing.T) {
-	if got := eagerPlannedActionMarker(clean.DeletionActionDeletePermanently); got != "perm" {
-		t.Fatalf("permanent marker = %q", got)
-	}
-	if got := eagerPlannedActionMarker(clean.DeletionActionMoveToRecycleBin); got != "bin" {
-		t.Fatalf("recycle marker = %q", got)
-	}
-	// Unknown/missing project as bin (same default as confirmation grouping).
-	if got := eagerPlannedActionMarker(clean.DeletionAction("")); got != "bin" {
-		t.Fatalf("empty marker = %q", got)
-	}
-
+func TestEagerPreviewRowLabelOmitsPlannedActionPrefix(t *testing.T) {
 	perm := eagerCategoryRow{
 		Label:          "D3D",
 		State:          clean.CategoryPreviewComplete,
@@ -181,15 +170,18 @@ func TestEagerPlannedActionMarkersProjectCatalogOnly(t *testing.T) {
 		Bytes:          1024,
 		PlannedAction:  clean.DeletionActionDeletePermanently,
 	}
-	if got := eagerPreviewRowLabel(perm); got != "perm · D3D · 1 item(s) · 1 KB" {
-		t.Fatalf("perm complete = %q", got)
+	if got := eagerPreviewRowLabel(perm); got != "D3D · 1 item(s) · 1 KB" {
+		t.Fatalf("complete = %q", got)
+	}
+	if got := eagerPreviewRowLabel(perm); strings.Contains(got, "perm") || strings.Contains(got, "bin") {
+		t.Fatalf("row must not prefix planned-action marker: %q", got)
 	}
 	partial := perm
 	partial.State = clean.CategoryPreviewPartial
-	if got := eagerPreviewRowLabel(partial); got != "perm · D3D · 1 item(s) · 1 KB · partial" {
-		t.Fatalf("perm partial = %q", got)
+	if got := eagerPreviewRowLabel(partial); got != "D3D · 1 item(s) · 1 KB · partial" {
+		t.Fatalf("partial = %q", got)
 	}
-	// Non-measured states still project catalog action; no invented bytes.
+	// Non-measured states invent no byte token and no action prefix.
 	for _, state := range []clean.CategoryPreviewState{
 		clean.CategoryPreviewWaiting,
 		clean.CategoryPreviewScanning,
@@ -200,20 +192,20 @@ func TestEagerPlannedActionMarkersProjectCatalogOnly(t *testing.T) {
 	} {
 		row := eagerCategoryRow{Label: "Cache", State: state, PlannedAction: clean.DeletionActionDeletePermanently}
 		got := eagerPreviewRowLabel(row)
-		if !strings.HasPrefix(got, "perm · ") {
-			t.Fatalf("state %q missing perm marker: %q", state, got)
+		if strings.HasPrefix(got, "perm · ") || strings.HasPrefix(got, "bin · ") {
+			t.Fatalf("state %q has planned-action prefix: %q", state, got)
 		}
 		if strings.Contains(got, "KB") || strings.Contains(got, "MB") || strings.Contains(got, "GB") {
 			t.Fatalf("state %q invented byte token: %q", state, got)
 		}
 	}
-	binWaiting := eagerCategoryRow{
+	waiting := eagerCategoryRow{
 		Label:         "Temp",
 		State:         clean.CategoryPreviewWaiting,
 		PlannedAction: clean.DeletionActionMoveToRecycleBin,
 	}
-	if got := eagerPreviewRowLabel(binWaiting); got != "bin · Temp · waiting" {
-		t.Fatalf("bin waiting = %q", got)
+	if got := eagerPreviewRowLabel(waiting); got != "Temp · waiting" {
+		t.Fatalf("waiting = %q", got)
 	}
 }
 
@@ -248,17 +240,18 @@ func TestEagerPermanentSelectionNoticePresence(t *testing.T) {
 	}
 }
 
-func TestEagerFooterHintsDocumentPlannedActionLegend(t *testing.T) {
-	const legend = "perm=permanent · bin=Recycle Bin"
+func TestEagerFooterHintsDoNotAuthorizeCleanup(t *testing.T) {
 	base := eagerFooterHints(false, clean.EagerPreviewNoWorkNone, false)
-	if !strings.Contains(base, legend) {
-		t.Fatalf("in-scan hints missing legend: %q", base)
+	if !strings.Contains(base, "space toggle") {
+		t.Fatalf("in-scan hints missing browse chrome: %q", base)
+	}
+	if strings.Contains(base, "perm=") || strings.Contains(base, "bin=") {
+		t.Fatalf("hints must not document removed per-row markers: %q", base)
 	}
 	ready := eagerFooterHints(true, clean.EagerPreviewNoWorkNone, true)
-	if !strings.Contains(ready, legend) || !strings.Contains(ready, "enter confirm") {
-		t.Fatalf("ready hints missing legend or enter: %q", ready)
+	if !strings.Contains(ready, "enter confirm") {
+		t.Fatalf("ready hints missing enter: %q", ready)
 	}
-	// Legend documents markers; does not authorize cleanup.
 	for _, forbidden := range []string{"execute now", "authorized", "will delete"} {
 		if strings.Contains(strings.ToLower(base), forbidden) {
 			t.Fatalf("hints must not authorize cleanup (%q): %s", forbidden, base)
@@ -324,8 +317,8 @@ func TestEagerPreviewHeaderAndFooterPure(t *testing.T) {
 	if !strings.Contains(base, "space toggle") || strings.Contains(base, "enter confirm") {
 		t.Fatalf("in-scan footer = %q", base)
 	}
-	if !strings.Contains(base, "perm=permanent · bin=Recycle Bin") {
-		t.Fatalf("in-scan footer missing planned-action legend: %q", base)
+	if strings.Contains(base, "perm=") || strings.Contains(base, "bin=") {
+		t.Fatalf("in-scan footer must not carry removed marker legend: %q", base)
 	}
 	if got := eagerFooterHints(true, clean.EagerPreviewNoWorkNeedSelection, false); !strings.Contains(got, "Select at least one") {
 		t.Fatalf("need selection footer = %q", got)
@@ -443,11 +436,14 @@ func TestEagerPreviewByteColumnAlignment(t *testing.T) {
 
 	complete := eagerPreviewRowLabelAligned(rows[0], leftWidth, byteWidth)
 	partial := eagerPreviewRowLabelAligned(rows[1], leftWidth, byteWidth)
-	// Plain fragments remain findable (oracle), including planned-action markers.
-	if !strings.Contains(complete, "bin · Short") || !strings.Contains(complete, "2 KB") {
+	// Plain fragments remain findable (oracle); no planned-action prefix.
+	if !strings.Contains(complete, "Short") || !strings.Contains(complete, "2 KB") {
 		t.Fatalf("complete = %q", complete)
 	}
-	if !strings.Contains(partial, "perm ·") || !strings.Contains(partial, "3 GB") || !strings.Contains(partial, "partial") {
+	if strings.Contains(complete, "bin ·") || strings.Contains(partial, "perm ·") {
+		t.Fatalf("labels must not prefix planned-action markers: complete=%q partial=%q", complete, partial)
+	}
+	if !strings.Contains(partial, "3 GB") || !strings.Contains(partial, "partial") {
 		t.Fatalf("partial = %q", partial)
 	}
 	// Byte tokens start at the same column in the plain frame.
@@ -465,8 +461,8 @@ func TestEagerPreviewByteColumnAlignment(t *testing.T) {
 	if strings.Contains(empty, "0 KB") {
 		t.Fatalf("empty invented zero magnitude field: %q", empty)
 	}
-	if !strings.Contains(empty, "perm · Empty") {
-		t.Fatalf("empty missing planned-action marker: %q", empty)
+	if got := empty; got != "Empty · empty" {
+		t.Fatalf("empty label = %q", got)
 	}
 }
 
@@ -507,26 +503,28 @@ func TestStyleMagnitudeTokenNoColorAndHues(t *testing.T) {
 func TestStylizeFrameMagnitudeOnPreviewAndSelected(t *testing.T) {
 	plain := strings.Join([]string{
 		"Foal Clean",
-		"  > [x] ✓ perm · Big · 1 item(s) · 1 GB",
-		"    [ ] ✓ bin · Mid · 1 item(s) · 100 MB",
-		"    [ ] … bin · Wait · waiting",
+		"  > [x] ✓ Big · 1 item(s) · 1 GB",
+		"    [ ] ✓ Mid · 1 item(s) · 100 MB",
+		"    [ ] … Wait · waiting",
 		"Selected: 1 categories · 1 GB",
 		"Selection includes permanent deletion.",
-		"Hints: space toggle · perm=permanent · bin=Recycle Bin",
+		"Hints: space toggle",
 	}, "\n")
 	if strings.Contains(plain, "\x1b[") {
 		t.Fatal("plain frame must stay free of escapes")
 	}
 	styled := stylizeFrame(plain)
-	// Plain fragments remain the contract (markers, notice, legend, bytes).
+	// Plain fragments remain the contract (labels, notice, bytes).
 	for _, want := range []string{
-		"perm · Big", "bin · Mid", "1 GB", "100 MB", "waiting",
+		"Big · 1 item(s)", "Mid · 1 item(s)", "1 GB", "100 MB", "waiting",
 		"Selected: 1 categories", "includes permanent deletion",
-		"perm=permanent · bin=Recycle Bin",
 	} {
 		if !strings.Contains(styled, want) {
 			t.Fatalf("styled frame missing plain fragment %q:\n%q", want, styled)
 		}
+	}
+	if strings.Contains(styled, "perm ·") || strings.Contains(styled, "bin ·") {
+		t.Fatalf("styled frame must not invent per-row action prefixes:\n%q", styled)
 	}
 	// Magnitude applied to measured preview/selected bytes, not waiting.
 	if !strings.Contains(styled, "\x1b[") {
@@ -538,13 +536,13 @@ func TestStylizeFrameMagnitudeOnPreviewAndSelected(t *testing.T) {
 			t.Fatalf("waiting line should not gain a byte token: %q", line)
 		}
 	}
-	// Planned-action markers must not receive pure-red whole-row risk tint.
+	// Preview rows must not use pure-red whole-row risk tint for size or labels.
 	for _, line := range strings.Split(styled, "\n") {
-		if !strings.Contains(line, "perm ·") && !strings.Contains(line, "bin ·") {
+		if !strings.Contains(line, "item(s)") {
 			continue
 		}
 		if strings.Contains(line, "[31m") || strings.Contains(line, "[91m") {
-			t.Fatalf("preview risk marker row must not use pure red: %q", line)
+			t.Fatalf("preview magnitude/label row must not use pure red: %q", line)
 		}
 	}
 }

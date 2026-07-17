@@ -77,23 +77,19 @@ Presentation-only item summaries used by interactive Foal views to keep grouped 
 _Avoid_: lossy read model, path suppression bypass, browser profile listing by default, execution manifest
 
 **Clean TUI dual-channel presentation**:
-A presentation-only encoding on the category-first Clean TUI that separates reclaimable-byte magnitude from deletion-action risk so the same red danger cue is never used for both. Magnitude uses tiered emphasis on trusted byte tokens only; risk uses confirmation grouping, permanent-deletion warnings, compact planned-action markers, and a selection-footer permanent notice.
-_Avoid_: red means large, whole-row magnitude color, magnitude implies danger, color as sole risk cue, execution authorization by color
+A presentation-only encoding on the category-first Clean TUI that separates reclaimable-byte magnitude from deletion-action risk so the same red danger cue is never used for both. Magnitude uses tiered emphasis on trusted byte tokens only; risk uses confirmation grouping, permanent-deletion warnings, and a selection-footer permanent notice without per-row action prefixes on the preview list.
+_Avoid_: red means large, whole-row magnitude color, magnitude implies danger, color as sole risk cue, execution authorization by color, per-row perm/bin chrome
 
 **Clean TUI magnitude emphasis**:
 Presentation-only styling of a trusted measured or affected byte token by absolute size using 1024-based thresholds: neutral below 100 MiB, attention (amber/yellow) from 100 MiB inclusive to 1 GiB exclusive, and strong (orange, not pure red) at 1 GiB and above. Zero-byte, empty, skipped, and unfinished/pending values receive no magnitude color; bold may remain when color is unavailable (`NO_COLOR` or weak terminals).
 _Avoid_: red for gigabytes, relative free-disk thresholds, unfinished-byte estimates, whole-row tint from size, freed-disk claim
 
-**Clean TUI planned-action marker**:
-A compact path-free preview label projecting a category's catalog Planned deletion action as `perm` (permanent deletion) or `bin` (Recycle Bin) without choosing or overriding that action. Markers are not red; Hints may explain `perm=permanent · bin=Recycle Bin`.
-_Avoid_: P/R-only without legend as the sole form, whole-row permanent red, TUI-owned action, marker as authorization
-
 **Clean TUI permanent-selection notice**:
-A footer sentence shown only while the current Clean TUI cleanup selection includes at least one permanent-delete category, stating that the selection includes permanent deletion, distinct from magnitude totals and from confirmation's irreversible warning.
-_Avoid_: always-visible permanent chrome, red magnitude total, silent permanent selection
+A footer sentence shown only while the current Clean TUI cleanup selection includes at least one permanent-delete category, stating that the selection includes permanent deletion, distinct from magnitude totals and from confirmation's irreversible warning. Preview category rows do not prefix planned-action markers.
+_Avoid_: always-visible permanent chrome, red magnitude total, silent permanent selection, per-row perm/bin labels
 
 **TUI restricted token styling**:
-A narrow presentation exception that may apply ANSI/style sequences to individual path-free tokens (byte sizes, planned-action markers, confirmation warnings) after a plain-text frame is built, while keeping the plain frame the source of truth for tests and copy. It does not authorize whole-row rainbow styling or embed escapes inside asserted contract text.
+A narrow presentation exception that may apply ANSI/style sequences to individual path-free tokens (byte sizes, confirmation warnings) after a plain-text frame is built, while keeping the plain frame the source of truth for tests and copy. It does not authorize whole-row rainbow styling or embed escapes inside asserted contract text.
 _Avoid_: arbitrary mid-line decoration, styled strings as test oracles, style-owned domain state
 
 **Report category**:

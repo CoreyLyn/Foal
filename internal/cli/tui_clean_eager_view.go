@@ -145,19 +145,10 @@ func eagerNoWorkState(rows []eagerCategoryRow, selectedCount int, unavailable, c
 
 // --- Path-free marker / label projection ---
 
-// eagerPlannedActionMarker projects catalog Planned deletion action as a
-// compact non-authorizing preview marker. TUI never chooses or overrides the
-// action; unknown/missing map to bin (same default as confirmation grouping).
-func eagerPlannedActionMarker(action clean.DeletionAction) string {
-	if action == clean.DeletionActionDeletePermanently {
-		return "perm"
-	}
-	return "bin"
-}
-
 // eagerPermanentSelectionNotice returns the path-free footer sentence shown
 // only while the exact selection includes at least one permanent-delete
-// category. Empty when no permanent work is selected.
+// category. Empty when no permanent work is selected. Preview rows do not
+// show per-row perm/bin markers; risk stays on this notice + confirmation.
 func eagerPermanentSelectionNotice(includesPermanent bool) string {
 	if !includesPermanent {
 		return ""
@@ -196,37 +187,36 @@ func eagerPreviewRowLabel(row eagerCategoryRow) string {
 // complete/partial outcomes, column-aligns the trusted byte token using the
 // supplied left and byte field widths (runes/bytes of the plain token text).
 // Widths of 0 disable padding. Waiting/scanning/empty/skipped/incomplete/failed
-// never invent a byte token or magnitude field. Every row projects catalog
-// planned-action markers (perm/bin); markers are not red and do not authorize.
+// never invent a byte token or magnitude field. Planned deletion action is not
+// shown as a per-row prefix (risk channel: footer notice + confirmation).
 func eagerPreviewRowLabelAligned(row eagerCategoryRow, leftWidth, byteWidth int) string {
-	marker := eagerPlannedActionMarker(row.PlannedAction)
 	switch row.State {
 	case clean.CategoryPreviewComplete:
-		return formatEagerPreviewMeasuredLabel(marker, row.Label, row.CandidateCount, row.Bytes, leftWidth, byteWidth, "")
+		return formatEagerPreviewMeasuredLabel(row.Label, row.CandidateCount, row.Bytes, leftWidth, byteWidth, "")
 	case clean.CategoryPreviewPartial:
-		return formatEagerPreviewMeasuredLabel(marker, row.Label, row.CandidateCount, row.Bytes, leftWidth, byteWidth, " · partial")
+		return formatEagerPreviewMeasuredLabel(row.Label, row.CandidateCount, row.Bytes, leftWidth, byteWidth, " · partial")
 	case clean.CategoryPreviewEmpty:
-		return fmt.Sprintf("%s · %s · empty", marker, row.Label)
+		return fmt.Sprintf("%s · empty", row.Label)
 	case clean.CategoryPreviewSkipped:
-		return fmt.Sprintf("%s · %s · skipped", marker, row.Label)
+		return fmt.Sprintf("%s · skipped", row.Label)
 	case clean.CategoryPreviewIncomplete:
-		return fmt.Sprintf("%s · %s · incomplete", marker, row.Label)
+		return fmt.Sprintf("%s · incomplete", row.Label)
 	case clean.CategoryPreviewFailed:
-		return fmt.Sprintf("%s · %s · failed", marker, row.Label)
+		return fmt.Sprintf("%s · failed", row.Label)
 	case clean.CategoryPreviewWaiting:
-		return fmt.Sprintf("%s · %s · waiting", marker, row.Label)
+		return fmt.Sprintf("%s · waiting", row.Label)
 	case clean.CategoryPreviewScanning:
-		return fmt.Sprintf("%s · %s · scanning", marker, row.Label)
+		return fmt.Sprintf("%s · scanning", row.Label)
 	default:
-		return fmt.Sprintf("%s · %s", marker, row.Label)
+		return row.Label
 	}
 }
 
 // formatEagerPreviewMeasuredLabel builds
-// "perm|bin · Label · N item(s) · <bytes>[suffix]" with optional column
-// alignment of the left prefix and the byte token.
-func formatEagerPreviewMeasuredLabel(actionMarker, label string, candidates int, bytes int64, leftWidth, byteWidth int, suffix string) string {
-	left := fmt.Sprintf("%s · %s · %d item(s) · ", actionMarker, label, candidates)
+// "Label · N item(s) · <bytes>[suffix]" with optional column alignment of the
+// left prefix and the byte token.
+func formatEagerPreviewMeasuredLabel(label string, candidates int, bytes int64, leftWidth, byteWidth int, suffix string) string {
+	left := fmt.Sprintf("%s · %d item(s) · ", label, candidates)
 	if leftWidth > len(left) {
 		left = left + strings.Repeat(" ", leftWidth-len(left))
 	}
@@ -235,13 +225,12 @@ func formatEagerPreviewMeasuredLabel(actionMarker, label string, candidates int,
 
 // eagerPreviewByteColumnWidths returns the plain-text widths needed to
 // column-align trusted complete/partial byte tokens across a preview list.
-// Non-measured states do not contribute. Order is not changed. Left width
-// includes the planned-action marker prefix so alignment survives risk chrome.
+// Non-measured states do not contribute. Order is not changed.
 func eagerPreviewByteColumnWidths(rows []eagerCategoryRow) (leftWidth, byteWidth int) {
 	for _, row := range rows {
 		switch row.State {
 		case clean.CategoryPreviewComplete, clean.CategoryPreviewPartial:
-			left := fmt.Sprintf("%s · %s · %d item(s) · ", eagerPlannedActionMarker(row.PlannedAction), row.Label, row.CandidateCount)
+			left := fmt.Sprintf("%s · %d item(s) · ", row.Label, row.CandidateCount)
 			if len(left) > leftWidth {
 				leftWidth = len(left)
 			}
@@ -447,12 +436,9 @@ func eagerPreviewHeaderLine(canceled, finished, allTerminal bool, activeIndex, c
 }
 
 // eagerFooterHints returns path-free preview footer hints for the current
-// terminal/selection state. Documents compact planned-action markers; never
-// authorizes cleanup.
+// terminal/selection state. Never authorizes cleanup.
 func eagerFooterHints(allTerminal bool, noWork clean.EagerPreviewNoWorkState, confirmationEnabled bool) string {
-	// Legend is presentation-only; markers project catalog action only.
-	const legend = "perm=permanent · bin=Recycle Bin"
-	const base = "Hints: up/down browse · space toggle · a select all · x clear · b/Esc back · q quit · " + legend
+	const base = "Hints: up/down browse · space toggle · a select all · x clear · b/Esc back · q quit"
 	if !allTerminal {
 		return base
 	}
@@ -465,7 +451,7 @@ func eagerFooterHints(allTerminal bool, noWork clean.EagerPreviewNoWorkState, co
 		return "No selectable cleanup found. Some categories were skipped or could not be measured.\n" + base
 	default:
 		if confirmationEnabled {
-			return "Hints: enter confirm · up/down browse · space toggle · a select all · x clear · b/Esc back · q quit · " + legend
+			return "Hints: enter confirm · up/down browse · space toggle · a select all · x clear · b/Esc back · q quit"
 		}
 		return base
 	}

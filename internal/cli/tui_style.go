@@ -11,9 +11,8 @@ import (
 // Whole-line styles decorate complete lines. Restricted token styling is a
 // narrow mid-line exception for agreed token kinds (magnitude byte sizes,
 // confirmation risk warning) and is applied after plain composition; plain
-// frames remain the test oracle.
-// Planned-action markers (perm/bin) stay plain text — never pure-red whole-row
-// risk tint on the preview list; red remains reserved for irreversible risk.
+// frames remain the test oracle. Red remains reserved for irreversible risk,
+// not for reclaimable-byte magnitude.
 var (
 	tuiSelectedStyle = lipgloss.NewStyle().Reverse(true).Bold(true)
 	tuiBorderStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
