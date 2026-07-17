@@ -172,6 +172,8 @@ func TestCanonicalDeveloperCacheRegistryBindsResolvers(t *testing.T) {
 
 	want := map[string]string{
 		DevCacheCategoryNPM:                 `C:\Users\test\AppData\Local\npm-cache`,
+		DevCacheCategoryPNPM:                `C:\Users\test\AppData\Local\pnpm\store`,
+		DevCacheCategoryYarn:                `C:\Users\test\AppData\Local\Yarn\Cache`,
 		DevCacheCategoryGo:                  `C:\Users\test\AppData\Local\go-build`,
 		DevCacheCategoryPip:                 `C:\Users\test\AppData\Local\pip\Cache`,
 		DevCacheCategoryCargo:               `C:\Users\test\.cargo\registry\cache`,

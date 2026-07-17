@@ -818,7 +818,7 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 			}
 		case clean.CategoryEligibilityOptIn:
 			optIns++
-			// Permanent-action opt-ins (complete 18-category matrix) start selected.
+			// Permanent-action opt-ins (complete 20-category matrix) start selected.
 			if row.PlannedAction == clean.DeletionActionDeletePermanently {
 				if !row.Selected {
 					t.Fatalf("permanent opt-in %q must start selected", row.Identifier)
@@ -849,16 +849,16 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 			recycleBinOptIns++
 		}
 	}
-	// Complete rule matrix: 1 default + 18 permanent = 19; 5 Recycle Bin opt-ins unselected.
-	if defaults != 1 || permanentOptIns != 18 || recycleBinOptIns != 5 || wantSelected != 19 {
-		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/18/5/19",
+	// Complete rule matrix: 1 default + 20 permanent = 21; 5 Recycle Bin opt-ins unselected.
+	if defaults != 1 || permanentOptIns != 20 || recycleBinOptIns != 5 || wantSelected != 21 {
+		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/20/5/21",
 			defaults, permanentOptIns, recycleBinOptIns, wantSelected)
 	}
-	if model.selectedCount() != 19 {
-		t.Fatalf("selectedCount = %d, want 19 (default + all permanent when rows present)", model.selectedCount())
+	if model.selectedCount() != 21 {
+		t.Fatalf("selectedCount = %d, want 21 (default + all permanent when rows present)", model.selectedCount())
 	}
-	if len(model.rows) != 24 {
-		t.Fatalf("eager rows = %d, want 24 executable categories", len(model.rows))
+	if len(model.rows) != 26 {
+		t.Fatalf("eager rows = %d, want 26 executable categories", len(model.rows))
 	}
 	for _, id := range model.selectedCategoryIDs() {
 		if strings.Contains(id, `\`) || strings.Contains(id, "/") || strings.Contains(id, " ") {

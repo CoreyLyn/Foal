@@ -17,6 +17,8 @@ import (
 func packageBuildPermanentCategories() []string {
 	return []string{
 		clean.DevCacheCategoryNPM,
+		clean.DevCacheCategoryPNPM,
+		clean.DevCacheCategoryYarn,
 		clean.DevCacheCategoryGo,
 		clean.DevCacheCategoryPip,
 		clean.DevCacheCategoryCargo,
@@ -51,6 +53,8 @@ func TestPackageBuildCachesPreserveRunningApplicationPolicies(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	want := map[string]clean.RunningApplicationPolicy{
 		clean.DevCacheCategoryNPM:                 clean.RunningApplicationPolicySharedRuntime,
+		clean.DevCacheCategoryPNPM:                clean.RunningApplicationPolicySharedRuntime,
+		clean.DevCacheCategoryYarn:                clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryGo:                  clean.RunningApplicationPolicyDistinctiveProcessIdle,
 		clean.DevCacheCategoryPip:                 clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryCargo:               clean.RunningApplicationPolicyDistinctiveProcessIdle,

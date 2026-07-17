@@ -28,6 +28,8 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 | `vscode_cache` | Opt-in | Proven | Yes | `delete_permanently` | Only allowlisted regenerating roots under the standard Code directory; Code must be idle before and after inspection. Re-fetch impact remains visible. |
 | `cursor_cache` | Opt-in | Proven | Yes | `delete_permanently` | Only allowlisted regenerating roots under the standard Cursor directory; Cursor must be idle before and after inspection. Re-fetch impact remains visible. |
 | `npm-cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact npm content-addressed cache; existing resolver and shared-runtime caveats remain. |
+| `pnpm-cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact pnpm content-addressable store root from env/default only; shared-runtime (Node); re-download/hardlink impact disclosed. Never project `node_modules`. |
+| `yarn-cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact Yarn global cache root (`YARN_CACHE_FOLDER` or `%LOCALAPPDATA%\Yarn\Cache`); shared-runtime (Node); re-download/offline impact disclosed. Never project-local `.yarn/cache`. |
 | `go-cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact Go build cache; it can be rebuilt, with rebuild cost disclosed. |
 | `pip-cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact pip download/build cache; packages may need to be downloaded or rebuilt. |
 | `cargo-cache` | Opt-in | Proven | Yes | `delete_permanently` | Only existing allowlisted regenerating Cargo cache content; source/build re-fetch cost remains visible. |
@@ -46,7 +48,7 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 
 - Dry-run reports the true planned action without requiring authorization.
 - CLI execution requires `--allow-permanent` in addition to `--execute` for permanent actions. Without it, permanent candidates are skipped with `permanent_deletion_not_authorized`; authorized Recycle Bin work continues.
-- The TUI starts with the 19 eligible rows described above selected when safely measurable. Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
+- The TUI starts with the 21 eligible rows described above selected when safely measurable. Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
 - The one TUI confirmation authorizes both disclosed action groups. Fresh execution may change candidate counts and bytes, but it must not introduce an action type that was not disclosed.
 
 ## Execution, failure, and cancellation

@@ -2074,6 +2074,8 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 	}
 	expectedDevCaches := []string{
 		clean.DevCacheCategoryNPM,
+		clean.DevCacheCategoryPNPM,
+		clean.DevCacheCategoryYarn,
 		clean.DevCacheCategoryGo,
 		clean.DevCacheCategoryPip,
 		clean.DevCacheCategoryCargo,
@@ -2128,6 +2130,8 @@ func TestCleanOptInInvalidName(t *testing.T) {
 		"vscode_cache",
 		"cursor_cache",
 		"npm-cache",
+		"pnpm-cache",
+		"yarn-cache",
 		"go-cache",
 		"pip-cache",
 		"cargo-cache",

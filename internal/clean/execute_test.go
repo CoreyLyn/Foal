@@ -938,6 +938,8 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 	}
 	expectedDevCaches := []string{
 		clean.DevCacheCategoryNPM,
+		clean.DevCacheCategoryPNPM,
+		clean.DevCacheCategoryYarn,
 		clean.DevCacheCategoryGo,
 		clean.DevCacheCategoryPip,
 		clean.DevCacheCategoryCargo,
@@ -1024,9 +1026,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// Should have 10 opportunity categories + 13 dev caches + "dev-caches" + "all" = 25
-	if len(valid) != 25 {
-		t.Fatalf("expected 25 valid names, got %d: %v", len(valid), valid)
+	// Should have 10 opportunity categories + 15 dev caches + "dev-caches" + "all" = 27
+	if len(valid) != 27 {
+		t.Fatalf("expected 27 valid names, got %d: %v", len(valid), valid)
 	}
 }
 
@@ -2923,4 +2925,243 @@ func TestBunCacheOptInDryRunAndExecuteEndToEnd(t *testing.T) {
 			t.Fatalf("protected bun root leaked: candidates=%#v totals=%#v", result.OptInCandidates, result.Totals)
 		}
 	})
+}
+
+// TestPNPMAndYarnCacheOptInDryRunAndExecuteEndToEnd covers pnpm-cache and
+// yarn-cache selection, shared-runtime policy, suggestion suppression, impact
+// notices, permanent authorization, and execute reclaim via shared seams.
+func TestPNPMAndYarnCacheOptInDryRunAndExecuteEndToEnd(t *testing.T) {
+	for _, tc := range []struct {
+		category      string
+		tool          string
+		label         string
+		command       string
+		impactSnippet string
+		payload       string
+	}{
+		{
+			category:      clean.DevCacheCategoryPNPM,
+			tool:          "pnpm",
+			label:         "pnpm cache",
+			command:       "pnpm store prune",
+			impactSnippet: "pnpm store",
+			payload:       "pnpm",
+		},
+		{
+			category:      clean.DevCacheCategoryYarn,
+			tool:          "yarn",
+			label:         "yarn cache",
+			command:       "yarn cache clean",
+			impactSnippet: "yarn cache",
+			payload:       "yarn",
+		},
+	} {
+		t.Run(tc.category, func(t *testing.T) {
+			root := t.TempDir()
+			cachePath := filepath.Join(root, tc.category)
+			siblingSuggestion := filepath.Join(root, tc.category+"-sibling")
+			if err := os.Mkdir(cachePath, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(siblingSuggestion, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(cachePath, "data.bin"), []byte(tc.payload), 0600); err != nil {
+				t.Fatal(err)
+			}
+			wantBytes := int64(len(tc.payload))
+
+			fakeResolver := func(category string) []string {
+				if category == tc.category {
+					return []string{cachePath}
+				}
+				return nil
+			}
+			// Shared-runtime: node may be running; cleanup still proceeds.
+			nodeRunning := func(context.Context) []clean.RunningApplicationState {
+				return []clean.RunningApplicationState{{
+					Application: clean.ApplicationNode,
+					State:       clean.RunningApplicationStateRunning,
+				}}
+			}
+
+			t.Run("dry-run opt-in produces candidate and suppresses same-identity suggestion", func(t *testing.T) {
+				result := clean.DryRun(context.Background(), clean.Options{
+					OptIn:                     []string{tc.category},
+					DevCachePathResolver:      fakeResolver,
+					DetectRunningApplications: nodeRunning,
+					DiscoverOpportunities:     noOpportunities,
+					DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+						return []clean.ReviewSuggestion{
+							{Tool: tc.tool, Label: tc.label, Command: tc.command, CachePath: cachePath},
+							{Tool: tc.tool, Label: tc.label + " sibling", Command: tc.command, CachePath: siblingSuggestion},
+						}
+					},
+					Rules: []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+				})
+				if len(result.OptInCandidates) != 1 {
+					t.Fatalf("opt-in candidates = %#v, want 1", result.OptInCandidates)
+				}
+				candidate := result.OptInCandidates[0]
+				if candidate.Category != tc.category {
+					t.Fatalf("category = %q, want %q", candidate.Category, tc.category)
+				}
+				if candidate.Path != cachePath {
+					t.Fatalf("path = %q, want %q", candidate.Path, cachePath)
+				}
+				if candidate.Bytes != wantBytes {
+					t.Fatalf("bytes = %d, want %d", candidate.Bytes, wantBytes)
+				}
+				if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+					t.Fatalf("planned_action = %q, want delete_permanently", candidate.PlannedAction)
+				}
+				if result.Totals.OptInReclaimableBytes != wantBytes {
+					t.Fatalf("opt-in reclaimable = %d, want %d", result.Totals.OptInReclaimableBytes, wantBytes)
+				}
+				if result.Totals.CandidateBytes != 0 || result.Totals.OpportunityObservedBytes != 0 {
+					t.Fatalf("bytes leaked into Potential space or Observed opportunity: %#v", result.Totals)
+				}
+				if len(result.ReviewSuggestions) != 1 || result.ReviewSuggestions[0].CachePath != siblingSuggestion {
+					t.Fatalf("review suggestions = %#v, want only sibling path", result.ReviewSuggestions)
+				}
+				// Shared-runtime must not surface node as a running skip.
+				if len(result.Skipped) != 0 {
+					t.Fatalf("shared-runtime must not skip for node running: %#v", result.Skipped)
+				}
+				model := clean.NewPreviewReadModel(result)
+				foundImpact := false
+				for _, notice := range model.Notices {
+					if notice.Kind == "opt_in_impact" && strings.Contains(notice.Message, tc.impactSnippet) {
+						foundImpact = true
+					}
+				}
+				if !foundImpact {
+					t.Fatalf("preview notices = %#v, want %s impact notice", model.Notices, tc.category)
+				}
+			})
+
+			t.Run("dry-run without opt-in does not count as Potential space", func(t *testing.T) {
+				result := clean.DryRun(context.Background(), clean.Options{
+					OptIn:                nil,
+					DevCachePathResolver: fakeResolver,
+					DiscoverOpportunities: noOpportunities,
+					DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+						return []clean.ReviewSuggestion{
+							{Tool: tc.tool, Label: tc.label, Command: tc.command, CachePath: cachePath},
+						}
+					},
+					Rules: []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+				})
+				if len(result.OptInCandidates) != 0 || result.Totals.OptInReclaimableBytes != 0 {
+					t.Fatalf("non-opted-in %s became opt-in: %#v", tc.category, result)
+				}
+				if result.Totals.CandidateBytes != 0 {
+					t.Fatalf("non-opted-in bytes entered Potential space: %d", result.Totals.CandidateBytes)
+				}
+			})
+
+			t.Run("execute without allow-permanent skips with permanent_deletion_not_authorized", func(t *testing.T) {
+				recycle := &recordingRecycleBinAdapter{}
+				permanent := &recordingPermanentRemover{}
+				result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+					AllowPermanentDeletion:    false,
+					OptIn:                     []string{tc.category},
+					DevCachePathResolver:      fakeResolver,
+					DetectRunningApplications: nodeRunning,
+					RecycleBinAdapter:         recycle,
+					PermanentRemover:          permanent,
+					DiscoverOpportunities:     noOpportunities,
+					DiscoverReviewSuggestions: noReviewSuggestions,
+					Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+				})
+				if len(recycle.paths) != 0 || len(permanent.paths) != 0 {
+					t.Fatalf("unauthorized collaborators: recycle=%v permanent=%v", recycle.paths, permanent.paths)
+				}
+				if result.Totals.OptInDeletedCount != 0 {
+					t.Fatalf("OptInDeletedCount = %d, want 0", result.Totals.OptInDeletedCount)
+				}
+				if len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "permanent_deletion_not_authorized" {
+					t.Fatalf("skipped = %#v, want permanent_deletion_not_authorized", result.Skipped)
+				}
+				if _, err := os.Lstat(cachePath); err != nil {
+					t.Fatalf("unauthorized execute must leave cache intact: %v", err)
+				}
+			})
+
+			t.Run("execute authorized deletes permanently; node running does not block", func(t *testing.T) {
+				recycle := &recordingRecycleBinAdapter{}
+				permanent := &recordingPermanentRemover{}
+				result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+					AllowPermanentDeletion:    true,
+					OptIn:                     []string{tc.category},
+					DevCachePathResolver:      fakeResolver,
+					DetectRunningApplications: nodeRunning,
+					RecycleBinAdapter:         recycle,
+					PermanentRemover:          permanent,
+					DiscoverOpportunities:     noOpportunities,
+					DiscoverReviewSuggestions: noReviewSuggestions,
+					Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+				})
+				if len(recycle.paths) != 0 {
+					t.Fatalf("%s must not use Recycle Bin: %v", tc.category, recycle.paths)
+				}
+				if len(permanent.paths) != 1 || permanent.paths[0] != cachePath {
+					t.Fatalf("permanent paths = %v, want [%q]", permanent.paths, cachePath)
+				}
+				if result.Totals.OptInDeletedCount != 1 {
+					t.Fatalf("OptInDeletedCount = %d, want 1", result.Totals.OptInDeletedCount)
+				}
+				if result.Totals.PermanentlyDeletedBytes != wantBytes {
+					t.Fatalf("permanently_deleted_bytes = %d, want %d", result.Totals.PermanentlyDeletedBytes, wantBytes)
+				}
+				encoded, err := json.Marshal(result)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body := strings.ToLower(string(encoded))
+				if strings.Contains(body, "secure erase") || strings.Contains(body, "shred") {
+					t.Fatalf("must not claim secure erase: %s", encoded)
+				}
+			})
+
+			t.Run("default execute without opt-in does not resolve category", func(t *testing.T) {
+				resolverCalled := false
+				result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+					OptIn: nil,
+					DevCachePathResolver: func(category string) []string {
+						if category == tc.category {
+							resolverCalled = true
+						}
+						return fakeResolver(category)
+					},
+					DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
+						t.Fatal("execute without opt-in must not run review suggestion probes")
+						return nil
+					},
+					RecycleBinAdapter: &recordingRecycleBinAdapter{},
+					Rules:             []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+				})
+				if resolverCalled {
+					t.Fatal("resolver must not run for unselected category")
+				}
+				if len(result.OptInCandidates) != 0 || result.Totals.OptInDeletedCount != 0 {
+					t.Fatalf("unexpected opt-in activity without selection: %#v", result)
+				}
+			})
+
+			t.Run("protection suppresses root before totals", func(t *testing.T) {
+				result := clean.DryRun(context.Background(), clean.Options{
+					OptIn:                     []string{tc.category},
+					Validator:                 pathsafe.NewValidator([]string{cachePath}),
+					DevCachePathResolver:      fakeResolver,
+					DetectRunningApplications: nodeRunning,
+					DiscoverOpportunities:     noOpportunities,
+					DiscoverReviewSuggestions: noReviewSuggestions,
+				})
+				if len(result.OptInCandidates) != 0 || result.Totals.OptInReclaimableBytes != 0 {
+					t.Fatalf("protected root leaked: candidates=%#v totals=%#v", result.OptInCandidates, result.Totals)
+				}
+			})
+		})
+	}
 }
