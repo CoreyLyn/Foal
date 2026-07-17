@@ -1935,8 +1935,10 @@ func TestNewPreviewReadModelAddsOneProjectArtifactReviewClueWithoutChangingClean
 		t.Fatalf("review clues = %#v, want exactly one project artifact clue", model.ReviewClues)
 	}
 	clue := model.ReviewClues[0]
-	if clue.Name != "Rebuildable project artifacts" || clue.Path != "" || !strings.Contains(clue.Details, "foal analyze <path>") {
-		t.Fatalf("review clue = %#v, want empty-path project analysis guidance", clue)
+	if clue.Name != "Rebuildable project artifacts" || clue.Path != "" ||
+		!strings.Contains(clue.Details, "foal analyze <path>") ||
+		!strings.Contains(clue.Details, "foal purge <root>") {
+		t.Fatalf("review clue = %#v, want empty-path analyze/purge guidance", clue)
 	}
 	if model.PotentialSpaceBytes != 12 ||
 		model.CandidateCount != 1 ||
@@ -2098,7 +2100,7 @@ func TestNewPreviewReadModelCommunicatesAdministratorOnlyCacheExclusionsWithoutE
 	}
 }
 
-func TestPreviewReportRendersProjectArtifactClueAsAnalysisOnlyGuidance(t *testing.T) {
+func TestPreviewReportRendersProjectArtifactClueAsAnalyzeAndPurgeGuidance(t *testing.T) {
 	output := clean.RenderPreviewReport(clean.NewPreviewReadModel(clean.Result{
 		Status: "preview",
 		Mode:   "dry_run",
@@ -2114,6 +2116,8 @@ func TestPreviewReportRendersProjectArtifactClueAsAnalysisOnlyGuidance(t *testin
 		"Rebuildable project artifacts",
 		"status: Review clue",
 		"foal analyze <path>",
+		"foal purge <root>",
+		"Clean does not scan project trees",
 	} {
 		if !strings.Contains(reviewClues, want) {
 			t.Fatalf("Review clues missing %q:\n%s", want, reviewClues)
@@ -2279,7 +2283,7 @@ func TestPreviewReportCategoriesGroupCleanReviewPresentationWithoutSemanticDrift
 		}},
 		ReviewClues: []clean.PreviewReviewClue{{
 			Name:    "Rebuildable project artifacts",
-			Details: "Use foal analyze <path> to inspect rebuildable project directories explicitly.",
+			Details: "Clean does not scan project trees. Use foal analyze <path> to label top-level rebuildable directories, or foal purge <root> for explicit-root preview and permanent reclaim.",
 		}},
 		PotentialSpaceBytes:      12,
 		CandidateCount:           1,

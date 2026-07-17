@@ -390,7 +390,7 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 	}
 	reviewClues := []PreviewReviewClue{{
 		Name:    "Rebuildable project artifacts",
-		Details: "Use foal analyze <path> to inspect rebuildable project directories explicitly.",
+		Details: "Clean does not scan project trees. Use foal analyze <path> to label top-level rebuildable directories, or foal purge <root> for explicit-root preview and permanent reclaim.",
 	}}
 	selectedSet, _, _ := NormalizedOptInSet(selected)
 	categorySummaries := previewOptInCategories(result, selectedSet)

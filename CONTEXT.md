@@ -193,12 +193,12 @@ The bytes represented by opt-in candidates in a clean preview or execution, repo
 _Avoid_: Potential space, observed opportunity bytes, total hinted space
 
 **Project artifact clue**:
-A review clue for rebuildable project directories or build outputs that Foal may surface only through explicit analysis or a future Project artifact purge flow.
-_Avoid_: default project scan, default clean candidate
+A review clue for rebuildable project directories or build outputs. Foal may label matching **top children** of an analyzed path via `foal analyze` (`classification=project_artifact_clue`), and Clean dry-run may show a presentation-only pointer toward `foal analyze` / `foal purge`. Clues never become Clean candidates or contribute to Potential space.
+_Avoid_: default project scan, default clean candidate, ordinary Clean opt-in row
 
 **Project artifact purge flow**:
-An explicit, non-default flow—separate from ordinary Clean default and opt-in discovery—that reclaims rebuildable project directories only under a user-supplied root after selection and confirmation (ADR 0019).
-_Avoid_: default project scan, clean default candidate, automatic disk-wide purge, ordinary Clean opt-in row without a designed purge command
+The shipped independent command `foal purge`: recursive discovery of allowlisted rebuildable directories under one or more **user-supplied** roots only (v1 names: `node_modules`, `target`, `dist`, `build`, `.build`, `.next`, `__pycache__`; exact final component). Default is dry-run preview; mutation requires `--execute` plus per-run `--allow-permanent` for permanent deletion (ordinary filesystem removal, high-impact reinstall/rebuild notice). Not a Clean default or catalog opt-in row; no implicit multi-root config, installer purge, elevation, or process stopping (ADR 0019).
+_Avoid_: default project scan, clean default candidate, automatic disk-wide purge, ordinary Clean opt-in row, Mole purge_paths parity
 
 **Running application skip**:
 A skipped-by-default report state for cleanup opportunities tied to currently running applications or services, especially sync clients, browsers, IDEs, AI tools, containers, and virtualization tools.

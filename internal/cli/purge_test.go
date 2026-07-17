@@ -519,6 +519,8 @@ func TestHelpDocumentsPurgeExecuteAndAllowPermanent(t *testing.T) {
 		"--execute",
 		"--allow-permanent",
 		"reinstall/rebuild",
+		"node_modules",
+		"Clean does not discover project artifacts",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("help missing %q:\n%s", want, out)
