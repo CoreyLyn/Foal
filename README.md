@@ -19,12 +19,12 @@ Permanent deletion is an explicit planned action, not a Recycle Bin fallback.
 
 | Planned action | Categories |
 | --- | --- |
-| `delete_permanently` (18) | `d3d_shader_cache`, `nvidia_dx_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, package/build caches (`npm-cache`, `go-cache`, `pip-cache`, `cargo-cache`, `nuget-cache`, `nuget-global-packages`, `corepack-cache`, `uv-cache`, `bun-cache`), `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, `jetbrains-ide-caches` |
+| `delete_permanently` (20) | `d3d_shader_cache`, `nvidia_dx_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, package/build caches (`npm-cache`, `pnpm-cache`, `yarn-cache`, `go-cache`, `pip-cache`, `cargo-cache`, `nuget-cache`, `nuget-global-packages`, `corepack-cache`, `uv-cache`, `bun-cache`), `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, `jetbrains-ide-caches` |
 | `move_to_recycle_bin` (6) | `foal_owned_temp_sandboxes` (default), `user_temp`, `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache` |
 
 - Dry-run reports the true planned action without authorization.
 - CLI execute requires per-run `--allow-permanent` in addition to `--execute` (and the matching `--opt-in` when using CLI additive opt-in). Without it, permanent candidates are skipped with `permanent_deletion_not_authorized` while Recycle Bin work continues.
-- The Clean TUI starts the default plus all permanent-action categories selected when safely measured (19 rows), leaves the five Recycle Bin opt-ins unselected, discloses permanent deletion in one confirmation, and passes equivalent authorization to shared Clean.
+- The Clean TUI starts the default plus all permanent-action categories selected when safely measured (21 rows), leaves the five Recycle Bin opt-ins unselected, discloses permanent deletion in one confirmation, and passes equivalent authorization to shared Clean.
 - Permanent deletion is ordinary filesystem removal only: no secure erasure, shred, free-space wipe, or forensic non-recoverability claim.
 
 See [Clean deletion policy](docs/plan/clean-deletion-policy.md) and [ADR 0018](docs/adr/0018-permanent-deletion-is-an-explicit-planned-action.md).
@@ -125,7 +125,7 @@ Scripts, pipes, and `--json` callers are unaffected.
 
 Foal is inspired by tools like Mole, but it is not "Mole for Windows". The roadmap is ordered by Windows risk and Foal's safety model rather than feature parity.
 
-- `clean`: conservative preview-first rules; mixed-action execution after explicit `--execute`. Permanent categories are the full 18-category matrix above (CLI `--allow-permanent`, TUI confirmation). The six Recycle Bin categories stay Recycle Bin.
+- `clean`: conservative preview-first rules; mixed-action execution after explicit `--execute`. Permanent categories are the full 20-category matrix above (CLI `--allow-permanent`, TUI confirmation). The six Recycle Bin categories stay Recycle Bin.
 - `uninstall`: preview-only application review. Foal does not execute uninstallers, stop processes, or delete leftovers.
 - `analyze`: read-only, JSON-first directory insight.
 - `status`: read-only system snapshot.

@@ -62,6 +62,53 @@ func resolveNPMCachePaths(deps devCachePathDependencies) []string {
 	return nil
 }
 
+func resolvePNPMCachePaths(deps devCachePathDependencies) []string {
+	// pnpm store (content-addressable package store, not project node_modules):
+	// non-empty pnpm_config_store_dir (v11+) or npm_config_store_dir ->
+	// $PNPM_HOME/store -> $XDG_DATA_HOME/pnpm/store -> %LOCALAPPDATA%\pnpm\store.
+	// Blank/whitespace env overrides fall through. Execute never runs pnpm
+	// store path / store prune, never reads pnpm-workspace.yaml or project
+	// .npmrc store-dir, and never walks project trees.
+	for _, key := range []string{"pnpm_config_store_dir", "npm_config_store_dir"} {
+		if path, ok := deps.lookupEnv(key); ok {
+			if trimmed := strings.TrimSpace(path); trimmed != "" {
+				return []string{trimmed}
+			}
+		}
+	}
+	if pnpmHome, ok := deps.lookupEnv("PNPM_HOME"); ok {
+		if trimmed := strings.TrimSpace(pnpmHome); trimmed != "" {
+			return []string{deps.joinPath(trimmed, "store")}
+		}
+	}
+	if xdg, ok := deps.lookupEnv("XDG_DATA_HOME"); ok {
+		if trimmed := strings.TrimSpace(xdg); trimmed != "" {
+			return []string{deps.joinPath(trimmed, "pnpm", "store")}
+		}
+	}
+	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
+		return []string{deps.joinPath(localAppData, "pnpm", "store")}
+	}
+	return nil
+}
+
+func resolveYarnCachePaths(deps devCachePathDependencies) []string {
+	// yarn: non-empty YARN_CACHE_FOLDER -> %LOCALAPPDATA%\Yarn\Cache.
+	// Blank/whitespace YARN_CACHE_FOLDER falls through to the classic Windows
+	// global cache root. Project-local Yarn Berry .yarn/cache is never a
+	// default root. Execute never runs yarn cache dir / yarn cache clean,
+	// never reads .yarnrc(/.yml), and never walks project trees.
+	if path, ok := deps.lookupEnv("YARN_CACHE_FOLDER"); ok {
+		if trimmed := strings.TrimSpace(path); trimmed != "" {
+			return []string{trimmed}
+		}
+	}
+	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
+		return []string{deps.joinPath(localAppData, "Yarn", "Cache")}
+	}
+	return nil
+}
+
 func resolveGoCachePaths(deps devCachePathDependencies) []string {
 	// go: GOCACHE -> %LOCALAPPDATA%\go-build
 	if path, ok := deps.lookupEnv("GOCACHE"); ok && path != "" {

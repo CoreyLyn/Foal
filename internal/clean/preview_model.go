@@ -133,6 +133,16 @@ const nugetGlobalPackagesOptInImpactNotice = "Opt-in NuGet global packages clean
 // and hardlinked project content can reduce actual reclaimable disk space.
 const bunCacheOptInImpactNotice = "Opt-in Bun cache cleanup may require re-downloading dependencies. Hardlinked project content can affect actual disk space reclaimed."
 
+// pnpmCacheOptInImpactNotice is shown when pnpm-cache is an Opt-in candidate.
+// Clearing pnpm's content-addressable store requires re-downloading packages;
+// hardlinked project content and offline workflows may be affected.
+const pnpmCacheOptInImpactNotice = "Opt-in pnpm store cleanup may require re-downloading packages. Hardlinked project content and offline installs can be affected."
+
+// yarnCacheOptInImpactNotice is shown when yarn-cache is an Opt-in candidate.
+// Clearing Yarn's global package cache may require future dependency downloads
+// and can slow the next install offline.
+const yarnCacheOptInImpactNotice = "Opt-in yarn cache cleanup may require re-downloading dependencies. Offline installs and private-registry packages may be affected."
+
 // playwrightBrowsersOptInImpactNotice is shown when playwright-browsers has
 // Opt-in candidates. Installations are re-downloadable but may be large, needed
 // offline, or in use by active automation; Foal does not stop processes.
@@ -241,7 +251,7 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasApplicationCacheVSIX bool
+	var hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPNPMOptIn, hasYarnOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasApplicationCacheVSIX bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case DevCacheCategoryUV:
@@ -250,6 +260,10 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			hasNuGetGlobalPackagesOptIn = true
 		case DevCacheCategoryBun:
 			hasBunOptIn = true
+		case DevCacheCategoryPNPM:
+			hasPNPMOptIn = true
+		case DevCacheCategoryYarn:
+			hasYarnOptIn = true
 		case DevCacheCategoryPlaywright:
 			hasPlaywrightOptIn = true
 		case DevCacheCategoryPuppeteerBrowsers:
@@ -286,6 +300,18 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
 			Message: bunCacheOptInImpactNotice,
+		})
+	}
+	if hasPNPMOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: pnpmCacheOptInImpactNotice,
+		})
+	}
+	if hasYarnOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: yarnCacheOptInImpactNotice,
 		})
 	}
 	if hasPlaywrightOptIn {

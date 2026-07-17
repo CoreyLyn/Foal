@@ -499,6 +499,148 @@ func TestDevCachePathResolution(t *testing.T) {
 			t.Fatalf("expected 0 paths when no resolution, got %d", len(paths))
 		}
 	})
+
+	t.Run("env-wins: pnpm prefers pnpm_config_store_dir then npm_config_store_dir", func(t *testing.T) {
+		deps := devCachePathDependencies{
+			lookupEnv: func(key string) (string, bool) {
+				switch key {
+				case "pnpm_config_store_dir":
+					return `C:\custom\pnpm-store`, true
+				case "npm_config_store_dir":
+					return `C:\legacy\pnpm-store`, true
+				case "PNPM_HOME":
+					return `C:\Users\test\AppData\Local\pnpm`, true
+				case "LOCALAPPDATA":
+					return `C:\Users\test\AppData\Local`, true
+				default:
+					return "", false
+				}
+			},
+			joinPath: func(parts ...string) string {
+				return strings.Join(parts, `\`)
+			},
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryPNPM, deps)
+		if len(paths) != 1 || paths[0] != `C:\custom\pnpm-store` {
+			t.Fatalf("pnpm_config_store_dir paths = %#v", paths)
+		}
+
+		deps.lookupEnv = func(key string) (string, bool) {
+			switch key {
+			case "pnpm_config_store_dir":
+				return "   ", true
+			case "npm_config_store_dir":
+				return `C:\legacy\pnpm-store`, true
+			case "LOCALAPPDATA":
+				return `C:\Users\test\AppData\Local`, true
+			default:
+				return "", false
+			}
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryPNPM, deps)
+		if len(paths) != 1 || paths[0] != `C:\legacy\pnpm-store` {
+			t.Fatalf("npm_config_store_dir after blank pnpm_config = %#v", paths)
+		}
+
+		deps.lookupEnv = func(key string) (string, bool) {
+			switch key {
+			case "PNPM_HOME":
+				return `C:\Users\test\AppData\Local\pnpm`, true
+			case "LOCALAPPDATA":
+				return `C:\Users\test\AppData\Local`, true
+			default:
+				return "", false
+			}
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryPNPM, deps)
+		if len(paths) != 1 || paths[0] != `C:\Users\test\AppData\Local\pnpm\store` {
+			t.Fatalf("PNPM_HOME default paths = %#v", paths)
+		}
+
+		deps.lookupEnv = func(key string) (string, bool) {
+			switch key {
+			case "XDG_DATA_HOME":
+				return `C:\Users\test\.local\share`, true
+			case "LOCALAPPDATA":
+				return `C:\Users\test\AppData\Local`, true
+			default:
+				return "", false
+			}
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryPNPM, deps)
+		if len(paths) != 1 || paths[0] != `C:\Users\test\.local\share\pnpm\store` {
+			t.Fatalf("XDG_DATA_HOME default paths = %#v", paths)
+		}
+
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "LOCALAPPDATA" {
+				return `C:\Users\test\AppData\Local`, true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryPNPM, deps)
+		if len(paths) != 1 || paths[0] != `C:\Users\test\AppData\Local\pnpm\store` {
+			t.Fatalf("LOCALAPPDATA default paths = %#v", paths)
+		}
+
+		deps.lookupEnv = func(string) (string, bool) { return "", false }
+		paths = resolveDevCachePaths(DevCacheCategoryPNPM, deps)
+		if len(paths) != 0 {
+			t.Fatalf("expected silent absence, got %#v", paths)
+		}
+	})
+
+	t.Run("env-wins: yarn uses non-empty YARN_CACHE_FOLDER only when set", func(t *testing.T) {
+		deps := devCachePathDependencies{
+			lookupEnv: func(key string) (string, bool) {
+				if key == "YARN_CACHE_FOLDER" {
+					return `C:\custom\yarn-cache`, true
+				}
+				if key == "LOCALAPPDATA" {
+					return `C:\Users\test\AppData\Local`, true
+				}
+				return "", false
+			},
+			joinPath: func(parts ...string) string {
+				return strings.Join(parts, `\`)
+			},
+		}
+		paths := resolveDevCachePaths(DevCacheCategoryYarn, deps)
+		if len(paths) != 1 || paths[0] != `C:\custom\yarn-cache` {
+			t.Fatalf("YARN_CACHE_FOLDER paths = %#v", paths)
+		}
+
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "YARN_CACHE_FOLDER" {
+				return "   ", true
+			}
+			if key == "LOCALAPPDATA" {
+				return `C:\Users\test\AppData\Local`, true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryYarn, deps)
+		if len(paths) != 1 || paths[0] != `C:\Users\test\AppData\Local\Yarn\Cache` {
+			t.Fatalf("blank YARN_CACHE_FOLDER default paths = %#v", paths)
+		}
+
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "LOCALAPPDATA" {
+				return `C:\Users\test\AppData\Local`, true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryYarn, deps)
+		if len(paths) != 1 || paths[0] != `C:\Users\test\AppData\Local\Yarn\Cache` {
+			t.Fatalf("LOCALAPPDATA default paths = %#v", paths)
+		}
+
+		deps.lookupEnv = func(string) (string, bool) { return "", false }
+		paths = resolveDevCachePaths(DevCacheCategoryYarn, deps)
+		if len(paths) != 0 {
+			t.Fatalf("expected silent absence, got %#v", paths)
+		}
+	})
 }
 
 func TestResolveElectronCachePaths(t *testing.T) {

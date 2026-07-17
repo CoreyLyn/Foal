@@ -16,6 +16,8 @@ const plannedRecycleBinAction = string(DeletionActionMoveToRecycleBin)
 // Dev cache categories - these are Review suggestions that become opt-in candidates
 const (
 	DevCacheCategoryNPM                 = "npm-cache"
+	DevCacheCategoryPNPM                = "pnpm-cache"
+	DevCacheCategoryYarn                = "yarn-cache"
 	DevCacheCategoryGo                  = "go-cache"
 	DevCacheCategoryPip                 = "pip-cache"
 	DevCacheCategoryCargo               = "cargo-cache"

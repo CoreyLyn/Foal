@@ -491,7 +491,7 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 18 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
+	// 20 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
 	// Over-broad whole-root system caches stay Recycle Bin until exact allowlists exist.
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
@@ -533,6 +533,20 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		resolveNPMCachePaths,
 		[]string{"npm"},
 	),
+	// pnpm content-addressable store: shared-runtime (Node hosts pnpm). Whole
+	// store root only; never project node_modules or virtual stores.
+	withPreviewSafetyNote(developerCacheEntry(
+		categoryDefinition(DevCacheCategoryPNPM, "pnpm store", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
+		resolvePNPMCachePaths,
+		[]string{"pnpm"},
+	), staticPreviewSafetyNote(pnpmCacheOptInImpactNotice)),
+	// yarn global cache: shared-runtime (Node hosts yarn). Classic Windows
+	// Yarn\Cache root or YARN_CACHE_FOLDER; never project .yarn/cache.
+	withPreviewSafetyNote(developerCacheEntry(
+		categoryDefinition(DevCacheCategoryYarn, "yarn cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
+		resolveYarnCachePaths,
+		[]string{"yarn"},
+	), staticPreviewSafetyNote(yarnCacheOptInImpactNotice)),
 	developerCacheEntry(
 		categoryDefinition(DevCacheCategoryGo, "Go build cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
 		resolveGoCachePaths,
