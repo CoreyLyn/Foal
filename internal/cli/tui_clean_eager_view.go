@@ -167,12 +167,22 @@ func eagerPreviewRowMarker(state clean.CategoryPreviewState, spinnerFrame int) s
 }
 
 // eagerPreviewRowLabel formats one preview category row without paths.
+// Byte fields are unpadded; use eagerPreviewRowLabelAligned for list alignment.
 func eagerPreviewRowLabel(row eagerCategoryRow) string {
+	return eagerPreviewRowLabelAligned(row, 0, 0)
+}
+
+// eagerPreviewRowLabelAligned formats one preview category row and, for
+// complete/partial outcomes, column-aligns the trusted byte token using the
+// supplied left and byte field widths (runes/bytes of the plain token text).
+// Widths of 0 disable padding. Waiting/scanning/empty/skipped/incomplete/failed
+// never invent a byte token or magnitude field.
+func eagerPreviewRowLabelAligned(row eagerCategoryRow, leftWidth, byteWidth int) string {
 	switch row.State {
 	case clean.CategoryPreviewComplete:
-		return fmt.Sprintf("%s · %d item(s) · %s", row.Label, row.CandidateCount, cleanFormatBytes(row.Bytes))
+		return formatEagerPreviewMeasuredLabel(row.Label, row.CandidateCount, row.Bytes, leftWidth, byteWidth, "")
 	case clean.CategoryPreviewPartial:
-		return fmt.Sprintf("%s · %d item(s) · %s · partial", row.Label, row.CandidateCount, cleanFormatBytes(row.Bytes))
+		return formatEagerPreviewMeasuredLabel(row.Label, row.CandidateCount, row.Bytes, leftWidth, byteWidth, " · partial")
 	case clean.CategoryPreviewEmpty:
 		return fmt.Sprintf("%s · empty", row.Label)
 	case clean.CategoryPreviewSkipped:
@@ -188,6 +198,46 @@ func eagerPreviewRowLabel(row eagerCategoryRow) string {
 	default:
 		return row.Label
 	}
+}
+
+// formatEagerPreviewMeasuredLabel builds "Label · N item(s) · <bytes>[suffix]"
+// with optional column alignment of the left prefix and the byte token.
+func formatEagerPreviewMeasuredLabel(label string, candidates int, bytes int64, leftWidth, byteWidth int, suffix string) string {
+	left := fmt.Sprintf("%s · %d item(s) · ", label, candidates)
+	if leftWidth > len(left) {
+		left = left + strings.Repeat(" ", leftWidth-len(left))
+	}
+	return left + cleanFormatBytesPadded(bytes, byteWidth) + suffix
+}
+
+// eagerPreviewByteColumnWidths returns the plain-text widths needed to
+// column-align trusted complete/partial byte tokens across a preview list.
+// Non-measured states do not contribute. Order is not changed.
+func eagerPreviewByteColumnWidths(rows []eagerCategoryRow) (leftWidth, byteWidth int) {
+	for _, row := range rows {
+		switch row.State {
+		case clean.CategoryPreviewComplete, clean.CategoryPreviewPartial:
+			left := fmt.Sprintf("%s · %d item(s) · ", row.Label, row.CandidateCount)
+			if len(left) > leftWidth {
+				leftWidth = len(left)
+			}
+			formatted := cleanFormatBytes(row.Bytes)
+			if len(formatted) > byteWidth {
+				byteWidth = len(formatted)
+			}
+		}
+	}
+	return leftWidth, byteWidth
+}
+
+// cleanFormatBytesPadded right-aligns cleanFormatBytes within width. Width <= 0
+// or already wider tokens return the unpadded form.
+func cleanFormatBytesPadded(bytes int64, width int) string {
+	formatted := cleanFormatBytes(bytes)
+	if width <= len(formatted) {
+		return formatted
+	}
+	return strings.Repeat(" ", width-len(formatted)) + formatted
 }
 
 // eagerExecutionRowMarker maps an execution state to a single-glyph marker.
@@ -440,4 +490,94 @@ func cleanFormatBytes(bytes int64) string {
 
 	formatted := strings.TrimSuffix(fmt.Sprintf("%.1f", value), ".0")
 	return formatted + " " + unit
+}
+
+// --- Magnitude emphasis (presentation only) ---
+
+// cleanMagnitudeTier classifies a trusted measured/affected byte token for
+// Clean TUI magnitude emphasis. Unfinished or missing sizes must not invent a
+// tier; callers pass only trusted complete/partial measured values (or the
+// measured portion of a selected total).
+type cleanMagnitudeTier int
+
+const (
+	// cleanMagnitudeNone: zero, empty, skipped, or unfinished — no magnitude hue.
+	cleanMagnitudeNone cleanMagnitudeTier = iota
+	// cleanMagnitudeNeutral: trusted positive bytes strictly below 100 MiB.
+	cleanMagnitudeNeutral
+	// cleanMagnitudeAttention: >= 100 MiB and < 1 GiB (amber/yellow).
+	cleanMagnitudeAttention
+	// cleanMagnitudeStrong: >= 1 GiB (orange, never pure red for size).
+	cleanMagnitudeStrong
+)
+
+const (
+	// Absolute 1024-based thresholds aligned with cleanFormatBytes units.
+	cleanMagnitudeAttentionBytes int64 = 100 * 1024 * 1024
+	cleanMagnitudeStrongBytes    int64 = 1024 * 1024 * 1024
+)
+
+// cleanMagnitudeTierFromBytes classifies a trusted byte count.
+// bytes <= 0 yields None (no magnitude color), not Neutral.
+func cleanMagnitudeTierFromBytes(bytes int64) cleanMagnitudeTier {
+	if bytes <= 0 {
+		return cleanMagnitudeNone
+	}
+	if bytes >= cleanMagnitudeStrongBytes {
+		return cleanMagnitudeStrong
+	}
+	if bytes >= cleanMagnitudeAttentionBytes {
+		return cleanMagnitudeAttention
+	}
+	return cleanMagnitudeNeutral
+}
+
+// cleanMagnitudeTierFromFormattedToken classifies a cleanFormatBytes plain
+// token after composition (restricted token styling path). Used when only the
+// rendered fragment is available; thresholds follow the displayed unit scale.
+func cleanMagnitudeTierFromFormattedToken(token string) cleanMagnitudeTier {
+	token = strings.TrimSpace(token)
+	if token == "" || token == "0 KB" {
+		return cleanMagnitudeNone
+	}
+	approx, ok := parseCleanFormatBytesApprox(token)
+	if !ok {
+		return cleanMagnitudeNone
+	}
+	return cleanMagnitudeTierFromBytes(approx)
+}
+
+// parseCleanFormatBytesApprox maps a cleanFormatBytes token back to an
+// approximate int64 for tier classification only (not for accounting).
+func parseCleanFormatBytesApprox(token string) (int64, bool) {
+	token = strings.TrimSpace(token)
+	if token == "0 KB" {
+		return 0, true
+	}
+	if token == "<1 KB" {
+		return 1, true
+	}
+	parts := strings.Split(token, " ")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	var value float64
+	if _, err := fmt.Sscanf(parts[0], "%f", &value); err != nil {
+		return 0, false
+	}
+	if value < 0 {
+		return 0, false
+	}
+	var mult int64
+	switch parts[1] {
+	case "KB":
+		mult = 1024
+	case "MB":
+		mult = 1024 * 1024
+	case "GB":
+		mult = 1024 * 1024 * 1024
+	default:
+		return 0, false
+	}
+	return int64(value * float64(mult)), true
 }
