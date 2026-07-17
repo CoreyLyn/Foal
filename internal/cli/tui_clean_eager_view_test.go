@@ -679,10 +679,6 @@ func TestStylizeFrameConfirmationMagnitudeAndRisk(t *testing.T) {
 		"Selected: 2 categories · 1 GB",
 		confirmationPermanentIrreversibleWarning,
 		"Recycle Bin items are moved, not permanently erased.",
-		// Non-confirmation surfaces must not pick up confirmation magnitude.
-		"  ✓ Cache · cleaned · 1 GB",
-		"Recycle Bin moved: 1 GB",
-		"Affected (processed): 1 GB",
 	}, "\n")
 	if strings.Contains(plain, "\x1b[") {
 		t.Fatal("plain frame must stay free of escapes")
@@ -702,7 +698,7 @@ func TestStylizeFrameConfirmationMagnitudeAndRisk(t *testing.T) {
 			t.Fatalf("styled confirmation missing plain fragment %q:\n%q", want, styled)
 		}
 	}
-	// Magnitude applied on confirmation measured lines + Selected (not execution/result labels alone as the contract).
+	// Magnitude applied on confirmation measured lines + Selected.
 	if !strings.Contains(styled, "\x1b[") {
 		t.Fatal("styled confirmation should include magnitude or risk escapes when color enabled")
 	}
@@ -728,18 +724,6 @@ func TestStylizeFrameConfirmationMagnitudeAndRisk(t *testing.T) {
 	}
 	if warningLine == confirmationPermanentIrreversibleWarning {
 		t.Fatal("risk warning should receive emphasis when color enabled")
-	}
-
-	// Execution/result lines stay outside confirmation magnitude eligibility.
-	for _, line := range strings.Split(styled, "\n") {
-		plainLine := stripANSIForTest(line)
-		if plainLine == "  ✓ Cache · cleaned · 1 GB" ||
-			plainLine == "Recycle Bin moved: 1 GB" ||
-			plainLine == "Affected (processed): 1 GB" {
-			if line != plainLine && (strings.Contains(line, "208") || strings.Contains(line, "214")) {
-				t.Fatalf("non-confirmation line received magnitude hue: %q", line)
-			}
-		}
 	}
 }
 
@@ -808,6 +792,162 @@ func stripANSIForTest(s string) string {
 		b.WriteByte(s[i])
 	}
 	return b.String()
+}
+
+func TestStylizeFrameMagnitudeOnResultSuccessBytes(t *testing.T) {
+	// Plain result frame: successful affected-style tokens only on cleaned/partial
+	// rows and result totals. Non-success outcomes invent no success-byte field.
+	plain := strings.Join([]string{
+		"Foal Clean",
+		"Cleanup result",
+		"  ✓ Big cache · cleaned · 1 GB",
+		"  ! Mid cache · partial · 100 MB",
+		"  ⊘ Skip me · skipped",
+		"  – Empty · empty",
+		"  ! Fail · failed",
+		"  ! Stop · canceled",
+		"",
+		"Processed: 5/6",
+		"Recycle Bin moved: 100 MB",
+		"Permanently deleted: 1 GB",
+		"Affected (processed): 1 GB",
+		"",
+		"Enter/Esc/b: menu · q: quit",
+	}, "\n")
+	if strings.Contains(plain, "\x1b[") {
+		t.Fatal("plain frame must stay free of escapes")
+	}
+	for _, banned := range []string{"freed", "reclaimed disk", "space reclaimed", "space freed"} {
+		if strings.Contains(strings.ToLower(plain), banned) {
+			t.Fatalf("must not label aggregate as freed/reclaimed (%q):\n%s", banned, plain)
+		}
+	}
+	// Plain fragments are the contract oracle.
+	for _, want := range []string{
+		"cleaned · 1 GB",
+		"partial · 100 MB",
+		"Recycle Bin moved: 100 MB",
+		"Permanently deleted: 1 GB",
+		"Affected (processed): 1 GB",
+		"skipped",
+		"empty",
+		"failed",
+		"canceled",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("plain result missing fragment %q:\n%s", want, plain)
+		}
+	}
+
+	styled := stylizeFrame(plain)
+	for _, want := range []string{"1 GB", "100 MB", "cleaned", "partial", "Affected (processed):", "skipped"} {
+		if !strings.Contains(styled, want) {
+			t.Fatalf("styled result missing plain fragment %q:\n%q", want, styled)
+		}
+	}
+	// Magnitude applied to successful affected-style tokens when color enabled.
+	if !strings.Contains(styled, "\x1b[") {
+		t.Fatal("styled result should include magnitude escapes when color enabled")
+	}
+	// Strong tier must not use pure red as size cue.
+	if strings.Contains(styled, "[31m") || strings.Contains(styled, "[91m") {
+		t.Fatalf("result magnitude must not use pure red:\n%q", styled)
+	}
+	// No full success-green / fail-red result palette in this slice.
+	for _, line := range strings.Split(styled, "\n") {
+		if strings.Contains(line, "cleaned") || strings.Contains(line, "failed") {
+			if strings.Contains(line, "[32m") || strings.Contains(line, "[92m") ||
+				strings.Contains(line, "[31m") || strings.Contains(line, "[91m") {
+				t.Fatalf("result must not use success-green/fail-red palette: %q", line)
+			}
+		}
+	}
+	// Non-success outcome lines invent no byte token for missing success bytes.
+	for _, line := range strings.Split(styled, "\n") {
+		if strings.Contains(line, "skipped") || strings.Contains(line, "empty") ||
+			strings.Contains(line, "failed") || strings.Contains(line, "canceled") {
+			if cleanByteTokenPattern.MatchString(line) {
+				t.Fatalf("non-success outcome invented byte token: %q", line)
+			}
+		}
+	}
+}
+
+func TestStylizeFrameResultZeroAndNonSuccessNoFalseMagnitude(t *testing.T) {
+	plain := strings.Join([]string{
+		"  ✓ Tiny · cleaned · 0 KB",
+		"  ⊘ Skip · skipped",
+		"  ! Fail · failed",
+		"Recycle Bin moved: 0 KB",
+		"Permanently deleted: 0 KB",
+		"Affected (processed): 0 KB",
+	}, "\n")
+	styled := stylizeFrame(plain)
+	for _, want := range []string{"0 KB", "skipped", "failed", "Affected (processed):"} {
+		if !strings.Contains(styled, want) {
+			t.Fatalf("styled zero/non-success missing fragment %q:\n%q", want, styled)
+		}
+	}
+	// Zero success bytes and non-success rows get no magnitude hues.
+	if strings.Contains(styled, "208") || strings.Contains(styled, "214") {
+		t.Fatalf("zero/non-success must not get magnitude hues:\n%q", styled)
+	}
+}
+
+func TestStylizeFrameResultMagnitudeRespectsNoColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	plain := strings.Join([]string{
+		"  ✓ Big · cleaned · 1 GB",
+		"Recycle Bin moved: 100 MB",
+		"Permanently deleted: 1 GB",
+		"Affected (processed): 1 GB",
+	}, "\n")
+	styled := stylizeFrame(plain)
+	for _, want := range []string{"1 GB", "100 MB", "Affected (processed):"} {
+		if !strings.Contains(styled, want) {
+			t.Fatalf("NO_COLOR result lost plain fragment %q:\n%q", want, styled)
+		}
+	}
+	if strings.Contains(styled, "208") || strings.Contains(styled, "214") {
+		t.Fatalf("NO_COLOR result leaked magnitude hues:\n%q", styled)
+	}
+}
+
+func TestIsMagnitudeEligibleLineResultSurfaces(t *testing.T) {
+	eligible := []string{
+		"  ✓ Big cache · cleaned · 1 GB",
+		"  ! Mid · partial · 100 MB",
+		"Recycle Bin moved: 100 MB",
+		"Permanently deleted: 1 GB",
+		"Affected (processed): 1 GB",
+		"Selected: 1 categories · 1 GB",
+		"    [x] ✓ Cache · 1 item(s) · 1 GB",
+	}
+	for _, line := range eligible {
+		if !isMagnitudeEligibleLine(line) {
+			t.Fatalf("expected eligible: %q", line)
+		}
+	}
+	// Execution progress footer is mid-line and not a result total line.
+	// Non-success outcomes and in-progress states are not magnitude surfaces.
+	ineligible := []string{
+		"Processed: 1/2 · Affected (processed): 0 KB",
+		"  ⊘ Skip · skipped",
+		"  – Empty · empty",
+		"  ! Fail · failed",
+		"  ⠋ Work · cleaning",
+		"  ⠋ Work · rechecking",
+		"Hints: Enter/Esc/b menu · q quit",
+	}
+	for _, line := range ineligible {
+		if isMagnitudeEligibleLine(line) {
+			t.Fatalf("expected ineligible: %q", line)
+		}
+	}
+	// Confirmation measured lines remain eligible after #271 (separate surface).
+	if !isMagnitudeEligibleLine("Permanent deletion · 1 categories · 1 item(s) · 1 GB") {
+		t.Fatal("confirmation measured line should stay magnitude-eligible")
+	}
 }
 
 func TestEagerUnavailableContentPure(t *testing.T) {

@@ -127,10 +127,23 @@ func stylizeLine(line string) string {
 
 // isMagnitudeEligibleLine reports lines where trusted byte tokens may receive
 // magnitude emphasis: category-first preview rows (checkbox chrome), the
-// Selected total line, and confirmation measured group/category lines.
-// Execution progress and result aggregates stay outside this surface (#272).
+// Selected total line, confirmation measured group/category lines, and result
+// successful affected-style totals/outcomes. Execution-progress chrome stays
+// outside this surface; non-success outcomes invent no success-byte field so
+// they never match cleaned/partial patterns.
 func isMagnitudeEligibleLine(line string) bool {
 	if strings.HasPrefix(line, "Selected:") {
+		return true
+	}
+	// Result footer totals: one trusted aggregate token per line. Wording is
+	// never "freed"/"reclaimed" disk space (see resultFooterLines).
+	if strings.HasPrefix(line, "Recycle Bin moved:") ||
+		strings.HasPrefix(line, "Permanently deleted:") ||
+		strings.HasPrefix(line, "Affected (processed):") {
+		return true
+	}
+	// Result successful outcome rows (cleaned / partial) carry affected bytes.
+	if strings.Contains(line, " · cleaned · ") || strings.Contains(line, " · partial · ") {
 		return true
 	}
 	// Preview rows: "  > [x] ✓ …" / "    [ ] …" — require checkbox chrome.
