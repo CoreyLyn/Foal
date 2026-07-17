@@ -46,13 +46,14 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 | `electron-cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact Electron download cache root only; never scan legacy or project-local state. |
 | `jetbrains-ide-caches` | Opt-in | Proven | Yes | `delete_permanently` | Only exact `caches`, `index`, and Rider `resharper-host` children under supported product-version roots; exclude Local History and require independent product idle gates. |
 | `visual-studio-caches` | Opt-in | Proven | Yes | `delete_permanently` | Only exact `ComponentModelCache` under current-user 14.0+ instance hives and shared `Roslyn` under `%LOCALAPPDATA%\Microsoft\VisualStudio`; devenv idle-before-and-after; exclude Settings/Extensions/ProgramData/solutions. |
+| `grok-build-update-residue` | Opt-in | Proven | Yes | `delete_permanently` | Exact ordinary files under `$GROK_HOME\bin` only: lowercase `grok.exe.old`, `agent.exe.old`, and anchored `*.exe.old.<pid>-<seq>.old` with non-empty decimal fields. One logical Grok Build identity (`grok.exe`/`agent.exe`) must be idle before and after discovery. Direct `downloads\grok-*` files are update witnesses only (never candidates); recent/future/unknown timestamps or unreadable downloads fail closed. Not a `dev-caches` member. Evidence: ADR 0021/0022, `docs/plan/grok-build-update-residue.md`. |
 | `administrator_only_caches` | Permission boundary | Not executable | No | None | Notice only; no automatic elevation and no cleanup authorization. |
 
 ## Authorization and confirmation
 
 - Dry-run reports the true planned action without requiring authorization.
 - CLI execution requires `--allow-permanent` in addition to `--execute` for permanent actions. Without it, permanent candidates are skipped with `permanent_deletion_not_authorized`; authorized Recycle Bin work continues.
-- The TUI starts with the 25 eligible rows described above selected when safely measurable. Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
+- The TUI starts with the 26 eligible rows described above selected when safely measurable. Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
 - The one TUI confirmation authorizes both disclosed action groups. Fresh execution may change candidate counts and bytes, but it must not introduce an action type that was not disclosed.
 
 ## Execution, failure, and cancellation

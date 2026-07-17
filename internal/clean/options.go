@@ -33,6 +33,8 @@ const (
 	DevCacheCategoryJetBrainsIDECaches  = "jetbrains-ide-caches"
 	DevCacheCategoryVisualStudioCaches  = "visual-studio-caches"
 	DevCacheCategoryAll                 = "dev-caches"
+	// CategoryGrokBuildUpdateResidue is defined in grok_build_update_residue.go
+	// (product-scoped CLI-agent residue; not a dev-caches member).
 )
 
 // RecycleBinVolumeConfig holds the Recycle Bin configuration for a volume.
@@ -85,6 +87,9 @@ type PermanentIdentityCandidate struct {
 	Path     string
 	Bytes    int64
 	Category string
+	// residueDiscovery carries optional env/clock injects for residue
+	// revalidation (package-internal; set by shared Execute from Options).
+	residueDiscovery GrokBuildResidueDiscoveryOptions
 }
 
 // PermanentIdentityValidator re-checks that a permanent candidate still has the
@@ -196,6 +201,10 @@ type Options struct {
 	// DevCacheChildDiscoverer overrides catalog-owned structured child discovery
 	// for tests. Production leaves it nil so categories use private catalog policy.
 	DevCacheChildDiscoverer DevCacheChildDiscoverer
+	// GrokBuildResidueDiscoveryOptions injects env/home/clock seams for the
+	// grok-build-update-residue category. Production leaves the zero value.
+	// Tests must use isolated roots and never read the real user .grok profile.
+	GrokBuildResidueDiscoveryOptions GrokBuildResidueDiscoveryOptions
 }
 
 type Rule struct {
@@ -325,6 +334,7 @@ const (
 	ApplicationMPS                        = "mps"
 	ApplicationWriterside                 = "writerside"
 	ApplicationRider                      = "rider"
+	// ApplicationGrokBuild is defined in grok_build_update_residue.go.
 	RunningApplicationStateRunning        = RunningApplicationStatus("running")
 	RunningApplicationStateIdle           = RunningApplicationStatus("idle")
 	RunningApplicationStateUnknown        = RunningApplicationStatus("unknown")

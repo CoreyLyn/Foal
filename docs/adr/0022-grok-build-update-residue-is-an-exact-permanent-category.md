@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the P1 spec. Implementation is not yet shipped.
+Accepted. CLI tracer implementation shipped with issue #262.
 
 ## Context
 

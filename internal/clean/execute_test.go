@@ -978,6 +978,11 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 		clean.DevCacheCategoryJetBrainsIDECaches,
 		clean.DevCacheCategoryVisualStudioCaches,
 	}
+	// Product-scoped CLI-agent residue is opt-in and selected by all, but not a
+	// developer-cache / dev-caches member.
+	expectedOtherOptIn := []string{
+		clean.CategoryGrokBuildUpdateResidue,
+	}
 	for _, cat := range expectedOpportunities {
 		if !enabled[cat] {
 			t.Fatalf("expected %q to be enabled by \"all\"", cat)
@@ -988,8 +993,14 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 			t.Fatalf("expected %q to be enabled by \"all\"", cat)
 		}
 	}
-	if len(enabled) != len(expectedOpportunities)+len(expectedDevCaches) {
-		t.Fatalf("expected %d enabled categories, got %d", len(expectedOpportunities)+len(expectedDevCaches), len(enabled))
+	for _, cat := range expectedOtherOptIn {
+		if !enabled[cat] {
+			t.Fatalf("expected %q to be enabled by \"all\"", cat)
+		}
+	}
+	wantEnabled := len(expectedOpportunities) + len(expectedDevCaches) + len(expectedOtherOptIn)
+	if len(enabled) != wantEnabled {
+		t.Fatalf("expected %d enabled categories, got %d", wantEnabled, len(enabled))
 	}
 	// Verify valid names list includes all categories, "dev-caches", and "all"
 	found := make(map[string]bool)
@@ -1051,9 +1062,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// Should have 12 opportunity categories + 17 dev caches + "dev-caches" + "all" = 31
-	if len(valid) != 31 {
-		t.Fatalf("expected 31 valid names, got %d: %v", len(valid), valid)
+	// 12 opportunity + 17 dev caches + grok-build-update-residue + "dev-caches" + "all" = 32
+	if len(valid) != 32 {
+		t.Fatalf("expected 32 valid names, got %d: %v", len(valid), valid)
 	}
 }
 

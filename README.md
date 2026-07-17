@@ -19,12 +19,12 @@ Permanent deletion is an explicit planned action, not a Recycle Bin fallback.
 
 | Planned action | Categories |
 | --- | --- |
-| `delete_permanently` (24) | `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, package/build caches (`npm-cache`, `pnpm-cache`, `yarn-cache`, `go-cache`, `go-modcache`, `pip-cache`, `cargo-cache`, `nuget-cache`, `nuget-global-packages`, `corepack-cache`, `uv-cache`, `bun-cache`), `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, `jetbrains-ide-caches`, `visual-studio-caches` |
+| `delete_permanently` (25) | `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, package/build caches (`npm-cache`, `pnpm-cache`, `yarn-cache`, `go-cache`, `go-modcache`, `pip-cache`, `cargo-cache`, `nuget-cache`, `nuget-global-packages`, `corepack-cache`, `uv-cache`, `bun-cache`), `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, `jetbrains-ide-caches`, `visual-studio-caches`, `grok-build-update-residue` |
 | `move_to_recycle_bin` (6) | `foal_owned_temp_sandboxes` (default), `user_temp`, `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache` |
 
 - Dry-run reports the true planned action without authorization.
 - CLI execute requires per-run `--allow-permanent` in addition to `--execute` (and the matching `--opt-in` when using CLI additive opt-in). Without it, permanent candidates are skipped with `permanent_deletion_not_authorized` while Recycle Bin work continues.
-- The Clean TUI starts the default plus all permanent-action categories selected when safely measured (25 rows), leaves the five Recycle Bin opt-ins unselected, discloses permanent deletion in one confirmation, and passes equivalent authorization to shared Clean.
+- The Clean TUI starts the default plus all permanent-action categories selected when safely measured (26 rows), leaves the five Recycle Bin opt-ins unselected, discloses permanent deletion in one confirmation, and passes equivalent authorization to shared Clean.
 - Permanent deletion is ordinary filesystem removal only: no secure erasure, shred, free-space wipe, or forensic non-recoverability claim.
 
 See [Clean deletion policy](docs/plan/clean-deletion-policy.md) and [ADR 0018](docs/adr/0018-permanent-deletion-is-an-explicit-planned-action.md).
@@ -88,6 +88,10 @@ Structured developer-cache highlights:
 - `electron-cache`: whole root from non-blank `electron_config_cache` or `%LOCALAPPDATA%\electron\Cache`
 - `jetbrains-ide-caches`: exact `caches`/`index` (and Rider `resharper-host`) under supported IntelliJ-platform product-version roots; Local History excluded; independent product idle gates
 - `visual-studio-caches`: exact `ComponentModelCache` under current-user 14.0+ instance hives and shared `Roslyn` under `%LOCALAPPDATA%\Microsoft\VisualStudio`; devenv idle gate; Settings/Extensions/ProgramData excluded
+
+CLI-agent residue (not a `dev-caches` member):
+
+- `grok-build-update-residue`: exact lowercase updater backups under `$GROK_HOME\bin` (`grok.exe.old`, `agent.exe.old`, and anchored `*.exe.old.<pid>-<seq>.old`); Grok idle before and after; recent `downloads\grok-*` witnesses fail closed and are never candidates; default CLI Clean performs no Grok probing
 
 Prefer non-destructive examples such as `foal clean --dry-run --json` in docs and verification.
 
