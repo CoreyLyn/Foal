@@ -3,3 +3,4 @@
 .gocache/
 /.worktrees
 /dist/
+/.release-verify
