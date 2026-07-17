@@ -156,6 +156,20 @@ func eagerPermanentSelectionNotice(includesPermanent bool) string {
 	return "Selection includes permanent deletion."
 }
 
+// eagerFooterRuleLine is the horizontal rule framing the preview selection /
+// focus info block. Uses terminal width when known; otherwise a stable 70-col
+// default matching the documented mockup.
+func eagerFooterRuleLine(width int) string {
+	n := 70
+	if width > 0 {
+		n = width
+	}
+	if n < 1 {
+		n = 1
+	}
+	return strings.Repeat("=", n)
+}
+
 // eagerPreviewRowMarker maps a preview state to a single-glyph marker.
 // spinnerFrame is only used for the scanning state.
 func eagerPreviewRowMarker(state clean.CategoryPreviewState, spinnerFrame int) string {

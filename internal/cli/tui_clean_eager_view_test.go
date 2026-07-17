@@ -298,6 +298,76 @@ func TestEagerResultTotalsPure(t *testing.T) {
 	}
 }
 
+func TestEagerFooterRuleLine(t *testing.T) {
+	if got := eagerFooterRuleLine(0); got != strings.Repeat("=", 70) {
+		t.Fatalf("default width rule = %q", got)
+	}
+	if got := eagerFooterRuleLine(40); got != strings.Repeat("=", 40) {
+		t.Fatalf("width-40 rule = %q", got)
+	}
+	if got := eagerFooterRuleLine(-1); got != strings.Repeat("=", 70) {
+		t.Fatalf("negative width falls back to default: %q", got)
+	}
+}
+
+func TestEagerPreviewFooterFramedByRules(t *testing.T) {
+	model := newEagerCleanModel(50, 30)
+	markEagerQueueTerminal(&model, true)
+	// One permanent selected category so notice appears inside the frame.
+	for i := range model.rows {
+		model.rows[i].Selected = false
+	}
+	model.rows[0].Selected = true
+	model.rows[0].State = clean.CategoryPreviewComplete
+	model.rows[0].Bytes = 1 << 30
+	model.rows[0].CandidateCount = 1
+	model.rows[0].PlannedAction = clean.DeletionActionDeletePermanently
+	model.cursor = 0
+
+	footer := model.fixedFooterLines()
+	rule := strings.Repeat("=", 50)
+	if len(footer) < 5 {
+		t.Fatalf("footer too short: %#v", footer)
+	}
+	// Leading blank, then rule, Selected…, optional permanent notice, Focused…, rule, Hints…
+	if footer[0] != "" {
+		t.Fatalf("want leading blank, got %q", footer[0])
+	}
+	if footer[1] != rule {
+		t.Fatalf("top rule = %q, want %q", footer[1], rule)
+	}
+	if !strings.HasPrefix(footer[2], "Selected:") {
+		t.Fatalf("Selected line after top rule = %q", footer[2])
+	}
+	// Locate bottom rule: last pure-equals line before Hints.
+	bottom := -1
+	for i, line := range footer {
+		if line == rule {
+			bottom = i
+		}
+	}
+	if bottom <= 2 {
+		t.Fatalf("bottom rule missing or not after content: %#v", footer)
+	}
+	joinedInside := strings.Join(footer[2:bottom], "\n")
+	if !strings.Contains(joinedInside, "Selected:") {
+		t.Fatalf("Selected must be inside frame:\n%s", joinedInside)
+	}
+	if !strings.Contains(joinedInside, "Selection includes permanent deletion.") {
+		t.Fatalf("permanent notice must be inside frame:\n%s", joinedInside)
+	}
+	if !strings.Contains(joinedInside, "Focused:") {
+		t.Fatalf("Focused must be inside frame:\n%s", joinedInside)
+	}
+	outside := strings.Join(footer[bottom+1:], "\n")
+	if !strings.Contains(outside, "Hints:") {
+		t.Fatalf("Hints must stay outside frame:\n%s", outside)
+	}
+	if strings.Contains(outside, "Selected:") || strings.Contains(outside, "Focused:") {
+		t.Fatalf("Selected/Focused must not appear outside frame:\n%s", outside)
+	}
+}
+
 func TestEagerPreviewHeaderAndFooterPure(t *testing.T) {
 	if got := eagerPreviewHeaderLine(true, false, false, -1, 0, 5, "3s"); !strings.HasPrefix(got, "Canceled") {
 		t.Fatalf("canceled header = %q", got)

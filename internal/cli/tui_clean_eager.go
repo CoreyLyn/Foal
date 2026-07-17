@@ -1056,8 +1056,12 @@ func (m eagerCleanModel) fixedFooterStyleLines() []tuiStyleLine {
 		return m.resultFooterStyleLines()
 	default:
 		n, measured, pending := m.selectionTotals()
+		rule := plainStyleLine(eagerFooterRuleLine(m.width))
+		// Preview info block: selection summary, permanent notice, focused
+		// detail — framed by '=' rules. Hints stay outside below the box.
 		lines := []tuiStyleLine{
 			plainStyleLine(""),
+			rule,
 			// Selected totals: tier from trusted measured bytes.
 			magnitudeStyleLine(eagerSelectionSummaryLine(n, measured, pending), measured),
 		}
@@ -1069,6 +1073,7 @@ func (m eagerCleanModel) fixedFooterStyleLines() []tuiStyleLine {
 		for _, line := range strings.Split(m.focusedDetailPanel(), "\n") {
 			lines = append(lines, plainStyleLine(line))
 		}
+		lines = append(lines, rule)
 		for _, line := range strings.Split(m.footerHints(), "\n") {
 			lines = append(lines, plainStyleLine(line))
 		}
