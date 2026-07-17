@@ -1089,6 +1089,73 @@ func TestEagerCleanModelBulkSelectAndClear(t *testing.T) {
 	}
 }
 
+func TestEagerCleanModelPlannedActionMarkersAndPermanentNotice(t *testing.T) {
+	// Inject mixed planned actions so plain frame assertions do not depend on
+	// production catalog membership of any particular permanent category.
+	queue := []clean.CleanupCategorySummary{
+		{
+			Identifier:     "recycle_one",
+			Label:          "Recycle one",
+			ReportCategory: clean.ReportCategoryUserEssentials,
+			Eligibility:    clean.CategoryEligibilityDefault,
+			PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+		},
+		{
+			Identifier:     "perm_one",
+			Label:          "Perm one",
+			ReportCategory: clean.ReportCategorySystem,
+			Eligibility:    clean.CategoryEligibilityOptIn,
+			PlannedAction:  clean.DeletionActionDeletePermanently,
+		},
+	}
+	model := newEagerCleanModelFromSummaries(queue, 100, 40)
+	model.generation = 1
+	model.startedAt = time.Now()
+	for i := range model.rows {
+		model.rows[i].State = clean.CategoryPreviewComplete
+		model.rows[i].CandidateCount = 1
+		model.rows[i].Bytes = 1024
+		model.rows[i].Selected = true
+	}
+	model.finished = true
+
+	content := model.content()
+	// Catalog-projected markers in plain frame.
+	if !strings.Contains(content, "bin · Recycle one") {
+		t.Fatalf("missing bin marker row:\n%s", content)
+	}
+	if !strings.Contains(content, "perm · Perm one") {
+		t.Fatalf("missing perm marker row:\n%s", content)
+	}
+	// Footer notice while selection includes permanent.
+	if !strings.Contains(content, "includes permanent deletion") {
+		t.Fatalf("missing permanent-selection notice:\n%s", content)
+	}
+	// Hints legend documents markers without authorizing cleanup.
+	if !strings.Contains(content, "perm=permanent · bin=Recycle Bin") {
+		t.Fatalf("missing planned-action legend:\n%s", content)
+	}
+	// Markers must not use pure-red whole-row risk tint (plain frame oracle).
+	if strings.Contains(content, "\x1b[31m") || strings.Contains(content, "\x1b[91m") {
+		t.Fatalf("plain content must not embed pure-red risk tint:\n%q", content)
+	}
+
+	// Clearing all permanent categories removes the notice.
+	for i := range model.rows {
+		if model.rows[i].PlannedAction == clean.DeletionActionDeletePermanently {
+			model.rows[i].Selected = false
+		}
+	}
+	cleared := model.content()
+	if strings.Contains(cleared, "includes permanent deletion") {
+		t.Fatalf("notice must disappear when permanent selection is empty:\n%s", cleared)
+	}
+	// Markers remain on rows (catalog projection); only the notice is selection-gated.
+	if !strings.Contains(cleared, "perm · Perm one") || !strings.Contains(cleared, "bin · Recycle one") {
+		t.Fatalf("markers must remain after deselect:\n%s", cleared)
+	}
+}
+
 func TestEagerCleanModelSelectionTotalsMeasuredAndPending(t *testing.T) {
 	model := newEagerCleanModel(100, 40)
 	model.generation = 1
