@@ -80,3 +80,17 @@ no automatic nightly releases.
 
 See [Release process](docs/plan/release-process.md) for release gates, artifact
 contents, and the staged Scoop/WinGet plan.
+
+## Platform compatibility
+
+Foal's compatibility baseline is Windows 10 or later, or Windows Server 2016 or
+later. Windows 11 x64 is the primary desktop target. ARM64 archives are preview
+builds until native ARM64 smoke testing is available. The current hosted CI
+executes only on Windows Server 2025 x64; see the
+[Windows support research](docs/research/windows-support.md) for the distinction
+between compatibility and verified support.
+
+## License
+
+Foal is licensed under the [GNU General Public License v3.0 only](LICENSE)
+(`GPL-3.0-only`).

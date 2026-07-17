@@ -24,6 +24,14 @@ The release also includes SHA-256 checksums. Linker flags inject only the tag
 and full commit into the shared version read model; no build timestamp is
 injected.
 
+Foal is released under GPL-3.0-only. The compatibility baseline is Windows 10
+or Windows Server 2016, matching Go 1.25's supported Windows floor; this is not
+a claim that every such version has been tested. Windows 11 x64 is the primary
+desktop target. ARM64 archives are preview builds until native ARM64 smoke
+testing is available. See
+[`docs/research/windows-support.md`](../research/windows-support.md) for the
+compatibility evidence and current test coverage.
+
 GitHub Actions creates provenance attestations for the ZIP archives. Windows
 Authenticode signing remains required before broad stable distribution and
 before adding WinGet as an official channel; provenance attestations do not
@@ -39,18 +47,19 @@ The release workflow fails closed unless all of these conditions hold:
 3. Module verification and the full test suite pass on Windows.
 4. GoReleaser successfully produces both architecture archives and checksums.
 
-The license choice and minimum supported Windows versions are product-owner
-decisions. They must be recorded before the first public prerelease; automation
-does not infer either decision.
+The repository license and Windows support baseline must remain recorded before
+publishing binaries; automation does not infer either decision.
 
 ## Publishing
 
 1. Confirm `main` is green and the intended commit contains no unrelated work.
 2. Create and push an annotated prerelease tag, initially `v0.1.0-rc.1`.
 3. Wait for the Release workflow to create the draft and attest its ZIP files.
-4. Download both archives and verify checksums.
-5. Smoke-test amd64 and arm64 on clean supported Windows environments, including
+4. Download both archives and verify checksums and archive contents.
+5. Smoke-test amd64 on a clean Windows 11 x64 environment, including
    `--version`, `--help`, read-only JSON commands, Clean dry-run, and the TUI.
+   For the preview ARM64 archive, verify the build target and package structure;
+   native ARM64 smoke testing becomes mandatory before removing the preview label.
 6. Review generated release notes and publish the draft manually.
 
 Enable GitHub immutable releases before the first public release. Do not replace
