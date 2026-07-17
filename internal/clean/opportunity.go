@@ -19,6 +19,8 @@ const (
 	OpportunityCategoryINetCache              = "inet_cache"
 	OpportunityCategoryD3DShaderCache         = "d3d_shader_cache"
 	OpportunityCategoryNVIDIADXCache          = "nvidia_dx_cache"
+	OpportunityCategoryAMDGPUShaderCaches     = "amd_gpu_shader_caches"
+	OpportunityCategoryIntelGPUShaderCache    = "intel_gpu_shader_cache"
 	OpportunityCategoryBrowserCache           = "browser_cache"
 	OpportunityCategoryVSCodeCache            = "vscode_cache"
 	OpportunityCategoryCursorCache            = "cursor_cache"
@@ -42,13 +44,22 @@ type UserTempDiscoveryOptions struct {
 type OpportunityDiscoveryOptions struct {
 	TempDir         string
 	LocalAppDataDir string
-	Now             time.Time
+	// LocalAppDataLowDir overrides the current-user LocalLow base (Known Folder
+	// FOLDERID_LocalAppDataLow) for tests. Empty uses production resolution.
+	// When LocalAppDataDir is a fixture override and this field is empty,
+	// LocalLow roots are not scanned so host state cannot leak into fixtures.
+	LocalAppDataLowDir string
+	Now                time.Time
 	// Categories restricts discovery to the listed categories. When empty,
 	// discovery scans every implemented category. Used to scan only opted-in
 	// categories at execute (ADR-0008: non-opted-in categories stay omitted)
 	// and only non-opted-in categories for the dry-run review projection.
 	Categories []string
 }
+
+// gpuShaderCacheOptInImpactNotice is shared by permanent GPU/shader cache
+// categories (AMD/Intel and symmetric to D3D/NVIDIA class impact).
+const gpuShaderCacheOptInImpactNotice = "Games and the desktop may recompile shaders after cleanup; temporary longer loads or stutter are expected."
 
 type BrowserCacheDiscoveryOptions struct {
 	// LocalAppDataDir overrides %LOCALAPPDATA% for tests. Empty uses the process
@@ -139,15 +150,34 @@ func discoverOpportunities(ctx context.Context, opts OpportunityDiscoveryOptions
 		result.Incomplete = append(result.Incomplete, userTemp.Incomplete...)
 	}
 	localAppDataDir := opts.LocalAppDataDir
+	localAppDataLowDir := opts.LocalAppDataLowDir
+	fixtureLocalAppData := localAppDataDir != ""
 	if localAppDataDir == "" {
 		localAppDataDir = os.Getenv("LOCALAPPDATA")
 	}
-	if localAppDataDir != "" {
-		for _, entry := range canonicalCategoryEntries {
-			if len(entry.fixedLocalAppDataPath) == 0 || !opportunityCategoryEnabled(entry.definition.Identifier, opts.Categories) {
+	if localAppDataLowDir == "" {
+		// Production: resolve Known Folder / fallback. Fixture LocalAppData
+		// without an explicit LocalLow override isolates tests from host caches.
+		if !fixtureLocalAppData {
+			localAppDataLowDir = resolveLocalAppDataLowDir()
+		}
+	}
+	for _, entry := range canonicalCategoryEntries {
+		if len(entry.existenceRoots) == 0 || !opportunityCategoryEnabled(entry.definition.Identifier, opts.Categories) {
+			continue
+		}
+		for _, root := range entry.existenceRoots {
+			base := ""
+			switch root.base {
+			case existenceRootLocalAppData:
+				base = localAppDataDir
+			case existenceRootLocalAppDataLow:
+				base = localAppDataLowDir
+			}
+			if base == "" || len(root.segments) == 0 {
 				continue
 			}
-			pathParts := append([]string{localAppDataDir}, entry.fixedLocalAppDataPath...)
+			pathParts := append([]string{base}, root.segments...)
 			appendExistenceObservedOpportunity(ctx, &result, entry.definition.Identifier, filepath.Join(pathParts...), deps)
 		}
 	}

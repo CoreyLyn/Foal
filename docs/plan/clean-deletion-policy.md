@@ -24,6 +24,8 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 | `inet_cache` | Opt-in | Not proven | No | `move_to_recycle_bin` | The current whole INetCache root is broader than proven disposable content; an exact allowlist requires a new decision. |
 | `d3d_shader_cache` | Opt-in | Proven | Yes | `delete_permanently` | Regenerating shader cache under the exact current-user root. |
 | `nvidia_dx_cache` | Opt-in | Proven | Yes | `delete_permanently` | Regenerating NVIDIA DX cache under the exact current-user root. |
+| `amd_gpu_shader_caches` | Opt-in | Proven | Yes | `delete_permanently` | Exact allowlisted current-user AMD driver shader cache children under Local `AMD` (`DxCache`, `DxcCache`, `Dx9Cache`, `OglCache`, `VkCache`) plus optional LocalLow `AMD\DxCache`; never parent `AMD` or Adrenalin UI siblings. Evidence: `docs/research/amd-intel-gpu-shader-caches.md`. |
+| `intel_gpu_shader_cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact current-user LocalLow `Intel\ShaderCache` only; never Local `Intel` parent, ProgramData, or service-profile copies. Evidence: `docs/research/amd-intel-gpu-shader-caches.md`. |
 | `browser_cache` | Opt-in | Proven | Yes | `delete_permanently` | Only allowlisted Chrome/Edge (`Cache`/`Code Cache`/`GPUCache`) and Firefox (`cache2`) profile cache roots; each browser must be idle before and after complete inspection. |
 | `vscode_cache` | Opt-in | Proven | Yes | `delete_permanently` | Only allowlisted regenerating roots under the standard Code directory; Code must be idle before and after inspection. Re-fetch impact remains visible. |
 | `cursor_cache` | Opt-in | Proven | Yes | `delete_permanently` | Only allowlisted regenerating roots under the standard Cursor directory; Cursor must be idle before and after inspection. Re-fetch impact remains visible. |
@@ -49,7 +51,7 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 
 - Dry-run reports the true planned action without requiring authorization.
 - CLI execution requires `--allow-permanent` in addition to `--execute` for permanent actions. Without it, permanent candidates are skipped with `permanent_deletion_not_authorized`; authorized Recycle Bin work continues.
-- The TUI starts with the 22 eligible rows described above selected when safely measurable. Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
+- The TUI starts with the 24 eligible rows described above selected when safely measurable. Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
 - The one TUI confirmation authorizes both disclosed action groups. Fresh execution may change candidate counts and bytes, but it must not introduce an action type that was not disclosed.
 
 ## Execution, failure, and cancellation

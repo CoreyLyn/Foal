@@ -19,12 +19,12 @@ Permanent deletion is an explicit planned action, not a Recycle Bin fallback.
 
 | Planned action | Categories |
 | --- | --- |
-| `delete_permanently` (21) | `d3d_shader_cache`, `nvidia_dx_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, package/build caches (`npm-cache`, `pnpm-cache`, `yarn-cache`, `go-cache`, `pip-cache`, `cargo-cache`, `nuget-cache`, `nuget-global-packages`, `corepack-cache`, `uv-cache`, `bun-cache`), `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, `jetbrains-ide-caches`, `visual-studio-caches` |
+| `delete_permanently` (23) | `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, package/build caches (`npm-cache`, `pnpm-cache`, `yarn-cache`, `go-cache`, `pip-cache`, `cargo-cache`, `nuget-cache`, `nuget-global-packages`, `corepack-cache`, `uv-cache`, `bun-cache`), `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, `jetbrains-ide-caches`, `visual-studio-caches` |
 | `move_to_recycle_bin` (6) | `foal_owned_temp_sandboxes` (default), `user_temp`, `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache` |
 
 - Dry-run reports the true planned action without authorization.
 - CLI execute requires per-run `--allow-permanent` in addition to `--execute` (and the matching `--opt-in` when using CLI additive opt-in). Without it, permanent candidates are skipped with `permanent_deletion_not_authorized` while Recycle Bin work continues.
-- The Clean TUI starts the default plus all permanent-action categories selected when safely measured (22 rows), leaves the five Recycle Bin opt-ins unselected, discloses permanent deletion in one confirmation, and passes equivalent authorization to shared Clean.
+- The Clean TUI starts the default plus all permanent-action categories selected when safely measured (24 rows), leaves the five Recycle Bin opt-ins unselected, discloses permanent deletion in one confirmation, and passes equivalent authorization to shared Clean.
 - Permanent deletion is ordinary filesystem removal only: no secure erasure, shred, free-space wipe, or forensic non-recoverability claim.
 
 See [Clean deletion policy](docs/plan/clean-deletion-policy.md) and [ADR 0018](docs/adr/0018-permanent-deletion-is-an-explicit-planned-action.md).
@@ -64,7 +64,7 @@ foal uninstall --json
 **Dry-run** previews default candidates and reports skipped-by-default Opportunity categories:
 
 - Idle user-temp entries as `user_temp`
-- Existence-observed current-user roots: `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache`, `d3d_shader_cache`, `nvidia_dx_cache`
+- Existence-observed current-user roots: `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache`, `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`
 - Chrome/Edge/Firefox `browser_cache` when the browser is idle before and after complete profile cache inspection
 - VS Code `vscode_cache` and Cursor `cursor_cache` when the editor is idle before and after exact allowlisted root inspection under standard Roaming AppData `Code` or `Cursor`
 

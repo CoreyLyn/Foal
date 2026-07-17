@@ -370,10 +370,10 @@ Secondary (layout inventory only):
 
 ## Implement checklist handoff (#238)
 
-- [ ] Register **separate** AMD and Intel categories only (both ship permanent).
-- [ ] AMD: allowlist exact child directory names; never parent `AMD`.
-- [ ] Intel: exact LocalLow `Intel\ShaderCache` only; never Local `Intel` parent.
-- [ ] Fixtures: use relative layouts in this note; no live GPU required.
-- [ ] Update deletion-policy matrix + docs only when categories register.
-- [ ] Impact notice: shader recompilation / possible temporary stutter; no secure-erase language.
-- [ ] In-use file failures isolated; no elevation; no process stopping.
+- [x] Register **separate** AMD and Intel categories only (both ship permanent).
+- [x] AMD: allowlist exact child directory names; never parent `AMD`.
+- [x] Intel: exact LocalLow `Intel\ShaderCache` only; never Local `Intel` parent.
+- [x] Fixtures: use relative layouts in this note; no live GPU required.
+- [x] Update deletion-policy matrix + docs only when categories register.
+- [x] Impact notice: shader recompilation / possible temporary stutter; no secure-erase language.
+- [x] In-use file failures isolated; no elevation; no process stopping.

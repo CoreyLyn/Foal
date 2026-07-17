@@ -27,6 +27,8 @@ func TestBuiltInOpportunityCatalogContainsOnlyApprovedV1Categories(t *testing.T)
 		OpportunityCategoryINetCache,
 		OpportunityCategoryD3DShaderCache,
 		OpportunityCategoryNVIDIADXCache,
+		OpportunityCategoryAMDGPUShaderCaches,
+		OpportunityCategoryIntelGPUShaderCache,
 	}
 
 	if !reflect.DeepEqual(got, want) {
@@ -37,9 +39,11 @@ func TestBuiltInOpportunityCatalogContainsOnlyApprovedV1Categories(t *testing.T)
 func TestBuiltInOpportunityDiscoveryNeverInspectsExcludedRoots(t *testing.T) {
 	localAppData := `C:\Users\corey\AppData\Local`
 	inspected := []string{}
+	localAppDataLow := `C:\Users\corey\AppData\LocalLow`
 	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
-		TempDir:         `C:\Users\corey\AppData\Local\Temp`,
-		LocalAppDataDir: localAppData,
+		TempDir:            `C:\Users\corey\AppData\Local\Temp`,
+		LocalAppDataDir:    localAppData,
+		LocalAppDataLowDir: localAppDataLow,
 	}, opportunityDiscoveryDependencies{
 		readDir: func(string) ([]os.DirEntry, error) { return []os.DirEntry{}, nil },
 		stat: func(path string) (os.FileInfo, error) {
@@ -59,6 +63,13 @@ func TestBuiltInOpportunityDiscoveryNeverInspectsExcludedRoots(t *testing.T) {
 		filepath.Join(localAppData, "Microsoft", "Windows", "INetCache"),
 		filepath.Join(localAppData, "D3DSCache"),
 		filepath.Join(localAppData, "NVIDIA", "DXCache"),
+		filepath.Join(localAppData, "AMD", "DxCache"),
+		filepath.Join(localAppData, "AMD", "DxcCache"),
+		filepath.Join(localAppData, "AMD", "Dx9Cache"),
+		filepath.Join(localAppData, "AMD", "OglCache"),
+		filepath.Join(localAppData, "AMD", "VkCache"),
+		filepath.Join(localAppDataLow, "AMD", "DxCache"),
+		filepath.Join(localAppDataLow, "Intel", "ShaderCache"),
 	}
 	if !reflect.DeepEqual(inspected, want) {
 		t.Fatalf("inspected roots = %#v, want only approved fixed roots %#v", inspected, want)
@@ -104,26 +115,41 @@ func TestIncompleteOpportunityInspectionIsExcludedAndDiscoveryContinues(t *testi
 
 func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 	localAppData := `C:\Users\corey\AppData\Local`
-	expectedRoots := map[string]string{
-		OpportunityCategoryCrashDumps:             filepath.Join(localAppData, "CrashDumps"),
-		OpportunityCategoryWindowsErrorReporting:  filepath.Join(localAppData, "Microsoft", "Windows", "WER"),
-		OpportunityCategoryExplorerThumbnailCache: filepath.Join(localAppData, "Microsoft", "Windows", "Explorer"),
-		OpportunityCategoryINetCache:              filepath.Join(localAppData, "Microsoft", "Windows", "INetCache"),
-		OpportunityCategoryD3DShaderCache:         filepath.Join(localAppData, "D3DSCache"),
-		OpportunityCategoryNVIDIADXCache:          filepath.Join(localAppData, "NVIDIA", "DXCache"),
+	localAppDataLow := `C:\Users\corey\AppData\LocalLow`
+	expectedRoots := map[string][]string{
+		OpportunityCategoryCrashDumps:             {filepath.Join(localAppData, "CrashDumps")},
+		OpportunityCategoryWindowsErrorReporting:  {filepath.Join(localAppData, "Microsoft", "Windows", "WER")},
+		OpportunityCategoryExplorerThumbnailCache: {filepath.Join(localAppData, "Microsoft", "Windows", "Explorer")},
+		OpportunityCategoryINetCache:              {filepath.Join(localAppData, "Microsoft", "Windows", "INetCache")},
+		OpportunityCategoryD3DShaderCache:         {filepath.Join(localAppData, "D3DSCache")},
+		OpportunityCategoryNVIDIADXCache:          {filepath.Join(localAppData, "NVIDIA", "DXCache")},
+		OpportunityCategoryAMDGPUShaderCaches: {
+			filepath.Join(localAppData, "AMD", "DxCache"),
+			filepath.Join(localAppData, "AMD", "DxcCache"),
+			filepath.Join(localAppData, "AMD", "Dx9Cache"),
+			filepath.Join(localAppData, "AMD", "OglCache"),
+			filepath.Join(localAppData, "AMD", "VkCache"),
+			filepath.Join(localAppDataLow, "AMD", "DxCache"),
+		},
+		OpportunityCategoryIntelGPUShaderCache: {filepath.Join(localAppDataLow, "Intel", "ShaderCache")},
+	}
+	allowedPaths := map[string]bool{}
+	for _, paths := range expectedRoots {
+		for _, p := range paths {
+			allowedPaths[p] = true
+		}
 	}
 	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
-		TempDir:         `C:\Users\corey\AppData\Local\Temp`,
-		LocalAppDataDir: localAppData,
+		TempDir:            `C:\Users\corey\AppData\Local\Temp`,
+		LocalAppDataDir:    localAppData,
+		LocalAppDataLowDir: localAppDataLow,
 	}, opportunityDiscoveryDependencies{
 		readDir: func(string) ([]os.DirEntry, error) {
 			return nil, fs.ErrPermission
 		},
 		stat: func(path string) (os.FileInfo, error) {
-			for _, expected := range expectedRoots {
-				if path == expected {
-					return fakeFileInfo{name: filepath.Base(path), mode: os.ModeDir}, nil
-				}
+			if allowedPaths[path] {
+				return fakeFileInfo{name: filepath.Base(path), mode: os.ModeDir}, nil
 			}
 			t.Fatalf("unexpected stat path %q", path)
 			return nil, fs.ErrNotExist
@@ -133,12 +159,24 @@ func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 		},
 	})
 
-	if len(result.Opportunities) != len(expectedRoots) {
-		t.Fatalf("opportunities = %#v, want every fixed category despite user temp failure", result.Opportunities)
+	wantCount := 0
+	for _, paths := range expectedRoots {
+		wantCount += len(paths)
+	}
+	if len(result.Opportunities) != wantCount {
+		t.Fatalf("opportunities = %#v, want every fixed root despite user temp failure", result.Opportunities)
 	}
 	for _, opportunity := range result.Opportunities {
-		if opportunity.Path != expectedRoots[opportunity.Category] {
-			t.Fatalf("opportunity = %#v, want fixed current-user root", opportunity)
+		paths := expectedRoots[opportunity.Category]
+		found := false
+		for _, p := range paths {
+			if opportunity.Path == p {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("opportunity = %#v, want fixed current-user root for category", opportunity)
 		}
 	}
 	if len(result.Incomplete) != 1 ||
@@ -238,11 +276,15 @@ func TestExistenceObservedCategorySafetyFailuresAreCategorizedAndExcluded(t *tes
 
 func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T) {
 	localAppData := `C:\Users\corey\AppData\Local`
+	localAppDataLow := `C:\Users\corey\AppData\LocalLow`
 	d3dRoot := filepath.Join(localAppData, "D3DSCache")
 	nvidiaRoot := filepath.Join(localAppData, "NVIDIA", "DXCache")
+	// All fixed existence roots except D3D: 5 legacy + 6 AMD + 1 Intel = 12.
+	// D3D is incomplete (permission), so expect 12 opportunities.
 	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
-		TempDir:         `C:\Users\corey\AppData\Local\Temp`,
-		LocalAppDataDir: localAppData,
+		TempDir:            `C:\Users\corey\AppData\Local\Temp`,
+		LocalAppDataDir:    localAppData,
+		LocalAppDataLowDir: localAppDataLow,
 	}, opportunityDiscoveryDependencies{
 		readDir: func(string) ([]os.DirEntry, error) { return []os.DirEntry{}, nil },
 		stat: func(path string) (os.FileInfo, error) {
@@ -256,10 +298,12 @@ func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T)
 		},
 	})
 
-	if len(result.Opportunities) != 5 {
-		t.Fatalf("opportunities = %#v, want unaffected fixed categories", result.Opportunities)
+	if len(result.Opportunities) != 12 {
+		t.Fatalf("opportunities = %#v, want unaffected fixed roots (12)", result.Opportunities)
 	}
 	foundNVIDIA := false
+	foundAMD := false
+	foundIntel := false
 	for _, opportunity := range result.Opportunities {
 		if opportunity.Category == OpportunityCategoryD3DShaderCache {
 			t.Fatalf("opportunities = %#v, must exclude incomplete D3D category", result.Opportunities)
@@ -267,9 +311,18 @@ func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T)
 		if opportunity.Category == OpportunityCategoryNVIDIADXCache && opportunity.Path == nvidiaRoot {
 			foundNVIDIA = true
 		}
+		if opportunity.Category == OpportunityCategoryAMDGPUShaderCaches {
+			foundAMD = true
+		}
+		if opportunity.Category == OpportunityCategoryIntelGPUShaderCache {
+			foundIntel = true
+		}
 	}
 	if !foundNVIDIA {
 		t.Fatalf("opportunities = %#v, want NVIDIA category after D3D failure", result.Opportunities)
+	}
+	if !foundAMD || !foundIntel {
+		t.Fatalf("opportunities = %#v, want AMD and Intel after D3D failure", result.Opportunities)
 	}
 	if len(result.Incomplete) != 1 ||
 		result.Incomplete[0].Category != OpportunityCategoryD3DShaderCache ||
