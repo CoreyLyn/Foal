@@ -1387,41 +1387,7 @@ func sharedExecutionPhaseLabel(phase clean.ExecutionPhase) string {
 
 func (m eagerCleanModel) confirmationBodyEntries() []eagerBodyLine {
 	permanent, recycle := m.confirmationActionGroups()
-	lines := make([]eagerBodyLine, 0, len(permanent)+len(recycle)+8)
-	appendGroup := func(title string, rows []eagerCategoryRow) {
-		if len(rows) == 0 {
-			return
-		}
-		cats, candidates, bytes := confirmationGroupTotals(rows)
-		lines = append(lines, eagerBodyLine{
-			text:              fmt.Sprintf("%s · %d categories · %d item(s) · %s", title, cats, candidates, cleanFormatBytes(bytes)),
-			rowIndex:          -1,
-			outcomeIndex:      -1,
-			magnitudeBytes:    bytes,
-			hasMagnitudeBytes: true,
-		})
-		for _, row := range rows {
-			action := clean.DeletionActionLabel(row.PlannedAction)
-			lines = append(lines, eagerBodyLine{
-				text: fmt.Sprintf("  - %s · %d item(s) · %s · %s",
-					row.Label, row.CandidateCount, cleanFormatBytes(row.Bytes), action),
-				rowIndex:          -1,
-				outcomeIndex:      -1,
-				magnitudeBytes:    row.Bytes,
-				hasMagnitudeBytes: true,
-			})
-			if row.SafetyNote != "" {
-				lines = append(lines, eagerBodyLine{
-					text:         "      Impact: " + row.SafetyNote,
-					rowIndex:     -1,
-					outcomeIndex: -1,
-				})
-			}
-		}
-	}
-	appendGroup("Permanent deletion", permanent)
-	appendGroup("Recycle Bin", recycle)
-	return lines
+	return confirmationBodyEntriesFromGroups(permanent, recycle)
 }
 
 func (m eagerCleanModel) confirmationFooterLines() []string {
@@ -1430,20 +1396,25 @@ func (m eagerCleanModel) confirmationFooterLines() []string {
 
 func (m eagerCleanModel) confirmationFooterStyleLines() []tuiStyleLine {
 	n, measured, _ := m.selectionTotals()
+	includesPermanent := m.selectionIncludesPermanent()
 	lines := []tuiStyleLine{
 		plainStyleLine(""),
 		magnitudeStyleLine(fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured)), measured),
-		plainStyleLine("Latest preview total only. Execution resolves fresh state; candidates or bytes may differ from preview."),
-		plainStyleLine("Fresh execution cannot introduce a deletion action type that was not disclosed above."),
 	}
-	if m.selectionIncludesPermanent() {
+	// Risk / recoverability first so irreversible disclosure stays visible.
+	if includesPermanent {
 		lines = append(lines, plainStyleLine(confirmationPermanentIrreversibleWarning))
 	}
-	// Recycle Bin-only wording when that group is present; never claim free space.
 	if _, recycle := m.confirmationActionGroups(); len(recycle) > 0 {
-		lines = append(lines, plainStyleLine("Recycle Bin items are moved, not permanently erased."))
+		lines = append(lines, plainStyleLine(confirmationRecycleRecoverabilityNote))
 	}
-	lines = append(lines, plainStyleLine(""), plainStyleLine("Enter: execute | b/Esc: back to preview"))
+	// Fresh-rescan expectation + action-type safety, then execute hint.
+	lines = append(lines,
+		plainStyleLine(confirmationActionTypeCaveat),
+		plainStyleLine(confirmationNextStepLine),
+		plainStyleLine(""),
+		plainStyleLine(confirmationExecuteHintLine(includesPermanent)),
+	)
 	return lines
 }
 

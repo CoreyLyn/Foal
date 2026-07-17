@@ -825,8 +825,12 @@ func TestIsConfirmationMeasuredLine(t *testing.T) {
 		{line: "Recycle Bin · 1 categories · 1 item(s) · 100 MB", want: true},
 		{line: "  - Go cache · 2 item(s) · 512 MB · Permanent deletion", want: true},
 		{line: "  - Foal-owned temp sandboxes · 1 item(s) · 2 KB · Recycle Bin", want: true},
-		// Risk warning is copy, not a measured-byte confirmation row.
+		// Summary-first section headers (no totals) are not measured lines.
+		{line: "Permanent deletion", want: false},
+		{line: "Recycle Bin", want: false},
+		// Risk warning / next-step copy is not a measured-byte confirmation row.
 		{line: confirmationPermanentIrreversibleWarning, want: false},
+		{line: confirmationNextStepLine, want: false},
 		// Preview / execution / result must not match confirmation patterns.
 		{line: "  > [x] ✓ Big · 1 item(s) · 1 GB", want: false},
 		{line: "    [ ] ✓ Mid · 1 item(s) · 100 MB", want: false},
@@ -840,6 +844,93 @@ func TestIsConfirmationMeasuredLine(t *testing.T) {
 	for _, tt := range cases {
 		if got := isConfirmationMeasuredLine(tt.line); got != tt.want {
 			t.Fatalf("isConfirmationMeasuredLine(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestConfirmationBodyEntriesSummaryFirst(t *testing.T) {
+	// Summary-first: compact group totals precede detail section headers + rows.
+	rows := []eagerCategoryRow{
+		{
+			Identifier:     "go-cache",
+			Label:          "Go cache",
+			Selected:       true,
+			PlannedAction:  clean.DeletionActionDeletePermanently,
+			State:          clean.CategoryPreviewComplete,
+			CandidateCount: 2,
+			Bytes:          1024 * 1024 * 1024,
+			SafetyNote:     "Rebuilds indexes after cleanup.",
+		},
+		{
+			Identifier:     "user_temp",
+			Label:          "User temp",
+			Selected:       true,
+			PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+			State:          clean.CategoryPreviewComplete,
+			CandidateCount: 1,
+			Bytes:          100 * 1024 * 1024,
+		},
+		{
+			Identifier:    "off",
+			Label:         "Off row",
+			Selected:      false,
+			PlannedAction: clean.DeletionActionDeletePermanently,
+			State:         clean.CategoryPreviewComplete,
+			Bytes:         99,
+		},
+	}
+	permanent, recycle := eagerConfirmationActionGroups(rows)
+	entries := confirmationBodyEntriesFromGroups(permanent, recycle)
+	if len(entries) == 0 {
+		t.Fatal("expected confirmation body entries")
+	}
+	// First non-empty lines are the compact summaries (both groups present).
+	if !strings.HasPrefix(entries[0].text, "Permanent deletion ·") {
+		t.Fatalf("first body line must be permanent summary, got %q", entries[0].text)
+	}
+	if !entries[0].hasMagnitudeBytes || entries[0].magnitudeBytes != permanent[0].Bytes {
+		t.Fatalf("permanent summary magnitude = %v %d", entries[0].hasMagnitudeBytes, entries[0].magnitudeBytes)
+	}
+	if !strings.HasPrefix(entries[1].text, "Recycle Bin ·") {
+		t.Fatalf("second body line must be recycle summary, got %q", entries[1].text)
+	}
+	// Blank separator then section header before detail rows.
+	blankIdx := -1
+	for i, e := range entries {
+		if e.text == "" {
+			blankIdx = i
+			break
+		}
+	}
+	if blankIdx < 0 {
+		t.Fatal("summary and details must be separated by a blank line")
+	}
+	if blankIdx >= len(entries)-1 || entries[blankIdx+1].text != "Permanent deletion" {
+		t.Fatalf("detail section header after blank = %#v", entries[blankIdx+1:])
+	}
+	joined := ""
+	for _, e := range entries {
+		joined += e.text + "\n"
+	}
+	for _, want := range []string{
+		"Permanent deletion · 1 categories · 2 item(s) · 1 GB",
+		"Recycle Bin · 1 categories · 1 item(s) · 100 MB",
+		"  - Go cache · 2 item(s) · 1 GB · Permanent deletion",
+		"      Impact: Rebuilds indexes after cleanup.",
+		"  - User temp · 1 item(s) · 100 MB · Recycle Bin",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("body missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "Off row") {
+		t.Fatalf("unselected category leaked:\n%s", joined)
+	}
+	// Empty groups omitted: permanent-only body has no Recycle Bin lines.
+	permOnly := confirmationBodyEntriesFromGroups(permanent, nil)
+	for _, e := range permOnly {
+		if strings.Contains(e.text, "Recycle Bin") {
+			t.Fatalf("empty recycle group must be omitted: %q", e.text)
 		}
 	}
 }
@@ -879,22 +970,31 @@ func TestConfirmationPlainFrameByteAndWarningCopy(t *testing.T) {
 	if len(permanent) != 1 || len(recycle) != 1 {
 		t.Fatalf("groups permanent=%d recycle=%d", len(permanent), len(recycle))
 	}
-	pc, pcand, pbytes := confirmationGroupTotals(permanent)
-	rc, rcand, rbytes := confirmationGroupTotals(recycle)
+	_, _, pbytes := confirmationGroupTotals(permanent)
+	_, _, rbytes := confirmationGroupTotals(recycle)
 
-	// Build the same plain fragments confirmationBodyEntries / footer use.
-	plain := strings.Join([]string{
+	// Body: summary-first then details (same pure helper as production).
+	body := confirmationBodyEntriesFromGroups(permanent, recycle)
+	bodyLines := make([]string, len(body))
+	for i, e := range body {
+		bodyLines[i] = e.text
+	}
+
+	// Footer fragments mirror confirmationFooterStyleLines ordering.
+	plainParts := []string{
 		"Foal Clean",
 		"Confirm cleanup",
-		fmt.Sprintf("Permanent deletion · %d categories · %d item(s) · %s", pc, pcand, cleanFormatBytes(pbytes)),
-		fmt.Sprintf("  - %s · %d item(s) · %s · %s", permanent[0].Label, permanent[0].CandidateCount, cleanFormatBytes(permanent[0].Bytes), clean.DeletionActionLabel(permanent[0].PlannedAction)),
-		"      Impact: " + permanent[0].SafetyNote,
-		fmt.Sprintf("Recycle Bin · %d categories · %d item(s) · %s", rc, rcand, cleanFormatBytes(rbytes)),
-		fmt.Sprintf("  - %s · %d item(s) · %s · %s", recycle[0].Label, recycle[0].CandidateCount, cleanFormatBytes(recycle[0].Bytes), clean.DeletionActionLabel(recycle[0].PlannedAction)),
+	}
+	plainParts = append(plainParts, bodyLines...)
+	plainParts = append(plainParts,
 		fmt.Sprintf("Selected: %d categories · %s", 2, cleanFormatBytes(pbytes+rbytes)),
 		confirmationPermanentIrreversibleWarning,
-		"Recycle Bin items are moved, not permanently erased.",
-	}, "\n")
+		confirmationRecycleRecoverabilityNote,
+		confirmationActionTypeCaveat,
+		confirmationNextStepLine,
+		confirmationExecuteHintLine(true),
+	)
+	plain := strings.Join(plainParts, "\n")
 	if strings.Contains(plain, "\x1b[") {
 		t.Fatal("plain confirmation frame must stay free of escapes")
 	}
@@ -907,6 +1007,8 @@ func TestConfirmationPlainFrameByteAndWarningCopy(t *testing.T) {
 		"1 GB",
 		"100 MB",
 		confirmationPermanentIrreversibleWarning,
+		confirmationNextStepLine,
+		"Enter: start cleanup",
 		"Impact: Rebuilds indexes after cleanup.",
 	} {
 		if !strings.Contains(plain, want) {
@@ -920,6 +1022,27 @@ func TestConfirmationPlainFrameByteAndWarningCopy(t *testing.T) {
 	if strings.Contains(plain, "Off row") {
 		t.Fatalf("unselected category leaked into confirmation:\n%s", plain)
 	}
+	// Summary lines appear before their detail rows.
+	permSummary := strings.Index(plain, "Permanent deletion · 1 categories")
+	permDetail := strings.Index(plain, "  - Go cache")
+	if permSummary < 0 || permDetail < 0 || permSummary > permDetail {
+		t.Fatalf("permanent summary must precede detail row:\n%s", plain)
+	}
+}
+
+func TestConfirmationExecuteHintAndNextStepCopy(t *testing.T) {
+	if confirmationExecuteHintLine(true) != "Enter: start cleanup | b/Esc: back to preview" {
+		t.Fatalf("permanent hint = %q", confirmationExecuteHintLine(true))
+	}
+	if confirmationExecuteHintLine(false) != "Enter: execute | b/Esc: back to preview" {
+		t.Fatalf("recycle-only hint = %q", confirmationExecuteHintLine(false))
+	}
+	if !strings.Contains(confirmationNextStepLine, "re-check selected categories") {
+		t.Fatalf("next-step missing re-check fragment: %q", confirmationNextStepLine)
+	}
+	if !strings.Contains(confirmationNextStepLine, "may take a while") {
+		t.Fatalf("next-step missing duration expectation: %q", confirmationNextStepLine)
+	}
 }
 
 func TestStylizeFrameConfirmationMagnitudeAndRisk(t *testing.T) {
@@ -927,12 +1050,18 @@ func TestStylizeFrameConfirmationMagnitudeAndRisk(t *testing.T) {
 		"Foal Clean",
 		"Confirm cleanup",
 		"Permanent deletion · 1 categories · 2 item(s) · 1 GB",
-		"  - Go cache · 2 item(s) · 1 GB · Permanent deletion",
 		"Recycle Bin · 1 categories · 1 item(s) · 100 MB",
+		"",
+		"Permanent deletion",
+		"  - Go cache · 2 item(s) · 1 GB · Permanent deletion",
+		"Recycle Bin",
 		"  - User temp · 1 item(s) · 2 KB · Recycle Bin",
 		"Selected: 2 categories · 1 GB",
 		confirmationPermanentIrreversibleWarning,
-		"Recycle Bin items are moved, not permanently erased.",
+		confirmationRecycleRecoverabilityNote,
+		confirmationActionTypeCaveat,
+		confirmationNextStepLine,
+		"Enter: start cleanup | b/Esc: back to preview",
 	}, "\n")
 	if strings.Contains(plain, "\x1b[") {
 		t.Fatal("plain frame must stay free of escapes")
@@ -944,9 +1073,11 @@ func TestStylizeFrameConfirmationMagnitudeAndRisk(t *testing.T) {
 		"100 MB",
 		"2 KB",
 		confirmationPermanentIrreversibleWarning,
+		confirmationNextStepLine,
 		"Permanent deletion · 1 categories",
 		"Recycle Bin · 1 categories",
 		"Selected: 2 categories",
+		"Enter: start cleanup",
 	} {
 		if !strings.Contains(styled, want) {
 			t.Fatalf("styled confirmation missing plain fragment %q:\n%q", want, styled)

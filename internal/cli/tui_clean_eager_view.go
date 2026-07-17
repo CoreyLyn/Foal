@@ -126,6 +126,89 @@ func confirmationGroupTotals(rows []eagerCategoryRow) (categories, candidates in
 	return categories, candidates, bytes
 }
 
+// Confirmation plain-frame copy (path-free). Tests assert these fragments.
+const (
+	// confirmationNextStepLine sets expectation before Enter executes: shared
+	// Clean re-checks selected categories, then mutates. No path, no ETA.
+	confirmationNextStepLine = "Next: re-check selected categories, then clean. This may take a while."
+	// confirmationActionTypeCaveat is the permanent safety note that fresh
+	// execution cannot introduce an undisclosed deletion action type.
+	confirmationActionTypeCaveat = "Fresh execution cannot introduce a deletion action type that was not disclosed above."
+	// confirmationRecycleRecoverabilityNote when the Recycle Bin group is present.
+	confirmationRecycleRecoverabilityNote = "Recycle Bin items are moved, not permanently erased."
+)
+
+// confirmationGroupSummaryLine is the compact action-group total used at the
+// top of the confirmation body (summary-first). Empty groups must not call this.
+func confirmationGroupSummaryLine(title string, rows []eagerCategoryRow) (line string, bytes int64) {
+	cats, candidates, bytes := confirmationGroupTotals(rows)
+	return fmt.Sprintf("%s · %d categories · %d item(s) · %s", title, cats, candidates, cleanFormatBytes(bytes)), bytes
+}
+
+// confirmationBodyEntriesFromGroups builds summary-first confirmation body lines:
+// high-level Permanent / Recycle totals first, then scrollable detail sections.
+// Empty action groups are omitted entirely. Presentation only.
+func confirmationBodyEntriesFromGroups(permanent, recycle []eagerCategoryRow) []eagerBodyLine {
+	lines := make([]eagerBodyLine, 0, len(permanent)+len(recycle)+8)
+	appendSummary := func(title string, rows []eagerCategoryRow) {
+		if len(rows) == 0 {
+			return
+		}
+		text, bytes := confirmationGroupSummaryLine(title, rows)
+		lines = append(lines, eagerBodyLine{
+			text:              text,
+			rowIndex:          -1,
+			outcomeIndex:      -1,
+			magnitudeBytes:    bytes,
+			hasMagnitudeBytes: true,
+		})
+	}
+	appendSummary("Permanent deletion", permanent)
+	appendSummary("Recycle Bin", recycle)
+
+	if len(permanent) > 0 || len(recycle) > 0 {
+		lines = append(lines, eagerBodyLine{text: "", rowIndex: -1, outcomeIndex: -1})
+	}
+
+	appendDetails := func(title string, rows []eagerCategoryRow) {
+		if len(rows) == 0 {
+			return
+		}
+		lines = append(lines, eagerBodyLine{text: title, rowIndex: -1, outcomeIndex: -1})
+		for _, row := range rows {
+			action := clean.DeletionActionLabel(row.PlannedAction)
+			lines = append(lines, eagerBodyLine{
+				text: fmt.Sprintf("  - %s · %d item(s) · %s · %s",
+					row.Label, row.CandidateCount, cleanFormatBytes(row.Bytes), action),
+				rowIndex:          -1,
+				outcomeIndex:      -1,
+				magnitudeBytes:    row.Bytes,
+				hasMagnitudeBytes: true,
+			})
+			if row.SafetyNote != "" {
+				lines = append(lines, eagerBodyLine{
+					text:         "      Impact: " + row.SafetyNote,
+					rowIndex:     -1,
+					outcomeIndex: -1,
+				})
+			}
+		}
+	}
+	appendDetails("Permanent deletion", permanent)
+	appendDetails("Recycle Bin", recycle)
+	return lines
+}
+
+// confirmationExecuteHintLine is the Enter / back key hint on confirmation.
+// Permanent selections use slightly stronger "start cleanup" wording; recycle-
+// only keeps "execute". No typed phrase or countdown.
+func confirmationExecuteHintLine(includesPermanent bool) string {
+	if includesPermanent {
+		return "Enter: start cleanup | b/Esc: back to preview"
+	}
+	return "Enter: execute | b/Esc: back to preview"
+}
+
 // eagerConfirmationEnabled requires every scannable category terminal and a
 // non-empty exact selection before the first Enter may open confirmation.
 func eagerConfirmationEnabled(unavailable, canceled bool, phase eagerCleanPhase, rows []eagerCategoryRow, executionStarted bool) bool {

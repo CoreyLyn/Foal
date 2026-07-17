@@ -1520,17 +1520,21 @@ func TestEagerCleanFirstEnterOpensConfirmationWithoutExecutionOrHistory(t *testi
 		model.rows[0].Label,
 		model.rows[optInIndex].Label,
 		"Selected: 2 categories",
-		"fresh state",
-		"may differ",
+		confirmationNextStepLine,
 		"cannot introduce a deletion action type",
+		"Enter: execute",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("confirmation missing %q:\n%s", want, content)
 		}
 	}
-	// Recycle Bin-only selection must not show permanent irreversible warning.
+	// Recycle Bin-only selection must not show permanent irreversible warning
+	// or the permanent-strengthened Enter hint.
 	if strings.Contains(content, "Permanent deletion is irreversible") {
 		t.Fatalf("recycle-only confirmation must not show permanent irreversible warning:\n%s", content)
+	}
+	if strings.Contains(content, "Enter: start cleanup") {
+		t.Fatalf("recycle-only confirmation must not use permanent Enter hint:\n%s", content)
 	}
 	// Unselected empty categories must not appear as selected lines.
 	selectedBlock := content
@@ -3012,10 +3016,18 @@ func TestEagerCleanConfirmationGroupsMixedActionsAndHandoff(t *testing.T) {
 		"Permanent deletion is irreversible",
 		"cannot introduce a deletion action type",
 		"Recycle Bin items are moved",
+		confirmationNextStepLine,
+		"Enter: start cleanup",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("confirmation missing %q:\n%s", want, content)
 		}
+	}
+	// Summary totals appear before detail rows.
+	if sum := strings.Index(content, "Permanent deletion · 1 categories"); sum < 0 {
+		t.Fatal("missing permanent summary")
+	} else if detail := strings.Index(content, "  - "); detail < 0 || sum > detail {
+		t.Fatalf("summary must precede detail rows:\n%s", content)
 	}
 	// No per-category deletion-method toggle chrome.
 	for _, banned := range []string{"toggle action", "change method", "deletion method"} {
@@ -3334,6 +3346,8 @@ func TestEagerCleanProductionPermanentCategoriesInitialSelectionAndConfirmation(
 		"Permanent deletion is irreversible",
 		"cannot introduce a deletion action type",
 		"Recycle Bin items are moved",
+		confirmationNextStepLine,
+		"Enter: start cleanup",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("confirmation missing %q:\n%s", want, content)
@@ -3525,6 +3539,8 @@ func TestEagerCleanGrokBuildUpdateResidueRowSelectionAndHandoff(t *testing.T) {
 		"Permanent deletion",
 		"Grok Build update residue",
 		"Permanent deletion is irreversible",
+		confirmationNextStepLine,
+		"Enter: start cleanup",
 	} {
 		if !strings.Contains(confirm, want) {
 			t.Fatalf("confirmation missing %q:\n%s", want, confirm)
