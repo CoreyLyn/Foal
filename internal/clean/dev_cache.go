@@ -110,9 +110,12 @@ func resolveYarnCachePaths(deps devCachePathDependencies) []string {
 }
 
 func resolveGoCachePaths(deps devCachePathDependencies) []string {
-	// go: GOCACHE -> %LOCALAPPDATA%\go-build
-	if path, ok := deps.lookupEnv("GOCACHE"); ok && path != "" {
-		return []string{path}
+	// go: non-blank GOCACHE -> %LOCALAPPDATA%\go-build.
+	// Blank/whitespace GOCACHE falls through to the default build cache root.
+	if path, ok := deps.lookupEnv("GOCACHE"); ok {
+		if trimmed := strings.TrimSpace(path); trimmed != "" {
+			return []string{trimmed}
+		}
 	}
 	if localAppData, ok := deps.lookupEnv("LOCALAPPDATA"); ok && localAppData != "" {
 		return []string{deps.joinPath(localAppData, "go-build")}
@@ -121,14 +124,26 @@ func resolveGoCachePaths(deps devCachePathDependencies) []string {
 }
 
 func resolveGoModCachePaths(deps devCachePathDependencies) []string {
-	// go module cache: non-blank GOMODCACHE -> %USERPROFILE%\go\pkg\mod
-	// (official default when GOPATH is the user home go tree). Blank/whitespace
-	// GOMODCACHE falls through. Never GOPATH/pkg siblings, GOROOT, tool binaries,
-	// or project vendor/. Foal owns path resolution and deletion; never runs
-	// go clean -modcache.
+	// go module cache resolution (matches go command semantics, no subprocess):
+	// 1. non-blank GOMODCACHE
+	// 2. non-blank GOPATH → first list entry via filepath.SplitList + pkg/mod
+	// 3. %USERPROFILE%\go\pkg\mod (Windows-friendly default home go tree)
+	// 4. userHomeDir/go/pkg/mod
+	// Blank/whitespace env values fall through. Never GOROOT, never other
+	// GOPATH/pkg siblings, tool binaries, or project vendor/. Foal owns path
+	// resolution and deletion; never runs go clean -modcache.
 	if path, ok := deps.lookupEnv("GOMODCACHE"); ok {
 		if trimmed := strings.TrimSpace(path); trimmed != "" {
 			return []string{trimmed}
+		}
+	}
+	if gopath, ok := deps.lookupEnv("GOPATH"); ok {
+		if trimmed := strings.TrimSpace(gopath); trimmed != "" {
+			// Go uses the first GOPATH entry when the value is a list.
+			entries := filepath.SplitList(trimmed)
+			if len(entries) > 0 && strings.TrimSpace(entries[0]) != "" {
+				return []string{deps.joinPath(strings.TrimSpace(entries[0]), "pkg", "mod")}
+			}
 		}
 	}
 	if userProfile, ok := deps.lookupEnv("USERPROFILE"); ok && userProfile != "" {

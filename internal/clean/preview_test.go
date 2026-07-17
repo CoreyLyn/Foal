@@ -406,8 +406,11 @@ func TestDryRunReportsChromeBrowserCacheOpportunityThroughReviewSurfaces(t *test
 			t.Fatalf("JSON missing %q: %s", want, jsonText)
 		}
 	}
-	if !strings.Contains(jsonText, "CacheStorage") {
-		t.Fatalf("JSON missing CacheStorage kind: %s", jsonText)
+	if !strings.Contains(jsonText, `"kind":"Service Worker/CacheStorage"`) {
+		t.Fatalf("JSON missing stable CacheStorage kind: %s", jsonText)
+	}
+	if strings.Contains(jsonText, `Service Worker\CacheStorage`) {
+		t.Fatalf("JSON Kind used OS backslash form: %s", jsonText)
 	}
 	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "ScriptCache", "Database", "move_to_recycle_bin"} {
 		if strings.Contains(jsonText, forbidden) {
@@ -545,8 +548,11 @@ func TestDryRunReportsEdgeBrowserCacheOpportunityThroughSharedReviewSurfaces(t *
 			t.Fatalf("JSON missing %q: %s", want, jsonText)
 		}
 	}
-	if !strings.Contains(jsonText, "CacheStorage") {
-		t.Fatalf("JSON missing CacheStorage kind: %s", jsonText)
+	if !strings.Contains(jsonText, `"kind":"Service Worker/CacheStorage"`) {
+		t.Fatalf("JSON missing stable CacheStorage kind: %s", jsonText)
+	}
+	if strings.Contains(jsonText, `Service Worker\CacheStorage`) {
+		t.Fatalf("JSON Kind used OS backslash form: %s", jsonText)
 	}
 	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "ScriptCache", "Database", "move_to_recycle_bin"} {
 		if strings.Contains(jsonText, forbidden) {

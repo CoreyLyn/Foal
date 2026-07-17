@@ -36,14 +36,16 @@ type browserCacheConfig struct {
 }
 
 // chromiumBrowserCacheDirectoryKinds is the exact allowlist of regenerable
-// profile-relative cache roots for Chrome and Edge. Nested Service Worker
+// profile-relative cache roots for Chrome and Edge. Kind strings use forward
+// slashes as a stable JSON/OS-independent identity; join with
+// filepath.FromSlash when building on-disk paths. Nested Service Worker
 // CacheStorage is the Cache Storage API backend only; ScriptCache and Database
 // siblings stay excluded (docs/research/chromium-service-worker-cachestorage.md).
 var chromiumBrowserCacheDirectoryKinds = []string{
 	"Cache",
 	"Code Cache",
 	"GPUCache",
-	filepath.Join("Service Worker", "CacheStorage"),
+	"Service Worker/CacheStorage",
 }
 
 // browserCacheConfigs registers every supported browser under the single
@@ -214,7 +216,8 @@ func inspectBrowserProfiles(
 			Caches: make([]BrowserCacheDirectory, 0, len(config.cacheDirectoryKinds)),
 		}
 		for _, kind := range config.cacheDirectoryKinds {
-			cachePath := filepath.Join(resolvedProfilePath, kind)
+			// Kind is a stable slash-form identity; convert for OS path joins.
+			cachePath := filepath.Join(resolvedProfilePath, filepath.FromSlash(kind))
 			if validator.IsUserProtected(cachePath) {
 				return browserCacheDiscoveryResult{suppressed: true, suppressedProtectionPaths: browserProtectedRulePaths(protectionRoot, validator)}
 			}

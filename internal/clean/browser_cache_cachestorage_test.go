@@ -80,25 +80,41 @@ func TestDryRunMeasuresChromiumCacheStorageAndExcludesSWSiblings(t *testing.T) {
 	}
 
 	// Confirm measured CacheStorage paths exist under both profiles.
+	// Kind is a stable forward-slash identity; Path remains OS-joined.
+	const wantCacheStorageKind = "Service Worker/CacheStorage"
 	cacheStoragePaths := []string{
 		filepath.Join(userDataRoot, "Default", "Service Worker", "CacheStorage"),
 		filepath.Join(userDataRoot, "Profile 1", "Service Worker", "CacheStorage"),
 	}
 	for _, profile := range opp.BrowserCache.Profiles {
 		for _, cache := range profile.Caches {
-			if !strings.Contains(cache.Kind, "CacheStorage") {
+			if cache.Kind != wantCacheStorageKind {
 				continue
 			}
 			if cache.Bytes <= 0 {
 				t.Fatalf("profile %s CacheStorage bytes = %d, want measured", profile.ID, cache.Bytes)
 			}
+			// Kind must stay slash-stable in JSON (no OS separators).
+			if strings.Contains(cache.Kind, `\`) {
+				t.Fatalf("Kind must use forward slashes, got %q", cache.Kind)
+			}
+		}
+	}
+	if !strings.Contains(jsonText, `"kind":"Service Worker/CacheStorage"`) &&
+		!strings.Contains(jsonText, `"Kind":"Service Worker/CacheStorage"`) {
+		// Accept either encoding casing from json tags; require slash form.
+		if !strings.Contains(jsonText, "Service Worker/CacheStorage") {
+			t.Fatalf("JSON missing stable Kind Service Worker/CacheStorage: %s", jsonText)
+		}
+		if strings.Contains(jsonText, `Service Worker\CacheStorage`) {
+			t.Fatalf("JSON Kind used OS backslash form: %s", jsonText)
 		}
 	}
 	for _, wantPath := range cacheStoragePaths {
 		found := false
 		for _, profile := range opp.BrowserCache.Profiles {
 			for _, cache := range profile.Caches {
-				if cache.Path == wantPath && cache.Bytes > 0 {
+				if cache.Kind == wantCacheStorageKind && cache.Path == wantPath && cache.Bytes > 0 {
 					found = true
 				}
 			}

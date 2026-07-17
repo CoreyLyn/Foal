@@ -150,6 +150,24 @@ func TestDevCachePathResolution(t *testing.T) {
 			t.Errorf("expected env path, got %q", paths[0])
 		}
 
+		// Whitespace-only GOCACHE falls through to default go-build path.
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "GOCACHE" {
+				return "   ", true
+			}
+			if key == "LOCALAPPDATA" {
+				return "C:\\Users\\test\\AppData\\Local", true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryGo, deps)
+		if len(paths) != 1 {
+			t.Fatalf("expected 1 path, got %d", len(paths))
+		}
+		if paths[0] != "C:\\Users\\test\\AppData\\Local\\go-build" {
+			t.Errorf("whitespace GOCACHE default path = %q", paths[0])
+		}
+
 		// Env not set: only default is returned
 		deps.lookupEnv = func(key string) (string, bool) {
 			if key == "LOCALAPPDATA" {
@@ -172,6 +190,9 @@ func TestDevCachePathResolution(t *testing.T) {
 				if key == "GOMODCACHE" {
 					return `C:\custom\gomod`, true
 				}
+				if key == "GOPATH" {
+					return `C:\gopath-should-not-win`, true
+				}
 				if key == "USERPROFILE" {
 					return `C:\Users\test`, true
 				}
@@ -183,13 +204,16 @@ func TestDevCachePathResolution(t *testing.T) {
 		}
 		paths := resolveDevCachePaths(DevCacheCategoryGoModCache, deps)
 		if len(paths) != 1 || paths[0] != `C:\custom\gomod` {
-			t.Fatalf("GOMODCACHE paths = %#v", paths)
+			t.Fatalf("GOMODCACHE wins over GOPATH: %#v", paths)
 		}
 
-		// Whitespace-only GOMODCACHE falls through to user default.
+		// Whitespace-only GOMODCACHE falls through to GOPATH first entry.
 		deps.lookupEnv = func(key string) (string, bool) {
 			if key == "GOMODCACHE" {
 				return "   ", true
+			}
+			if key == "GOPATH" {
+				return `D:\go`, true
 			}
 			if key == "USERPROFILE" {
 				return `C:\Users\test`, true
@@ -197,11 +221,26 @@ func TestDevCachePathResolution(t *testing.T) {
 			return "", false
 		}
 		paths = resolveDevCachePaths(DevCacheCategoryGoModCache, deps)
-		if len(paths) != 1 || paths[0] != `C:\Users\test\go\pkg\mod` {
-			t.Fatalf("blank GOMODCACHE default paths = %#v", paths)
+		if len(paths) != 1 || paths[0] != `D:\go\pkg\mod` {
+			t.Fatalf("blank GOMODCACHE uses GOPATH: %#v", paths)
 		}
 
-		// Env not set: %USERPROFILE%\go\pkg\mod.
+		// Multi-entry GOPATH uses only the first element (OS list separator).
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "GOPATH" {
+				return strings.Join([]string{`D:\first`, `E:\second`}, string(filepath.ListSeparator)), true
+			}
+			if key == "USERPROFILE" {
+				return `C:\Users\test`, true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryGoModCache, deps)
+		if len(paths) != 1 || paths[0] != `D:\first\pkg\mod` {
+			t.Fatalf("multi-entry GOPATH first only: %#v", paths)
+		}
+
+		// No GOMODCACHE/GOPATH: %USERPROFILE%\go\pkg\mod.
 		deps.lookupEnv = func(key string) (string, bool) {
 			if key == "USERPROFILE" {
 				return `C:\Users\test`, true
@@ -211,6 +250,21 @@ func TestDevCachePathResolution(t *testing.T) {
 		paths = resolveDevCachePaths(DevCacheCategoryGoModCache, deps)
 		if len(paths) != 1 || paths[0] != `C:\Users\test\go\pkg\mod` {
 			t.Fatalf("USERPROFILE default paths = %#v", paths)
+		}
+
+		// Whitespace GOPATH falls through to USERPROFILE.
+		deps.lookupEnv = func(key string) (string, bool) {
+			if key == "GOPATH" {
+				return "   ", true
+			}
+			if key == "USERPROFILE" {
+				return `C:\Users\test`, true
+			}
+			return "", false
+		}
+		paths = resolveDevCachePaths(DevCacheCategoryGoModCache, deps)
+		if len(paths) != 1 || paths[0] != `C:\Users\test\go\pkg\mod` {
+			t.Fatalf("blank GOPATH USERPROFILE fallback = %#v", paths)
 		}
 
 		// USERPROFILE missing: userHomeDir fallback.
@@ -234,6 +288,7 @@ func TestDevCachePathResolution(t *testing.T) {
 
 		// Structural boundary: build cache and module cache resolvers stay separate.
 		// go-modcache never returns go-build; go-cache never returns go/pkg/mod.
+		// With only GOCACHE set (no GOMODCACHE), mod still falls through home, not GOCACHE.
 		buildDeps := devCachePathDependencies{
 			lookupEnv: func(key string) (string, bool) {
 				switch key {
@@ -241,6 +296,8 @@ func TestDevCachePathResolution(t *testing.T) {
 					return `C:\build\go-build`, true
 				case "GOMODCACHE":
 					return `C:\mod\pkg\mod`, true
+				case "GOPATH":
+					return `C:\gopath-must-not-override-gomodcache`, true
 				case "LOCALAPPDATA":
 					return `C:\Users\test\AppData\Local`, true
 				case "USERPROFILE":
@@ -261,6 +318,31 @@ func TestDevCachePathResolution(t *testing.T) {
 		}
 		if buildPaths[0] == modPaths[0] {
 			t.Fatal("build and module cache must remain separate roots")
+		}
+
+		// GOCACHE must not leak into go-modcache when GOMODCACHE is unset.
+		noModEnv := devCachePathDependencies{
+			lookupEnv: func(key string) (string, bool) {
+				switch key {
+				case "GOCACHE":
+					return `C:\build\go-build`, true
+				case "LOCALAPPDATA":
+					return `C:\Users\test\AppData\Local`, true
+				case "USERPROFILE":
+					return `C:\Users\test`, true
+				default:
+					return "", false
+				}
+			},
+			joinPath: func(parts ...string) string { return strings.Join(parts, `\`) },
+		}
+		buildOnly := resolveDevCachePaths(DevCacheCategoryGo, noModEnv)
+		modHome := resolveDevCachePaths(DevCacheCategoryGoModCache, noModEnv)
+		if len(buildOnly) != 1 || buildOnly[0] != `C:\build\go-build` {
+			t.Fatalf("go-cache alone = %#v", buildOnly)
+		}
+		if len(modHome) != 1 || modHome[0] != `C:\Users\test\go\pkg\mod` {
+			t.Fatalf("go-modcache without GOMODCACHE must not use GOCACHE: %#v", modHome)
 		}
 	})
 
