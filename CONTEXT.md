@@ -100,6 +100,10 @@ _Avoid_: cleanup rule group, execution authorization, JSON status
 A human-readable notice that explains protected or administrator-only locations were skipped without recommending elevation as the normal path.
 _Avoid_: full preview prompt, automatic elevation, run as administrator recommendation
 
+**Windows system cleanup handoff**:
+A path-free, byte-free, non-executable refinement of the Administrator permission boundary that directs the user to Windows Settings > System > Storage > Temporary files or Cleanup recommendations for administrator-managed space such as Windows Update Cleanup, Delivery Optimization, and previous Windows installations. It is fixed human guidance shown on every non-JSON Clean dry-run and throughout the Clean TUI preview state, including unavailable and no-work previews, labeled Windows-managed and Not measured by Foal, and excluded from Potential space. It disappears on TUI confirmation, execution, and result pages, and is not Result data, JSON contract data, or History. Foal does not inspect those roots, estimate their size, open or invoke the Windows entry point, run `cleanmgr` or DISM, request elevation, or register the handoff as a cleanup category or `optimize` check.
+_Avoid_: JSON recommendation, persisted recommendation, system cleanup category, system cache opportunity, estimated system-cleanable bytes, elevated cleanup, delegated cleanup execution
+
 **Protection rules**:
 Foal's active cleanup safety boundaries, including default Windows path-safety rules and user-defined deny-only entries loaded from `%APPDATA%\Foal\protection.txt` or `FOAL_PROTECTION_FILE`. Each valid absolute local path protects itself and its subtree using normalized, case-insensitive, path-component-aware matching; protected candidates disappear before reclaimable totals and path-bearing projection, while the Clean TUI eager preview may retain only a path-free category exclusion count and `skipped` or `partial` state, and a Review suggestion without a resolved cache path is never matched by interpreting command text.
 _Avoid_: cleanup authorization, allow-only model, protected path disclosure, protected-byte total
