@@ -205,6 +205,137 @@ func TestFilesystemPermanentRemoverHonorsCancelDuringWalk(t *testing.T) {
 	}
 }
 
+func TestExecutePermanentPathSafeRunsBeforePreMutation(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "protected.tmp")
+	if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var preMutationCalls atomic.Int32
+	remover := &countingPermanentRemover{}
+	result := delete.ExecutePermanentWithHooks(
+		context.Background(),
+		[]delete.Candidate{{Path: path, Bytes: 4}},
+		remover,
+		pathsafe.NewValidator([]string{root}),
+		func(candidate delete.Candidate) (pathsafe.Reason, bool) {
+			preMutationCalls.Add(1)
+			return pathsafe.Reason{}, true
+		},
+	)
+	if preMutationCalls.Load() != 0 {
+		t.Fatalf("pre-mutation ran after PathSafe rejection: calls=%d", preMutationCalls.Load())
+	}
+	if remover.calls.Load() != 0 {
+		t.Fatalf("remover called after PathSafe rejection: %d", remover.calls.Load())
+	}
+	if len(result.Items) != 1 || result.Items[0].Kind != delete.PermanentOutcomeSkipped {
+		t.Fatalf("result = %#v, want pathsafe skip", result.Items)
+	}
+	if result.Items[0].Reason.Code != "protected_path" {
+		t.Fatalf("reason = %#v", result.Items[0].Reason)
+	}
+}
+
+func TestExecutePermanentPreMutationRejectionDoesNotCallRemover(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file.tmp")
+	if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	remover := &countingPermanentRemover{}
+	result := delete.ExecutePermanentWithHooks(
+		context.Background(),
+		[]delete.Candidate{{Path: path, Bytes: 4}},
+		remover,
+		pathsafe.Validator{},
+		func(candidate delete.Candidate) (pathsafe.Reason, bool) {
+			if candidate.Path != path || candidate.Bytes != 4 {
+				t.Fatalf("pre-mutation candidate = %#v", candidate)
+			}
+			return pathsafe.Reason{
+				Code:    "identity_mismatch",
+				Message: "candidate no longer matches category identity",
+			}, false
+		},
+	)
+	if remover.calls.Load() != 0 {
+		t.Fatalf("remover called on pre-mutation rejection: %d", remover.calls.Load())
+	}
+	if len(result.Items) != 1 || result.Items[0].Kind != delete.PermanentOutcomeSkipped {
+		t.Fatalf("result = %#v, want skipped", result.Items)
+	}
+	if result.Items[0].Reason.Code != "identity_mismatch" || result.Items[0].Bytes != 4 {
+		t.Fatalf("item = %#v", result.Items[0])
+	}
+	if result.Items[0].PartialRisk {
+		t.Fatal("pre-mutation skip must not claim partial risk")
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("rejected path must remain: %v", err)
+	}
+}
+
+func TestExecutePermanentPreMutationRejectionIsolatesSiblings(t *testing.T) {
+	root := t.TempDir()
+	reject := filepath.Join(root, "reject.tmp")
+	keep := filepath.Join(root, "keep.tmp")
+	for _, path := range []string{reject, keep} {
+		if err := os.WriteFile(path, []byte("xx"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	remover := &countingPermanentRemover{}
+	result := delete.ExecutePermanentWithHooks(
+		context.Background(),
+		[]delete.Candidate{
+			{Path: reject, Bytes: 2},
+			{Path: keep, Bytes: 2},
+		},
+		remover,
+		pathsafe.Validator{},
+		func(candidate delete.Candidate) (pathsafe.Reason, bool) {
+			if candidate.Path == reject {
+				return pathsafe.Reason{Code: "identity_mismatch", Message: "reject"}, false
+			}
+			return pathsafe.Reason{}, true
+		},
+	)
+	if remover.calls.Load() != 1 {
+		t.Fatalf("remover calls = %d, want only valid sibling", remover.calls.Load())
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("items = %#v", result.Items)
+	}
+	if result.Items[0].Kind != delete.PermanentOutcomeSkipped || result.Items[0].Reason.Code != "identity_mismatch" {
+		t.Fatalf("first = %#v", result.Items[0])
+	}
+	if result.Items[1].Kind != delete.PermanentOutcomeDeleted || result.Items[1].Path != keep {
+		t.Fatalf("second = %#v", result.Items[1])
+	}
+}
+
+func TestExecutePermanentNilPreMutationKeepsExistingBehavior(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file.tmp")
+	if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := delete.ExecutePermanentWithHooks(
+		context.Background(),
+		[]delete.Candidate{{Path: path, Bytes: 4}},
+		delete.FilesystemPermanentRemover{},
+		pathsafe.Validator{},
+		nil,
+	)
+	if len(result.Items) != 1 || result.Items[0].Kind != delete.PermanentOutcomeDeleted {
+		t.Fatalf("result = %#v, want deleted with nil pre-mutation", result.Items)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("path should be deleted: %v", err)
+	}
+}
+
 type countingPermanentRemover struct {
 	calls atomic.Int32
 }
