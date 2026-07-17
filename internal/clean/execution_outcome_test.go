@@ -30,6 +30,37 @@ func TestInProgressExecutionStateProjectsSharedPhases(t *testing.T) {
 	}
 }
 
+func TestProjectInProgressCategoryStateWaitingVsActive(t *testing.T) {
+	active := "npm-cache"
+	other := "pnpm-cache"
+	cases := []struct {
+		name   string
+		phase  clean.ExecutionPhase
+		active string
+		id     string
+		want   clean.CategoryExecutionState
+	}{
+		{"active scanning", clean.ExecutionPhaseScanning, active, active, clean.CategoryExecutionRechecking},
+		{"other waiting", clean.ExecutionPhaseScanning, active, other, clean.CategoryExecutionWaiting},
+		{"empty active applies phase", clean.ExecutionPhaseRecycleBinSafety, "", active, clean.CategoryExecutionReady},
+		{"empty active other also phase", clean.ExecutionPhaseRecycleBinSafety, "", other, clean.CategoryExecutionReady},
+		{"active cleaning", clean.ExecutionPhasePermanentOperations, active, active, clean.CategoryExecutionCleaning},
+		{"non-active during permanent waits", clean.ExecutionPhasePermanentOperations, active, other, clean.CategoryExecutionWaiting},
+	}
+	for _, tc := range cases {
+		got := clean.ProjectInProgressCategoryState(tc.phase, tc.active, tc.id)
+		if got != tc.want {
+			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+		if clean.IsTerminalExecutionState(got) {
+			t.Fatalf("%s: must not be terminal", tc.name)
+		}
+	}
+	if clean.IsTerminalExecutionState(clean.CategoryExecutionWaiting) {
+		t.Fatal("waiting must not be terminal")
+	}
+}
+
 func TestProjectCategoryExecutionOutcomesEmptyWhenNoCandidates(t *testing.T) {
 	selected := []string{clean.DefaultCategoryFoalOwnedTempSandboxes, clean.OpportunityCategoryCrashDumps}
 	outcomes := clean.ProjectCategoryExecutionOutcomes(selected, clean.Result{Status: "ok", Mode: "execute"})

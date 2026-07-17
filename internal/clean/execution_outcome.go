@@ -4,11 +4,16 @@ import "strings"
 
 // CategoryExecutionState is the path-free lifecycle for one selected category
 // during shared Clean execution and its terminal projection from the final
-// Result. In-progress values (rechecking, ready, cleaning) come from shared
-// phase observations; terminal values come only from the authoritative Result.
+// Result. In-progress values (waiting, rechecking, ready, cleaning) come from
+// shared phase observations plus ActiveCategory; terminal values come only
+// from the authoritative Result.
 type CategoryExecutionState string
 
 const (
+	// CategoryExecutionWaiting is selected but not yet the ActiveCategory
+	// during shared execution. Distinct from preview waiting; progress alone
+	// never promotes waiting to a terminal outcome (Slice D territory).
+	CategoryExecutionWaiting    CategoryExecutionState = "waiting"
 	CategoryExecutionRechecking CategoryExecutionState = "rechecking"
 	CategoryExecutionReady      CategoryExecutionState = "ready"
 	CategoryExecutionCleaning   CategoryExecutionState = "cleaning"
@@ -51,9 +56,9 @@ func IsTerminalExecutionState(state CategoryExecutionState) bool {
 	}
 }
 
-// InProgressExecutionState projects the shared execution phase onto every
-// selected category while work is still in flight. It does not invent
-// byte-derived progress or per-item state.
+// InProgressExecutionState projects the shared execution phase onto the active
+// category while work is still in flight. It does not invent byte-derived
+// progress, per-item state, or terminal outcomes.
 func InProgressExecutionState(phase ExecutionPhase) CategoryExecutionState {
 	switch phase {
 	case ExecutionPhaseRecycleBinSafety:
@@ -66,6 +71,20 @@ func InProgressExecutionState(phase ExecutionPhase) CategoryExecutionState {
 		// Before the first observation arrives, treat work as fresh scanning.
 		return CategoryExecutionRechecking
 	}
+}
+
+// ProjectInProgressCategoryState maps one path-free progress observation onto a
+// single selected category. When ActiveCategory is non-empty, only that
+// category receives the phase-mapped in-progress state; other categories stay
+// waiting unless already advanced (callers preserve prior non-waiting state).
+// Empty ActiveCategory means the phase is not category-scoped (e.g. aggregate
+// Recycle Bin safety): every still-open category receives the phase mapping.
+// Progress never invents terminal outcomes or Affected bytes.
+func ProjectInProgressCategoryState(phase ExecutionPhase, activeCategory, categoryID string) CategoryExecutionState {
+	if activeCategory != "" && activeCategory != categoryID {
+		return CategoryExecutionWaiting
+	}
+	return InProgressExecutionState(phase)
 }
 
 // ProjectCategoryExecutionOutcomes maps the authoritative final Result onto the

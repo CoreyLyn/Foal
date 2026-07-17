@@ -116,8 +116,12 @@ const (
 
 // ExecutionProgress is deliberately absent from Result and its JSON contract.
 // A reporter observes execution; it never supplies candidates or safety input.
+// ActiveCategory is a path-free canonical category id for the boundary the
+// pipeline is entering (empty when the phase is not category-scoped, e.g.
+// aggregate Recycle Bin safety or completion).
 type ExecutionProgress struct {
-	Phase ExecutionPhase
+	Phase          ExecutionPhase
+	ActiveCategory string
 }
 
 type ProgressReporter func(ExecutionProgress)

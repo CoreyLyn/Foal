@@ -83,6 +83,9 @@ func resolveOptInCandidates(ctx context.Context, opts Options, plan map[string]b
 		return res
 	}
 	for _, category := range orderedPlanCategories(plan) {
+		// Observation-only category boundary during execute. Dry-run leaves
+		// ProgressReporter nil so this is a no-op on preview paths.
+		reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseScanning, category)
 		core, err := resolveCategoryCore(ctx, opts, category)
 		if err != nil {
 			// Plan keys are canonical opt-in IDs from planning; unexpected

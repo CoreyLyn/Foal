@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -527,24 +526,128 @@ func TestExecuteMixedActionProgressPhasesIncludePermanent(t *testing.T) {
 	root := t.TempDir()
 	recyclePath := writeTestFile(t, root, "r.tmp", "rb")
 	permanentPath := writeTestFile(t, root, "p.tmp", "pd")
-	var phases []clean.ExecutionPhase
+	var events []clean.ExecutionProgress
 	opts := mixedActionOpts(t, root, recyclePath, permanentPath, true)
 	opts.RecycleBinAdapter = &recordingRecycleBinAdapter{}
 	opts.PermanentRemover = &recordingPermanentRemover{}
 	opts.ProgressReporter = func(p clean.ExecutionProgress) {
-		phases = append(phases, p.Phase)
+		events = append(events, p)
 	}
 	_ = clean.Execute(context.Background(), opts)
-	want := []clean.ExecutionPhase{
+	phases := make([]clean.ExecutionPhase, 0, len(events))
+	for _, e := range events {
+		phases = append(phases, e.Phase)
+	}
+	// Category-boundary duplicates of Scanning / Ops phases are allowed.
+	wantOrder := []clean.ExecutionPhase{
 		clean.ExecutionPhaseScanning,
 		clean.ExecutionPhaseRecycleBinSafety,
 		clean.ExecutionPhaseRecycleBinOperations,
 		clean.ExecutionPhasePermanentOperations,
 		clean.ExecutionPhaseComplete,
 	}
-	if !reflect.DeepEqual(phases, want) {
-		t.Fatalf("phases = %v, want %v", phases, want)
+	if err := assertPhaseOrderAllowsExtras(phases, wantOrder); err != nil {
+		t.Fatalf("phases = %v: %v", phases, err)
 	}
+	var sawRecycleCat, sawPermanentCat bool
+	for _, e := range events {
+		if e.Phase == clean.ExecutionPhaseRecycleBinOperations && e.ActiveCategory == testRecycleRule {
+			sawRecycleCat = true
+		}
+		if e.Phase == clean.ExecutionPhasePermanentOperations && e.ActiveCategory == testPermanentRule {
+			sawPermanentCat = true
+		}
+	}
+	if !sawRecycleCat || !sawPermanentCat {
+		t.Fatalf("missing mutate category progress: recycle=%v permanent=%v events=%#v",
+			sawRecycleCat, sawPermanentCat, events)
+	}
+}
+
+func TestExecuteReportsActiveCategoryAroundResolveAndMutateBoundaries(t *testing.T) {
+	root := t.TempDir()
+	recycleA := writeTestFile(t, root, "a.tmp", "aa")
+	recycleB := writeTestFile(t, root, "b.tmp", "bb")
+	permanentC := writeTestFile(t, root, "c.tmp", "cc")
+	const (
+		ruleA = "test_rule_a"
+		ruleB = "test_rule_b"
+		ruleC = "test_rule_c"
+	)
+	var events []clean.ExecutionProgress
+	result := clean.Execute(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
+		CategoryPlannedActions: map[string]clean.DeletionAction{
+			ruleA: clean.DeletionActionMoveToRecycleBin,
+			ruleB: clean.DeletionActionMoveToRecycleBin,
+			ruleC: clean.DeletionActionDeletePermanently,
+		},
+		Rules: []clean.Rule{
+			{ID: ruleA, DefaultEnabled: true, CandidatePaths: []string{recycleA}},
+			{ID: ruleB, DefaultEnabled: true, CandidatePaths: []string{recycleB}},
+			{ID: ruleC, DefaultEnabled: true, CandidatePaths: []string{permanentC}},
+		},
+		RecycleBinAdapter:  &recordingRecycleBinAdapter{},
+		PermanentRemover:   &recordingPermanentRemover{},
+		RecycleBinCapacityProbe: func(string) (clean.RecycleBinVolumeConfig, error) {
+			return clean.RecycleBinVolumeConfig{Volume: "v", MaxCapacity: 1 << 60}, nil
+		},
+		ProgressReporter: func(p clean.ExecutionProgress) {
+			events = append(events, p)
+		},
+	})
+	if result.Totals.DeletedCount != 3 {
+		t.Fatalf("deleted = %d, want 3; result=%#v", result.Totals.DeletedCount, result)
+	}
+
+	// Collect first ActiveCategory per phase for resolve/mutate boundaries.
+	scanCats := uniqueActiveCategories(events, clean.ExecutionPhaseScanning)
+	rbCats := uniqueActiveCategories(events, clean.ExecutionPhaseRecycleBinOperations)
+	permCats := uniqueActiveCategories(events, clean.ExecutionPhasePermanentOperations)
+	if !containsAllStrings(scanCats, ruleA, ruleB, ruleC) {
+		t.Fatalf("scan ActiveCategory = %v, want %s/%s/%s", scanCats, ruleA, ruleB, ruleC)
+	}
+	if !containsAllStrings(rbCats, ruleA, ruleB) {
+		t.Fatalf("recycle ops ActiveCategory = %v, want %s/%s", rbCats, ruleA, ruleB)
+	}
+	if !containsAllStrings(permCats, ruleC) {
+		t.Fatalf("permanent ops ActiveCategory = %v, want %s", permCats, ruleC)
+	}
+	// Safety and completion stay non-category-scoped.
+	for _, e := range events {
+		if e.Phase == clean.ExecutionPhaseRecycleBinSafety && e.ActiveCategory != "" {
+			t.Fatalf("RecycleBinSafety should have empty ActiveCategory: %#v", e)
+		}
+		if e.Phase == clean.ExecutionPhaseComplete && e.ActiveCategory != "" {
+			t.Fatalf("Complete should have empty ActiveCategory: %#v", e)
+		}
+	}
+}
+
+func uniqueActiveCategories(events []clean.ExecutionProgress, phase clean.ExecutionPhase) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, e := range events {
+		if e.Phase != phase || e.ActiveCategory == "" || seen[e.ActiveCategory] {
+			continue
+		}
+		seen[e.ActiveCategory] = true
+		out = append(out, e.ActiveCategory)
+	}
+	return out
+}
+
+func containsAllStrings(have []string, want ...string) bool {
+	set := make(map[string]bool, len(have))
+	for _, s := range have {
+		set[s] = true
+	}
+	for _, w := range want {
+		if !set[w] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestExecutePermanentOnlyPopulatesSplitTotalsAndJSON(t *testing.T) {

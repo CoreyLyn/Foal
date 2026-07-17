@@ -173,7 +173,10 @@ func exactTUICommandParameters(categories []string) history.CommandParameters {
 func executeExactCleanSelectionCmd(ctx context.Context, selected []string, allowPermanent bool) tea.Cmd {
 	selected = append([]string(nil), selected...)
 	return func() tea.Msg {
-		progress := make(chan clean.ExecutionProgress, 4)
+		// Larger buffer: Slice C emits per-category boundaries in addition to
+		// phase markers; a tiny buffer can stall the execute goroutine while
+		// the TUI drains one event per tick/cmd.
+		progress := make(chan clean.ExecutionProgress, 64)
 		result := make(chan clean.Result, 1)
 		stream := &cleanExecutionStream{progress: progress, result: result}
 		go func() {
@@ -834,7 +837,8 @@ func (m eagerCleanModel) confirmationActionGroups() (permanent, recycle []eagerC
 }
 
 // initialExecutionOutcomes builds path-free in-progress rows for the frozen
-// selection. Authorization cannot change after this snapshot.
+// selection. Authorization cannot change after this snapshot. Rows start
+// waiting until shared progress names an ActiveCategory.
 func initialExecutionOutcomes(frozen []string) []clean.CategoryExecutionOutcome {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	out := make([]clean.CategoryExecutionOutcome, 0, len(frozen))
@@ -846,7 +850,7 @@ func initialExecutionOutcomes(frozen []string) []clean.CategoryExecutionOutcome 
 		out = append(out, clean.CategoryExecutionOutcome{
 			Identifier: id,
 			Label:      label,
-			State:      clean.InProgressExecutionState(""),
+			State:      clean.CategoryExecutionWaiting,
 		})
 	}
 	return out
@@ -865,13 +869,40 @@ func (m *eagerCleanModel) applyExactExecutionProgress(msg eagerExactExecutionPro
 	}
 	m.executionProgress = msg.progress
 	m.spinnerFrame++
-	// Observation-only: project the shared phase onto every selected row that
-	// is still in progress. Progress never authorizes work or changes Result.
-	inProgress := clean.InProgressExecutionState(msg.progress.Phase)
+	// Observation-only: ActiveCategory becomes rechecking/ready/cleaning;
+	// categories not yet reached stay waiting. Once a row leaves waiting it
+	// keeps its last in-progress state until the authoritative Result (Slice C
+	// does not invent mid-flight cleaned/skipped). Progress never authorizes
+	// work or changes Result.
+	active := msg.progress.ActiveCategory
+	phase := msg.progress.Phase
 	for i := range m.executionOutcomes {
-		if !clean.IsTerminalExecutionState(m.executionOutcomes[i].State) {
-			m.executionOutcomes[i].State = inProgress
+		if clean.IsTerminalExecutionState(m.executionOutcomes[i].State) {
+			continue
 		}
+		if active == "" {
+			// Phase openers without a category (initial Scanning / Complete)
+			// must not promote every waiting row. Aggregate Recycle Bin safety
+			// is intentionally category-unscoped and maps onto open rows.
+			if phase == clean.ExecutionPhaseScanning || phase == "" || phase == clean.ExecutionPhaseComplete {
+				continue
+			}
+			m.executionOutcomes[i].State = clean.InProgressExecutionState(phase)
+			continue
+		}
+		projected := clean.ProjectInProgressCategoryState(
+			phase, active, m.executionOutcomes[i].Identifier,
+		)
+		if projected == clean.CategoryExecutionWaiting {
+			// Keep prior in-progress state after this row has been active so
+			// it does not flash back to waiting when ActiveCategory moves on.
+			if m.executionOutcomes[i].State == clean.CategoryExecutionWaiting ||
+				m.executionOutcomes[i].State == "" {
+				m.executionOutcomes[i].State = clean.CategoryExecutionWaiting
+			}
+			continue
+		}
+		m.executionOutcomes[i].State = projected
 	}
 	m.syncExecutionViewport()
 	return waitEagerExactExecutionCmd(msg.stream)
@@ -1271,6 +1302,22 @@ func (m *eagerCleanModel) ensureBodyLineVisible(lineIndex int) {
 }
 
 func (m eagerCleanModel) executionActiveIndex() int {
+	// Prefer the category named by shared progress so viewport follow tracks
+	// the real active boundary rather than the first non-terminal waiting row.
+	activeID := m.executionProgress.ActiveCategory
+	if activeID != "" {
+		for i, outcome := range m.executionOutcomes {
+			if outcome.Identifier == activeID && !clean.IsTerminalExecutionState(outcome.State) {
+				return i
+			}
+		}
+	}
+	for i, outcome := range m.executionOutcomes {
+		if !clean.IsTerminalExecutionState(outcome.State) &&
+			outcome.State != clean.CategoryExecutionWaiting {
+			return i
+		}
+	}
 	for i, outcome := range m.executionOutcomes {
 		if !clean.IsTerminalExecutionState(outcome.State) {
 			return i
@@ -1340,9 +1387,18 @@ func (m eagerCleanModel) executionHeaderLine() string {
 		m.executionElapsed() >= eagerExecutionStillWorkingThreshold {
 		reassurance = eagerExecutionStillScanningReassurance
 	}
+	phaseLabel := sharedExecutionPhaseLabel(phase)
+	if active := strings.TrimSpace(m.executionProgress.ActiveCategory); active != "" {
+		// Path-free catalog label only; never candidate paths.
+		label := active
+		if summary, ok := clean.CanonicalCleanupCategoryCatalog().Summary(active); ok && summary.Label != "" {
+			label = summary.Label
+		}
+		phaseLabel = phaseLabel + " · " + label
+	}
 	return eagerExecutionHeaderLine(
 		m.spinnerFrame,
-		sharedExecutionPhaseLabel(phase),
+		phaseLabel,
 		m.executionElapsedLabel(),
 		reassurance,
 	)

@@ -261,11 +261,20 @@ func TestEagerFooterHintsDoNotAuthorizeCleanup(t *testing.T) {
 }
 
 func TestEagerExecutionMarkersAndLabelsPure(t *testing.T) {
+	if got := eagerExecutionRowMarker(clean.CategoryExecutionWaiting, 0); got != "…" {
+		t.Fatalf("waiting marker = %q", got)
+	}
 	if got := eagerExecutionRowMarker(clean.CategoryExecutionCleaning, 2); got != eagerPreviewSpinnerFrames[2] {
 		t.Fatalf("cleaning marker = %q", got)
 	}
 	if got := eagerExecutionRowMarker(clean.CategoryExecutionCleaned, 0); got != "✓" {
 		t.Fatalf("cleaned marker = %q", got)
+	}
+	if got := eagerExecutionRowLabel(clean.CategoryExecutionOutcome{
+		Label: "Cache",
+		State: clean.CategoryExecutionWaiting,
+	}); got != "Cache · waiting" {
+		t.Fatalf("waiting label = %q", got)
 	}
 	outcome := clean.CategoryExecutionOutcome{
 		Label:         "Cache",

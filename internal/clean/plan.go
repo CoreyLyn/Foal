@@ -296,6 +296,9 @@ func appendDefaultCandidates(ctx context.Context, opts Options, selectedDefaults
 		if filterDefaults && !selectedDefaults[rule.ID] {
 			continue
 		}
+		// Observation-only category boundary during execute. Dry-run leaves
+		// ProgressReporter nil so this is a no-op on preview paths.
+		reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseScanning, rule.ID)
 		for _, path := range rule.CandidatePaths {
 			previewCandidate(ctx, opts, path, rule.ID, result)
 		}

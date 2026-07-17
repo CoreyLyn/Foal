@@ -359,9 +359,11 @@ func cleanFormatBytesPadded(bytes int64, width int) string {
 }
 
 // eagerExecutionRowMarker maps an execution state to a single-glyph marker.
-// spinnerFrame is only used for in-progress states.
+// spinnerFrame is only used for active in-progress states (not waiting).
 func eagerExecutionRowMarker(state clean.CategoryExecutionState, spinnerFrame int) string {
 	switch state {
+	case clean.CategoryExecutionWaiting:
+		return "…"
 	case clean.CategoryExecutionRechecking, clean.CategoryExecutionReady, clean.CategoryExecutionCleaning:
 		return eagerPreviewSpinnerFrames[spinnerFrame%len(eagerPreviewSpinnerFrames)]
 	case clean.CategoryExecutionCleaned:
@@ -380,6 +382,8 @@ func eagerExecutionRowMarker(state clean.CategoryExecutionState, spinnerFrame in
 // eagerExecutionRowLabel formats one execution/result outcome without paths.
 func eagerExecutionRowLabel(outcome clean.CategoryExecutionOutcome) string {
 	switch outcome.State {
+	case clean.CategoryExecutionWaiting:
+		return outcome.Label + " · waiting"
 	case clean.CategoryExecutionRechecking:
 		return outcome.Label + " · rechecking"
 	case clean.CategoryExecutionReady:

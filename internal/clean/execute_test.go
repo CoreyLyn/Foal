@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -152,24 +152,46 @@ func TestExecuteReportsSharedProgressWithoutChangingOutcome(t *testing.T) {
 	if err := os.WriteFile(candidate, []byte("cache"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	var phases []clean.ExecutionPhase
+	var events []clean.ExecutionProgress
 	adapter := &recordingRecycleBinAdapter{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		ProgressReporter: func(progress clean.ExecutionProgress) {
-			phases = append(phases, progress.Phase)
+			events = append(events, progress)
 		},
 		RecycleBinAdapter: adapter,
 		Rules:             []clean.Rule{{ID: "test_default_rule", DefaultEnabled: true, CandidatePaths: []string{candidate}}},
 	})
 
-	want := []clean.ExecutionPhase{
+	phases := make([]clean.ExecutionPhase, 0, len(events))
+	for _, e := range events {
+		phases = append(phases, e.Phase)
+	}
+	// Extra per-category Scanning / RecycleBinOperations events are allowed;
+	// overall phase order must still advance Scanning → Safety → Ops → Complete.
+	wantOrder := []clean.ExecutionPhase{
 		clean.ExecutionPhaseScanning,
 		clean.ExecutionPhaseRecycleBinSafety,
 		clean.ExecutionPhaseRecycleBinOperations,
 		clean.ExecutionPhaseComplete,
 	}
-	if !reflect.DeepEqual(phases, want) {
-		t.Fatalf("progress phases = %v, want %v", phases, want)
+	if err := assertPhaseOrderAllowsExtras(phases, wantOrder); err != nil {
+		t.Fatalf("progress phases = %v: %v", phases, err)
+	}
+	// Resolve boundary names the default rule; mutate boundary does too.
+	var sawScanCategory, sawOpsCategory bool
+	for _, e := range events {
+		if e.Phase == clean.ExecutionPhaseScanning && e.ActiveCategory == "test_default_rule" {
+			sawScanCategory = true
+		}
+		if e.Phase == clean.ExecutionPhaseRecycleBinOperations && e.ActiveCategory == "test_default_rule" {
+			sawOpsCategory = true
+		}
+		if e.ActiveCategory != "" && strings.Contains(e.ActiveCategory, `\`) {
+			t.Fatalf("ActiveCategory must be path-free: %#v", e)
+		}
+	}
+	if !sawScanCategory || !sawOpsCategory {
+		t.Fatalf("missing category boundaries: scan=%v ops=%v events=%#v", sawScanCategory, sawOpsCategory, events)
 	}
 	if result.Totals.DeletedCount != 1 || len(adapter.paths) != 1 || adapter.paths[0] != candidate {
 		t.Fatalf("observer changed execution outcome: result=%#v paths=%v", result, adapter.paths)
@@ -181,6 +203,33 @@ func TestExecuteReportsSharedProgressWithoutChangingOutcome(t *testing.T) {
 	if strings.Contains(string(encoded), "progress") || strings.Contains(string(encoded), "scanning") {
 		t.Fatalf("progress leaked into JSON contract: %s", encoded)
 	}
+}
+
+// assertPhaseOrderAllowsExtras checks that want phases appear in order inside
+// got, allowing duplicate emissions of the current phase (per-category
+// boundaries) without inventing new phase kinds or reordering.
+func assertPhaseOrderAllowsExtras(got, want []clean.ExecutionPhase) error {
+	wi := 0
+	for _, phase := range got {
+		if wi < len(want) && phase == want[wi] {
+			wi++
+			continue
+		}
+		// Category-boundary duplicates of the phase just matched.
+		if wi > 0 && phase == want[wi-1] {
+			continue
+		}
+		for j := wi; j < len(want); j++ {
+			if phase == want[j] {
+				return fmt.Errorf("phase %q appeared before %q", phase, want[wi])
+			}
+		}
+		return fmt.Errorf("unexpected phase %q after matching %v", phase, want[:wi])
+	}
+	if wi != len(want) {
+		return fmt.Errorf("missing phases from %v (matched %d/%d)", want, wi, len(want))
+	}
+	return nil
 }
 
 func TestExecuteProgressReporterCannotInterruptExecution(t *testing.T) {

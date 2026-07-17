@@ -314,7 +314,7 @@ The single separate TUI view that reviews the exact Clean TUI cleanup selection 
 _Avoid_: second permanent-delete dialog, executing preview paths, undisclosed action type, one-key accidental cleanup, browsing-as-confirmation
 
 **Clean execution progress**:
-Observation-only shared Clean events for the current execution phase and path-free per-selected-category states such as `rechecking`, `ready`, `cleaning`, `empty`, `cleaned`, `partial`, `skipped`, `failed`, and `canceled`, without candidate paths or byte-derived percentages. Progress is not part of the JSON result and never authorizes candidates or drives safety decisions; the final Result and history remain authoritative.
+Observation-only shared Clean events for the current execution phase, optional path-free `ActiveCategory` (canonical category id at resolve/mutate boundaries; empty for aggregate Recycle Bin safety and completion), and path-free per-selected-category states such as `waiting`, `rechecking`, `ready`, `cleaning`, `empty`, `cleaned`, `partial`, `skipped`, `failed`, and `canceled`, without candidate paths or byte-derived percentages. Progress is not part of the JSON result and never authorizes candidates or drives safety decisions; mid-flight progress does not invent terminal category outcomes; the final Result and history remain authoritative.
 _Avoid_: TUI-inferred progress, byte-derived percentage, candidate path stream, execution manifest, progress as cleanup authorization, rollback promise
 
 **Clean execution category outcome**:

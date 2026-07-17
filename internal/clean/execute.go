@@ -31,12 +31,15 @@ func runExecute(ctx context.Context, opts Options) Result {
 		ctx = context.Background()
 	}
 	start := time.Now()
-	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseScanning)
+	// Fresh resolve starts without a specific category; per-category Scanning
+	// events follow at each resolve boundary (see appendDefaultCandidates /
+	// resolveOptInCandidates).
+	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseScanning, "")
 
 	// Phase 1: skeleton / plan
 	if opts.ProtectionLoadError != nil {
 		result := protectionLoadFailure("execute", opts, start)
-		reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseComplete)
+		reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseComplete, "")
 		return result
 	}
 	categoryPlan := effectiveCategoryPlan(opts)
@@ -48,21 +51,21 @@ func runExecute(ctx context.Context, opts Options) Result {
 	// Phase 3: partition Recycle Bin vs permanent
 	recycleBinCandidates, permanentCandidates := partitionByPlannedAction(executionCandidates)
 
-	// Phase 4: aggregate Recycle Bin capacity preflight (RB only)
-	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseRecycleBinSafety)
+	// Phase 4: aggregate Recycle Bin capacity preflight (RB only).
+	// ActiveCategory is empty: this check is volume-scoped, not category-scoped.
+	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseRecycleBinSafety, "")
 	executionGroups := prepareRecycleBinCandidateGroups(opts, recycleBinCandidates)
 
-	// Phase 5: mutate Recycle Bin first
-	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseRecycleBinOperations)
+	// Phase 5: mutate Recycle Bin first (category ActiveCategory at each
+	// first-touch boundary inside the volume-grouped path).
 	adapter := opts.RecycleBinAdapter
 	if adapter == nil {
 		adapter = delete.WindowsRecycleBinAdapter{}
 	}
 	executeRecycleBinCandidateGroups(ctx, opts, adapter, executionGroups, &result)
 
-	// Phase 6: mutate permanent last
+	// Phase 6: mutate permanent last (per-category progress then mutation)
 	if len(permanentCandidates) > 0 {
-		reportExecutionProgress(opts.ProgressReporter, ExecutionPhasePermanentOperations)
 		executePermanentCandidates(ctx, opts, permanentCandidates, &result)
 	}
 
@@ -70,7 +73,7 @@ func runExecute(ctx context.Context, opts Options) Result {
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)
 	recordHistorySession(ctx, opts, result, start, time.Now())
-	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseComplete)
+	reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseComplete, "")
 	return result
 }
 
@@ -130,12 +133,16 @@ func partitionByPlannedAction(candidates []actionExecutionCandidate) (recycleBin
 	return recycleBin, permanent
 }
 
-func reportExecutionProgress(reporter ProgressReporter, phase ExecutionPhase) {
+// reportExecutionProgress delivers an observation-only event. activeCategory is
+// the path-free canonical category id for the boundary being entered, or empty
+// when the phase is not category-scoped. Panics in the reporter are recovered
+// so observation can never interrupt or authorize execution.
+func reportExecutionProgress(reporter ProgressReporter, phase ExecutionPhase, activeCategory string) {
 	if reporter == nil {
 		return
 	}
 	defer func() { _ = recover() }()
-	reporter(ExecutionProgress{Phase: phase})
+	reporter(ExecutionProgress{Phase: phase, ActiveCategory: activeCategory})
 }
 
 // actionExecutionCandidate is one freshly resolved candidate with its planned
@@ -204,20 +211,38 @@ func prepareRecycleBinCandidateGroups(opts Options, candidates []actionExecution
 }
 
 func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter delete.Adapter, groups recycleBinCandidateGroups, result *Result) {
+	// Volume grouping is the safety model (aggregate capacity). Progress only
+	// marks each category when its candidates are first touched in this phase.
+	reportedCategory := make(map[string]bool)
+	reportRecycleCategory := func(candidates []actionExecutionCandidate) {
+		for _, candidate := range candidates {
+			id := candidate.rule
+			if id == "" || reportedCategory[id] {
+				continue
+			}
+			reportedCategory[id] = true
+			reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseRecycleBinOperations, id)
+		}
+	}
+
 	for _, volume := range groups.order {
 		group := groups.byVolume[volume]
 		switch {
 		case group.unsafe:
+			reportRecycleCategory(group.candidates)
 			skipRecycleBinVolume(result, group.candidates, recycleBinCapacityProbeFailedIssueCode, "Recycle Bin capacity state is unknown; skipping this volume rather than risking permanent deletion")
 			continue
 		case group.config.NukeOnDelete:
+			reportRecycleCategory(group.candidates)
 			skipRecycleBinVolume(result, group.candidates, recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted")
 			continue
 		case group.config.CurrentUsage > group.config.MaxCapacity || group.totalBytes > group.config.MaxCapacity-group.config.CurrentUsage:
+			reportRecycleCategory(group.candidates)
 			skipRecycleBinVolume(result, group.candidates, recycleBinCapacityIssueCode, "Selected candidates exceed the remaining Recycle Bin capacity for this volume")
 			continue
 		}
 
+		reportRecycleCategory(group.candidates)
 		deleteCandidates := make([]delete.Candidate, 0, len(group.candidates))
 		byPath := make(map[string]actionExecutionCandidate, len(group.candidates))
 		for _, candidate := range group.candidates {
@@ -263,21 +288,27 @@ func executePermanentCandidates(ctx context.Context, opts Options, candidates []
 		return
 	}
 	permanentAction := string(DeletionActionDeletePermanently)
+	// Progress at category boundaries only (first-seen rule order). Mutation
+	// order and safety model stay candidate-list order within each category.
+	groups := groupCandidatesByCategory(candidates)
 	if !opts.AllowPermanentDeletion {
-		for _, candidate := range candidates {
-			result.Skipped = append(result.Skipped, SkippedItem{
-				Path:          candidate.candidate.Path,
-				Bytes:         candidate.candidate.Bytes,
-				Rule:          candidate.rule,
-				PlannedAction: permanentAction,
-				Reason: issue(
-					permanentDeletionNotAuthorizedIssueCode,
-					"permanent deletion is not authorized for this run; planned action is unchanged",
-					true,
-					candidate.candidate.Path,
-					candidate.rule,
-				),
-			})
+		for _, group := range groups {
+			reportExecutionProgress(opts.ProgressReporter, ExecutionPhasePermanentOperations, group.rule)
+			for _, candidate := range group.candidates {
+				result.Skipped = append(result.Skipped, SkippedItem{
+					Path:          candidate.candidate.Path,
+					Bytes:         candidate.candidate.Bytes,
+					Rule:          candidate.rule,
+					PlannedAction: permanentAction,
+					Reason: issue(
+						permanentDeletionNotAuthorizedIssueCode,
+						"permanent deletion is not authorized for this run; planned action is unchanged",
+						true,
+						candidate.candidate.Path,
+						candidate.rule,
+					),
+				})
+			}
 		}
 		return
 	}
@@ -287,54 +318,86 @@ func executePermanentCandidates(ctx context.Context, opts Options, candidates []
 		remover = delete.FilesystemPermanentRemover{}
 	}
 
-	deleteCandidates := make([]delete.Candidate, 0, len(candidates))
-	byPath := make(map[string]actionExecutionCandidate, len(candidates))
-	for _, candidate := range candidates {
-		deleteCandidates = append(deleteCandidates, candidate.candidate)
-		byPath[candidate.candidate.Path] = candidate
-	}
+	for _, group := range groups {
+		reportExecutionProgress(opts.ProgressReporter, ExecutionPhasePermanentOperations, group.rule)
+		deleteCandidates := make([]delete.Candidate, 0, len(group.candidates))
+		byPath := make(map[string]actionExecutionCandidate, len(group.candidates))
+		for _, candidate := range group.candidates {
+			deleteCandidates = append(deleteCandidates, candidate.candidate)
+			byPath[candidate.candidate.Path] = candidate
+		}
 
-	preMutation := composePermanentPreMutation(opts, byPath)
-	permanentResult := delete.ExecutePermanentWithHooks(ctx, deleteCandidates, remover, opts.Validator, preMutation)
-	for _, item := range permanentResult.Items {
-		candidate := byPath[item.Path]
-		switch item.Kind {
-		case delete.PermanentOutcomeDeleted:
-			result.Deleted = append(result.Deleted, DeletedItem{
-				Path:    item.Path,
-				Bytes:   item.Bytes,
-				Rule:    candidate.rule,
-				Action:  permanentAction,
-				IsOptIn: candidate.isOptIn,
-			})
-		case delete.PermanentOutcomeFailed:
-			result.Failed = append(result.Failed, FailedItem{
-				Path:          item.Path,
-				Bytes:         item.Bytes,
-				Rule:          candidate.rule,
-				PlannedAction: permanentAction,
-				Action:        permanentAction,
-				Reason:        issue(permanentDeleteFailedIssueCode, item.Reason.Message, true, item.Path, candidate.rule),
-			})
-		case delete.PermanentOutcomeCanceled:
-			result.Skipped = append(result.Skipped, SkippedItem{
-				Path:          item.Path,
-				Bytes:         item.Bytes,
-				Rule:          candidate.rule,
-				PlannedAction: permanentAction,
-				Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
-			})
-		default:
-			// Pre-mutation skips (protection, reparse, hardlink, category identity).
-			result.Skipped = append(result.Skipped, SkippedItem{
-				Path:          item.Path,
-				Bytes:         item.Bytes,
-				Rule:          candidate.rule,
-				PlannedAction: permanentAction,
-				Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
-			})
+		preMutation := composePermanentPreMutation(opts, byPath)
+		permanentResult := delete.ExecutePermanentWithHooks(ctx, deleteCandidates, remover, opts.Validator, preMutation)
+		for _, item := range permanentResult.Items {
+			candidate := byPath[item.Path]
+			switch item.Kind {
+			case delete.PermanentOutcomeDeleted:
+				result.Deleted = append(result.Deleted, DeletedItem{
+					Path:    item.Path,
+					Bytes:   item.Bytes,
+					Rule:    candidate.rule,
+					Action:  permanentAction,
+					IsOptIn: candidate.isOptIn,
+				})
+			case delete.PermanentOutcomeFailed:
+				result.Failed = append(result.Failed, FailedItem{
+					Path:          item.Path,
+					Bytes:         item.Bytes,
+					Rule:          candidate.rule,
+					PlannedAction: permanentAction,
+					Action:        permanentAction,
+					Reason:        issue(permanentDeleteFailedIssueCode, item.Reason.Message, true, item.Path, candidate.rule),
+				})
+			case delete.PermanentOutcomeCanceled:
+				result.Skipped = append(result.Skipped, SkippedItem{
+					Path:          item.Path,
+					Bytes:         item.Bytes,
+					Rule:          candidate.rule,
+					PlannedAction: permanentAction,
+					Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
+				})
+			default:
+				// Pre-mutation skips (protection, reparse, hardlink, category identity).
+				result.Skipped = append(result.Skipped, SkippedItem{
+					Path:          item.Path,
+					Bytes:         item.Bytes,
+					Rule:          candidate.rule,
+					PlannedAction: permanentAction,
+					Reason:        issue(item.Reason.Code, item.Reason.Message, true, item.Path, candidate.rule),
+				})
+			}
 		}
 	}
+}
+
+// categoryCandidateGroup is one rule's candidates in first-seen order among the
+// partitioned permanent/recycle lists. Used only for progress boundaries and
+// permanent per-category mutation batching; it does not authorize work.
+type categoryCandidateGroup struct {
+	rule       string
+	candidates []actionExecutionCandidate
+}
+
+func groupCandidatesByCategory(candidates []actionExecutionCandidate) []categoryCandidateGroup {
+	if len(candidates) == 0 {
+		return nil
+	}
+	indexByRule := make(map[string]int, len(candidates))
+	groups := make([]categoryCandidateGroup, 0)
+	for _, candidate := range candidates {
+		rule := candidate.rule
+		if idx, ok := indexByRule[rule]; ok {
+			groups[idx].candidates = append(groups[idx].candidates, candidate)
+			continue
+		}
+		indexByRule[rule] = len(groups)
+		groups = append(groups, categoryCandidateGroup{
+			rule:       rule,
+			candidates: []actionExecutionCandidate{candidate},
+		})
+	}
+	return groups
 }
 
 // composePermanentPreMutation builds the optional delete-layer hook that

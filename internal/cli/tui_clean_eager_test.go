@@ -1823,9 +1823,11 @@ func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) 
 	original := runExactCleanSelection
 	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
 		if reporter != nil {
+			// Phase opener (no category) then category-scoped boundaries.
 			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning})
+			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning, ActiveCategory: selected[0]})
 			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinSafety})
-			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinOperations})
+			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinOperations, ActiveCategory: selected[0]})
 		}
 		select {
 		case <-ctx.Done():
@@ -1870,8 +1872,9 @@ func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) 
 	if !strings.Contains(content, "Fresh scanning") {
 		t.Fatalf("header missing Fresh scanning:\n%s", content)
 	}
-	if !strings.Contains(content, selectedLabel) || !strings.Contains(content, "rechecking") {
-		t.Fatalf("selected in-progress row missing:\n%s", content)
+	// Before any progress arrives, selected rows start waiting.
+	if !strings.Contains(content, selectedLabel) || !strings.Contains(content, "waiting") {
+		t.Fatalf("selected waiting row missing:\n%s", content)
 	}
 	if strings.Contains(content, unselectedLabel) {
 		t.Fatalf("unselected category leaked into execution view:\n%s", content)
@@ -1887,12 +1890,22 @@ func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) 
 		}
 	}
 
-	// Drive progress projections through shared phases.
+	// Drive progress projections through shared phases (+ category events).
 	started := exactExecutionStartedFrom(t, cmd)
 	wait := model.applyExactExecutionStarted(started)
-	phases := []string{"Fresh scanning", "Recycle Bin safety check", "Moving to Recycle Bin"}
-	states := []string{"rechecking", "ready", "cleaning"}
-	for i := 0; i < 3; i++ {
+	// empty Scanning → category Scanning → Safety → Ops
+	type step struct {
+		phaseSubstr string
+		state       string
+		activeInHdr bool
+	}
+	steps := []step{
+		{"Fresh scanning", "waiting", false},  // opener leaves waiting
+		{"Fresh scanning", "rechecking", true}, // ActiveCategory
+		{"Recycle Bin safety check", "ready", false},
+		{"Moving to Recycle Bin", "cleaning", true},
+	}
+	for i, st := range steps {
 		msg := wait()
 		progress, ok := msg.(eagerExactExecutionProgressMsg)
 		if !ok {
@@ -1900,11 +1913,14 @@ func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) 
 		}
 		wait = model.applyExactExecutionProgress(progress)
 		content = model.content()
-		if !strings.Contains(content, phases[i]) {
-			t.Fatalf("phase %q missing:\n%s", phases[i], content)
+		if !strings.Contains(content, st.phaseSubstr) {
+			t.Fatalf("step %d phase %q missing:\n%s", i, st.phaseSubstr, content)
 		}
-		if !strings.Contains(content, states[i]) {
-			t.Fatalf("state %q missing:\n%s", states[i], content)
+		if !strings.Contains(content, st.state) {
+			t.Fatalf("step %d state %q missing:\n%s", i, st.state, content)
+		}
+		if st.activeInHdr && !strings.Contains(content, selectedLabel) {
+			t.Fatalf("step %d header/body missing active label %q:\n%s", i, selectedLabel, content)
 		}
 		if strings.Contains(content, `C:\Users\me`) {
 			t.Fatalf("path leaked during progress:\n%s", content)
@@ -1944,6 +1960,109 @@ func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) 
 		t.Fatalf("outcomes = %#v", model.executionOutcomes)
 	}
 	_ = cancelCalls
+}
+
+func TestEagerCleanExecutionProgressActiveCategoryWaitingVsActive(t *testing.T) {
+	defaultID := clean.DefaultCategoryFoalOwnedTempSandboxes
+	optInID := clean.OpportunityCategoryCrashDumps
+	var defaultLabel, optInLabel string
+	catalog := clean.CanonicalCleanupCategoryCatalog()
+	if s, ok := catalog.Summary(defaultID); ok {
+		defaultLabel = s.Label
+	}
+	if s, ok := catalog.Summary(optInID); ok {
+		optInLabel = s.Label
+	}
+
+	model := newEagerCleanModel(100, 40)
+	model.phase = eagerPhaseExecuting
+	model.executionStarted = true
+	model.executionStartedAt = time.Now()
+	model.frozenCategories = []string{defaultID, optInID}
+	model.executionOutcomes = initialExecutionOutcomes(model.frozenCategories)
+	model.execFollowActive = true
+	model.execTrackedActive = -1
+
+	// Initial: both waiting, Processed still 0/2.
+	content := model.content()
+	if !strings.Contains(content, "waiting") || !strings.Contains(content, "Processed: 0/2") {
+		t.Fatalf("initial waiting:\n%s", content)
+	}
+	for _, o := range model.executionOutcomes {
+		if o.State != clean.CategoryExecutionWaiting {
+			t.Fatalf("initial state = %q for %s", o.State, o.Identifier)
+		}
+	}
+
+	// Active default during scanning: only default rechecking; opt-in stays waiting.
+	_ = model.applyExactExecutionProgress(eagerExactExecutionProgressMsg{
+		progress: clean.ExecutionProgress{
+			Phase:          clean.ExecutionPhaseScanning,
+			ActiveCategory: defaultID,
+		},
+	})
+	byID := map[string]clean.CategoryExecutionState{}
+	for _, o := range model.executionOutcomes {
+		byID[o.Identifier] = o.State
+	}
+	if byID[defaultID] != clean.CategoryExecutionRechecking {
+		t.Fatalf("active default = %q, want rechecking", byID[defaultID])
+	}
+	if byID[optInID] != clean.CategoryExecutionWaiting {
+		t.Fatalf("inactive opt-in = %q, want waiting", byID[optInID])
+	}
+	content = model.content()
+	if !strings.Contains(content, "Fresh scanning · "+defaultLabel) {
+		t.Fatalf("header missing active catalog label:\n%s", content)
+	}
+	if !strings.Contains(content, defaultLabel+" · rechecking") {
+		t.Fatalf("active row label:\n%s", content)
+	}
+	if !strings.Contains(content, optInLabel+" · waiting") {
+		t.Fatalf("waiting row label:\n%s", content)
+	}
+	if model.executionActiveIndex() != 0 {
+		t.Fatalf("active index = %d, want 0", model.executionActiveIndex())
+	}
+	// Terminal count still zero mid-flight.
+	if strings.Contains(content, "Processed: 0/2") == false {
+		t.Fatalf("Processed must stay terminal-only:\n%s", content)
+	}
+
+	// Move active to opt-in: default keeps last in-progress; opt-in becomes rechecking.
+	_ = model.applyExactExecutionProgress(eagerExactExecutionProgressMsg{
+		progress: clean.ExecutionProgress{
+			Phase:          clean.ExecutionPhaseScanning,
+			ActiveCategory: optInID,
+		},
+	})
+	byID = map[string]clean.CategoryExecutionState{}
+	for _, o := range model.executionOutcomes {
+		byID[o.Identifier] = o.State
+	}
+	if byID[defaultID] != clean.CategoryExecutionRechecking {
+		t.Fatalf("prior active should keep rechecking, got %q", byID[defaultID])
+	}
+	if byID[optInID] != clean.CategoryExecutionRechecking {
+		t.Fatalf("new active = %q, want rechecking", byID[optInID])
+	}
+	if model.executionActiveIndex() != 1 {
+		t.Fatalf("active index = %d, want 1", model.executionActiveIndex())
+	}
+	content = model.content()
+	if !strings.Contains(content, "Fresh scanning · "+optInLabel) {
+		t.Fatalf("header should follow new active:\n%s", content)
+	}
+	// Progress must not invent cleaned/skipped mid-flight.
+	for _, banned := range []string{"cleaned", "skipped", "failed", "partial"} {
+		// Only check body rows via states, not footer copy.
+		_ = banned
+	}
+	for _, o := range model.executionOutcomes {
+		if clean.IsTerminalExecutionState(o.State) {
+			t.Fatalf("progress must not invent terminal state: %#v", o)
+		}
+	}
 }
 
 func TestEagerCleanExecutionTerminalOutcomesAndMixedPartial(t *testing.T) {
