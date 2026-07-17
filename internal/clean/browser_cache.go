@@ -35,6 +35,17 @@ type browserCacheConfig struct {
 	cacheDirectoryKinds []string
 }
 
+// chromiumBrowserCacheDirectoryKinds is the exact allowlist of regenerable
+// profile-relative cache roots for Chrome and Edge. Nested Service Worker
+// CacheStorage is the Cache Storage API backend only; ScriptCache and Database
+// siblings stay excluded (docs/research/chromium-service-worker-cachestorage.md).
+var chromiumBrowserCacheDirectoryKinds = []string{
+	"Cache",
+	"Code Cache",
+	"GPUCache",
+	filepath.Join("Service Worker", "CacheStorage"),
+}
+
 // browserCacheConfigs registers every supported browser under the single
 // browser_cache category. Chromium entries use Local State under Local AppData
 // User Data. Firefox uses profiles.ini under Roaming and regenerable cache2
@@ -44,13 +55,13 @@ var browserCacheConfigs = []browserCacheConfig{
 		application:         ApplicationGoogleChrome,
 		localAppDataPath:    []string{"Google", "Chrome", "User Data"},
 		catalogKind:         browserProfileCatalogLocalState,
-		cacheDirectoryKinds: []string{"Cache", "Code Cache", "GPUCache"},
+		cacheDirectoryKinds: chromiumBrowserCacheDirectoryKinds,
 	},
 	{
 		application:         ApplicationMicrosoftEdge,
 		localAppDataPath:    []string{"Microsoft", "Edge", "User Data"},
 		catalogKind:         browserProfileCatalogLocalState,
-		cacheDirectoryKinds: []string{"Cache", "Code Cache", "GPUCache"},
+		cacheDirectoryKinds: chromiumBrowserCacheDirectoryKinds,
 	},
 	{
 		application:         ApplicationMozillaFirefox,

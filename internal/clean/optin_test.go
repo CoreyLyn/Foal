@@ -70,7 +70,7 @@ func TestResolveOptInCandidatesBrowserYieldsIndividualCacheDirs(t *testing.T) {
 	res := resolveOptInCandidates(context.Background(), opts, plan)
 
 	if len(res.candidates) != 1 {
-		t.Fatalf("candidates = %d, want 1 (Default/Cache only; Code Cache/GPUCache are empty)", len(res.candidates))
+		t.Fatalf("candidates = %d, want 1 (Default/Cache only; other allowlisted kinds empty)", len(res.candidates))
 	}
 	if res.candidates[0].Path != defaultCache {
 		t.Errorf("candidate path = %q, want individual cache dir %q (not User Data root)", res.candidates[0].Path, defaultCache)

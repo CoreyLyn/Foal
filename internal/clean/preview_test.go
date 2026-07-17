@@ -406,10 +406,17 @@ func TestDryRunReportsChromeBrowserCacheOpportunityThroughReviewSurfaces(t *test
 			t.Fatalf("JSON missing %q: %s", want, jsonText)
 		}
 	}
-	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "Service Worker", "move_to_recycle_bin"} {
+	if !strings.Contains(jsonText, "CacheStorage") {
+		t.Fatalf("JSON missing CacheStorage kind: %s", jsonText)
+	}
+	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "ScriptCache", "Database", "move_to_recycle_bin"} {
 		if strings.Contains(jsonText, forbidden) {
 			t.Fatalf("JSON contains excluded Chrome data %q: %s", forbidden, jsonText)
 		}
+	}
+	// Parent-level Service Worker blob must not be a candidate path (only nested CacheStorage is).
+	if strings.Contains(jsonText, filepath.Join("Service Worker", "worker.bin")) {
+		t.Fatalf("JSON leaked parent Service Worker file path: %s", jsonText)
 	}
 
 	report := clean.RenderPreviewReport(clean.NewPreviewReadModel(result))
@@ -424,7 +431,7 @@ func TestDryRunReportsChromeBrowserCacheOpportunityThroughReviewSurfaces(t *test
 			t.Fatalf("human report missing %q:\n%s", want, report)
 		}
 	}
-	for _, noisy := range []string{"Profile 1", "Code Cache", "GPUCache", "History", "Cookies", "Extensions", "Service Worker"} {
+	for _, noisy := range []string{"Profile 1", "Code Cache", "GPUCache", "History", "Cookies", "Extensions", "CacheStorage"} {
 		if strings.Contains(report, noisy) {
 			t.Fatalf("human report contains noisy Chrome detail %q:\n%s", noisy, report)
 		}
@@ -443,12 +450,13 @@ func TestDryRunReportsChromeBrowserCacheOpportunityThroughReviewSurfaces(t *test
 		filepath.Join(userDataRoot, "Default", "Cache"),
 		filepath.Join(userDataRoot, "Default", "Code Cache"),
 		filepath.Join(userDataRoot, "Default", "GPUCache"),
+		filepath.Join(userDataRoot, "Default", "Service Worker", "CacheStorage"),
 	} {
 		if !strings.Contains(detailedText, want) {
 			t.Fatalf("detailed review data missing %q:\n%s", want, detailedText)
 		}
 	}
-	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "Service Worker"} {
+	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "ScriptCache", "Database"} {
 		if strings.Contains(detailedText, forbidden) {
 			t.Fatalf("detailed review data contains excluded Chrome path %q:\n%s", forbidden, detailedText)
 		}
@@ -537,10 +545,16 @@ func TestDryRunReportsEdgeBrowserCacheOpportunityThroughSharedReviewSurfaces(t *
 			t.Fatalf("JSON missing %q: %s", want, jsonText)
 		}
 	}
-	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "Service Worker", "move_to_recycle_bin"} {
+	if !strings.Contains(jsonText, "CacheStorage") {
+		t.Fatalf("JSON missing CacheStorage kind: %s", jsonText)
+	}
+	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "ScriptCache", "Database", "move_to_recycle_bin"} {
 		if strings.Contains(jsonText, forbidden) {
 			t.Fatalf("JSON contains excluded Edge data %q: %s", forbidden, jsonText)
 		}
+	}
+	if strings.Contains(jsonText, filepath.Join("Service Worker", "worker.bin")) {
+		t.Fatalf("JSON leaked parent Service Worker file path: %s", jsonText)
 	}
 
 	report := clean.RenderPreviewReport(clean.NewPreviewReadModel(result))
@@ -555,7 +569,7 @@ func TestDryRunReportsEdgeBrowserCacheOpportunityThroughSharedReviewSurfaces(t *
 			t.Fatalf("human report missing %q:\n%s", want, report)
 		}
 	}
-	for _, noisy := range []string{"Profile 1", "Code Cache", "GPUCache", "History", "Cookies", "Extensions", "Service Worker"} {
+	for _, noisy := range []string{"Profile 1", "Code Cache", "GPUCache", "History", "Cookies", "Extensions", "CacheStorage"} {
 		if strings.Contains(report, noisy) {
 			t.Fatalf("human report contains noisy Edge detail %q:\n%s", noisy, report)
 		}
@@ -574,12 +588,13 @@ func TestDryRunReportsEdgeBrowserCacheOpportunityThroughSharedReviewSurfaces(t *
 		filepath.Join(userDataRoot, "Default", "Cache"),
 		filepath.Join(userDataRoot, "Default", "Code Cache"),
 		filepath.Join(userDataRoot, "Default", "GPUCache"),
+		filepath.Join(userDataRoot, "Default", "Service Worker", "CacheStorage"),
 	} {
 		if !strings.Contains(detailedText, want) {
 			t.Fatalf("detailed review data missing %q:\n%s", want, detailedText)
 		}
 	}
-	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "Service Worker"} {
+	for _, forbidden := range []string{"Guest Profile", "System Profile", "History", "Cookies", "Extensions", "ScriptCache", "Database"} {
 		if strings.Contains(detailedText, forbidden) {
 			t.Fatalf("detailed review data contains excluded Edge path %q:\n%s", forbidden, detailedText)
 		}

@@ -62,6 +62,12 @@ type OpportunityDiscoveryOptions struct {
 // categories (AMD/Intel and symmetric to D3D/NVIDIA class impact).
 const gpuShaderCacheOptInImpactNotice = "Games and the desktop may recompile shaders after cleanup; temporary longer loads or stutter are expected."
 
+// browserCacheOptInImpactNotice discloses regenerable-cache cleanup impact for
+// browser_cache, including Cache Storage (Service Worker CacheStorage) offline
+// PWA re-download. It does not claim logout, unregistration of service workers,
+// or removal of cookies/history/IndexedDB.
+const browserCacheOptInImpactNotice = "Browser cache cleanup removes regenerable HTTP, code, GPU, and Cache Storage (Service Worker CacheStorage) data. Cookies, passwords, history, and IndexedDB are not removed. Progressive Web Apps and offline sites may need a network connection on next visit to rebuild their cache; first loads after cleanup may be slower."
+
 type BrowserCacheDiscoveryOptions struct {
 	// LocalAppDataDir overrides %LOCALAPPDATA% for tests. Empty uses the process
 	// environment. Chromium User Data and Firefox Local cache trees resolve here.

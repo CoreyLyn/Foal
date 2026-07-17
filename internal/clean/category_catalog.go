@@ -589,7 +589,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		categoryDefinition(OpportunityCategoryIntelGPUShaderCache, "Intel GPU shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently),
 		existenceRootSpec{base: existenceRootLocalAppDataLow, segments: []string{"Intel", "ShaderCache"}},
 	), staticPreviewSafetyNote(gpuShaderCacheOptInImpactNotice)),
-	browserCacheCategoryEntry(categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, DeletionActionDeletePermanently)),
+	withPreviewSafetyNote(browserCacheCategoryEntry(categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, DeletionActionDeletePermanently)), staticPreviewSafetyNote(browserCacheOptInImpactNotice)),
 	withPreviewSafetyNote(applicationCacheCategoryEntry(
 		categoryDefinition(
 			OpportunityCategoryVSCodeCache,
