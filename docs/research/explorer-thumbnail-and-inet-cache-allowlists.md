@@ -1,10 +1,10 @@
 # Exact allowlists: `explorer_thumbnail_cache` and `inet_cache`
 
-Status: researched 2026-07-17. This note is evidence for implement follow-up
-to [#235](https://github.com/CoreyLyn/Foal/issues/235) / program
-[#233](https://github.com/CoreyLyn/Foal/issues/233). It does **not** change
-discovery code, category registration, Planned deletion action, or deletion
-behavior.
+Status: researched 2026-07-17; allowlist discovery implemented in [#239](https://github.com/CoreyLyn/Foal/issues/239).
+This note remains the evidence source for paths and Planned-action rationale
+from [#235](https://github.com/CoreyLyn/Foal/issues/235) / program
+[#233](https://github.com/CoreyLyn/Foal/issues/233). Planned action stays
+`move_to_recycle_bin` until a separate permanent-eligibility decision.
 
 Parent product decision: [ADR 0019](../adr/0019-cleanup-category-gap-decisions.md)
 item 5 — refine discovery first; reassess permanent-delete eligibility only

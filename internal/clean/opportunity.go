@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -178,7 +179,12 @@ func discoverOpportunities(ctx context.Context, opts OpportunityDiscoveryOptions
 				continue
 			}
 			pathParts := append([]string{base}, root.segments...)
-			appendExistenceObservedOpportunity(ctx, &result, entry.definition.Identifier, filepath.Join(pathParts...), deps)
+			path := filepath.Join(pathParts...)
+			if root.matchDirectFileName != nil {
+				appendExistenceObservedMatchingFiles(ctx, &result, entry.definition.Identifier, path, root.matchDirectFileName, deps)
+				continue
+			}
+			appendExistenceObservedOpportunity(ctx, &result, entry.definition.Identifier, path, deps)
 		}
 	}
 	result.ElapsedMS = time.Since(startedAt).Milliseconds()
@@ -301,6 +307,102 @@ func appendExistenceObservedOpportunity(ctx context.Context, result *Opportunity
 		Status:   UserTempOpportunityStatus,
 		Reason:   UserTempOpportunityReason,
 	})
+}
+
+// appendExistenceObservedMatchingFiles discovers independent file candidates
+// under parent. The parent directory is never a candidate. Only direct children
+// whose basenames match matchName and that are regular non-reparse files are
+// measured. Missing parent or zero matches is silent empty — never a whole-
+// parent fallback.
+func appendExistenceObservedMatchingFiles(
+	ctx context.Context,
+	result *OpportunityDiscoveryResult,
+	category, parent string,
+	matchName func(string) bool,
+	deps opportunityDiscoveryDependencies,
+) {
+	if matchName == nil {
+		return
+	}
+	if deps.stat == nil {
+		deps.stat = os.Lstat
+	}
+	if deps.readDir == nil {
+		deps.readDir = os.ReadDir
+	}
+	if deps.joinPath == nil {
+		deps.joinPath = joinOpportunityPath
+	}
+
+	info, err := deps.stat(parent)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		result.Incomplete = append(result.Incomplete, incompleteInspection(category, parent, classifyError(err), err.Error()))
+		return
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		// Parent must be a real directory. Fail closed: never promote parent.
+		return
+	}
+
+	select {
+	case <-ctx.Done():
+		result.Incomplete = append(result.Incomplete, incompleteInspection(category, parent, "context_canceled", ctx.Err().Error()))
+		return
+	default:
+	}
+
+	entries, err := deps.readDir(parent)
+	if err != nil {
+		result.Incomplete = append(result.Incomplete, incompleteInspection(category, parent, classifyError(err), err.Error()))
+		return
+	}
+	// Deterministic order for contract stability.
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return strings.ToLower(names[i]) < strings.ToLower(names[j])
+	})
+	for _, name := range names {
+		if !matchName(name) {
+			continue
+		}
+		path := deps.joinPath(parent, name)
+		if !isDirectChildPath(parent, path) {
+			continue
+		}
+		fi, err := deps.stat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			result.Incomplete = append(result.Incomplete, incompleteInspection(category, path, classifyError(err), err.Error()))
+			continue
+		}
+		// Only regular files; reject directories and reparse points with matching names.
+		if fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+			continue
+		}
+		appendExistenceObservedOpportunity(ctx, result, category, path, deps)
+	}
+}
+
+// isExplorerThumbnailCacheDBName reports whether basename matches the research
+// allowlist thumbcache_*.db / iconcache_*.db (case-insensitive). The underscore
+// after the prefix is required; bare thumbcache.db / iconcache.db are excluded.
+func isExplorerThumbnailCacheDBName(name string) bool {
+	if name == "" || strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	lower := strings.ToLower(name)
+	if !strings.HasSuffix(lower, ".db") {
+		return false
+	}
+	return strings.HasPrefix(lower, "thumbcache_") || strings.HasPrefix(lower, "iconcache_")
 }
 
 func joinOpportunityPath(root, name string) string {
