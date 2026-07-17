@@ -1021,6 +1021,11 @@ func (m eagerCleanModel) fixedFooterLines() []string {
 		return m.resultFooterLines()
 	default:
 		lines := []string{"", m.selectionSummaryLine()}
+		// Permanent-selection notice is risk chrome only; disappears when the
+		// exact selection has no permanent category. Does not authorize cleanup.
+		if notice := eagerPermanentSelectionNotice(m.selectionIncludesPermanent()); notice != "" {
+			lines = append(lines, notice)
+		}
 		lines = append(lines, strings.Split(m.focusedDetailPanel(), "\n")...)
 		lines = append(lines, strings.Split(m.footerHints(), "\n")...)
 		return lines
