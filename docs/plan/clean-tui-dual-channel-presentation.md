@@ -31,15 +31,14 @@ No change to discovery, JSON contracts, selection semantics, planned actions, pa
 ### Risk channel
 
 - Confirmation remains the primary risk surface: Permanent vs Recycle Bin groups, irreversible permanent warning (red/bold).
-- Preview rows show catalog-projected markers: `perm` / `bin` (not whole-row red).
+- Preview rows do **not** show per-row `perm` / `bin` prefixes (removed for list noise).
 - When the exact selection includes any permanent category, footer adds a full sentence such as `includes permanent deletion`.
-- Hints legend: `perm=permanent · bin=Recycle Bin`.
 
 ## Surfaces (v1)
 
 | Surface | Magnitude on bytes | Notes |
 |---------|-------------------|--------|
-| Preview category row | Yes (complete/partial measured bytes) | Plus `perm`/`bin`; no whole-row size tint |
+| Preview category row | Yes (complete/partial measured bytes) | No per-row action prefix; no whole-row size tint |
 | Selected total line | Yes | Permanent notice when selection includes permanent |
 | Focused detail | Same rule as row if implemented cheaply | Optional follow |
 | Confirmation | Yes on measured byte numbers | Risk red reserved for permanent warning/headings |
@@ -70,14 +69,14 @@ No change to discovery, JSON contracts, selection semantics, planned actions, pa
 
 ## Likely implementation slices
 
-1. Pure helpers: magnitude tier from `int64` bytes; format+style byte token; `perm`/`bin` from planned action; selection permanent notice line.
-2. Preview/confirm/result view wiring: align bytes, inject markers, apply token styles, strengthen confirmation warning.
+1. Pure helpers: magnitude tier from `int64` bytes; format+style byte token; selection permanent notice line.
+2. Preview/confirm/result view wiring: align bytes, apply token styles, strengthen confirmation warning.
 3. Tests: tier boundaries, no color on zero/pending, plain-frame assertions, footer notice only when selection includes permanent, `NO_COLOR` bold fallback if wired.
-4. Keep `CONTEXT.md` and this plan aligned if thresholds or markers change.
+4. Keep `CONTEXT.md` and this plan aligned if thresholds or risk chrome change.
 
 ## References
 
-- `CONTEXT.md`: Clean TUI dual-channel presentation, magnitude emphasis, planned-action marker, permanent-selection notice, TUI restricted token styling.
+- `CONTEXT.md`: Clean TUI dual-channel presentation, magnitude emphasis, permanent-selection notice, TUI restricted token styling.
 - ADR 0023: dual-channel presentation and restricted token styling.
 - `docs/plan/clean-tui-category-first-interaction.md`: interaction model preserved.
 - ADR 0018: planned action is catalog-owned; TUI displays and authorizes disclosure only.

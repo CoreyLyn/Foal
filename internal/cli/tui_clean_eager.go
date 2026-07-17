@@ -885,24 +885,33 @@ func (m *eagerCleanModel) applyExactExecuted(msg eagerExactExecutedMsg) {
 	}
 }
 
+// content returns the plain-text frame (test oracle). Magnitude styling uses
+// contentStyleLines so production View can classify tiers from trusted int64
+// bytes rather than reverse-parsing cleanFormatBytes tokens.
 func (m eagerCleanModel) content() string {
+	return joinStyleLineText(m.contentStyleLines())
+}
+
+// contentStyleLines builds the same frame as content() with optional trusted
+// magnitude byte metadata on measured/affected lines.
+func (m eagerCleanModel) contentStyleLines() []tuiStyleLine {
 	if m.terminalTooSmall() {
-		return m.tooSmallContent()
+		return styleLinesFromPlain(m.tooSmallContent())
 	}
 	if m.unavailable != nil {
-		return m.unavailableContent()
+		return styleLinesFromPlain(m.unavailableContent())
 	}
 
-	header := m.fixedHeaderLines()
-	footer := m.fixedFooterLines()
-	body := m.scrollableBodyLines()
+	header := m.fixedHeaderStyleLines()
+	footer := m.fixedFooterStyleLines()
+	body := m.scrollableBodyStyleLines()
 	// height <= 0 means unconstrained (deterministic model tests without a
 	// WindowSize). Otherwise body fills remaining rows under fixed chrome.
 	capacity := len(body)
 	if m.height > 0 {
 		capacity = m.height - len(header) - len(footer)
 		if capacity < 1 {
-			return m.tooSmallContent()
+			return styleLinesFromPlain(m.tooSmallContent())
 		}
 	}
 	offset := m.clampedViewportOffset(len(body), capacity)
@@ -911,13 +920,15 @@ func (m eagerCleanModel) content() string {
 		end = len(body)
 	}
 
-	parts := make([]string, 0, len(header)+capacity+len(footer))
+	parts := make([]tuiStyleLine, 0, len(header)+capacity+len(footer)+1)
 	parts = append(parts, header...)
 	if len(body) > 0 {
 		parts = append(parts, body[offset:end]...)
 	}
 	parts = append(parts, footer...)
-	return strings.Join(parts, "\n") + "\n"
+	// Trailing empty line preserves the historical final newline from content().
+	parts = append(parts, plainStyleLine(""))
+	return parts
 }
 
 // terminalTooSmall reports whether the terminal cannot host the minimum safe
@@ -969,23 +980,47 @@ func (m eagerCleanModel) tooSmallHints() string {
 
 // fixedHeaderLines are titles and phase/progress fixed above the body.
 func (m eagerCleanModel) fixedHeaderLines() []string {
+	return styleLinesText(m.fixedHeaderStyleLines())
+}
+
+func (m eagerCleanModel) fixedHeaderStyleLines() []tuiStyleLine {
 	if m.unavailable != nil {
-		return []string{"Clean unavailable"}
+		return []tuiStyleLine{plainStyleLine("Clean unavailable")}
 	}
 	switch m.phase {
 	case eagerPhaseConfirmation:
-		return []string{"Foal Clean", "Confirm cleanup", ""}
+		return []tuiStyleLine{
+			plainStyleLine("Foal Clean"),
+			plainStyleLine("Confirm cleanup"),
+			plainStyleLine(""),
+		}
 	case eagerPhaseExecuting:
-		return []string{"Foal Clean", m.executionHeaderLine(), ""}
+		return []tuiStyleLine{
+			plainStyleLine("Foal Clean"),
+			plainStyleLine(m.executionHeaderLine()),
+			plainStyleLine(""),
+		}
 	case eagerPhaseResult:
-		return []string{"Foal Clean", "Cleanup result", ""}
+		return []tuiStyleLine{
+			plainStyleLine("Foal Clean"),
+			plainStyleLine("Cleanup result"),
+			plainStyleLine(""),
+		}
 	default:
-		return []string{"Foal Clean", m.headerLine(), ""}
+		return []tuiStyleLine{
+			plainStyleLine("Foal Clean"),
+			plainStyleLine(m.headerLine()),
+			plainStyleLine(""),
+		}
 	}
 }
 
 // fixedFooterLines hold totals, diagnostics, cancellation status, and key hints.
 func (m eagerCleanModel) fixedFooterLines() []string {
+	return styleLinesText(m.fixedFooterStyleLines())
+}
+
+func (m eagerCleanModel) fixedFooterStyleLines() []tuiStyleLine {
 	if m.unavailable != nil {
 		code := "unavailable"
 		message := "Clean cannot start."
@@ -995,39 +1030,48 @@ func (m eagerCleanModel) fixedFooterLines() []string {
 		if m.unavailable.Message != "" {
 			message = m.unavailable.Message
 		}
-		return []string{
-			fmt.Sprintf("Code: %s", code),
-			message,
-			"",
-			"Hints: Enter/Esc/b menu · q quit",
+		return []tuiStyleLine{
+			plainStyleLine(fmt.Sprintf("Code: %s", code)),
+			plainStyleLine(message),
+			plainStyleLine(""),
+			plainStyleLine("Hints: Enter/Esc/b menu · q quit"),
 		}
 	}
 	switch m.phase {
 	case eagerPhaseConfirmation:
-		return m.confirmationFooterLines()
+		return m.confirmationFooterStyleLines()
 	case eagerPhaseExecuting:
-		lines := []string{""}
+		lines := []tuiStyleLine{plainStyleLine("")}
 		if m.cancellationRequested {
-			lines = append(lines, cancellationRequestedMessage)
+			lines = append(lines, plainStyleLine(cancellationRequestedMessage))
 		}
-		lines = append(lines, m.executionFooterLine())
+		lines = append(lines, plainStyleLine(m.executionFooterLine()))
 		if m.cancellationRequested {
-			lines = append(lines, "Waiting for final Result. Escape, b, and q are inactive.")
+			lines = append(lines, plainStyleLine("Waiting for final Result. Escape, b, and q are inactive."))
 		} else {
-			lines = append(lines, "Hints: Ctrl+C cancel · Escape/b/q inactive during execution")
+			lines = append(lines, plainStyleLine("Hints: Ctrl+C cancel · Escape/b/q inactive during execution"))
 		}
 		return lines
 	case eagerPhaseResult:
-		return m.resultFooterLines()
+		return m.resultFooterStyleLines()
 	default:
-		lines := []string{"", m.selectionSummaryLine()}
+		n, measured, pending := m.selectionTotals()
+		lines := []tuiStyleLine{
+			plainStyleLine(""),
+			// Selected totals: tier from trusted measured bytes.
+			magnitudeStyleLine(eagerSelectionSummaryLine(n, measured, pending), measured),
+		}
 		// Permanent-selection notice is risk chrome only; disappears when the
 		// exact selection has no permanent category. Does not authorize cleanup.
 		if notice := eagerPermanentSelectionNotice(m.selectionIncludesPermanent()); notice != "" {
-			lines = append(lines, notice)
+			lines = append(lines, plainStyleLine(notice))
 		}
-		lines = append(lines, strings.Split(m.focusedDetailPanel(), "\n")...)
-		lines = append(lines, strings.Split(m.footerHints(), "\n")...)
+		for _, line := range strings.Split(m.focusedDetailPanel(), "\n") {
+			lines = append(lines, plainStyleLine(line))
+		}
+		for _, line := range strings.Split(m.footerHints(), "\n") {
+			lines = append(lines, plainStyleLine(line))
+		}
 		return lines
 	}
 }
@@ -1035,18 +1079,37 @@ func (m eagerCleanModel) fixedFooterLines() []string {
 // scrollableBodyLines are the central content. Group headings travel with their
 // category rows; there is no independent heading freeze or scroll mode.
 func (m eagerCleanModel) scrollableBodyLines() []string {
-	lines := m.scrollableBodyEntries()
+	return styleLinesText(m.scrollableBodyStyleLines())
+}
+
+func (m eagerCleanModel) scrollableBodyStyleLines() []tuiStyleLine {
+	entries := m.scrollableBodyEntries()
+	out := make([]tuiStyleLine, len(entries))
+	for i, line := range entries {
+		if line.hasMagnitudeBytes {
+			out[i] = magnitudeStyleLine(line.text, line.magnitudeBytes)
+		} else {
+			out[i] = plainStyleLine(line.text)
+		}
+	}
+	return out
+}
+
+// styleLinesText projects annotated style lines back to plain strings.
+func styleLinesText(lines []tuiStyleLine) []string {
 	out := make([]string, len(lines))
 	for i, line := range lines {
-		out[i] = line.text
+		out[i] = line.Text
 	}
 	return out
 }
 
 type eagerBodyLine struct {
-	text         string
-	rowIndex     int // preview row index; -1 when not a category row
-	outcomeIndex int // execution/result outcome index; -1 when not an outcome row
+	text              string
+	rowIndex          int // preview row index; -1 when not a category row
+	outcomeIndex      int // execution/result outcome index; -1 when not an outcome row
+	magnitudeBytes    int64
+	hasMagnitudeBytes bool // trusted int64 for the line's cleanFormatBytes token
 }
 
 func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
@@ -1059,11 +1122,18 @@ func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
 	case eagerPhaseExecuting, eagerPhaseResult:
 		lines := make([]eagerBodyLine, 0, len(m.executionOutcomes))
 		for i, outcome := range m.executionOutcomes {
-			lines = append(lines, eagerBodyLine{
+			line := eagerBodyLine{
 				text:         fmt.Sprintf("  %s %s", m.executionRowMarker(outcome.State), m.executionRowLabel(outcome)),
 				rowIndex:     -1,
 				outcomeIndex: i,
-			})
+			}
+			// Successful affected-style outcomes carry trusted affected bytes.
+			switch outcome.State {
+			case clean.CategoryExecutionCleaned, clean.CategoryExecutionPartial:
+				line.hasMagnitudeBytes = true
+				line.magnitudeBytes = outcome.AffectedBytes
+			}
+			lines = append(lines, line)
 		}
 		return lines
 	default:
@@ -1087,11 +1157,18 @@ func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
 			}
 			// Cursor (>) and checkbox ([x]/[ ]) stay independent of scan markers.
 			label := eagerPreviewRowLabelAligned(row, leftWidth, byteWidth)
-			lines = append(lines, eagerBodyLine{
+			line := eagerBodyLine{
 				text:         fmt.Sprintf("  %s %s %s %s", cursor, m.checkbox(row), m.rowMarker(row), label),
 				rowIndex:     i,
 				outcomeIndex: -1,
-			})
+			}
+			// Complete/partial measured rows: tier from trusted row.Bytes.
+			switch row.State {
+			case clean.CategoryPreviewComplete, clean.CategoryPreviewPartial:
+				line.hasMagnitudeBytes = true
+				line.magnitudeBytes = row.Bytes
+			}
+			lines = append(lines, line)
 		}
 		return lines
 	}
@@ -1273,17 +1350,21 @@ func (m eagerCleanModel) confirmationBodyEntries() []eagerBodyLine {
 		}
 		cats, candidates, bytes := confirmationGroupTotals(rows)
 		lines = append(lines, eagerBodyLine{
-			text:         fmt.Sprintf("%s · %d categories · %d item(s) · %s", title, cats, candidates, cleanFormatBytes(bytes)),
-			rowIndex:     -1,
-			outcomeIndex: -1,
+			text:              fmt.Sprintf("%s · %d categories · %d item(s) · %s", title, cats, candidates, cleanFormatBytes(bytes)),
+			rowIndex:          -1,
+			outcomeIndex:      -1,
+			magnitudeBytes:    bytes,
+			hasMagnitudeBytes: true,
 		})
 		for _, row := range rows {
 			action := clean.DeletionActionLabel(row.PlannedAction)
 			lines = append(lines, eagerBodyLine{
 				text: fmt.Sprintf("  - %s · %d item(s) · %s · %s",
 					row.Label, row.CandidateCount, cleanFormatBytes(row.Bytes), action),
-				rowIndex:     -1,
-				outcomeIndex: -1,
+				rowIndex:          -1,
+				outcomeIndex:      -1,
+				magnitudeBytes:    row.Bytes,
+				hasMagnitudeBytes: true,
 			})
 			if row.SafetyNote != "" {
 				lines = append(lines, eagerBodyLine{
@@ -1300,21 +1381,25 @@ func (m eagerCleanModel) confirmationBodyEntries() []eagerBodyLine {
 }
 
 func (m eagerCleanModel) confirmationFooterLines() []string {
+	return styleLinesText(m.confirmationFooterStyleLines())
+}
+
+func (m eagerCleanModel) confirmationFooterStyleLines() []tuiStyleLine {
 	n, measured, _ := m.selectionTotals()
-	lines := []string{
-		"",
-		fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured)),
-		"Latest preview total only. Execution resolves fresh state; candidates or bytes may differ from preview.",
-		"Fresh execution cannot introduce a deletion action type that was not disclosed above.",
+	lines := []tuiStyleLine{
+		plainStyleLine(""),
+		magnitudeStyleLine(fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured)), measured),
+		plainStyleLine("Latest preview total only. Execution resolves fresh state; candidates or bytes may differ from preview."),
+		plainStyleLine("Fresh execution cannot introduce a deletion action type that was not disclosed above."),
 	}
 	if m.selectionIncludesPermanent() {
-		lines = append(lines, confirmationPermanentIrreversibleWarning)
+		lines = append(lines, plainStyleLine(confirmationPermanentIrreversibleWarning))
 	}
 	// Recycle Bin-only wording when that group is present; never claim free space.
 	if _, recycle := m.confirmationActionGroups(); len(recycle) > 0 {
-		lines = append(lines, "Recycle Bin items are moved, not permanently erased.")
+		lines = append(lines, plainStyleLine("Recycle Bin items are moved, not permanently erased."))
 	}
-	lines = append(lines, "", "Enter: execute | b/Esc: back to preview")
+	lines = append(lines, plainStyleLine(""), plainStyleLine("Enter: execute | b/Esc: back to preview"))
 	return lines
 }
 
@@ -1323,21 +1408,25 @@ func (m eagerCleanModel) resultTotals() (recycle, permanent, affected int64) {
 }
 
 func (m eagerCleanModel) resultFooterLines() []string {
+	return styleLinesText(m.resultFooterStyleLines())
+}
+
+func (m eagerCleanModel) resultFooterStyleLines() []tuiStyleLine {
 	recycle, permanent, affected := m.resultTotals()
 	terminal := clean.CountTerminalExecutionOutcomes(m.executionOutcomes)
 	total := len(m.executionOutcomes)
-	lines := []string{
-		"",
-		fmt.Sprintf("Processed: %d/%d", terminal, total),
-		fmt.Sprintf("Recycle Bin moved: %s", cleanFormatBytes(recycle)),
-		fmt.Sprintf("Permanently deleted: %s", cleanFormatBytes(permanent)),
+	lines := []tuiStyleLine{
+		plainStyleLine(""),
+		plainStyleLine(fmt.Sprintf("Processed: %d/%d", terminal, total)),
+		magnitudeStyleLine(fmt.Sprintf("Recycle Bin moved: %s", cleanFormatBytes(recycle)), recycle),
+		magnitudeStyleLine(fmt.Sprintf("Permanently deleted: %s", cleanFormatBytes(permanent)), permanent),
 		// Aggregate is processed content, never "freed" or "reclaimed" disk space.
-		fmt.Sprintf("Affected (processed): %s", cleanFormatBytes(affected)),
+		magnitudeStyleLine(fmt.Sprintf("Affected (processed): %s", cleanFormatBytes(affected)), affected),
 	}
 	if clean.ResultHasPermanentPartialRisk(m.executionResult) {
-		lines = append(lines, clean.PermanentPartialRiskWarning)
+		lines = append(lines, plainStyleLine(clean.PermanentPartialRiskWarning))
 	}
-	lines = append(lines, "", "Enter/Esc/b: menu · q: quit")
+	lines = append(lines, plainStyleLine(""), plainStyleLine("Enter/Esc/b: menu · q: quit"))
 	return lines
 }
 

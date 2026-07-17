@@ -1089,7 +1089,7 @@ func TestEagerCleanModelBulkSelectAndClear(t *testing.T) {
 	}
 }
 
-func TestEagerCleanModelPlannedActionMarkersAndPermanentNotice(t *testing.T) {
+func TestEagerCleanModelPermanentSelectionNoticeWithoutRowMarkers(t *testing.T) {
 	// Inject mixed planned actions so plain frame assertions do not depend on
 	// production catalog membership of any particular permanent category.
 	queue := []clean.CleanupCategorySummary{
@@ -1120,22 +1120,21 @@ func TestEagerCleanModelPlannedActionMarkersAndPermanentNotice(t *testing.T) {
 	model.finished = true
 
 	content := model.content()
-	// Catalog-projected markers in plain frame.
-	if !strings.Contains(content, "bin · Recycle one") {
-		t.Fatalf("missing bin marker row:\n%s", content)
+	// Rows show labels without per-row planned-action prefixes.
+	if !strings.Contains(content, "Recycle one") || !strings.Contains(content, "Perm one") {
+		t.Fatalf("missing category labels:\n%s", content)
 	}
-	if !strings.Contains(content, "perm · Perm one") {
-		t.Fatalf("missing perm marker row:\n%s", content)
+	if strings.Contains(content, "bin ·") || strings.Contains(content, "perm ·") {
+		t.Fatalf("preview must not show per-row perm/bin prefixes:\n%s", content)
 	}
 	// Footer notice while selection includes permanent.
 	if !strings.Contains(content, "includes permanent deletion") {
 		t.Fatalf("missing permanent-selection notice:\n%s", content)
 	}
-	// Hints legend documents markers without authorizing cleanup.
-	if !strings.Contains(content, "perm=permanent · bin=Recycle Bin") {
-		t.Fatalf("missing planned-action legend:\n%s", content)
+	if strings.Contains(content, "perm=permanent") || strings.Contains(content, "bin=Recycle Bin") {
+		t.Fatalf("hints must not document removed row markers:\n%s", content)
 	}
-	// Markers must not use pure-red whole-row risk tint (plain frame oracle).
+	// Plain frame oracle: no embedded pure-red risk tint.
 	if strings.Contains(content, "\x1b[31m") || strings.Contains(content, "\x1b[91m") {
 		t.Fatalf("plain content must not embed pure-red risk tint:\n%q", content)
 	}
@@ -1150,9 +1149,9 @@ func TestEagerCleanModelPlannedActionMarkersAndPermanentNotice(t *testing.T) {
 	if strings.Contains(cleared, "includes permanent deletion") {
 		t.Fatalf("notice must disappear when permanent selection is empty:\n%s", cleared)
 	}
-	// Markers remain on rows (catalog projection); only the notice is selection-gated.
-	if !strings.Contains(cleared, "perm · Perm one") || !strings.Contains(cleared, "bin · Recycle one") {
-		t.Fatalf("markers must remain after deselect:\n%s", cleared)
+	// Labels remain; only the notice is selection-gated.
+	if !strings.Contains(cleared, "Perm one") || !strings.Contains(cleared, "Recycle one") {
+		t.Fatalf("labels must remain after deselect:\n%s", cleared)
 	}
 }
 

@@ -145,7 +145,7 @@ func TestEagerPreviewMarkersAndLabelsPure(t *testing.T) {
 		Bytes:          2048,
 		PlannedAction:  clean.DeletionActionMoveToRecycleBin,
 	}
-	if got := eagerPreviewRowLabel(row); got != "bin · Temp · 2 item(s) · 2 KB" {
+	if got := eagerPreviewRowLabel(row); got != "Temp · 2 item(s) · 2 KB" {
 		t.Fatalf("label = %q", got)
 	}
 	if got := eagerCheckbox(true); got != "[x]" {
@@ -162,18 +162,7 @@ func TestEagerPreviewMarkersAndLabelsPure(t *testing.T) {
 	}
 }
 
-func TestEagerPlannedActionMarkersProjectCatalogOnly(t *testing.T) {
-	if got := eagerPlannedActionMarker(clean.DeletionActionDeletePermanently); got != "perm" {
-		t.Fatalf("permanent marker = %q", got)
-	}
-	if got := eagerPlannedActionMarker(clean.DeletionActionMoveToRecycleBin); got != "bin" {
-		t.Fatalf("recycle marker = %q", got)
-	}
-	// Unknown/missing project as bin (same default as confirmation grouping).
-	if got := eagerPlannedActionMarker(clean.DeletionAction("")); got != "bin" {
-		t.Fatalf("empty marker = %q", got)
-	}
-
+func TestEagerPreviewRowLabelOmitsPlannedActionPrefix(t *testing.T) {
 	perm := eagerCategoryRow{
 		Label:          "D3D",
 		State:          clean.CategoryPreviewComplete,
@@ -181,15 +170,18 @@ func TestEagerPlannedActionMarkersProjectCatalogOnly(t *testing.T) {
 		Bytes:          1024,
 		PlannedAction:  clean.DeletionActionDeletePermanently,
 	}
-	if got := eagerPreviewRowLabel(perm); got != "perm · D3D · 1 item(s) · 1 KB" {
-		t.Fatalf("perm complete = %q", got)
+	if got := eagerPreviewRowLabel(perm); got != "D3D · 1 item(s) · 1 KB" {
+		t.Fatalf("complete = %q", got)
+	}
+	if got := eagerPreviewRowLabel(perm); strings.Contains(got, "perm") || strings.Contains(got, "bin") {
+		t.Fatalf("row must not prefix planned-action marker: %q", got)
 	}
 	partial := perm
 	partial.State = clean.CategoryPreviewPartial
-	if got := eagerPreviewRowLabel(partial); got != "perm · D3D · 1 item(s) · 1 KB · partial" {
-		t.Fatalf("perm partial = %q", got)
+	if got := eagerPreviewRowLabel(partial); got != "D3D · 1 item(s) · 1 KB · partial" {
+		t.Fatalf("partial = %q", got)
 	}
-	// Non-measured states still project catalog action; no invented bytes.
+	// Non-measured states invent no byte token and no action prefix.
 	for _, state := range []clean.CategoryPreviewState{
 		clean.CategoryPreviewWaiting,
 		clean.CategoryPreviewScanning,
@@ -200,20 +192,20 @@ func TestEagerPlannedActionMarkersProjectCatalogOnly(t *testing.T) {
 	} {
 		row := eagerCategoryRow{Label: "Cache", State: state, PlannedAction: clean.DeletionActionDeletePermanently}
 		got := eagerPreviewRowLabel(row)
-		if !strings.HasPrefix(got, "perm · ") {
-			t.Fatalf("state %q missing perm marker: %q", state, got)
+		if strings.HasPrefix(got, "perm · ") || strings.HasPrefix(got, "bin · ") {
+			t.Fatalf("state %q has planned-action prefix: %q", state, got)
 		}
 		if strings.Contains(got, "KB") || strings.Contains(got, "MB") || strings.Contains(got, "GB") {
 			t.Fatalf("state %q invented byte token: %q", state, got)
 		}
 	}
-	binWaiting := eagerCategoryRow{
+	waiting := eagerCategoryRow{
 		Label:         "Temp",
 		State:         clean.CategoryPreviewWaiting,
 		PlannedAction: clean.DeletionActionMoveToRecycleBin,
 	}
-	if got := eagerPreviewRowLabel(binWaiting); got != "bin · Temp · waiting" {
-		t.Fatalf("bin waiting = %q", got)
+	if got := eagerPreviewRowLabel(waiting); got != "Temp · waiting" {
+		t.Fatalf("waiting = %q", got)
 	}
 }
 
@@ -248,17 +240,18 @@ func TestEagerPermanentSelectionNoticePresence(t *testing.T) {
 	}
 }
 
-func TestEagerFooterHintsDocumentPlannedActionLegend(t *testing.T) {
-	const legend = "perm=permanent · bin=Recycle Bin"
+func TestEagerFooterHintsDoNotAuthorizeCleanup(t *testing.T) {
 	base := eagerFooterHints(false, clean.EagerPreviewNoWorkNone, false)
-	if !strings.Contains(base, legend) {
-		t.Fatalf("in-scan hints missing legend: %q", base)
+	if !strings.Contains(base, "space toggle") {
+		t.Fatalf("in-scan hints missing browse chrome: %q", base)
+	}
+	if strings.Contains(base, "perm=") || strings.Contains(base, "bin=") {
+		t.Fatalf("hints must not document removed per-row markers: %q", base)
 	}
 	ready := eagerFooterHints(true, clean.EagerPreviewNoWorkNone, true)
-	if !strings.Contains(ready, legend) || !strings.Contains(ready, "enter confirm") {
-		t.Fatalf("ready hints missing legend or enter: %q", ready)
+	if !strings.Contains(ready, "enter confirm") {
+		t.Fatalf("ready hints missing enter: %q", ready)
 	}
-	// Legend documents markers; does not authorize cleanup.
 	for _, forbidden := range []string{"execute now", "authorized", "will delete"} {
 		if strings.Contains(strings.ToLower(base), forbidden) {
 			t.Fatalf("hints must not authorize cleanup (%q): %s", forbidden, base)
@@ -324,8 +317,8 @@ func TestEagerPreviewHeaderAndFooterPure(t *testing.T) {
 	if !strings.Contains(base, "space toggle") || strings.Contains(base, "enter confirm") {
 		t.Fatalf("in-scan footer = %q", base)
 	}
-	if !strings.Contains(base, "perm=permanent · bin=Recycle Bin") {
-		t.Fatalf("in-scan footer missing planned-action legend: %q", base)
+	if strings.Contains(base, "perm=") || strings.Contains(base, "bin=") {
+		t.Fatalf("in-scan footer must not carry removed marker legend: %q", base)
 	}
 	if got := eagerFooterHints(true, clean.EagerPreviewNoWorkNeedSelection, false); !strings.Contains(got, "Select at least one") {
 		t.Fatalf("need selection footer = %q", got)
@@ -443,11 +436,14 @@ func TestEagerPreviewByteColumnAlignment(t *testing.T) {
 
 	complete := eagerPreviewRowLabelAligned(rows[0], leftWidth, byteWidth)
 	partial := eagerPreviewRowLabelAligned(rows[1], leftWidth, byteWidth)
-	// Plain fragments remain findable (oracle), including planned-action markers.
-	if !strings.Contains(complete, "bin · Short") || !strings.Contains(complete, "2 KB") {
+	// Plain fragments remain findable (oracle); no planned-action prefix.
+	if !strings.Contains(complete, "Short") || !strings.Contains(complete, "2 KB") {
 		t.Fatalf("complete = %q", complete)
 	}
-	if !strings.Contains(partial, "perm ·") || !strings.Contains(partial, "3 GB") || !strings.Contains(partial, "partial") {
+	if strings.Contains(complete, "bin ·") || strings.Contains(partial, "perm ·") {
+		t.Fatalf("labels must not prefix planned-action markers: complete=%q partial=%q", complete, partial)
+	}
+	if !strings.Contains(partial, "3 GB") || !strings.Contains(partial, "partial") {
 		t.Fatalf("partial = %q", partial)
 	}
 	// Byte tokens start at the same column in the plain frame.
@@ -465,14 +461,14 @@ func TestEagerPreviewByteColumnAlignment(t *testing.T) {
 	if strings.Contains(empty, "0 KB") {
 		t.Fatalf("empty invented zero magnitude field: %q", empty)
 	}
-	if !strings.Contains(empty, "perm · Empty") {
-		t.Fatalf("empty missing planned-action marker: %q", empty)
+	if got := empty; got != "Empty · empty" {
+		t.Fatalf("empty label = %q", got)
 	}
 }
 
 func TestStyleMagnitudeTokenNoColorAndHues(t *testing.T) {
-	attention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, true)
-	strong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, true)
+	attention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, true, false)
+	strong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, true, false)
 	if attention == "100 MB" || strong == "1 GB" {
 		t.Fatal("colored path should decorate attention/strong tokens")
 	}
@@ -485,8 +481,8 @@ func TestStyleMagnitudeTokenNoColorAndHues(t *testing.T) {
 		t.Fatalf("strong magnitude must not use pure red: %q", strong)
 	}
 
-	noColorAttention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, false)
-	noColorStrong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, false)
+	noColorAttention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, false, false)
+	noColorStrong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, false, false)
 	if !strings.Contains(noColorAttention, "100 MB") || !strings.Contains(noColorStrong, "1 GB") {
 		t.Fatalf("NO_COLOR path lost fragments: %q %q", noColorAttention, noColorStrong)
 	}
@@ -496,37 +492,203 @@ func TestStyleMagnitudeTokenNoColorAndHues(t *testing.T) {
 	}
 
 	// Zero/none and neutral stay plain (no invented magnitude color).
-	if got := styleMagnitudeTokenWithColor("0 KB", cleanMagnitudeNone, true); got != "0 KB" {
+	if got := styleMagnitudeTokenWithColor("0 KB", cleanMagnitudeNone, true, false); got != "0 KB" {
 		t.Fatalf("none tier = %q", got)
 	}
-	if got := styleMagnitudeTokenWithColor("2 KB", cleanMagnitudeNeutral, true); got != "2 KB" {
+	if got := styleMagnitudeTokenWithColor("2 KB", cleanMagnitudeNeutral, true, false); got != "2 KB" {
 		t.Fatalf("neutral tier = %q", got)
+	}
+}
+
+func TestClassifyMagnitudeTierPrefersTrustedBytes(t *testing.T) {
+	const (
+		mib = int64(1024 * 1024)
+		gib = int64(1024 * 1024 * 1024)
+	)
+	// Display rounding can make just-below thresholds look like the next unit
+	// step; trusted int64 classification must still win on the production path.
+	justBelowAttention := 100*mib - 1
+	tokenBelowAttention := cleanFormatBytes(justBelowAttention)
+	if tokenBelowAttention != "100 MB" {
+		// Document the brittle display; if formatting changes, still assert tiers.
+		t.Logf("cleanFormatBytes(%d) = %q (expected rounding to 100 MB historically)", justBelowAttention, tokenBelowAttention)
+	}
+	if got := classifyMagnitudeTier(tokenBelowAttention, justBelowAttention, true); got != cleanMagnitudeNeutral {
+		t.Fatalf("trusted just-below 100 MiB tier = %v, want Neutral", got)
+	}
+	// Fallback reverse-parse of the rounded token is documented as imprecise.
+	if tokenBelowAttention == "100 MB" {
+		if got := classifyMagnitudeTier(tokenBelowAttention, 0, false); got != cleanMagnitudeAttention {
+			t.Fatalf("fallback for rounded 100 MB token = %v, want Attention", got)
+		}
+	}
+
+	justBelowStrong := gib - 1
+	tokenBelowStrong := cleanFormatBytes(justBelowStrong)
+	if got := classifyMagnitudeTier(tokenBelowStrong, justBelowStrong, true); got != cleanMagnitudeAttention {
+		t.Fatalf("trusted just-below 1 GiB tier = %v, want Attention", got)
+	}
+
+	// Exact thresholds via int64 remain the authoritative boundary table.
+	tests := []struct {
+		name    string
+		bytes   int64
+		trusted bool
+		token   string
+		want    cleanMagnitudeTier
+	}{
+		{name: "zero trusted", bytes: 0, trusted: true, token: "0 KB", want: cleanMagnitudeNone},
+		{name: "exactly 100 MiB", bytes: 100 * mib, trusted: true, token: cleanFormatBytes(100 * mib), want: cleanMagnitudeAttention},
+		{name: "exactly 1 GiB", bytes: gib, trusted: true, token: cleanFormatBytes(gib), want: cleanMagnitudeStrong},
+		{name: "fallback 1 GB token", bytes: 0, trusted: false, token: "1 GB", want: cleanMagnitudeStrong},
+		{name: "fallback 0 KB token", bytes: 0, trusted: false, token: "0 KB", want: cleanMagnitudeNone},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyMagnitudeTier(tt.token, tt.bytes, tt.trusted); got != tt.want {
+				t.Fatalf("classifyMagnitudeTier(%q, %d, trusted=%v) = %v, want %v",
+					tt.token, tt.bytes, tt.trusted, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStylizeStyleLinesUsesTrustedBytesNotTokenParse(t *testing.T) {
+	// Line displays a token that reverse-parse would call Attention, but the
+	// trusted count is Neutral (< 100 MiB). Production path must classify from
+	// int64 so the token stays undecorated (Neutral = plain).
+	const justBelow = int64(100*1024*1024 - 1)
+	token := cleanFormatBytes(justBelow)
+	plain := fmt.Sprintf("    [x] ✓ Edge · 1 item(s) · %s", token)
+
+	// Tier decision: trusted bytes win over token text.
+	if got := classifyMagnitudeTier(token, justBelow, true); got != cleanMagnitudeNeutral {
+		t.Fatalf("trusted tier = %v, want Neutral for %d (%q)", got, justBelow, token)
+	}
+	if token == "100 MB" {
+		if got := classifyMagnitudeTier(token, 0, false); got != cleanMagnitudeAttention {
+			t.Fatalf("fallback tier for rounded %q = %v, want Attention", token, got)
+		}
+	}
+
+	// Annotated style path: Neutral token remains plain (no magnitude style).
+	styled := stylizeStyleLines([]tuiStyleLine{
+		magnitudeStyleLine(plain, justBelow),
+	})
+	if !strings.Contains(styled, token) {
+		t.Fatalf("lost plain token %q:\n%q", token, styled)
+	}
+	// Neutral leaves the token unstyled; the whole line may still be plain.
+	if styled != plain {
+		// Allow only non-magnitude whole-line styles; magnitude hues must not apply.
+		if strings.Contains(styled, "214") || strings.Contains(styled, "208") {
+			t.Fatalf("trusted Neutral must not apply attention/strong hues:\n%q", styled)
+		}
+	}
+
+	// Explicit color core: Neutral stays plain; Attention (fallback tier) hues.
+	if got := styleMagnitudeTokenWithColor(token, cleanMagnitudeNeutral, true, false); got != token {
+		t.Fatalf("Neutral colored path should stay plain, got %q", got)
+	}
+	attention := styleMagnitudeTokenWithColor("100 MB", cleanMagnitudeAttention, true, false)
+	if attention == "100 MB" || !strings.Contains(attention, "100 MB") {
+		t.Fatalf("Attention colored path should decorate token: %q", attention)
+	}
+	if strings.Contains(attention, "[31m") || strings.Contains(attention, "[91m") {
+		t.Fatalf("Attention must not use pure red: %q", attention)
+	}
+}
+
+func TestSelectedRowMagnitudeStacking(t *testing.T) {
+	// Focused preview row: reverse chrome + magnitude on the byte token.
+	// Plain fragments remain the oracle; strong must not use pure red.
+	const gib = int64(1024 * 1024 * 1024)
+	plain := "  > [x] ✓ Big · 1 item(s) · 1 GB"
+	styled := stylizeStyleLines([]tuiStyleLine{
+		magnitudeStyleLine(plain, gib),
+	})
+	for _, want := range []string{"Big · 1 item(s)", "1 GB", "[x]"} {
+		if !strings.Contains(styled, want) {
+			t.Fatalf("selected styled row missing plain fragment %q:\n%q", want, styled)
+		}
+	}
+	if strings.Contains(styled, "[31m") || strings.Contains(styled, "[91m") {
+		t.Fatalf("selected strong magnitude must not use pure red:\n%q", styled)
+	}
+	// Selection reverse is applied (left/token/right segments).
+	if !strings.Contains(styled, "\x1b[") {
+		t.Fatal("selected row should receive style escapes")
+	}
+	// Strip ANSI: plain frame fragments must still match the source line.
+	if stripANSIForTest(styled) != plain {
+		t.Fatalf("selected styled row plain projection mismatch:\n got %q\nwant %q", stripANSIForTest(styled), plain)
+	}
+
+	// Explicit color core: selected strong stacks reverse + orange, never pure red.
+	selectedStrong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, true, true)
+	if !strings.Contains(selectedStrong, "1 GB") {
+		t.Fatalf("selected strong lost plain fragment: %q", selectedStrong)
+	}
+	if selectedStrong == "1 GB" {
+		t.Fatal("selected strong should decorate token when color enabled")
+	}
+	if strings.Contains(selectedStrong, "[31m") || strings.Contains(selectedStrong, "[91m") {
+		t.Fatalf("selected strong must not use pure red: %q", selectedStrong)
+	}
+	// Reverse bit (7) should be present for continuous selection on the token.
+	if !strings.Contains(selectedStrong, "7") {
+		t.Fatalf("selected strong should include reverse: %q", selectedStrong)
+	}
+
+	// Neutral selected: continuous reverse, no magnitude hue indexes required.
+	neutralToken := styleMagnitudeTokenWithColor("2 KB", cleanMagnitudeNeutral, true, true)
+	if !strings.Contains(neutralToken, "2 KB") {
+		t.Fatalf("neutral selected lost fragment: %q", neutralToken)
+	}
+	// Explicit no-color selected strong: reverse/bold without magnitude hues.
+	noColorStrong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, false, true)
+	if !strings.Contains(noColorStrong, "1 GB") {
+		t.Fatalf("NO_COLOR selected strong lost fragment: %q", noColorStrong)
+	}
+	if strings.Contains(noColorStrong, "208") || strings.Contains(noColorStrong, "214") {
+		t.Fatalf("NO_COLOR selected strong leaked magnitude hues: %q", noColorStrong)
+	}
+
+	// Neutral selected full line still projects plain fragments.
+	neutralPlain := "  > [x] ✓ Small · 1 item(s) · 2 KB"
+	neutralStyled := stylizeStyleLines([]tuiStyleLine{
+		magnitudeStyleLine(neutralPlain, 2048),
+	})
+	if stripANSIForTest(neutralStyled) != neutralPlain {
+		t.Fatalf("neutral selected plain projection mismatch:\n got %q\nwant %q", stripANSIForTest(neutralStyled), neutralPlain)
 	}
 }
 
 func TestStylizeFrameMagnitudeOnPreviewAndSelected(t *testing.T) {
 	plain := strings.Join([]string{
 		"Foal Clean",
-		"  > [x] ✓ perm · Big · 1 item(s) · 1 GB",
-		"    [ ] ✓ bin · Mid · 1 item(s) · 100 MB",
-		"    [ ] … bin · Wait · waiting",
+		"  > [x] ✓ Big · 1 item(s) · 1 GB",
+		"    [ ] ✓ Mid · 1 item(s) · 100 MB",
+		"    [ ] … Wait · waiting",
 		"Selected: 1 categories · 1 GB",
 		"Selection includes permanent deletion.",
-		"Hints: space toggle · perm=permanent · bin=Recycle Bin",
+		"Hints: space toggle",
 	}, "\n")
 	if strings.Contains(plain, "\x1b[") {
 		t.Fatal("plain frame must stay free of escapes")
 	}
 	styled := stylizeFrame(plain)
-	// Plain fragments remain the contract (markers, notice, legend, bytes).
+	// Plain fragments remain the contract (labels, notice, bytes).
 	for _, want := range []string{
-		"perm · Big", "bin · Mid", "1 GB", "100 MB", "waiting",
+		"Big · 1 item(s)", "Mid · 1 item(s)", "1 GB", "100 MB", "waiting",
 		"Selected: 1 categories", "includes permanent deletion",
-		"perm=permanent · bin=Recycle Bin",
 	} {
 		if !strings.Contains(styled, want) {
 			t.Fatalf("styled frame missing plain fragment %q:\n%q", want, styled)
 		}
+	}
+	if strings.Contains(styled, "perm ·") || strings.Contains(styled, "bin ·") {
+		t.Fatalf("styled frame must not invent per-row action prefixes:\n%q", styled)
 	}
 	// Magnitude applied to measured preview/selected bytes, not waiting.
 	if !strings.Contains(styled, "\x1b[") {
@@ -538,13 +700,13 @@ func TestStylizeFrameMagnitudeOnPreviewAndSelected(t *testing.T) {
 			t.Fatalf("waiting line should not gain a byte token: %q", line)
 		}
 	}
-	// Planned-action markers must not receive pure-red whole-row risk tint.
+	// Preview rows must not use pure-red whole-row risk tint for size or labels.
 	for _, line := range strings.Split(styled, "\n") {
-		if !strings.Contains(line, "perm ·") && !strings.Contains(line, "bin ·") {
+		if !strings.Contains(line, "item(s)") {
 			continue
 		}
 		if strings.Contains(line, "[31m") || strings.Contains(line, "[91m") {
-			t.Fatalf("preview risk marker row must not use pure red: %q", line)
+			t.Fatalf("preview magnitude/label row must not use pure red: %q", line)
 		}
 	}
 }
