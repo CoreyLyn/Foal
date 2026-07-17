@@ -1115,8 +1115,12 @@ func TestExecuteOptInCursorDoesNotAuthorizeVSCode(t *testing.T) {
 		t.Fatalf("OptInDeletedCount = %d, want 1 cursor root", result.Totals.OptInDeletedCount)
 	}
 	for _, path := range permanent.paths {
-		if strings.Contains(path, string(filepath.Separator)+"Code"+string(filepath.Separator)) ||
-			strings.HasSuffix(path, string(filepath.Separator)+"Code") {
+		relative, err := filepath.Rel(roaming, path)
+		if err != nil {
+			t.Fatalf("relative permanent path: %v", err)
+		}
+		applicationRoot := strings.Split(relative, string(filepath.Separator))[0]
+		if strings.EqualFold(applicationRoot, "Code") {
 			t.Fatalf("cursor opt-in deleted VS Code path: %v", permanent.paths)
 		}
 	}

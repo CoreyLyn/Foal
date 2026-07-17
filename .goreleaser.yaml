@@ -21,29 +21,10 @@ builds:
       - amd64
       - arm64
 
-  - id: fo
-    main: ./cmd/fo
-    binary: fo
-    env:
-      - CGO_ENABLED=0
-    flags:
-      - -trimpath
-    ldflags:
-      - >-
-        -s -w
-        -X github.com/CoreyLyn/Foal/internal/buildinfo.Version={{ .Tag }}
-        -X github.com/CoreyLyn/Foal/internal/buildinfo.Commit={{ .FullCommit }}
-    goos:
-      - windows
-    goarch:
-      - amd64
-      - arm64
-
 archives:
   - id: windows
     ids:
       - foal
-      - fo
     formats:
       - zip
     name_template: "foal_{{ .Version }}_windows_{{ .Arch }}"

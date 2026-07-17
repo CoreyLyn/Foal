@@ -50,8 +50,6 @@ jobs:
             $env:GOARCH = $arch
             go build -trimpath -o "build/foal_windows_$arch.exe" ./cmd/foal
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            go build -trimpath -o "build/fo_windows_$arch.exe" ./cmd/fo
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
       - name: Smoke test native CLI

@@ -14,14 +14,12 @@ it. Pushing a tag never makes binaries immediately public.
 
 ## Build and artifacts
 
-GoReleaser builds the canonical command and its convenience alias with
-`CGO_ENABLED=0` and `-trimpath`:
+GoReleaser builds the canonical command with `CGO_ENABLED=0` and `-trimpath`:
 
 - `foal.exe`
-- `fo.exe`
 
 Each release contains one ZIP for Windows amd64 and one for Windows arm64. Each
-archive includes both executables, README, and the selected repository license.
+archive includes `foal.exe`, README, and the selected repository license.
 The release also includes SHA-256 checksums. Linker flags inject only the tag
 and full commit into the shared version read model; no build timestamp is
 injected.

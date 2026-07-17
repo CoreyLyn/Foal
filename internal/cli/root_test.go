@@ -120,12 +120,14 @@ func TestHelpUsesFoalNamingOnly(t *testing.T) {
 	}
 }
 
-func TestFoAliasRunsSameExplicitCommandSurface(t *testing.T) {
+func TestNoArgumentTTYRoutesToFoalMainMenuEntry(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := RunInvocation(Invocation{
-		ExecutableName: "fo",
-		Args:           []string{"status", "--json"},
+		ExecutableName:            "foal",
+		InteractiveTerminal:       true,
+		OutputInteractiveTerminal: true,
+		Args:                      nil,
 	}, &stdout, &stderr)
 
 	if code != exitOK {
@@ -134,69 +136,29 @@ func TestFoAliasRunsSameExplicitCommandSurface(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
-	var got envelope
-	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
+	output := stdout.String()
+	for _, want := range []string{
+		"https://github.com/CoreyLyn/Foal",
+		"Foal main menu",
+		"Safe, preview-first cleanup for Windows",
+		"> Clean",
+		"  Uninstall",
+		"  Analyze",
+		"  Status",
+		"  Extensions",
+		"j/k or up/down: move",
+		"enter: open",
+		"q: quit",
+		"read-only navigation shell",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("main menu entry missing %q:\n%s", want, output)
+		}
 	}
-	if got.Command != "status" {
-		t.Fatalf("command = %q, want status", got.Command)
-	}
-	result, ok := got.Result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("result has type %T, want object", got.Result)
-	}
-	foal, ok := result["foal"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("result.foal has type %T, want object", result["foal"])
-	}
-	if foal["command"] != "foal" || foal["executable"] != "foal.exe" {
-		t.Fatalf("foal state = %#v, want canonical foal naming through alias", foal)
-	}
-}
-
-func TestNoArgumentTTYRoutesToFoalMainMenuEntry(t *testing.T) {
-	for _, executable := range []string{"foal", "fo"} {
-		t.Run(executable, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-
-			code := RunInvocation(Invocation{
-				ExecutableName:            executable,
-				InteractiveTerminal:       true,
-				OutputInteractiveTerminal: true,
-				Args:                      nil,
-			}, &stdout, &stderr)
-
-			if code != exitOK {
-				t.Fatalf("RunInvocation returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
-			}
-			if stderr.Len() != 0 {
-				t.Fatalf("stderr = %q, want empty", stderr.String())
-			}
-			output := stdout.String()
-			for _, want := range []string{
-				"https://github.com/CoreyLyn/Foal",
-				"Foal main menu",
-				"Safe, preview-first cleanup for Windows",
-				"> Clean",
-				"  Uninstall",
-				"  Analyze",
-				"  Status",
-				"  Extensions",
-				"j/k or up/down: move",
-				"enter: open",
-				"q: quit",
-				"read-only navigation shell",
-			} {
-				if !strings.Contains(output, want) {
-					t.Fatalf("main menu entry missing %q:\n%s", want, output)
-				}
-			}
-			for _, forbidden := range []string{"Mole", "Mac", "optimize", "fo command", "fo --help", "execute cleanup", "Run uninstaller", "Delete leftover"} {
-				if strings.Contains(output, forbidden) {
-					t.Fatalf("main menu entry contains forbidden alias/destructive wording %q:\n%s", forbidden, output)
-				}
-			}
-		})
+	for _, forbidden := range []string{"Mole", "Mac", "optimize", "fo command", "fo --help", "execute cleanup", "Run uninstaller", "Delete leftover"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("main menu entry contains forbidden alias/destructive wording %q:\n%s", forbidden, output)
+		}
 	}
 }
 
@@ -204,7 +166,7 @@ func TestNoArgumentNonTTYKeepsCanonicalHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := RunInvocation(Invocation{
-		ExecutableName:      "fo",
+		ExecutableName:      "foal",
 		InteractiveTerminal: false,
 		Args:                nil,
 	}, &stdout, &stderr)

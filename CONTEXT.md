@@ -220,12 +220,8 @@ _Avoid_: TUI-owned cleanup engine, replacement command path, implicit execution,
 The top-level interactive TUI entry that appears when a user explicitly starts Foal's interactive mode, offering command navigation for clean, uninstall, analyze, status, and future read-only views while preserving each command's existing CLI and JSON contract.
 _Avoid_: default execution hub, hidden command behavior change, feature-parity clone menu
 
-**Fo command alias**:
-The short interactive convenience alias for the Foal CLI, intended to launch the same command surface as `foal` while keeping `foal` as the canonical command name in product identity, help text, JSON contracts, and documentation.
-_Avoid_: legacy compatibility alias, renamed canonical command, separate behavior surface
-
 **Interactive default entry**:
-The no-argument `foal` and `fo` behavior in an interactive terminal, launching the Foal main menu while preserving non-interactive and JSON-oriented command behavior for scripts, pipes, and automation.
+The no-argument `foal` behavior in an interactive terminal, launching the Foal main menu while preserving non-interactive and JSON-oriented command behavior for scripts, pipes, and automation.
 _Avoid_: blocking non-TTY scripts, replacing help semantics everywhere, implicit command execution
 
 **Main menu command entries**:
