@@ -1,6 +1,6 @@
 # Structured downloadable developer-cache artifacts use catalog-owned child discovery
 
-> **Status note (ADR 0018):** Structured categories such as `playwright-browsers` and `puppeteer-browsers` (and product-scoped `jetbrains-ide-caches` via ADR 0017) use catalog planned action `delete_permanently`. Discovery, fail-closed layout policy, and shared opt-in resolution in this ADR remain in force. Aggregate Recycle Bin capacity pre-checks apply only when a category's planned action is `move_to_recycle_bin`.
+> **Status note (ADR 0018):** Structured categories such as `playwright-browsers` and `puppeteer-browsers` (and product-scoped `jetbrains-ide-caches` via ADR 0017, `visual-studio-caches` via ADR 0020) use catalog planned action `delete_permanently`. Discovery, fail-closed layout policy, and shared opt-in resolution in this ADR remain in force. Aggregate Recycle Bin capacity pre-checks apply only when a category's planned action is `move_to_recycle_bin`.
 
 Foal already reclaims whole-root developer-tool caches through explicit opt-in, env/default root resolution, Protection, fresh Dry-run/Execute resolution, immediate validation, and action-specific preflight including aggregate Recycle Bin capacity checks for Recycle Bin work (ADR 0008, qualified by ADR 0018). Some developer caches are not safe to treat as a single root: they mix re-downloadable installations with profiles, metadata, product parents, or other state that must never be authorized by proximity under the same tree.
 

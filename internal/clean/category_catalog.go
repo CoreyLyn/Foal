@@ -293,6 +293,9 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationMPS, displayName: "MPS", executables: []string{"mps64.exe", "mps.exe"}},
 	{id: ApplicationWriterside, displayName: "Writerside", executables: []string{"writerside64.exe", "writerside.exe"}},
 	{id: ApplicationRider, displayName: "Rider", executables: []string{"rider64.exe", "rider.exe"}},
+	// Full Visual Studio IDE (not VS Code / Cursor). devenv.exe is the
+	// distinctive process Microsoft cache-clear guidance requires idle.
+	{id: ApplicationVisualStudio, displayName: "Visual Studio", executables: []string{"devenv.exe"}},
 }
 
 // applicationCacheApplicationDefinitions is the controlled registry of idle
@@ -491,7 +494,7 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 20 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
+	// 21 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
 	// Over-broad whole-root system caches stay Recycle Bin until exact allowlists exist.
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
@@ -635,6 +638,18 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		ApplicationGoLand, ApplicationRustRover, ApplicationAqua,
 		ApplicationMPS, ApplicationWriterside, ApplicationRider,
 	), staticPreviewSafetyNote(jetbrainsIDECachesOptInImpactNotice)),
+	// Visual Studio regenerable caches: one product-scoped parent under
+	// %LOCALAPPDATA%\Microsoft\VisualStudio with exact ComponentModelCache
+	// (per 14.0+ instance hive) and shared Roslyn children. Distinctive-process
+	// idle on devenv.exe; independent of VS Code/Cursor. Permanent deletion;
+	// no Review probe, no ProgramData/settings/solutions.
+	withPreviewSafetyNote(developerCacheEntryWithProductScopedChildren(
+		categoryDefinition(DevCacheCategoryVisualStudioCaches, "Visual Studio caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		resolveVisualStudioCacheRootScopes,
+		discoverVisualStudioCacheChildren,
+		nil,
+		ApplicationVisualStudio,
+	), staticPreviewSafetyNote(visualStudioCachesOptInImpactNotice)),
 	// Non-executable permission boundary: actionless and cannot enter execution.
 	nonExecutableCategoryEntry(categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable, "")),
 }

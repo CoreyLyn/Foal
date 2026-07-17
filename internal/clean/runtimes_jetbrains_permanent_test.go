@@ -93,6 +93,21 @@ func TestRuntimesJetBrainsDryRunReportsPermanentWithoutAuthorization(t *testing.
 				}
 			},
 		},
+		{
+			name:     "visual-studio-caches",
+			category: clean.DevCacheCategoryVisualStudioCaches,
+			setup: func(t *testing.T) (string, clean.Options) {
+				_, parent := writeVisualStudioParent(t)
+				child := writeVisualStudioCacheChild(t, parent, "Roslyn")
+				return child, clean.Options{
+					AllowPermanentDeletion:    false,
+					OptIn:                     []string{clean.DevCacheCategoryVisualStudioCaches},
+					DetectRunningApplications: idleVisualStudioDetector(),
+					DiscoverOpportunities:     noOpportunities,
+					DiscoverReviewSuggestions: noReviewSuggestions,
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -351,6 +366,7 @@ func TestRuntimesJetBrainsTUIInitiallySelectsPermanentCategories(t *testing.T) {
 		clean.DevCacheCategoryPuppeteerBrowsers,
 		clean.DevCacheCategoryElectron,
 		clean.DevCacheCategoryJetBrainsIDECaches,
+		clean.DevCacheCategoryVisualStudioCaches,
 	} {
 		summary, ok := clean.CanonicalCleanupCategoryCatalog().Summary(id)
 		if !ok {

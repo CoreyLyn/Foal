@@ -163,6 +163,10 @@ const electronCacheOptInImpactNotice = "Opt-in Electron cache cleanup may requir
 // shown when jetbrains-ide-caches has Opt-in candidates. Indexes rebuild; the
 // next IDE startup or project open may be slower.
 
+// visualStudioCachesOptInImpactNotice is defined in visual_studio_caches.go and
+// shown when visual-studio-caches has Opt-in candidates. MEF/Roslyn caches
+// rebuild; the next Visual Studio startup or solution load may be slower.
+
 // applicationCacheCachedExtensionVSIXsImpactNotice is shown when an Application
 // cache CachedExtensionVSIXs root is observed or selected. Installed extensions
 // and settings are never selected for any editor category.
@@ -251,7 +255,7 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPNPMOptIn, hasYarnOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasApplicationCacheVSIX bool
+	var hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPNPMOptIn, hasYarnOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasVisualStudioOptIn, hasApplicationCacheVSIX bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case DevCacheCategoryUV:
@@ -272,6 +276,8 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			hasElectronOptIn = true
 		case DevCacheCategoryJetBrainsIDECaches:
 			hasJetBrainsOptIn = true
+		case DevCacheCategoryVisualStudioCaches:
+			hasVisualStudioOptIn = true
 		default:
 			if isApplicationCacheCategory(candidate.Category) && isCachedExtensionVSIXsPath(candidate.Path) {
 				hasApplicationCacheVSIX = true
@@ -336,6 +342,12 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
 			Message: jetbrainsIDECachesOptInImpactNotice,
+		})
+	}
+	if hasVisualStudioOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: visualStudioCachesOptInImpactNotice,
 		})
 	}
 	if hasApplicationCacheVSIX {

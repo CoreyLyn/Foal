@@ -7,7 +7,7 @@ After comparing Foal's Clean matrix to Windows built-in tools (Disk Cleanup, Sto
 1. **Firefox under existing `browser_cache`** — same regenerable-cache-only allowlist policy and idle gates as Chrome/Edge; no separate category; Chromium forks (Brave, Opera, …) deferred.
 2. **pnpm store and yarn cache** — developer-tool opt-in with exact roots, permanent-delete eligibility when proven, re-download impact notices; not Docker/Scoop/Chocolatey.
 3. **AMD and Intel GPU/shader caches** — symmetric to `d3d_shader_cache` / `nvidia_dx_cache` after path and layout evidence; no vendor-merged mega-category.
-4. **Visual Studio caches** — independent category, exact allowlist, idle gate; no whole-ProgramData scan.
+4. **Visual Studio caches** — shipped as `visual-studio-caches` (ADR 0020): independent category, exact ComponentModelCache/Roslyn allowlist, devenv idle gate; no whole-ProgramData scan.
 5. **`explorer_thumbnail_cache` / `inet_cache` exact allowlists** — refine discovery first; reassess permanent-delete eligibility only after Regenerable proof; keep Recycle Bin until then.
 6. **Independent project-artifact purge flow** — Mole-style explicit root + selection + confirmation; never default Clean disk-wide scan; not a Clean catalog default/opt-in row in the ordinary sense until designed.
 

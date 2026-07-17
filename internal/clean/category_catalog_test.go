@@ -41,6 +41,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"puppeteer-browsers",
 		"electron-cache",
 		"jetbrains-ide-caches",
+		"visual-studio-caches",
 		"administrator_only_caches",
 	}
 	gotIdentifiers := make([]string, 0, len(summaries))
@@ -189,6 +190,7 @@ func lockedPermanentCategoryIDs() []string {
 		clean.DevCacheCategoryPuppeteerBrowsers,
 		clean.DevCacheCategoryElectron,
 		clean.DevCacheCategoryJetBrainsIDECaches,
+		clean.DevCacheCategoryVisualStudioCaches,
 	}
 }
 
@@ -213,13 +215,13 @@ func productionPermanentCategoryIDs() map[string]bool {
 }
 
 // TestCompleteDeletionRuleMatrixLocked is the end-state catalog contract for ADR 0018:
-// exactly 20 delete_permanently, 6 move_to_recycle_bin, and one actionless permission boundary.
+// exactly 21 delete_permanently, 6 move_to_recycle_bin, and one actionless permission boundary.
 func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	wantPermanent := lockedPermanentCategoryIDs()
 	wantRecycleBin := lockedRecycleBinCategoryIDs()
-	if len(wantPermanent) != 20 {
-		t.Fatalf("locked permanent matrix length = %d, want 20", len(wantPermanent))
+	if len(wantPermanent) != 21 {
+		t.Fatalf("locked permanent matrix length = %d, want 21", len(wantPermanent))
 	}
 	if len(wantRecycleBin) != 6 {
 		t.Fatalf("locked Recycle Bin matrix length = %d, want 6", len(wantRecycleBin))
@@ -247,8 +249,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	if len(executable) != 26 {
-		t.Fatalf("executable categories = %d (%v), want 26", len(executable), executable)
+	if len(executable) != 27 {
+		t.Fatalf("executable categories = %d (%v), want 27", len(executable), executable)
 	}
 	if !reflect.DeepEqual(permanent, wantPermanent) {
 		t.Fatalf("permanent matrix = %#v, want %#v", permanent, wantPermanent)
@@ -268,7 +270,7 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		t.Fatal("administrator_only_caches must never start selected")
 	}
 
-	// TUI initial selection when every executable row is present: default + 20 permanent = 21.
+	// TUI initial selection when every executable row is present: default + 21 permanent = 22.
 	selected := 0
 	for _, summary := range catalog.Summaries() {
 		if !clean.InitiallySelectedCategory(summary) {
@@ -281,8 +283,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 				summary.Identifier, summary.Eligibility, summary.PlannedAction)
 		}
 	}
-	if selected != 21 {
-		t.Fatalf("initially selected categories = %d, want 21 (default + 20 permanent)", selected)
+	if selected != 22 {
+		t.Fatalf("initially selected categories = %d, want 22 (default + 21 permanent)", selected)
 	}
 	for _, id := range []string{
 		clean.OpportunityCategoryUserTemp,
@@ -303,10 +305,10 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	// Eager queue is all 26 executable rows; permission boundary is never scanned.
+	// Eager queue is all 27 executable rows; permission boundary is never scanned.
 	queue := clean.EagerPreviewQueue()
-	if len(queue) != 26 {
-		t.Fatalf("EagerPreviewQueue length = %d, want 26 executable categories", len(queue))
+	if len(queue) != 27 {
+		t.Fatalf("EagerPreviewQueue length = %d, want 27 executable categories", len(queue))
 	}
 	for _, summary := range queue {
 		if summary.Identifier == "administrator_only_caches" {
@@ -386,8 +388,8 @@ func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 			}
 		}
 	}
-	if len(permanent) != 20 || len(permanent) != len(want) {
-		t.Fatalf("production permanent categories = %v, want exactly 20", permanent)
+	if len(permanent) != 21 || len(permanent) != len(want) {
+		t.Fatalf("production permanent categories = %v, want exactly 21", permanent)
 	}
 	for _, id := range lockedRecycleBinCategoryIDs() {
 		summary, ok := catalog.Summary(id)
@@ -601,6 +603,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryPuppeteerBrowsers,
 		clean.DevCacheCategoryElectron,
 		clean.DevCacheCategoryJetBrainsIDECaches,
+		clean.DevCacheCategoryVisualStudioCaches,
 	}
 	wantDeveloperToolsOptIn := append(
 		[]string{clean.OpportunityCategoryVSCodeCache, clean.OpportunityCategoryCursorCache},
@@ -647,6 +650,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		clean.DevCacheCategoryPuppeteerBrowsers:   clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryElectron:            clean.RunningApplicationPolicySharedRuntime,
 		clean.DevCacheCategoryJetBrainsIDECaches:  clean.RunningApplicationPolicyDistinctiveProcessIdle,
+		clean.DevCacheCategoryVisualStudioCaches:  clean.RunningApplicationPolicyDistinctiveProcessIdle,
 	}
 	for id, wantPolicy := range policies {
 		summary, ok := catalog.Summary(id)
@@ -675,8 +679,9 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		"idea64.exe", "pycharm64.exe", "webstorm64.exe", "phpstorm64.exe",
 		"rubymine64.exe", "clion64.exe", "datagrip64.exe", "dataspell64.exe",
 		"goland64.exe", "rustrover64.exe", "aqua64.exe", "mps64.exe", "writerside64.exe",
-		"rider64.exe",
+		"rider64.exe", "devenv.exe",
 		"IntelliJIdea", "IdeaIC", "PyCharmCE", "WebStorm", "PhpStorm", "RubyMine",
+		"ComponentModelCache",
 		"CLion", "DataGrip", "DataSpell", "GoLand", "RustRover", "Writerside",
 		"resolvePaths", "lookupEnv", "LOCALAPPDATA", "APPDATA", "ms-playwright",
 		"CachedData", "CachedExtensionVSIXs", "INSTALLATION_COMPLETE",
