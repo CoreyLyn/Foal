@@ -67,7 +67,7 @@ foal uninstall --json
 **Dry-run** previews default candidates and reports skipped-by-default Opportunity categories:
 
 - Idle user-temp entries as `user_temp`
-- Existence-observed current-user roots: `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache`, `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`
+- Existence-observed current-user paths: `crash_dumps`, `windows_error_reporting`, exact-allowlist `explorer_thumbnail_cache` (`thumbcache_*.db` / `iconcache_*.db`) and `inet_cache` (`INetCache\IE`, `INetCache\Low\IE`), `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`
 - Chrome/Edge/Firefox `browser_cache` when the browser is idle before and after complete profile cache inspection
 - VS Code `vscode_cache` and Cursor `cursor_cache` when the editor is idle before and after exact allowlisted root inspection under standard Roaming AppData `Code` or `Cursor`
 

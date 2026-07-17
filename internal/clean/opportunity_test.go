@@ -17,7 +17,8 @@ func TestDiscoverOpportunitiesCategorizesUserTempAndCurrentUserWindowsCaches(t *
 	localAppData := t.TempDir()
 	now := time.Date(2026, time.June, 10, 12, 0, 0, 0, time.UTC)
 	userTempPath := fileWithModification(t, tempRoot, "idle.tmp", "idle", now.Add(-8*24*time.Hour))
-	cacheRoots := []struct {
+	// Whole-root existence categories (candidate path == measured root).
+	wholeRoots := []struct {
 		category string
 		path     string
 		file     string
@@ -25,18 +26,33 @@ func TestDiscoverOpportunitiesCategorizesUserTempAndCurrentUserWindowsCaches(t *
 	}{
 		{clean.OpportunityCategoryCrashDumps, filepath.Join(localAppData, "CrashDumps"), "app.dmp", "crash"},
 		{clean.OpportunityCategoryWindowsErrorReporting, filepath.Join(localAppData, "Microsoft", "Windows", "WER"), "report.wer", "wer"},
-		{clean.OpportunityCategoryExplorerThumbnailCache, filepath.Join(localAppData, "Microsoft", "Windows", "Explorer"), "thumbcache.db", "thumb"},
-		{clean.OpportunityCategoryINetCache, filepath.Join(localAppData, "Microsoft", "Windows", "INetCache"), "cache.dat", "inet"},
 		{clean.OpportunityCategoryD3DShaderCache, filepath.Join(localAppData, "D3DSCache"), "shader.bin", "d3d"},
 		{clean.OpportunityCategoryNVIDIADXCache, filepath.Join(localAppData, "NVIDIA", "DXCache"), "shader.bin", "nvidia"},
 	}
-	cacheFiles := make([]string, 0, len(cacheRoots))
-	for _, cache := range cacheRoots {
+	cacheFiles := make([]string, 0, len(wholeRoots)+3)
+	for _, cache := range wholeRoots {
 		if err := os.MkdirAll(cache.path, 0700); err != nil {
 			t.Fatal(err)
 		}
 		cacheFiles = append(cacheFiles, fileWithModification(t, cache.path, cache.file, cache.contents, now))
 	}
+	// explorer_thumbnail_cache: exact allowlisted DB files under Explorer (not whole root).
+	explorerParent := filepath.Join(localAppData, "Microsoft", "Windows", "Explorer")
+	if err := os.MkdirAll(explorerParent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	thumbFile := fileWithModification(t, explorerParent, "thumbcache_256.db", "thumb", now)
+	cacheFiles = append(cacheFiles, thumbFile)
+	// inet_cache: exact IE / Low\IE dirs (not whole INetCache).
+	ieRoot := filepath.Join(localAppData, "Microsoft", "Windows", "INetCache", "IE")
+	lowIERoot := filepath.Join(localAppData, "Microsoft", "Windows", "INetCache", "Low", "IE")
+	for _, root := range []string{ieRoot, lowIERoot} {
+		if err := os.MkdirAll(root, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cacheFiles = append(cacheFiles, fileWithModification(t, ieRoot, "cache.dat", "inet", now))
+	cacheFiles = append(cacheFiles, fileWithModification(t, lowIERoot, "low.dat", "low", now))
 
 	result := clean.DiscoverOpportunities(context.Background(), clean.OpportunityDiscoveryOptions{
 		TempDir:         tempRoot,
@@ -44,29 +60,52 @@ func TestDiscoverOpportunitiesCategorizesUserTempAndCurrentUserWindowsCaches(t *
 		Now:             now,
 	})
 
-	if len(result.Opportunities) != 1+len(cacheRoots) {
-		t.Fatalf("opportunities = %#v, want user temp and six current-user Windows cache roots", result.Opportunities)
+	// user_temp + 4 whole roots + 1 thumb file + 2 inet dirs = 8
+	wantCount := 1 + len(wholeRoots) + 1 + 2
+	if len(result.Opportunities) != wantCount {
+		t.Fatalf("opportunities = %#v, want user temp and %d Windows cache candidates", result.Opportunities, wantCount-1)
 	}
 	userTemp := result.Opportunities[0]
 	if userTemp.Category != clean.OpportunityCategoryUserTemp || userTemp.Path != userTempPath ||
 		!userTemp.LatestModifiedAt.Equal(now.Add(-8*24*time.Hour)) || userTemp.IdleDays != 8 {
 		t.Fatalf("user temp opportunity = %#v, want categorized age-observed result", userTemp)
 	}
-	for index, cache := range cacheRoots {
-		opportunity := result.Opportunities[index+1]
-		if opportunity.Category != cache.category || opportunity.Path != cache.path ||
-			opportunity.Bytes != int64(len(cache.contents)) || !opportunity.LatestModifiedAt.IsZero() || opportunity.IdleDays != 0 {
-			t.Fatalf("%s opportunity = %#v, want whole-root existence-observed result", cache.category, opportunity)
-		}
+	byCategoryPath := map[string]clean.Opportunity{}
+	for _, opportunity := range result.Opportunities[1:] {
+		byCategoryPath[opportunity.Category+"\x00"+opportunity.Path] = opportunity
 		encoded, err := json.Marshal(opportunity)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(string(encoded), "latest_modified_at") || strings.Contains(string(encoded), "idle_days") {
-			t.Fatalf("%s JSON emits misleading age fields: %s", cache.category, encoded)
+			t.Fatalf("%s JSON emits misleading age fields: %s", opportunity.Category, encoded)
 		}
-		if _, err := os.Stat(cacheFiles[index]); err != nil {
-			t.Fatalf("discovery changed %s file %q: %v", cache.category, cacheFiles[index], err)
+	}
+	for _, cache := range wholeRoots {
+		key := cache.category + "\x00" + cache.path
+		opportunity, ok := byCategoryPath[key]
+		if !ok || opportunity.Bytes != int64(len(cache.contents)) || !opportunity.LatestModifiedAt.IsZero() || opportunity.IdleDays != 0 {
+			t.Fatalf("%s opportunity = %#v, want whole-root existence-observed result", cache.category, byCategoryPath)
+		}
+	}
+	thumbOpp, ok := byCategoryPath[clean.OpportunityCategoryExplorerThumbnailCache+"\x00"+thumbFile]
+	if !ok || thumbOpp.Bytes != int64(len("thumb")) {
+		t.Fatalf("thumbnail opportunity = %#v, want allowlisted file %q", byCategoryPath, thumbFile)
+	}
+	if _, ok := byCategoryPath[clean.OpportunityCategoryExplorerThumbnailCache+"\x00"+explorerParent]; ok {
+		t.Fatal("whole Explorer root must not be a candidate")
+	}
+	ieOpp, ok := byCategoryPath[clean.OpportunityCategoryINetCache+"\x00"+ieRoot]
+	if !ok || ieOpp.Bytes != int64(len("inet")) {
+		t.Fatalf("inet IE opportunity missing in %#v", byCategoryPath)
+	}
+	lowOpp, ok := byCategoryPath[clean.OpportunityCategoryINetCache+"\x00"+lowIERoot]
+	if !ok || lowOpp.Bytes != int64(len("low")) {
+		t.Fatalf("inet Low\\IE opportunity missing in %#v", byCategoryPath)
+	}
+	for _, path := range cacheFiles {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("discovery changed file %q: %v", path, err)
 		}
 	}
 }

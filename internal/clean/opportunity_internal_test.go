@@ -59,8 +59,11 @@ func TestBuiltInOpportunityDiscoveryNeverInspectsExcludedRoots(t *testing.T) {
 	want := []string{
 		filepath.Join(localAppData, "CrashDumps"),
 		filepath.Join(localAppData, "Microsoft", "Windows", "WER"),
+		// Explorer parent is statted for file-pattern discovery; whole root is never a candidate.
 		filepath.Join(localAppData, "Microsoft", "Windows", "Explorer"),
-		filepath.Join(localAppData, "Microsoft", "Windows", "INetCache"),
+		// INetCache exact allowlisted dirs only (not whole INetCache).
+		filepath.Join(localAppData, "Microsoft", "Windows", "INetCache", "IE"),
+		filepath.Join(localAppData, "Microsoft", "Windows", "INetCache", "Low", "IE"),
 		filepath.Join(localAppData, "D3DSCache"),
 		filepath.Join(localAppData, "NVIDIA", "DXCache"),
 		filepath.Join(localAppData, "AMD", "DxCache"),
@@ -116,13 +119,17 @@ func TestIncompleteOpportunityInspectionIsExcludedAndDiscoveryContinues(t *testi
 func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 	localAppData := `C:\Users\corey\AppData\Local`
 	localAppDataLow := `C:\Users\corey\AppData\LocalLow`
+	// Explorer uses file-pattern discovery under parent; empty ReadDir ⇒ no thumbnail candidates.
+	// INetCache is exact IE + Low\IE whole roots.
 	expectedRoots := map[string][]string{
-		OpportunityCategoryCrashDumps:             {filepath.Join(localAppData, "CrashDumps")},
-		OpportunityCategoryWindowsErrorReporting:  {filepath.Join(localAppData, "Microsoft", "Windows", "WER")},
-		OpportunityCategoryExplorerThumbnailCache: {filepath.Join(localAppData, "Microsoft", "Windows", "Explorer")},
-		OpportunityCategoryINetCache:              {filepath.Join(localAppData, "Microsoft", "Windows", "INetCache")},
-		OpportunityCategoryD3DShaderCache:         {filepath.Join(localAppData, "D3DSCache")},
-		OpportunityCategoryNVIDIADXCache:          {filepath.Join(localAppData, "NVIDIA", "DXCache")},
+		OpportunityCategoryCrashDumps:            {filepath.Join(localAppData, "CrashDumps")},
+		OpportunityCategoryWindowsErrorReporting: {filepath.Join(localAppData, "Microsoft", "Windows", "WER")},
+		OpportunityCategoryINetCache: {
+			filepath.Join(localAppData, "Microsoft", "Windows", "INetCache", "IE"),
+			filepath.Join(localAppData, "Microsoft", "Windows", "INetCache", "Low", "IE"),
+		},
+		OpportunityCategoryD3DShaderCache: {filepath.Join(localAppData, "D3DSCache")},
+		OpportunityCategoryNVIDIADXCache:  {filepath.Join(localAppData, "NVIDIA", "DXCache")},
 		OpportunityCategoryAMDGPUShaderCaches: {
 			filepath.Join(localAppData, "AMD", "DxCache"),
 			filepath.Join(localAppData, "AMD", "DxcCache"),
@@ -133,7 +140,8 @@ func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 		},
 		OpportunityCategoryIntelGPUShaderCache: {filepath.Join(localAppDataLow, "Intel", "ShaderCache")},
 	}
-	allowedPaths := map[string]bool{}
+	explorerParent := filepath.Join(localAppData, "Microsoft", "Windows", "Explorer")
+	allowedPaths := map[string]bool{explorerParent: true}
 	for _, paths := range expectedRoots {
 		for _, p := range paths {
 			allowedPaths[p] = true
@@ -144,7 +152,10 @@ func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 		LocalAppDataDir:    localAppData,
 		LocalAppDataLowDir: localAppDataLow,
 	}, opportunityDiscoveryDependencies{
-		readDir: func(string) ([]os.DirEntry, error) {
+		readDir: func(path string) ([]os.DirEntry, error) {
+			if path == explorerParent {
+				return []os.DirEntry{}, nil
+			}
 			return nil, fs.ErrPermission
 		},
 		stat: func(path string) (os.FileInfo, error) {
@@ -167,6 +178,9 @@ func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 		t.Fatalf("opportunities = %#v, want every fixed root despite user temp failure", result.Opportunities)
 	}
 	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == OpportunityCategoryExplorerThumbnailCache {
+			t.Fatalf("empty Explorer parent must not emit candidates: %#v", opportunity)
+		}
 		paths := expectedRoots[opportunity.Category]
 		found := false
 		for _, p := range paths {
@@ -193,8 +207,9 @@ func TestExistenceObservedCategorySafetyFailuresAreCategorizedAndExcluded(t *tes
 	}{
 		{OpportunityCategoryCrashDumps, `C:\Users\corey\AppData\Local\CrashDumps`},
 		{OpportunityCategoryWindowsErrorReporting, `C:\Users\corey\AppData\Local\Microsoft\Windows\WER`},
-		{OpportunityCategoryExplorerThumbnailCache, `C:\Users\corey\AppData\Local\Microsoft\Windows\Explorer`},
-		{OpportunityCategoryINetCache, `C:\Users\corey\AppData\Local\Microsoft\Windows\INetCache`},
+		// Sample allowlisted candidate paths (file / exact IE root), not whole parents.
+		{OpportunityCategoryExplorerThumbnailCache, `C:\Users\corey\AppData\Local\Microsoft\Windows\Explorer\thumbcache_256.db`},
+		{OpportunityCategoryINetCache, `C:\Users\corey\AppData\Local\Microsoft\Windows\INetCache\IE`},
 		{OpportunityCategoryD3DShaderCache, `C:\Users\corey\AppData\Local\D3DSCache`},
 		{OpportunityCategoryNVIDIADXCache, `C:\Users\corey\AppData\Local\NVIDIA\DXCache`},
 	}
@@ -279,8 +294,10 @@ func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T)
 	localAppDataLow := `C:\Users\corey\AppData\LocalLow`
 	d3dRoot := filepath.Join(localAppData, "D3DSCache")
 	nvidiaRoot := filepath.Join(localAppData, "NVIDIA", "DXCache")
-	// All fixed existence roots except D3D: 5 legacy + 6 AMD + 1 Intel = 12.
-	// D3D is incomplete (permission), so expect 12 opportunities.
+	// Fixed existence candidates except D3D:
+	// CrashDumps + WER + IE + Low\IE + NVIDIA + AMD×6 + Intel = 12.
+	// Explorer parent ReadDir is empty ⇒ no thumbnail candidates.
+	// D3D is incomplete (permission).
 	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
 		TempDir:            `C:\Users\corey\AppData\Local\Temp`,
 		LocalAppDataDir:    localAppData,

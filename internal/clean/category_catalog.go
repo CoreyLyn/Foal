@@ -370,9 +370,16 @@ const (
 
 // existenceRootSpec is one exact relative root under a known current-user base.
 // Missing bases or missing roots are silent absence (no incomplete result).
+//
+// When matchDirectFileName is non-nil, segments form a parent directory that is
+// never itself a candidate. Only direct children whose basenames match the
+// predicate and that are regular non-reparse files become independent
+// candidates. Missing parent or zero matches is silent empty (no whole-root
+// fallback). Non-matching siblings are never candidates.
 type existenceRootSpec struct {
-	base     existenceRootBase
-	segments []string
+	base                existenceRootBase
+	segments            []string
+	matchDirectFileName func(name string) bool
 }
 
 type categoryCatalogEntry struct {
@@ -435,8 +442,9 @@ func existenceOpportunityRootsEntry(definition CleanupCategoryDefinition, roots 
 	copied := make([]existenceRootSpec, len(roots))
 	for i, root := range roots {
 		copied[i] = existenceRootSpec{
-			base:     root.base,
-			segments: append([]string(nil), root.segments...),
+			base:                root.base,
+			segments:            append([]string(nil), root.segments...),
+			matchDirectFileName: root.matchDirectFileName,
 		}
 	}
 	return categoryCatalogEntry{
@@ -533,13 +541,34 @@ func developerCacheEntryWithProductScopedChildren(
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
 	// 23 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
-	// Over-broad whole-root system caches stay Recycle Bin until exact allowlists exist.
+	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
+	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "CrashDumps"),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryWindowsErrorReporting, "Windows Error Reporting", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "Microsoft", "Windows", "WER"),
-	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "Microsoft", "Windows", "Explorer"),
-	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "Microsoft", "Windows", "INetCache"),
+	// Explorer thumbnail/icon DBs: exact thumbcache_*.db / iconcache_*.db under
+	// Local\Microsoft\Windows\Explorer only. Parent Explorer, ETL logs,
+	// RecommendationsFilterList.json, nested decoys, and legacy IconCache.db
+	// outside Explorer are never candidates. Missing matches ⇒ empty (no
+	// whole-root fallback). Evidence: docs/research/explorer-thumbnail-and-inet-cache-allowlists.md (#235/#239).
+	existenceOpportunityRootsEntry(
+		categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin),
+		existenceRootSpec{
+			base:                existenceRootLocalAppData,
+			segments:            []string{"Microsoft", "Windows", "Explorer"},
+			matchDirectFileName: isExplorerThumbnailCacheDBName,
+		},
+	),
+	// INetCache: exact Temporary Internet Files dirs IE and Low\IE only.
+	// Whole INetCache, Content.IE5 junctions, Low (parent), SuggestedSites,
+	// Virtualized, Office Content.*, and thumbnails are never candidates.
+	// Evidence: docs/research/explorer-thumbnail-and-inet-cache-allowlists.md (#235/#239).
+	existenceOpportunityRootsEntry(
+		categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin),
+		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"Microsoft", "Windows", "INetCache", "IE"}},
+		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"Microsoft", "Windows", "INetCache", "Low", "IE"}},
+	),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), "D3DSCache"),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), "NVIDIA", "DXCache"),
 	// AMD GPU/shader caches: exact allowlisted children under Local AMD (+ optional
