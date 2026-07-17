@@ -64,12 +64,18 @@ jobs:
       - name: Validate release source
         shell: bash
         run: |
-          if [[ "$(git cat-file -t "$GITHUB_REF_NAME")" != "tag" ]]; then
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          if [[ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" != "tag" ]]; then
             echo "Release tags must be annotated" >&2
             exit 1
           fi
+          tag_commit="$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")"
+          if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "Release tag changed after the workflow was triggered" >&2
+            exit 1
+          fi
           git fetch origin main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
             echo "Release tag must point to a commit on main" >&2
             exit 1
           fi
