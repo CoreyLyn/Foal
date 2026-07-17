@@ -30,6 +30,7 @@ const (
 	DevCacheCategoryPuppeteerBrowsers   = "puppeteer-browsers"
 	DevCacheCategoryElectron            = "electron-cache"
 	DevCacheCategoryJetBrainsIDECaches  = "jetbrains-ide-caches"
+	DevCacheCategoryVisualStudioCaches  = "visual-studio-caches"
 	DevCacheCategoryAll                 = "dev-caches"
 )
 
@@ -282,6 +283,8 @@ const (
 	ApplicationBun                        = "bun"
 	ApplicationVisualStudioCode           = "visual_studio_code"
 	ApplicationCursor                     = "cursor"
+	// ApplicationVisualStudio is full Visual Studio (devenv.exe), not VS Code.
+	ApplicationVisualStudio               = "visual_studio"
 	ApplicationIntelliJIDEA               = "intellij_idea"
 	ApplicationPyCharm                    = "pycharm"
 	ApplicationWebStorm                   = "webstorm"

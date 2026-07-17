@@ -32,6 +32,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPuppeteerBrowsers,
 			clean.DevCacheCategoryElectron,
 			clean.DevCacheCategoryJetBrainsIDECaches,
+			clean.DevCacheCategoryVisualStudioCaches,
 			clean.OpportunityCategoryVSCodeCache,
 			clean.OpportunityCategoryCursorCache,
 		}
@@ -40,8 +41,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"dev-caches\"", cat)
 			}
 		}
-		if len(enabled) != 17 {
-			t.Fatalf("expected 17 enabled developer-tools categories, got %d", len(enabled))
+		if len(enabled) != 18 {
+			t.Fatalf("expected 18 enabled developer-tools categories, got %d", len(enabled))
 		}
 		// Verify valid names include dev categories and dev-caches
 		found := make(map[string]bool)
@@ -91,6 +92,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPuppeteerBrowsers,
 			clean.DevCacheCategoryElectron,
 			clean.DevCacheCategoryJetBrainsIDECaches,
+			clean.DevCacheCategoryVisualStudioCaches,
 		}
 		for _, cat := range expectedOpportunities {
 			if !enabled[cat] {
@@ -102,8 +104,8 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 				t.Fatalf("expected %q to be enabled by \"all\"", cat)
 			}
 		}
-		if len(enabled) != 10+15 {
-			t.Fatalf("expected 25 enabled categories (10+15), got %d", len(enabled))
+		if len(enabled) != 10+16 {
+			t.Fatalf("expected 26 enabled categories (10+16), got %d", len(enabled))
 		}
 	})
 
@@ -124,6 +126,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryPuppeteerBrowsers,
 			clean.DevCacheCategoryElectron,
 			clean.DevCacheCategoryJetBrainsIDECaches,
+			clean.DevCacheCategoryVisualStudioCaches,
 		}
 		for _, cat := range devCaches {
 			t.Run(cat, func(t *testing.T) {

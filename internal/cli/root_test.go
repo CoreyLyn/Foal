@@ -2088,6 +2088,7 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.DevCacheCategoryPuppeteerBrowsers,
 		clean.DevCacheCategoryElectron,
 		clean.DevCacheCategoryJetBrainsIDECaches,
+		clean.DevCacheCategoryVisualStudioCaches,
 	}
 	want := append(expectedOpportunities, expectedDevCaches...)
 	if len(capturedOpts.OptIn) != len(want) {
