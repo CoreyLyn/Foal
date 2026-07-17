@@ -33,6 +33,10 @@ const (
 	DevCacheCategoryJetBrainsIDECaches  = "jetbrains-ide-caches"
 	DevCacheCategoryVisualStudioCaches  = "visual-studio-caches"
 	DevCacheCategoryAll                 = "dev-caches"
+	// CLIAgentCategoryGroup is a selection-group token that expands to
+	// independently registered product-scoped CLI-agent categories in catalog
+	// order. It owns no resolver, candidates, or deletion action.
+	CLIAgentCategoryGroup = "cli-agents"
 	// CategoryGrokBuildUpdateResidue is defined in grok_build_update_residue.go
 	// (product-scoped CLI-agent residue; not a dev-caches member).
 )

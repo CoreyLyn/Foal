@@ -62,6 +62,9 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 		if !found["dev-caches"] {
 			t.Fatalf("valid names missing \"dev-caches\"")
 		}
+		if !found[clean.CLIAgentCategoryGroup] {
+			t.Fatalf("valid names missing %q", clean.CLIAgentCategoryGroup)
+		}
 	})
 
 	t.Run("all enables both opportunity categories and dev caches", func(t *testing.T) {

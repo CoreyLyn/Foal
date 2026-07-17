@@ -112,6 +112,7 @@ func TestCompileExactCategoryPlanRejectsInvalidInputs(t *testing.T) {
 		{name: "unknown", ids: []string{"not_a_category"}, want: "unknown"},
 		{name: "group all", ids: []string{"all"}, want: "group"},
 		{name: "group dev-caches", ids: []string{"dev-caches"}, want: "group"},
+		{name: "group cli-agents", ids: []string{"cli-agents"}, want: "group"},
 		{name: "permission boundary", ids: []string{"administrator_only_caches"}, want: "permission_boundary"},
 		{name: "path windows", ids: []string{`C:\Users\temp`}, want: "path_bearing"},
 		{name: "path slash", ids: []string{"foo/bar"}, want: "path_bearing"},

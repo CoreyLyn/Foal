@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. CLI tracer implementation shipped with issue #262.
+Accepted. CLI tracer implementation shipped with issue #262. Selection alias `cli-agents`, Clean TUI eager/permanent participation, and docs alignment shipped with issue #263.
 
 ## Context
 

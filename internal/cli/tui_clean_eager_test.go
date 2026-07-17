@@ -865,7 +865,7 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 		if strings.Contains(id, `\`) || strings.Contains(id, "/") || strings.Contains(id, " ") {
 			t.Fatalf("selection id looks path-bearing or alias-like: %q", id)
 		}
-		if id == "dev-caches" || id == "all" {
+		if id == "dev-caches" || id == "cli-agents" || id == "all" {
 			t.Fatalf("group token in selection: %q", id)
 		}
 	}
@@ -1694,6 +1694,7 @@ func TestRunExactCleanSelectionRejectsInvalidIdentifiersBeforeCleanup(t *testing
 	for _, ids := range [][]string{
 		{"all"},
 		{"dev-caches"},
+		{"cli-agents"},
 		{`C:\Users\temp`},
 		{"not_a_category"},
 		{"administrator_only_caches"},
@@ -3293,4 +3294,201 @@ func TestEagerCleanProductionPermanentCategoriesInitialSelectionAndConfirmation(
 			t.Fatalf("result missing %q:\n%s", want, content)
 		}
 	}
+}
+
+func TestEagerCleanGrokBuildUpdateResidueRowSelectionAndHandoff(t *testing.T) {
+	// Grok participates in the catalog-derived eager queue as a permanent row.
+	// The TUI never owns Grok paths, process detection, or deletion — only
+	// freezes the canonical identifier and permanent authorization.
+	grokID := clean.CategoryGrokBuildUpdateResidue
+	queue := clean.EagerPreviewQueue()
+	foundInQueue := false
+	for _, summary := range queue {
+		if summary.Identifier == grokID {
+			foundInQueue = true
+			if summary.PlannedAction != clean.DeletionActionDeletePermanently {
+				t.Fatalf("grok planned_action = %q", summary.PlannedAction)
+			}
+			if !clean.InitiallySelectedCategory(summary) {
+				t.Fatal("grok permanent category must start selected when measurable")
+			}
+			break
+		}
+	}
+	if !foundInQueue {
+		t.Fatal("eager queue missing grok-build-update-residue")
+	}
+
+	var gotSelected []string
+	var gotAllowPermanent bool
+	var calls int
+	original := runExactCleanSelection
+	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ clean.ProgressReporter) clean.Result {
+		calls++
+		gotSelected = append([]string(nil), selected...)
+		gotAllowPermanent = allowPermanent
+		return clean.Result{
+			Status: "ok",
+			Mode:   "execute",
+			Deleted: []clean.DeletedItem{{
+				Path:   `C:\Users\corey\.grok\bin\grok.exe.old`,
+				Bytes:  138 << 20,
+				Rule:   grokID,
+				Action: string(clean.DeletionActionDeletePermanently),
+			}},
+			Totals: clean.Totals{
+				DeletedCount:            1,
+				PermanentlyDeletedBytes: 138 << 20,
+				AffectedBytes:           138 << 20,
+			},
+		}
+	}
+	t.Cleanup(func() { runExactCleanSelection = original })
+
+	model := newEagerCleanModel(100, 40)
+	var grokIdx = -1
+	for i, row := range model.rows {
+		if row.Identifier == grokID {
+			grokIdx = i
+			if !row.Selected {
+				t.Fatal("safely measurable Grok permanent row must start selected")
+			}
+			if row.PlannedAction != clean.DeletionActionDeletePermanently {
+				t.Fatalf("row planned_action = %q", row.PlannedAction)
+			}
+		}
+	}
+	if grokIdx < 0 {
+		t.Fatal("model rows missing grok-build-update-residue")
+	}
+
+	// Independently clear Grok; other permanent rows may stay selected for this test.
+	model.rows[grokIdx].Selected = false
+	if model.rows[grokIdx].Selected {
+		t.Fatal("Grok row must be independently clearable")
+	}
+
+	// Drive terminal states: Grok complete/measurable, others empty so selection is exact.
+	for i := range model.rows {
+		id := model.rows[i].Identifier
+		if id == grokID {
+			model.rows[i].State = clean.CategoryPreviewComplete
+			model.rows[i].CandidateCount = 1
+			model.rows[i].Bytes = 138 << 20
+			model.rows[i].Selected = true
+			continue
+		}
+		model.rows[i].State = clean.CategoryPreviewEmpty
+		model.rows[i].Selected = false
+	}
+	model.finished = true
+	model.generation = 1
+
+	if model.selectedCount() != 1 {
+		t.Fatalf("selectedCount = %d, want 1 (Grok only)", model.selectedCount())
+	}
+	if !model.selectionIncludesPermanent() {
+		t.Fatal("Grok selection must disclose permanent")
+	}
+	if !model.confirmationEnabled() {
+		t.Fatal("confirmation should be enabled for non-empty terminal selection")
+	}
+
+	// Focus Grok so path-free browse rendering includes its label without
+	// owning Grok paths or process detection.
+	model.cursor = grokIdx
+	model.ensurePreviewCursorVisible()
+	if model.rows[grokIdx].Label != "Grok Build update residue" {
+		t.Fatalf("row label = %q", model.rows[grokIdx].Label)
+	}
+	browse := model.content()
+	assertNoPath(t, browse)
+	if strings.Contains(browse, ".grok") || strings.Contains(browse, "grok.exe.old") || strings.Contains(browse, `\bin\`) {
+		t.Fatalf("path-free browse leaked Grok path:\n%s", browse)
+	}
+	if !strings.Contains(browse, "Grok Build update residue") {
+		t.Fatalf("browse missing Grok label after focus:\n%s", browse)
+	}
+
+	_, cmd := model.handleKey("enter")
+	if cmd != nil || model.phase != eagerPhaseConfirmation {
+		t.Fatalf("first enter: phase=%v cmd=%v", model.phase, cmd)
+	}
+	confirm := model.content()
+	assertNoPath(t, confirm)
+	for _, want := range []string{
+		"Permanent deletion",
+		"Grok Build update residue",
+		"Permanent deletion is irreversible",
+	} {
+		if !strings.Contains(confirm, want) {
+			t.Fatalf("confirmation missing %q:\n%s", want, confirm)
+		}
+	}
+	if calls != 0 {
+		t.Fatal("confirmation must not execute or write History")
+	}
+
+	// Empty / no-selection states preserve existing confirmation rules.
+	// Leave confirmation phase first so selection mutations apply to browse state.
+	model.phase = eagerPhasePreview
+	model.rows[grokIdx].Selected = false
+	if model.confirmationEnabled() {
+		t.Fatal("no-selection must disable confirmation")
+	}
+	model.rows[grokIdx].Selected = true
+	if !model.confirmationEnabled() {
+		t.Fatal("re-selected Grok must enable confirmation")
+	}
+	_, cmd = model.handleKey("enter")
+	if cmd != nil || model.phase != eagerPhaseConfirmation {
+		t.Fatalf("re-enter confirmation: phase=%v cmd=%v", model.phase, cmd)
+	}
+
+	// Second Enter freezes exact ID + permanent authorization through shared Clean.
+	nav, cmd := model.handleKey("enter")
+	if nav != eagerPreviewNavNone || cmd == nil {
+		t.Fatalf("second enter: nav=%v cmd=%v", nav, cmd)
+	}
+	if !model.frozenAllowPermanent {
+		t.Fatal("TUI confirmation must authorize permanent deletion")
+	}
+	if len(model.frozenCategories) != 1 || model.frozenCategories[0] != grokID {
+		t.Fatalf("frozen = %#v, want [%q]", model.frozenCategories, grokID)
+	}
+	// Group tokens never enter the exact frozen selection.
+	for _, id := range model.frozenCategories {
+		if id == clean.CLIAgentCategoryGroup || id == clean.DevCacheCategoryAll || id == "all" {
+			t.Fatalf("group token in frozen selection: %q", id)
+		}
+	}
+	// Drive the tea.Cmd handoff so shared Clean receives the frozen plan.
+	started := cmd().(eagerExactExecutionStartedMsg)
+	wait := model.applyExactExecutionStarted(started)
+	for model.phase == eagerPhaseExecuting {
+		msg := wait()
+		switch m := msg.(type) {
+		case eagerExactExecutionProgressMsg:
+			wait = model.applyExactExecutionProgress(m)
+		case eagerExactExecutedMsg:
+			model.applyExactExecuted(m)
+			wait = nil
+		default:
+			t.Fatalf("unexpected %T", msg)
+		}
+		if wait == nil {
+			break
+		}
+	}
+	if calls != 1 || !gotAllowPermanent {
+		t.Fatalf("calls=%d allow=%v", calls, gotAllowPermanent)
+	}
+	if len(gotSelected) != 1 || gotSelected[0] != grokID {
+		t.Fatalf("handoff selected=%v, want [%q]", gotSelected, grokID)
+	}
+	if model.phase != eagerPhaseResult {
+		t.Fatalf("phase=%v", model.phase)
+	}
+	result := model.content()
+	assertNoPath(t, result)
 }

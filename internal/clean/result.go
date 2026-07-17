@@ -290,7 +290,10 @@ func issue(code, message string, recoverable bool, path, ruleID string) Structur
 }
 
 // NormalizedOptInSet returns the set of opt-in categories enabled, resolving
-// "all" to all implemented categories and "dev-caches" to all dev caches.
+// group tokens: "all" to every implemented opt-in category, "dev-caches" to
+// developer-cache plus Application cache categories, and "cli-agents" to
+// independently registered product-scoped CLI-agent categories. Group tokens
+// own no resolver, candidates, or deletion action.
 // Returns the set, a list of invalid names (if any), and the list of valid
 // names for error reporting.
 func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []string, valid []string) {
@@ -298,14 +301,18 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 	// dev-caches expands from catalog policy: developer-cache categories plus
 	// idle Application cache opportunities under Developer tools.
 	devCaches := developerToolsOptInCategoryIDs()
-	valid = make([]string, 0, len(selectable)+2)
+	// cli-agents expands independently registered product-scoped CLI-agent
+	// categories in deterministic catalog order (not a mega-category).
+	cliAgents := cliAgentCategoryIDs()
+	valid = make([]string, 0, len(selectable)+3)
 	valid = append(valid, selectable...)
-	valid = append(valid, DevCacheCategoryAll, "all")
+	valid = append(valid, DevCacheCategoryAll, CLIAgentCategoryGroup, "all")
 
 	enabled = make(map[string]bool)
 	seen := make(map[string]bool)
 	all := false
 	allDevCaches := false
+	allCLIAgents := false
 	for _, name := range optIn {
 		name = strings.ToLower(name)
 		if seen[name] {
@@ -320,6 +327,10 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 			allDevCaches = true
 			continue
 		}
+		if name == CLIAgentCategoryGroup {
+			allCLIAgents = true
+			continue
+		}
 		summary, validName := canonicalCleanupCategoryCatalog.Summary(name)
 		validName = validName && strings.TrimSpace(name) == name
 		if !validName || summary.Eligibility != CategoryEligibilityOptIn {
@@ -332,9 +343,17 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 		for _, v := range selectable {
 			enabled[v] = true
 		}
-	} else if allDevCaches {
-		for _, v := range devCaches {
-			enabled[v] = true
+	} else {
+		// Group tokens expand independently and compose with exact tokens.
+		if allDevCaches {
+			for _, v := range devCaches {
+				enabled[v] = true
+			}
+		}
+		if allCLIAgents {
+			for _, v := range cliAgents {
+				enabled[v] = true
+			}
 		}
 	}
 	return enabled, invalid, valid

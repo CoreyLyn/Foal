@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for P1 design. This ADR fixes category granularity only; it does not approve any CLI agent artifact for cleanup or add a catalog entry.
+Accepted. Product-scoped category granularity is mandatory. The `cli-agents` selection alias shipped with the first product category (`grok-build-update-residue`); it remains a non-executable group token only.
 
 ## Context
 
@@ -14,7 +14,7 @@ A single executable `cli-agents` category would hide product-specific impact and
 
 - Model each supported CLI agent as an independent canonical Clean category only after its exact eligible children and exclusions are proven.
 - Give each category its own discovery policy, runtime/concurrency gate, planned deletion action, impact text, and tests.
-- A future `cli-agents` token may be a convenience selection alias that expands to the independently registered categories. It is never an executable category, never owns candidates, and never defines shared path or deletion semantics.
+- The `cli-agents` token is a convenience selection alias that expands to independently registered product-scoped CLI-agent categories in deterministic catalog order. It is never an executable category, never owns candidates, and never defines shared path or deletion semantics.
 - Do not infer eligibility from a top-level agent home, or from names such as `cache`, `tmp`, `logs`, or `downloads`.
 - Do not reuse desktop Application cache policy merely because a CLI agent has a companion GUI product.
 
