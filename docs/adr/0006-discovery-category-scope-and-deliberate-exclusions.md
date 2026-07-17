@@ -1,5 +1,8 @@
 # Clean discovery adds per-user system caches and deliberately excludes browser caches and the Recycle Bin
 
+> **Status note:** Browser cache discovery later shipped under ADR 0007 with running-application detection. The Recycle Bin remains permanently excluded from Opportunity discovery. Catalog planned actions for executable categories (including permanent deletion for regenerable caches) are governed by ADR 0018 and do not re-open Recycle Bin as an Opportunity.
+
+
 Clean's review-only skipped-by-default discovery generalizes from a single user-temp scan to multiple opportunity categories, each with its own observation rule. The JSON `opportunities` array gains a `category` field. The v1 categories beyond user temp are per-user, no-admin, no-external-tool, regenerating caches: crash dumps (`%LOCALAPPDATA%\CrashDumps`), Windows Error Reporting (`WER`), the Explorer thumbnail cache, `INetCache`, and GPU shader caches (`D3DSCache`, NVIDIA `DXCache`). Each is a fixed known root observed whole as one opportunity, gated on existence rather than idle age (these caches regenerate, so age conveys no safety signal), reusing the existing 100k-descendant inspection ceiling and reparse-point rejection.
 
 Two obvious, high-value targets are deliberately left out, and a future reader will ask why:

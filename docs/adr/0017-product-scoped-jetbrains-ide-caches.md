@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. **ADR 0018:** `jetbrains-ide-caches` uses planned action `delete_permanently` with per-run permanent authorization; product-scoped discovery, exclusions, and independent idle gates below remain in force. Recycle Bin capacity pre-checks do not apply to this permanent category.
 
 ## Context
 
@@ -19,7 +19,7 @@ Register one Developer tools opt-in category `jetbrains-ide-caches` (label `JetB
 - Each product-version directory is a product-scoped root, never a candidate. Discover only exact `caches` and `index` children as independent Opt-in candidates (deterministic catalog/version/child order); Rider additionally discovers exact `resharper-host`.
 - Permanent exclusions include Local History, file history, VCS Log, JCEF, plugins, logs, coverage, projects/data-source/editor/full-line/tmp/splash/metadata, unknown children, pre-2020 layouts, non-catalog products (Fleet/Air/Gateway/Client; Android Studio; Toolbox/Installations/Daemon/Shared/dotPeek/standalone ReSharper roots), regular files, and reparse points.
 - Idle-before-and-after gates are independent per logical product. Running/unknown/missing state for one product skips every root for that product only; post-scan unsafe state discards only that product's measured children.
-- Dry-run, Clean TUI eager preview, and Execute share the same fresh category resolution seam. Execute never trusts preview paths; every candidate is validated immediately before Recycle Bin move; aggregate capacity checks apply; permanent deletion is never a fallback.
+- Dry-run, Clean TUI eager preview, and Execute share the same fresh category resolution seam. Execute never trusts preview paths; every candidate is validated immediately before permanent deletion; permanent authorization is required; permanent deletion is never used as a Recycle Bin fallback for other categories.
 - Default CLI Execute without opt-in performs no JetBrains root resolution or process detection. Clean TUI may measure the category while unselected under the existing TUI-only rule. Selection uses the canonical category identifier only.
 - Foal never reads config roots, install dirs, Toolbox, registry, CWD, projects, `idea.system.path`, properties, command lines, or window titles, and never invokes or stops JetBrains software.
 - Public JSON/human/TUI contracts stay ordinary Opt-in surfaces; product prefixes and launchers remain private Clean policy.
@@ -28,4 +28,4 @@ Register one Developer tools opt-in category `jetbrains-ide-caches` (label `JetB
 
 - Adding another compatible JetBrains IDE is a private catalog entry plus tests, not a new public category or pipeline.
 - CONTEXT, AGENTS, README, and plan enumerations list `jetbrains-ide-caches` with the exact product and exclusion boundaries above.
-- Tests use shared Dry-run/Execute as the primary seam, with table-driven edition prefixes, independent product gates, Protection, capacity, cancellation, and fake Recycle Bin coverage.
+- Tests use shared Dry-run/Execute as the primary seam, with table-driven edition prefixes, independent product gates, Protection, permanent-authorization and failure paths, cancellation, and shared Clean execution coverage.

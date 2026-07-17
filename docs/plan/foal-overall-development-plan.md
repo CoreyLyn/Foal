@@ -83,6 +83,8 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 
 ## Phase 3B: Clean Skipped-by-Default Discovery
 
+Historical phase note: later work added browser/Application cache opportunities, opt-in execution, structured developer caches, and catalog-owned mixed actions (ADR 0018). The bullets below describe the original Phase 3B slice.
+
 - Keep the default candidate set frozen; this phase expands read-only discovery, not default or opt-in execution.
 - Discover non-Foal-owned top-level entries under the current user's Windows temporary directory for `clean --dry-run` and the read-only Clean TUI only.
 - Report an entry as a user temp opportunity only when the latest modification observed across the entry and all safely inspectable descendants is at least seven days old.
@@ -128,7 +130,7 @@ The following design principles continue to govern TUI work:
 - No full rule pack or profile system.
 - No browser cache discovery before running-application detection.
 - No Recycle Bin Opportunity category.
-- No default IDE, package-manager, or developer-cache expansion; allowlisted developer-tool caches remain Review suggestions.
+- No default expansion of IDE, package-manager, or developer-cache rules; those stay skipped-by-default Review suggestions until explicit Opt-in or Clean TUI selection, then use their catalog planned action (many permanent per ADR 0018).
 - No administrator-only Opportunity roots or automatic elevation.
 - No system optimization actions.
 - No uninstall execution model.
