@@ -13,35 +13,10 @@ import (
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
-
-// cleanFormatBytes formats byte counts for path-free Clean TUI chrome.
-func cleanFormatBytes(bytes int64) string {
-	if bytes <= 0 {
-		return "0 KB"
-	}
-	if bytes < 1024 {
-		return "<1 KB"
-	}
-
-	const (
-		kilobyte = int64(1024)
-		megabyte = 1024 * kilobyte
-		gigabyte = 1024 * megabyte
-	)
-
-	value := float64(bytes) / float64(kilobyte)
-	unit := "KB"
-	if bytes >= gigabyte {
-		value = float64(bytes) / float64(gigabyte)
-		unit = "GB"
-	} else if bytes >= megabyte {
-		value = float64(bytes) / float64(megabyte)
-		unit = "MB"
-	}
-
-	formatted := strings.TrimSuffix(fmt.Sprintf("%.1f", value), ".0")
-	return formatted + " " + unit
-}
+// nextEagerGeneration assigns unique Clean session generations so stale stream
+// messages from a canceled or superseded session cannot mutate a later model
+// that happens to reuse a small per-model counter.
+var nextEagerGeneration atomic.Uint64
 
 // cleanExecutionStream carries progress then the final Result for one exact
 // Clean execution started from the category-first confirmation path.
@@ -49,11 +24,6 @@ type cleanExecutionStream struct {
 	progress <-chan clean.ExecutionProgress
 	result   <-chan clean.Result
 }
-
-// nextEagerGeneration assigns unique Clean session generations so stale stream
-// messages from a canceled or superseded session cannot mutate a later model
-// that happens to reuse a small per-model counter.
-var nextEagerGeneration atomic.Uint64
 
 // Category-first eager preview model for the Clean TUI. This is the primary
 // Clean surface after cutover: path-free terminal outcomes, exact per-session
@@ -565,88 +535,46 @@ func (m *eagerCleanModel) rowIndex(identifier string) int {
 // allCategoriesTerminal reports whether every scannable category has a terminal
 // path-free outcome. Confirmation cannot be enabled while this is false.
 func (m eagerCleanModel) allCategoriesTerminal() bool {
-	if m.unavailable != nil || len(m.rows) == 0 {
+	if m.unavailable != nil {
 		return false
 	}
-	for _, row := range m.rows {
-		if !clean.IsTerminalPreviewState(row.State) {
-			return false
-		}
-	}
-	return true
+	return eagerAllCategoriesTerminal(m.rows)
 }
 
 // confirmationEnabled requires every scannable category terminal and a
 // non-empty exact selection before the first Enter may open confirmation.
 func (m eagerCleanModel) confirmationEnabled() bool {
-	return m.unavailable == nil && !m.canceled && m.phase == eagerPhasePreview &&
-		m.allCategoriesTerminal() && m.selectedCount() > 0 && !m.executionStarted
+	return eagerConfirmationEnabled(m.unavailable != nil, m.canceled, m.phase, m.rows, m.executionStarted)
 }
 
 // noWorkState classifies finished zero-selection presentation.
 func (m eagerCleanModel) noWorkState() clean.EagerPreviewNoWorkState {
-	if m.unavailable != nil || m.canceled {
-		return clean.EagerPreviewNoWorkNone
-	}
-	observations := make([]clean.CategoryPreviewObservation, len(m.rows))
-	for i, row := range m.rows {
-		observations[i] = clean.CategoryPreviewObservation{
-			Identifier:     row.Identifier,
-			State:          row.State,
-			CandidateCount: row.CandidateCount,
-			Bytes:          row.Bytes,
-		}
-	}
-	return clean.ClassifyEagerPreviewNoWork(observations, m.selectedCount())
+	return eagerNoWorkState(m.rows, m.selectedCount(), m.unavailable != nil, m.canceled)
 }
 
 // selectedCount returns how many categories are currently authorized.
 func (m eagerCleanModel) selectedCount() int {
-	n := 0
-	for _, row := range m.rows {
-		if row.Selected {
-			n++
-		}
-	}
-	return n
+	return eagerSelectedCount(m.rows)
 }
 
 // selectedCategoryIDs returns canonical identifiers in stable display/scan
 // order. Contains only selected default or opt-in identifiers — no aliases,
 // group tokens, permission notices, review evidence, or paths.
 func (m eagerCleanModel) selectedCategoryIDs() []string {
-	ids := make([]string, 0, len(m.rows))
-	for _, row := range m.rows {
-		if row.Selected {
-			ids = append(ids, row.Identifier)
-		}
-	}
-	return ids
+	return eagerSelectedCategoryIDs(m.rows)
 }
 
 // selectionTotals returns selected category count, safely measured bytes for
 // complete/partial selected rows, and selected waiting/scanning pending count.
 // Unfinished, empty, skipped, incomplete, and failed work contributes no bytes.
 func (m eagerCleanModel) selectionTotals() (categories int, measuredBytes int64, pending int) {
-	for _, row := range m.rows {
-		if !row.Selected {
-			continue
-		}
-		categories++
-		switch row.State {
-		case clean.CategoryPreviewWaiting, clean.CategoryPreviewScanning:
-			pending++
-		case clean.CategoryPreviewComplete, clean.CategoryPreviewPartial:
-			measuredBytes += row.Bytes
-		}
-	}
-	return categories, measuredBytes, pending
+	return eagerSelectionTotals(m.rows)
 }
 
 // rowSelectable reports whether Space may toggle the row. Waiting, scanning,
 // complete, and partial are selectable; disabled terminal outcomes are not.
 func (m eagerCleanModel) rowSelectable(row eagerCategoryRow) bool {
-	return clean.SelectablePreviewOutcome(row.State)
+	return eagerRowSelectable(row)
 }
 
 // toggleFocusedSelection toggles the focused row when selectable. Never
@@ -887,40 +815,13 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 // discloses any delete_permanently planned action. Used for confirmation
 // grouping and equivalent per-run permanent authorization.
 func (m eagerCleanModel) selectionIncludesPermanent() bool {
-	for _, row := range m.rows {
-		if row.Selected && row.PlannedAction == clean.DeletionActionDeletePermanently {
-			return true
-		}
-	}
-	return false
+	return eagerSelectionIncludesPermanent(m.rows)
 }
 
 // confirmationActionGroups splits the exact selection into Permanent deletion
 // and Recycle Bin work. Empty groups are omitted. Action is catalog-owned.
 func (m eagerCleanModel) confirmationActionGroups() (permanent, recycle []eagerCategoryRow) {
-	for _, row := range m.rows {
-		if !row.Selected {
-			continue
-		}
-		switch row.PlannedAction {
-		case clean.DeletionActionDeletePermanently:
-			permanent = append(permanent, row)
-		default:
-			// Missing/unknown action is treated as Recycle Bin presentation only
-			// for confirmation totals; shared Clean remains authoritative.
-			recycle = append(recycle, row)
-		}
-	}
-	return permanent, recycle
-}
-
-func confirmationGroupTotals(rows []eagerCategoryRow) (categories, candidates int, bytes int64) {
-	for _, row := range rows {
-		categories++
-		candidates += row.CandidateCount
-		bytes += row.Bytes
-	}
-	return categories, candidates, bytes
+	return eagerConfirmationActionGroups(m.rows)
 }
 
 // initialExecutionOutcomes builds path-free in-progress rows for the frozen
@@ -1409,18 +1310,7 @@ func (m eagerCleanModel) confirmationFooterLines() []string {
 }
 
 func (m eagerCleanModel) resultTotals() (recycle, permanent, affected int64) {
-	recycle = m.executionResult.Totals.RecycleBinMovedBytes
-	permanent = m.executionResult.Totals.PermanentlyDeletedBytes
-	affected = m.executionResult.Totals.AffectedBytes
-	if recycle == 0 && permanent == 0 && affected == 0 {
-		recycle = clean.SumExecutionRecycleBinMovedBytes(m.executionOutcomes)
-		permanent = clean.SumExecutionPermanentlyDeletedBytes(m.executionOutcomes)
-		affected = clean.SumExecutionAffectedBytes(m.executionOutcomes)
-	}
-	if affected == 0 {
-		affected = recycle + permanent
-	}
-	return recycle, permanent, affected
+	return eagerResultTotals(m.executionResult, m.executionOutcomes)
 }
 
 func (m eagerCleanModel) resultFooterLines() []string {
@@ -1458,52 +1348,15 @@ func (m eagerCleanModel) executionFooterLine() string {
 }
 
 func (m eagerCleanModel) executionRowMarker(state clean.CategoryExecutionState) string {
-	switch state {
-	case clean.CategoryExecutionRechecking, clean.CategoryExecutionReady, clean.CategoryExecutionCleaning:
-		return eagerPreviewSpinnerFrames[m.spinnerFrame%len(eagerPreviewSpinnerFrames)]
-	case clean.CategoryExecutionCleaned:
-		return "✓"
-	case clean.CategoryExecutionEmpty:
-		return "–"
-	case clean.CategoryExecutionSkipped:
-		return "⊘"
-	case clean.CategoryExecutionPartial, clean.CategoryExecutionFailed, clean.CategoryExecutionCanceled:
-		return "!"
-	default:
-		return "!"
-	}
+	return eagerExecutionRowMarker(state, m.spinnerFrame)
 }
 
 func (m eagerCleanModel) executionRowLabel(outcome clean.CategoryExecutionOutcome) string {
-	switch outcome.State {
-	case clean.CategoryExecutionRechecking:
-		return outcome.Label + " · rechecking"
-	case clean.CategoryExecutionReady:
-		return outcome.Label + " · ready"
-	case clean.CategoryExecutionCleaning:
-		return outcome.Label + " · cleaning"
-	case clean.CategoryExecutionEmpty:
-		return outcome.Label + " · empty"
-	case clean.CategoryExecutionCleaned:
-		return fmt.Sprintf("%s · cleaned · %s", outcome.Label, cleanFormatBytes(outcome.AffectedBytes))
-	case clean.CategoryExecutionPartial:
-		return fmt.Sprintf("%s · partial · %s", outcome.Label, cleanFormatBytes(outcome.AffectedBytes))
-	case clean.CategoryExecutionSkipped:
-		return outcome.Label + " · skipped"
-	case clean.CategoryExecutionFailed:
-		return outcome.Label + " · failed"
-	case clean.CategoryExecutionCanceled:
-		return outcome.Label + " · canceled"
-	default:
-		return outcome.Label
-	}
+	return eagerExecutionRowLabel(outcome)
 }
 
 func (m eagerCleanModel) checkbox(row eagerCategoryRow) string {
-	if row.Selected {
-		return "[x]"
-	}
-	return "[ ]"
+	return eagerCheckbox(row.Selected)
 }
 
 // selectionSummaryLine shows live selected totals. Unfinished selected work is
@@ -1511,57 +1364,29 @@ func (m eagerCleanModel) checkbox(row eagerCategoryRow) string {
 // terminal the line collapses to count and measured total.
 func (m eagerCleanModel) selectionSummaryLine() string {
 	n, measured, pending := m.selectionTotals()
-	if pending > 0 {
-		return fmt.Sprintf("Selected: %d categories · %s measured · %d pending", n, cleanFormatBytes(measured), pending)
-	}
-	return fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured))
+	return eagerSelectionSummaryLine(n, measured, pending)
 }
 
 func (m eagerCleanModel) unavailableContent() string {
-	code := "unavailable"
-	message := "Clean cannot start."
+	code := ""
+	message := ""
 	if m.unavailable != nil {
-		if m.unavailable.Code != "" {
-			code = m.unavailable.Code
-		}
-		if m.unavailable.Message != "" {
-			message = m.unavailable.Message
-		}
+		code = m.unavailable.Code
+		message = m.unavailable.Message
 	}
-	return strings.Join([]string{
-		"Clean unavailable",
-		fmt.Sprintf("Code: %s", code),
-		message,
-		"",
-		"Hints: Enter/Esc/b menu · q quit",
-		"",
-	}, "\n")
+	return eagerUnavailableContent(code, message)
 }
 
 func (m eagerCleanModel) headerLine() string {
-	total := len(m.rows)
-	elapsed := m.elapsedLabel()
-	if m.canceled {
-		return fmt.Sprintf("Canceled · %s", elapsed)
-	}
-	if m.finished && m.allCategoriesTerminal() {
-		return fmt.Sprintf("Scan complete · %d/%d · %s", total, total, elapsed)
-	}
-	// Scanning n/N: n is the 1-based index of the active category, or completed+1.
-	n := m.completed + 1
-	if m.activeIndex >= 0 {
-		n = m.activeIndex + 1
-	}
-	if n > total {
-		n = total
-	}
-	if total == 0 {
-		return fmt.Sprintf("Scanning 0/0 · %s", elapsed)
-	}
-	if !m.allCategoriesTerminal() {
-		return fmt.Sprintf("Scanning %d/%d · Confirmation available after scan completes · %s", n, total, elapsed)
-	}
-	return fmt.Sprintf("Scanning %d/%d · %s", n, total, elapsed)
+	return eagerPreviewHeaderLine(
+		m.canceled,
+		m.finished,
+		m.allCategoriesTerminal(),
+		m.activeIndex,
+		m.completed,
+		len(m.rows),
+		m.elapsedLabel(),
+	)
 }
 
 func (m eagerCleanModel) elapsedLabel() string {
@@ -1580,45 +1405,11 @@ func (m eagerCleanModel) elapsedLabel() string {
 }
 
 func (m eagerCleanModel) rowMarker(row eagerCategoryRow) string {
-	switch row.State {
-	case clean.CategoryPreviewWaiting:
-		return "…"
-	case clean.CategoryPreviewScanning:
-		return eagerPreviewSpinnerFrames[m.spinnerFrame%len(eagerPreviewSpinnerFrames)]
-	case clean.CategoryPreviewComplete:
-		return "✓"
-	case clean.CategoryPreviewEmpty:
-		return "–"
-	case clean.CategoryPreviewSkipped:
-		return "⊘"
-	case clean.CategoryPreviewPartial, clean.CategoryPreviewIncomplete, clean.CategoryPreviewFailed:
-		return "!"
-	default:
-		return "!"
-	}
+	return eagerPreviewRowMarker(row.State, m.spinnerFrame)
 }
 
 func (m eagerCleanModel) rowLabel(row eagerCategoryRow) string {
-	switch row.State {
-	case clean.CategoryPreviewComplete:
-		return fmt.Sprintf("%s · %d item(s) · %s", row.Label, row.CandidateCount, cleanFormatBytes(row.Bytes))
-	case clean.CategoryPreviewPartial:
-		return fmt.Sprintf("%s · %d item(s) · %s · partial", row.Label, row.CandidateCount, cleanFormatBytes(row.Bytes))
-	case clean.CategoryPreviewEmpty:
-		return fmt.Sprintf("%s · empty", row.Label)
-	case clean.CategoryPreviewSkipped:
-		return fmt.Sprintf("%s · skipped", row.Label)
-	case clean.CategoryPreviewIncomplete:
-		return fmt.Sprintf("%s · incomplete", row.Label)
-	case clean.CategoryPreviewFailed:
-		return fmt.Sprintf("%s · failed", row.Label)
-	case clean.CategoryPreviewWaiting:
-		return fmt.Sprintf("%s · waiting", row.Label)
-	case clean.CategoryPreviewScanning:
-		return fmt.Sprintf("%s · scanning", row.Label)
-	default:
-		return row.Label
-	}
+	return eagerPreviewRowLabel(row)
 }
 
 // focusedDetailPanel is the bottom contextual diagnostic that follows the
@@ -1638,96 +1429,9 @@ func (m eagerCleanModel) focusedDetailPanel() string {
 }
 
 func (m eagerCleanModel) focusedDetailBody(row eagerCategoryRow) string {
-	switch row.State {
-	case clean.CategoryPreviewWaiting:
-		return "Waiting to scan."
-	case clean.CategoryPreviewScanning:
-		return "Scanning…"
-	case clean.CategoryPreviewComplete:
-		return fmt.Sprintf("Complete · %d item(s) · %s", row.CandidateCount, cleanFormatBytes(row.Bytes))
-	case clean.CategoryPreviewPartial:
-		body := fmt.Sprintf("Partial · %d item(s) · %s", row.CandidateCount, cleanFormatBytes(row.Bytes))
-		if row.ExcludedSiblingCount > 0 {
-			body += fmt.Sprintf(" · %d excluded", row.ExcludedSiblingCount)
-		}
-		if row.ReasonCode != "" {
-			body += " · " + pathFreeReasonExplanation(row.ReasonCode)
-		}
-		return body
-	case clean.CategoryPreviewEmpty:
-		return "Empty · no candidates found"
-	case clean.CategoryPreviewSkipped:
-		body := "Skipped"
-		if row.ReasonCode != "" {
-			body += " · " + pathFreeReasonExplanation(row.ReasonCode)
-		}
-		if row.ExcludedSiblingCount > 0 {
-			body += fmt.Sprintf(" · %d excluded", row.ExcludedSiblingCount)
-		}
-		return body
-	case clean.CategoryPreviewIncomplete:
-		body := "Incomplete"
-		if row.ReasonCode != "" {
-			body += " · " + pathFreeReasonExplanation(row.ReasonCode)
-		}
-		return body
-	case clean.CategoryPreviewFailed:
-		body := "Failed"
-		if row.ReasonCode != "" {
-			body += " · " + pathFreeReasonExplanation(row.ReasonCode)
-		} else {
-			body += " · measurement failed"
-		}
-		return body
-	default:
-		return "Unknown state"
-	}
-}
-
-func pathFreeReasonExplanation(code string) string {
-	switch code {
-	case clean.PreviewReasonProtected:
-		return "protected by Protection rules"
-	case clean.PreviewReasonApplicationRunning, clean.PreviewReasonDevToolRunning:
-		return "application is running"
-	case clean.PreviewReasonRunningStateUnknown:
-		return "application state unknown"
-	case clean.PreviewReasonInspectionLimit:
-		return "inspection limit exceeded"
-	case clean.PreviewReasonContextCanceled:
-		return "scan canceled"
-	case clean.PreviewReasonInspectionFailed:
-		return "measurement failed"
-	case clean.PreviewReasonEmpty:
-		return "no candidates found"
-	case "reparse_point":
-		return "reparse point excluded"
-	default:
-		// Stable code only — never forward raw OS text that may embed paths.
-		if code == "" {
-			return "see category state"
-		}
-		return code
-	}
+	return eagerFocusedDetailBody(row)
 }
 
 func (m eagerCleanModel) footerHints() string {
-	const base = "Hints: up/down browse · space toggle · a select all · x clear · b/Esc back · q quit"
-	if !m.allCategoriesTerminal() {
-		return base
-	}
-	// Distinct zero-authorization messages; none call execution or write History.
-	switch m.noWorkState() {
-	case clean.EagerPreviewNoWorkNeedSelection:
-		return "Select at least one category to continue.\n" + base
-	case clean.EagerPreviewNoWorkAllEmpty:
-		return "Nothing to clean.\n" + base
-	case clean.EagerPreviewNoWorkDiagnostics:
-		return "No selectable cleanup found. Some categories were skipped or could not be measured.\n" + base
-	default:
-		if m.confirmationEnabled() {
-			return "Hints: enter confirm · up/down browse · space toggle · a select all · x clear · b/Esc back · q quit"
-		}
-		return base
-	}
+	return eagerFooterHints(m.allCategoriesTerminal(), m.noWorkState(), m.confirmationEnabled())
 }

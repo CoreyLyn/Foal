@@ -11,10 +11,33 @@ import (
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
+// recordingHistoryRecorder is a no-op History seam for exact-handoff tests.
 type recordingHistoryRecorder struct{}
 
 func (*recordingHistoryRecorder) Record(context.Context, history.SessionRecord, []history.ItemRecord) error {
 	return nil
+}
+
+func TestCleanFormatBytes(t *testing.T) {
+	tests := []struct {
+		name  string
+		bytes int64
+		want  string
+	}{
+		{name: "zero", bytes: 0, want: "0 KB"},
+		{name: "negative", bytes: -1, want: "0 KB"},
+		{name: "less than one kilobyte", bytes: 512, want: "<1 KB"},
+		{name: "kilobytes", bytes: 1536, want: "1.5 KB"},
+		{name: "megabytes", bytes: 2 * 1024 * 1024, want: "2 MB"},
+		{name: "gigabytes", bytes: 3 * 1024 * 1024 * 1024, want: "3 GB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cleanFormatBytes(tt.bytes); got != tt.want {
+				t.Fatalf("cleanFormatBytes(%d) = %q, want %q", tt.bytes, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestEagerCleanModelQueueIsCatalogDerived(t *testing.T) {
