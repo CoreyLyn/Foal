@@ -78,7 +78,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 - Include a permission boundary notice when administrator-only or protected locations are skipped, without recommending elevation as the normal path.
 - Write a detailed candidate list under Foal's config/history area as a human-readable companion artifact, not as an execution manifest.
 - Surface external tool commands as review suggestions only. Foal must not execute them, delegate cleanup to them, or count their estimates as `Potential space`.
-- Treat browser, IDE, package-manager, AI-tool, Docker, WSL, virtualization, sync-client, project-artifact, and application-leftover findings as skipped-by-default or review clues unless an explicit future opt-in rule group is approved.
+- Treat browser, IDE, package-manager, AI-tool, Docker, WSL, virtualization, sync-client, project-artifact, and application-leftover findings as skipped-by-default or review clues unless an explicit future opt-in rule group is approved. Project artifacts are never ordinary Clean opt-in rows; reclaim uses the independent shipped `foal purge` command with explicit roots (see `docs/plan/project-artifact-clues.md`).
 - Treat running application state as a skip reason, not as a close-and-clean prompt or default cleanup condition.
 
 ## Phase 3B: Clean Skipped-by-Default Discovery

@@ -12,13 +12,13 @@ The hard constraint: a default `foal clean --dry-run` must **not** go hunting fo
 
 ## Decisions
 
-- **Ownership split (analyze labels; clean points).** Project-artifact awareness lives in `foal analyze`, which already performs a read-only directory walk and reports top children by size. When a top child's name matches a recognized rebuildable-artifact set, `analyze` labels it. `foal clean --dry-run` carries only a single static pointer clue directing the user to `foal analyze <path>`. This matches Mole's split (deep scan in `purge`/`analyze`, pointer in `clean`) and respects the glossary's "only through explicit analysis."
+- **Ownership split (analyze labels; clean points; purge deletes).** Project-artifact awareness for read-only insight lives in `foal analyze`, which reports top children by size. When a top child's name matches a recognized rebuildable-artifact set, `analyze` labels it. `foal clean --dry-run` carries only a single static pointer clue directing the user to `foal analyze <path>` and `foal purge <root>`. Nested discovery and deletion are owned by the shipped independent `foal purge` command—not by Clean.
 
-- **No deep scanning in analyze.** `analyze` stays "top children by size"; it does NOT recurse looking for nested artifacts. Going deeper would turn `analyze` into a project scanner (scope creep). Limitation: only artifacts that happen to be a top child of the analyzed path are labeled (e.g. `analyze <project-root>` catches a direct `node_modules`; `analyze ~/Projects` would not catch artifacts two levels down). Documented as acceptable for v1.
+- **No deep scanning in analyze.** `analyze` stays "top children by size"; it does NOT recurse looking for nested artifacts. Going deeper would turn `analyze` into a project scanner (scope creep). Limitation: only artifacts that happen to be a top child of the analyzed path are labeled (e.g. `analyze <project-root>` catches a direct `node_modules`; `analyze ~/Projects` would not catch artifacts two levels down). Nested reclaim under an explicit root is `foal purge`'s job.
 
-- **Recognized artifact set (high-confidence, v1).** `node_modules`, `target`, `dist`, `build`, `.build`, `.next`, `__pycache__`. Deliberately excludes generic `bin`/`obj` to avoid noise; the set can be widened later. Because this is a read-only label (not a deletion), over-labeling is low-risk.
+- **Recognized artifact set (high-confidence, v1).** `node_modules`, `target`, `dist`, `build`, `.build`, `.next`, `__pycache__`. Deliberately excludes generic `bin`/`obj` to avoid noise; the set can be widened later. Analyze uses the set for labels only; `foal purge` uses the same set for discovery/deletion.
 
-- **clean's pointer clue is a presentation-only constant.** It fills the existing `ReviewClue` read-model slot with a constant entry (name "Rebuildable project artifacts", empty path, details pointing at `foal analyze <path>`). It is injected in the clean preview read-model projection and rendered in human output and the TUI. It is NOT added to the clean `Result` JSON contract — it is constant UX guidance, not data (consistent with how the suggestions static safety note is handled).
+- **clean's pointer clue is a presentation-only constant.** It fills the existing `ReviewClue` read-model slot with a constant entry (name "Rebuildable project artifacts", empty path, details pointing at `foal analyze <path>` and `foal purge <root>`). It is injected in the clean preview read-model projection and rendered in human output and the TUI. It is NOT added to the clean `Result` JSON contract — it is constant UX guidance, not data (consistent with how the suggestions static safety note is handled).
 
 ## Rejected alternatives
 
@@ -36,10 +36,21 @@ The hard constraint: a default `foal clean --dry-run` must **not** go hunting fo
 - Deep/recursive artifact discovery in `analyze`.
 - Configurable multi-root defaults analogous to Mole's `purge_paths` without an explicit user root.
 
-## Later direction (ADR 0019)
+## Shipped direction: `foal purge` (ADR 0019)
 
-An independent **Project artifact purge flow** (separate command or dedicated flow, not default Clean discovery) may reclaim rebuildable artifacts under a user-supplied root after selection and confirmation. That work needs its own design/PRD; it does not reopen default disk-wide project scanning.
+An independent **Project artifact purge flow** is shipped as the top-level command `foal purge` (issues #241–#243; user-docs alignment #244). It does **not** reopen default disk-wide project scanning or expand ordinary Clean catalog rows.
 
-## How to turn this into a PRD later
+| Surface | Behavior |
+| --- | --- |
+| Command | `foal purge <root> [root...]` — roots never implied |
+| Preview | Default dry-run (optional `--dry-run`); recursive allowlisted discovery under supplied roots; planned action `delete_permanently` without mutation |
+| Execute | `--execute --allow-permanent`; re-discovers then permanently deletes matches; without authorization, candidates are skipped and nothing is deleted |
+| Allowlist (v1) | Same high-confidence set as analyze: `node_modules`, `target`, `dist`, `build`, `.build`, `.next`, `__pycache__` (exact final component; no `bin`/`obj`) |
+| Safety | Protection rules (deny-only), dangerous-root rejection, reparse fail-closed, inspection ceilings, history sessions distinct from Clean |
+| Not shipped | Mole installer purge, implicit multi-root `purge_paths` config, Clean `--opt-in` project-artifact category, nested labeling inside `analyze` |
 
-In a new conversation: "Read `docs/plan/project-artifact-clues.md` and `CONTEXT.md` (Project artifact clue), then `/to-prd`."
+The read-only analyze labels and Clean presentation-only pointer in this plan remain valid. Clean still does not discover or delete project artifacts by default or via ordinary opt-in catalog rows.
+
+## How to extend later
+
+Further allowlist entries, selection filters, or a purge TUI entry need their own issue/tests. Do not fold project-artifact deletion into ordinary Clean opt-in rows without reopening ADR 0019.
