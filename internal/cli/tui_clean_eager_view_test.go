@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -559,6 +560,254 @@ func TestStylizeFrameMagnitudeRespectsNoColor(t *testing.T) {
 	if strings.Contains(styled, "208") || strings.Contains(styled, "214") {
 		t.Fatalf("NO_COLOR path leaked magnitude hues:\n%q", styled)
 	}
+}
+
+func TestIsConfirmationMeasuredLine(t *testing.T) {
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{line: "Permanent deletion · 2 categories · 3 item(s) · 1 GB", want: true},
+		{line: "Recycle Bin · 1 categories · 1 item(s) · 100 MB", want: true},
+		{line: "  - Go cache · 2 item(s) · 512 MB · Permanent deletion", want: true},
+		{line: "  - Foal-owned temp sandboxes · 1 item(s) · 2 KB · Recycle Bin", want: true},
+		// Risk warning is copy, not a measured-byte confirmation row.
+		{line: confirmationPermanentIrreversibleWarning, want: false},
+		// Preview / execution / result must not match confirmation patterns.
+		{line: "  > [x] ✓ Big · 1 item(s) · 1 GB", want: false},
+		{line: "    [ ] ✓ Mid · 1 item(s) · 100 MB", want: false},
+		{line: "  ✓ Cache · cleaned · 4 KB", want: false},
+		{line: "Recycle Bin moved: 1 GB", want: false},
+		{line: "Permanently deleted: 100 MB", want: false},
+		{line: "Affected (processed): 1 GB", want: false},
+		{line: "Selected: 2 categories · 1 GB", want: false},
+		{line: "      Impact: Rebuilds indexes after cleanup.", want: false},
+	}
+	for _, tt := range cases {
+		if got := isConfirmationMeasuredLine(tt.line); got != tt.want {
+			t.Fatalf("isConfirmationMeasuredLine(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestConfirmationPlainFrameByteAndWarningCopy(t *testing.T) {
+	// Plain confirmation composition is the contract oracle (no ANSI).
+	rows := []eagerCategoryRow{
+		{
+			Identifier:     "go-cache",
+			Label:          "Go cache",
+			Selected:       true,
+			PlannedAction:  clean.DeletionActionDeletePermanently,
+			State:          clean.CategoryPreviewComplete,
+			CandidateCount: 2,
+			Bytes:          1024 * 1024 * 1024, // 1 GB
+			SafetyNote:     "Rebuilds indexes after cleanup.",
+		},
+		{
+			Identifier:     "user_temp",
+			Label:          "User temp",
+			Selected:       true,
+			PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+			State:          clean.CategoryPreviewComplete,
+			CandidateCount: 1,
+			Bytes:          100 * 1024 * 1024, // 100 MB
+		},
+		{
+			Identifier:    "off",
+			Label:         "Off row",
+			Selected:      false,
+			PlannedAction: clean.DeletionActionDeletePermanently,
+			State:         clean.CategoryPreviewComplete,
+			Bytes:         99,
+		},
+	}
+	permanent, recycle := eagerConfirmationActionGroups(rows)
+	if len(permanent) != 1 || len(recycle) != 1 {
+		t.Fatalf("groups permanent=%d recycle=%d", len(permanent), len(recycle))
+	}
+	pc, pcand, pbytes := confirmationGroupTotals(permanent)
+	rc, rcand, rbytes := confirmationGroupTotals(recycle)
+
+	// Build the same plain fragments confirmationBodyEntries / footer use.
+	plain := strings.Join([]string{
+		"Foal Clean",
+		"Confirm cleanup",
+		fmt.Sprintf("Permanent deletion · %d categories · %d item(s) · %s", pc, pcand, cleanFormatBytes(pbytes)),
+		fmt.Sprintf("  - %s · %d item(s) · %s · %s", permanent[0].Label, permanent[0].CandidateCount, cleanFormatBytes(permanent[0].Bytes), clean.DeletionActionLabel(permanent[0].PlannedAction)),
+		"      Impact: " + permanent[0].SafetyNote,
+		fmt.Sprintf("Recycle Bin · %d categories · %d item(s) · %s", rc, rcand, cleanFormatBytes(rbytes)),
+		fmt.Sprintf("  - %s · %d item(s) · %s · %s", recycle[0].Label, recycle[0].CandidateCount, cleanFormatBytes(recycle[0].Bytes), clean.DeletionActionLabel(recycle[0].PlannedAction)),
+		fmt.Sprintf("Selected: %d categories · %s", 2, cleanFormatBytes(pbytes+rbytes)),
+		confirmationPermanentIrreversibleWarning,
+		"Recycle Bin items are moved, not permanently erased.",
+	}, "\n")
+	if strings.Contains(plain, "\x1b[") {
+		t.Fatal("plain confirmation frame must stay free of escapes")
+	}
+	for _, want := range []string{
+		"Permanent deletion · 1 categories · 2 item(s) · 1 GB",
+		"Go cache · 2 item(s) · 1 GB · Permanent deletion",
+		"Recycle Bin · 1 categories · 1 item(s) · 100 MB",
+		"User temp · 1 item(s) · 100 MB · Recycle Bin",
+		"Selected: 2 categories ·",
+		"1 GB",
+		"100 MB",
+		confirmationPermanentIrreversibleWarning,
+		"Impact: Rebuilds indexes after cleanup.",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("plain confirmation missing %q:\n%s", want, plain)
+		}
+	}
+	// Groups stay separately reported; unselected categories stay out.
+	if !strings.Contains(plain, "Permanent deletion ·") || !strings.Contains(plain, "Recycle Bin ·") {
+		t.Fatalf("action groups not separately reported:\n%s", plain)
+	}
+	if strings.Contains(plain, "Off row") {
+		t.Fatalf("unselected category leaked into confirmation:\n%s", plain)
+	}
+}
+
+func TestStylizeFrameConfirmationMagnitudeAndRisk(t *testing.T) {
+	plain := strings.Join([]string{
+		"Foal Clean",
+		"Confirm cleanup",
+		"Permanent deletion · 1 categories · 2 item(s) · 1 GB",
+		"  - Go cache · 2 item(s) · 1 GB · Permanent deletion",
+		"Recycle Bin · 1 categories · 1 item(s) · 100 MB",
+		"  - User temp · 1 item(s) · 2 KB · Recycle Bin",
+		"Selected: 2 categories · 1 GB",
+		confirmationPermanentIrreversibleWarning,
+		"Recycle Bin items are moved, not permanently erased.",
+		// Non-confirmation surfaces must not pick up confirmation magnitude.
+		"  ✓ Cache · cleaned · 1 GB",
+		"Recycle Bin moved: 1 GB",
+		"Affected (processed): 1 GB",
+	}, "\n")
+	if strings.Contains(plain, "\x1b[") {
+		t.Fatal("plain frame must stay free of escapes")
+	}
+	styled := stylizeFrame(plain)
+	// Plain fragments remain the contract oracle.
+	for _, want := range []string{
+		"1 GB",
+		"100 MB",
+		"2 KB",
+		confirmationPermanentIrreversibleWarning,
+		"Permanent deletion · 1 categories",
+		"Recycle Bin · 1 categories",
+		"Selected: 2 categories",
+	} {
+		if !strings.Contains(styled, want) {
+			t.Fatalf("styled confirmation missing plain fragment %q:\n%q", want, styled)
+		}
+	}
+	// Magnitude applied on confirmation measured lines + Selected (not execution/result labels alone as the contract).
+	if !strings.Contains(styled, "\x1b[") {
+		t.Fatal("styled confirmation should include magnitude or risk escapes when color enabled")
+	}
+
+	// Risk warning uses pure red risk emphasis, not magnitude orange/amber.
+	var warningLine string
+	for _, line := range strings.Split(styled, "\n") {
+		if strings.Contains(line, "irreversible") {
+			warningLine = line
+			break
+		}
+	}
+	if warningLine == "" {
+		t.Fatal("warning line missing from styled frame")
+	}
+	if !strings.Contains(warningLine, confirmationPermanentIrreversibleWarning) {
+		t.Fatalf("warning lost plain copy: %q", warningLine)
+	}
+	// Pure red CSI (31 / 91) or lipgloss 256 red "1"/"9" may appear for risk.
+	// Magnitude orange/amber (208/214) must not paint the irreversible warning.
+	if strings.Contains(warningLine, "208") || strings.Contains(warningLine, "214") {
+		t.Fatalf("risk warning must not use magnitude-orange: %q", warningLine)
+	}
+	if warningLine == confirmationPermanentIrreversibleWarning {
+		t.Fatal("risk warning should receive emphasis when color enabled")
+	}
+
+	// Execution/result lines stay outside confirmation magnitude eligibility.
+	for _, line := range strings.Split(styled, "\n") {
+		plainLine := stripANSIForTest(line)
+		if plainLine == "  ✓ Cache · cleaned · 1 GB" ||
+			plainLine == "Recycle Bin moved: 1 GB" ||
+			plainLine == "Affected (processed): 1 GB" {
+			if line != plainLine && (strings.Contains(line, "208") || strings.Contains(line, "214")) {
+				t.Fatalf("non-confirmation line received magnitude hue: %q", line)
+			}
+		}
+	}
+}
+
+func TestStyleRiskWarningNoColorAndRed(t *testing.T) {
+	text := confirmationPermanentIrreversibleWarning
+	colored := styleRiskWarningWithColor(text, true)
+	if colored == text {
+		t.Fatal("colored risk path should decorate warning")
+	}
+	if !strings.Contains(colored, text) {
+		t.Fatalf("risk style lost plain fragment: %q", colored)
+	}
+	// Must not use magnitude orange/amber as the risk cue.
+	if strings.Contains(colored, "208") || strings.Contains(colored, "214") {
+		t.Fatalf("risk style used magnitude hues: %q", colored)
+	}
+
+	noColor := styleRiskWarningWithColor(text, false)
+	if !strings.Contains(noColor, text) {
+		t.Fatalf("NO_COLOR risk path lost fragment: %q", noColor)
+	}
+	if strings.Contains(noColor, "208") || strings.Contains(noColor, "214") {
+		t.Fatalf("NO_COLOR risk path leaked magnitude hues: %q", noColor)
+	}
+	// Without color, hues for pure red should not appear either.
+	if strings.Contains(noColor, "[31m") || strings.Contains(noColor, "[91m") {
+		t.Fatalf("NO_COLOR risk path leaked red CSI: %q", noColor)
+	}
+}
+
+func TestStylizeFrameConfirmationRiskRespectsNoColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	plain := strings.Join([]string{
+		"Permanent deletion · 1 categories · 1 item(s) · 1 GB",
+		confirmationPermanentIrreversibleWarning,
+	}, "\n")
+	styled := stylizeFrame(plain)
+	if !strings.Contains(styled, "1 GB") || !strings.Contains(styled, confirmationPermanentIrreversibleWarning) {
+		t.Fatalf("NO_COLOR confirmation lost plain fragments:\n%q", styled)
+	}
+	if strings.Contains(styled, "208") || strings.Contains(styled, "214") {
+		t.Fatalf("NO_COLOR confirmation leaked magnitude hues:\n%q", styled)
+	}
+	if strings.Contains(styled, "[31m") || strings.Contains(styled, "[91m") {
+		t.Fatalf("NO_COLOR confirmation leaked risk red CSI:\n%q", styled)
+	}
+}
+
+// stripANSIForTest removes common CSI sequences so tests can compare plain copy
+// without treating ANSI as the contract oracle.
+func stripANSIForTest(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) {
+				c := s[j]
+				j++
+				if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+					break
+				}
+			}
+			i = j - 1
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 func TestEagerUnavailableContentPure(t *testing.T) {
