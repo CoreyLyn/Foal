@@ -359,9 +359,19 @@ func TestDryRunJSONContractShape(t *testing.T) {
 	if c["kind"] != "node_modules" || c["bytes"] != float64(2) {
 		t.Fatalf("candidate = %#v", c)
 	}
+	if c["planned_action"] != purge.PlannedActionDeletePermanently {
+		t.Fatalf("planned_action = %#v", c["planned_action"])
+	}
 	totals := decoded["totals"].(map[string]interface{})
 	if totals["candidate_count"] != float64(1) || totals["bytes"] != float64(2) {
 		t.Fatalf("totals = %#v", totals)
+	}
+	// Dry-run never mutates and always discloses high-impact rebuild cost.
+	if len(result.Deleted) != 0 || result.Totals.PermanentlyDeletedBytes != 0 {
+		t.Fatalf("dry-run must not claim deletion: %#v", result)
+	}
+	if len(result.Notices) == 0 || !strings.Contains(result.Notices[0], "reinstalling") {
+		t.Fatalf("notices = %#v, want high-impact rebuild notice", result.Notices)
 	}
 }
 
@@ -371,12 +381,14 @@ func TestRenderPreviewReportListsKindPathBytes(t *testing.T) {
 		Mode:   purge.ModeDryRun,
 		Root:   `D:\work\proj`,
 		Candidates: []purge.Candidate{{
-			Kind:         "node_modules",
-			Path:         `D:\work\proj\app\node_modules`,
-			RelativePath: `app\node_modules`,
-			Bytes:        42,
+			Kind:          "node_modules",
+			Path:          `D:\work\proj\app\node_modules`,
+			RelativePath:  `app\node_modules`,
+			Bytes:         42,
+			PlannedAction: purge.PlannedActionDeletePermanently,
 		}},
-		Totals: purge.Totals{CandidateCount: 1, Bytes: 42},
+		Totals:  purge.Totals{CandidateCount: 1, Bytes: 42},
+		Notices: []string{purge.HighImpactNotice},
 	})
 	for _, want := range []string{
 		"Foal purge",
@@ -385,6 +397,8 @@ func TestRenderPreviewReportListsKindPathBytes(t *testing.T) {
 		"42",
 		`app\node_modules`,
 		"No changes were made",
+		"reinstalling dependencies",
+		"--execute --allow-permanent",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q:\n%s", want, report)

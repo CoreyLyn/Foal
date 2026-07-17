@@ -1,5 +1,6 @@
 // Package purge implements the independent Project artifact purge flow.
-// This slice is dry-run / preview-only for a single explicit root (issue #241).
+// Dry-run previews allowlisted rebuildable directories under one explicit root;
+// execute rediscovers, authorizes permanent deletion per run, and mutates.
 package purge
 
 import (
@@ -12,19 +13,35 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/CoreyLyn/Foal/internal/core/delete"
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
+	"github.com/CoreyLyn/Foal/internal/history"
 )
 
 const (
-	// ModeDryRun is the only supported mode in this slice.
-	ModeDryRun = "dry_run"
+	ModeDryRun  = "dry_run"
+	ModeExecute = "execute"
 
 	StatusPreview  = "preview"
+	StatusOK       = "ok"
 	StatusError    = "error"
 	StatusCanceled = "canceled"
+
+	// PlannedActionDeletePermanently is the only planned action for purge candidates.
+	PlannedActionDeletePermanently = "delete_permanently"
+
+	// Issue codes (stable contracts).
+	IssuePermanentDeletionNotAuthorized = "permanent_deletion_not_authorized"
+	IssuePermanentDeleteFailed          = "permanent_delete_failed"
+	IssueContextCanceled                = "context_canceled"
 
 	// defaultDescendantLimit matches Clean opportunity inspection ceilings.
 	defaultDescendantLimit = 100_000
 )
+
+// HighImpactNotice discloses reinstall/rebuild cost and permanent-deletion semantics.
+const HighImpactNotice = "High impact: removing project artifacts requires reinstalling dependencies and rebuilding projects. Permanent deletion is ordinary filesystem removal (not secure erasure) and is irreversible."
 
 // v1 high-confidence Project artifact directory names (exact final component).
 // Aligned with analyze's project artifact clue set; deliberately excludes bin/obj.
@@ -43,7 +60,7 @@ var (
 	errReparsePoint    = errors.New("purge inspection encountered a reparse point")
 )
 
-// Options configures a dry-run discovery under one explicit root.
+// Options configures dry-run discovery or execute mutation under one explicit root.
 type Options struct {
 	// Root is required. Empty root is an error; Foal never invents a system-drive scan.
 	Root string
@@ -52,39 +69,91 @@ type Options struct {
 	DescendantLimit int
 	// WalkDir is injectable for tests; nil uses filepath.WalkDir.
 	WalkDir func(string, fs.WalkDirFunc) error
+	// AllowPermanentDeletion is the per-run permanent-deletion authorization.
+	// Dry-run never requires it. Execute without it skips every candidate with
+	// permanent_deletion_not_authorized and deletes nothing.
+	AllowPermanentDeletion bool
+	// PermanentRemover is injectable for tests; nil uses ordinary filesystem removal.
+	PermanentRemover delete.PermanentRemover
+	// Validator is applied immediately before each permanent delete.
+	Validator pathsafe.Validator
+	// HistoryRecorder optionally records purge sessions (distinct from Clean).
+	HistoryRecorder history.Recorder
+	// CommandParameters identify the purge invocation in History.
+	CommandParameters history.CommandParameters
 }
 
-// Result is the JSON-contract read model for purge dry-run.
+// Result is the JSON-contract read model for purge dry-run and execute.
 type Result struct {
-	Status     string      `json:"status"`
-	Mode       string      `json:"mode"`
-	Root       string      `json:"root,omitempty"`
-	Candidates []Candidate `json:"candidates"`
-	Totals     Totals      `json:"totals"`
-	Skipped    []Skipped   `json:"skipped"`
-	Message    string      `json:"message,omitempty"`
-	ElapsedMS  int64       `json:"elapsed_ms"`
+	Status     string        `json:"status"`
+	Mode       string        `json:"mode"`
+	Root       string        `json:"root,omitempty"`
+	Candidates []Candidate   `json:"candidates"`
+	Deleted    []DeletedItem `json:"deleted"`
+	Failed     []FailedItem  `json:"failed"`
+	Skipped    []Skipped     `json:"skipped"`
+	Totals     Totals        `json:"totals"`
+	Notices    []string      `json:"notices,omitempty"`
+	Message    string        `json:"message,omitempty"`
+	ElapsedMS  int64         `json:"elapsed_ms"`
 }
 
 // Candidate is one discovered allowlisted project artifact directory.
 type Candidate struct {
+	Kind          string `json:"kind"`
+	Path          string `json:"path"`
+	RelativePath  string `json:"relative_path"`
+	Bytes         int64  `json:"bytes"`
+	PlannedAction string `json:"planned_action"`
+}
+
+// DeletedItem is one successfully permanently deleted artifact.
+type DeletedItem struct {
 	Kind         string `json:"kind"`
 	Path         string `json:"path"`
-	RelativePath string `json:"relative_path"`
+	RelativePath string `json:"relative_path,omitempty"`
 	Bytes        int64  `json:"bytes"`
+	Action       string `json:"action"`
 }
 
-// Totals aggregates successful candidate measurements only.
+// FailedItem is a permanent deletion that failed after mutation may have begun.
+type FailedItem struct {
+	Kind          string `json:"kind"`
+	Path          string `json:"path"`
+	RelativePath  string `json:"relative_path,omitempty"`
+	Bytes         int64  `json:"bytes"`
+	PlannedAction string `json:"planned_action"`
+	Action        string `json:"action"`
+	Reason        Issue  `json:"reason"`
+}
+
+// Totals aggregates discovery and mutation outcomes.
 type Totals struct {
-	CandidateCount int   `json:"candidate_count"`
-	Bytes          int64 `json:"bytes"`
+	CandidateCount          int   `json:"candidate_count"`
+	Bytes                   int64 `json:"bytes"`
+	DeletedCount            int   `json:"deleted_count"`
+	SkippedCount            int   `json:"skipped_count"`
+	FailedCount             int   `json:"failed_count"`
+	PermanentlyDeletedBytes int64 `json:"permanently_deleted_bytes"`
+	AffectedBytes           int64 `json:"affected_bytes"`
 }
 
-// Skipped records fail-closed discovery or measurement outcomes.
+// Skipped records fail-closed discovery, authorization, or pre-mutation outcomes.
 type Skipped struct {
-	Path   string `json:"path"`
-	Reason string `json:"reason"`
-	Detail string `json:"detail,omitempty"`
+	Path          string `json:"path"`
+	Reason        string `json:"reason"`
+	Detail        string `json:"detail,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	Bytes         int64  `json:"bytes,omitempty"`
+	PlannedAction string `json:"planned_action,omitempty"`
+}
+
+// Issue is a structured diagnostic attached to failed items.
+type Issue struct {
+	Code        string `json:"code"`
+	Message     string `json:"message"`
+	Recoverable bool   `json:"recoverable"`
+	Path        string `json:"path,omitempty"`
 }
 
 // DryRun discovers allowlisted project artifacts under one explicit root without mutation.
@@ -93,65 +162,103 @@ func DryRun(ctx context.Context, opts Options) Result {
 		ctx = context.Background()
 	}
 	start := time.Now()
+	preview, errResult, ok := discover(ctx, opts, ModeDryRun, start)
+	if !ok {
+		return errResult
+	}
+	result := Result{
+		Status:     StatusPreview,
+		Mode:       ModeDryRun,
+		Root:       preview.root,
+		Candidates: preview.candidates,
+		Deleted:    []DeletedItem{},
+		Failed:     []FailedItem{},
+		Skipped:    preview.skipped,
+		Totals:     totalsFromPreview(preview.candidates, preview.skipped),
+		Notices:    highImpactNotices(len(preview.candidates) > 0),
+		ElapsedMS:  time.Since(start).Milliseconds(),
+	}
+	recordHistorySession(ctx, opts, result, start, time.Now())
+	return result
+}
 
+type discoveryPreview struct {
+	root       string
+	candidates []Candidate
+	skipped    []Skipped
+}
+
+// discover validates the root and finds candidates. On hard error or cancel,
+// ok is false and errResult is ready to return.
+func discover(ctx context.Context, opts Options, mode string, start time.Time) (discoveryPreview, Result, bool) {
 	root := strings.TrimSpace(opts.Root)
 	if root == "" {
-		return Result{
+		return discoveryPreview{}, Result{
 			Status:     StatusError,
-			Mode:       ModeDryRun,
+			Mode:       mode,
 			Candidates: []Candidate{},
+			Deleted:    []DeletedItem{},
+			Failed:     []FailedItem{},
 			Skipped:    []Skipped{},
 			Message:    "purge requires an explicit root path; refusing to scan without a user-supplied root",
 			ElapsedMS:  time.Since(start).Milliseconds(),
-		}
+		}, false
 	}
 
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return Result{
+		return discoveryPreview{}, Result{
 			Status:     StatusError,
-			Mode:       ModeDryRun,
+			Mode:       mode,
 			Root:       root,
 			Candidates: []Candidate{},
+			Deleted:    []DeletedItem{},
+			Failed:     []FailedItem{},
 			Skipped:    []Skipped{},
 			Message:    "invalid purge root: " + err.Error(),
 			ElapsedMS:  time.Since(start).Milliseconds(),
-		}
+		}, false
 	}
 
 	info, err := os.Lstat(absRoot)
 	if err != nil {
-		return Result{
+		return discoveryPreview{}, Result{
 			Status:     StatusError,
-			Mode:       ModeDryRun,
+			Mode:       mode,
 			Root:       absRoot,
 			Candidates: []Candidate{},
+			Deleted:    []DeletedItem{},
+			Failed:     []FailedItem{},
 			Skipped:    []Skipped{},
 			Message:    "purge root not found or inaccessible: " + err.Error(),
 			ElapsedMS:  time.Since(start).Milliseconds(),
-		}
+		}, false
 	}
 	if isReparsePoint(info) {
-		return Result{
+		return discoveryPreview{}, Result{
 			Status:     StatusError,
-			Mode:       ModeDryRun,
+			Mode:       mode,
 			Root:       absRoot,
 			Candidates: []Candidate{},
+			Deleted:    []DeletedItem{},
+			Failed:     []FailedItem{},
 			Skipped:    []Skipped{},
 			Message:    "purge root is a reparse point or link and cannot be scanned",
 			ElapsedMS:  time.Since(start).Milliseconds(),
-		}
+		}, false
 	}
 	if !info.IsDir() {
-		return Result{
+		return discoveryPreview{}, Result{
 			Status:     StatusError,
-			Mode:       ModeDryRun,
+			Mode:       mode,
 			Root:       absRoot,
 			Candidates: []Candidate{},
+			Deleted:    []DeletedItem{},
+			Failed:     []FailedItem{},
 			Skipped:    []Skipped{},
 			Message:    "purge root must be a directory",
 			ElapsedMS:  time.Since(start).Milliseconds(),
-		}
+		}, false
 	}
 
 	limit := opts.DescendantLimit
@@ -173,17 +280,19 @@ func DryRun(ctx context.Context, opts Options) Result {
 	scanner.discover(ctx, absRoot)
 
 	if ctx.Err() != nil || scanner.canceled {
-		// Cancellation: no partial success claim.
-		return Result{
+		// Cancellation during discovery: no partial success claim.
+		return discoveryPreview{}, Result{
 			Status:     StatusCanceled,
-			Mode:       ModeDryRun,
+			Mode:       mode,
 			Root:       absRoot,
 			Candidates: []Candidate{},
+			Deleted:    []DeletedItem{},
+			Failed:     []FailedItem{},
 			Totals:     Totals{},
 			Skipped:    scanner.skipped,
 			Message:    "purge discovery canceled; no partial preview claimed",
 			ElapsedMS:  time.Since(start).Milliseconds(),
-		}
+		}, false
 	}
 
 	sort.SliceStable(scanner.candidates, func(i, j int) bool {
@@ -193,23 +302,30 @@ func DryRun(ctx context.Context, opts Options) Result {
 		return scanner.candidates[i].RelativePath < scanner.candidates[j].RelativePath
 	})
 
+	return discoveryPreview{
+		root:       absRoot,
+		candidates: scanner.candidates,
+		skipped:    scanner.skipped,
+	}, Result{}, true
+}
+
+func totalsFromPreview(candidates []Candidate, skipped []Skipped) Totals {
 	var totalBytes int64
-	for _, c := range scanner.candidates {
+	for _, c := range candidates {
 		totalBytes += c.Bytes
 	}
-
-	return Result{
-		Status:     StatusPreview,
-		Mode:       ModeDryRun,
-		Root:       absRoot,
-		Candidates: scanner.candidates,
-		Totals: Totals{
-			CandidateCount: len(scanner.candidates),
-			Bytes:          totalBytes,
-		},
-		Skipped:   scanner.skipped,
-		ElapsedMS: time.Since(start).Milliseconds(),
+	return Totals{
+		CandidateCount: len(candidates),
+		Bytes:          totalBytes,
+		SkippedCount:   len(skipped),
 	}
+}
+
+func highImpactNotices(include bool) []string {
+	if !include {
+		return nil
+	}
+	return []string{HighImpactNotice}
 }
 
 // RenderPreviewReport formats a human dry-run preview (no mutation language).
@@ -238,6 +354,7 @@ func RenderPreviewReport(result Result) string {
 	b.WriteString(fmt.Sprintf("Root: %s\n", result.Root))
 	b.WriteString(fmt.Sprintf("Candidates: %d\n", result.Totals.CandidateCount))
 	b.WriteString(fmt.Sprintf("Measured bytes: %d\n", result.Totals.Bytes))
+	b.WriteString("Planned action: permanent deletion (requires --execute --allow-permanent)\n")
 	if len(result.Candidates) == 0 {
 		b.WriteString("No allowlisted project artifacts found under this root.\n")
 	} else {
@@ -256,7 +373,57 @@ func RenderPreviewReport(result Result) string {
 			b.WriteString(fmt.Sprintf("  %s (%s)\n", s.Path, s.Reason))
 		}
 	}
-	b.WriteString("\nNo changes were made. Execute is not available in this slice.\n")
+	for _, notice := range result.Notices {
+		b.WriteString("\n")
+		b.WriteString(notice)
+		b.WriteString("\n")
+	}
+	if len(result.Notices) == 0 && result.Totals.CandidateCount > 0 {
+		b.WriteString("\n")
+		b.WriteString(HighImpactNotice)
+		b.WriteString("\n")
+	}
+	b.WriteString("\nNo changes were made. Use --execute --allow-permanent to permanently delete matching artifacts after a fresh rediscovery.\n")
+	return b.String()
+}
+
+// RenderExecuteReport formats a human execute summary without free-space claims.
+func RenderExecuteReport(result Result) string {
+	var b strings.Builder
+	b.WriteString("Foal purge\n")
+	if result.Status == StatusError {
+		b.WriteString("Status: error\n")
+		if result.Message != "" {
+			b.WriteString(result.Message)
+			b.WriteString("\n")
+		}
+		return b.String()
+	}
+	if result.Status == StatusCanceled {
+		b.WriteString("Status: canceled\n")
+		if result.Message != "" {
+			b.WriteString(result.Message)
+			b.WriteString("\n")
+		}
+	} else {
+		b.WriteString("Execution complete.\n")
+	}
+	b.WriteString(fmt.Sprintf("Root: %s\n", result.Root))
+	b.WriteString(fmt.Sprintf("Deleted: %d, skipped: %d, failed: %d.\n",
+		result.Totals.DeletedCount, result.Totals.SkippedCount, result.Totals.FailedCount))
+	b.WriteString(fmt.Sprintf("Permanently deleted: %d bytes. Affected: %d bytes.\n",
+		result.Totals.PermanentlyDeletedBytes, result.Totals.AffectedBytes))
+	if result.Totals.PermanentlyDeletedBytes > 0 || result.Totals.FailedCount > 0 {
+		b.WriteString("Permanent deletion is ordinary filesystem removal; it is irreversible and is not a secure-erasure wipe. Completed work is not rolled back.\n")
+	}
+	for _, notice := range result.Notices {
+		b.WriteString(notice)
+		b.WriteString("\n")
+	}
+	if len(result.Notices) == 0 {
+		b.WriteString(HighImpactNotice)
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 
@@ -340,10 +507,11 @@ func (d *discovery) measureCandidate(ctx context.Context, path, kind string) {
 		rel = path
 	}
 	d.candidates = append(d.candidates, Candidate{
-		Kind:         kind,
-		Path:         path,
-		RelativePath: rel,
-		Bytes:        bytes,
+		Kind:          kind,
+		Path:          path,
+		RelativePath:  rel,
+		Bytes:         bytes,
+		PlannedAction: PlannedActionDeletePermanently,
 	})
 }
 

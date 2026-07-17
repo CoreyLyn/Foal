@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/history"
 	"github.com/CoreyLyn/Foal/internal/purge"
 )
 
@@ -184,14 +185,216 @@ func TestPurgeAcceptsExplicitDryRunFlag(t *testing.T) {
 	}
 }
 
-func TestPurgeRejectsExecuteInThisSlice(t *testing.T) {
+func TestPurgeRejectsDryRunAndExecuteTogether(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"purge", "--execute", t.TempDir()}, &stdout, &stderr)
+	code := Run([]string{"purge", "--dry-run", "--execute", t.TempDir()}, &stdout, &stderr)
 	if code != exitUsage {
 		t.Fatalf("exit = %d", code)
 	}
-	if !strings.Contains(stderr.String(), "execute is not available") {
+	if !strings.Contains(stderr.String(), "either --dry-run or --execute") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestPurgeExecuteWithoutAllowPermanentSkipsWithStructuredReason(t *testing.T) {
+	disableHistoryRecording(t)
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		filepath.Join("app", "node_modules", "a"): "xy",
+	})
+	nm := filepath.Join(root, "app", "node_modules")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"purge", "--execute", "--json", root}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	var env struct {
+		Command string       `json:"command"`
+		Result  purge.Result `json:"result"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
+	}
+	if env.Command != "purge" || env.Result.Mode != purge.ModeExecute {
+		t.Fatalf("envelope = %#v", env)
+	}
+	if len(env.Result.Deleted) != 0 || env.Result.Totals.PermanentlyDeletedBytes != 0 {
+		t.Fatalf("must delete nothing without auth: %#v", env.Result)
+	}
+	found := false
+	for _, s := range env.Result.Skipped {
+		if s.Reason == purge.IssuePermanentDeletionNotAuthorized {
+			found = true
+			if s.PlannedAction != purge.PlannedActionDeletePermanently {
+				t.Fatalf("planned action changed: %#v", s)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("skipped = %#v, want permanent_deletion_not_authorized", env.Result.Skipped)
+	}
+	if _, err := os.Lstat(nm); err != nil {
+		t.Fatalf("artifact must remain: %v", err)
+	}
+}
+
+func TestPurgeExecuteWithAllowPermanentDeletesAndRecordsHistory(t *testing.T) {
+	historyDir := t.TempDir()
+	t.Setenv("FOAL_HISTORY_DIR", historyDir)
+	// Rebind history factory so default recorder picks up the test dir.
+	originalRecorder := newHistoryRecorder
+	newHistoryRecorder = func() (history.Recorder, error) {
+		return history.NewFileRecorder(historyDir), nil
+	}
+	t.Cleanup(func() { newHistoryRecorder = originalRecorder })
+
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		filepath.Join("app", "node_modules", "a"): "xyz",
+		filepath.Join("web", "dist", "b"):         "ww",
+	})
+	nm := filepath.Join(root, "app", "node_modules")
+	dist := filepath.Join(root, "web", "dist")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"purge", "--execute", "--allow-permanent", "--json", root}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	var env struct {
+		Command string       `json:"command"`
+		Result  purge.Result `json:"result"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
+	}
+	result := env.Result
+	if result.Status != purge.StatusOK || result.Mode != purge.ModeExecute {
+		t.Fatalf("status/mode = %q/%q", result.Status, result.Mode)
+	}
+	if len(result.Deleted) != 2 {
+		t.Fatalf("deleted = %#v", result.Deleted)
+	}
+	for _, d := range result.Deleted {
+		if d.Action != purge.PlannedActionDeletePermanently {
+			t.Fatalf("action = %#v", d)
+		}
+	}
+	if result.Totals.PermanentlyDeletedBytes != 5 { // "xyz"+"ww"
+		t.Fatalf("permanently_deleted_bytes = %d", result.Totals.PermanentlyDeletedBytes)
+	}
+	if len(result.Notices) == 0 || !strings.Contains(strings.Join(result.Notices, "\n"), "reinstalling") {
+		t.Fatalf("notices = %#v", result.Notices)
+	}
+	if _, err := os.Lstat(nm); !os.IsNotExist(err) {
+		t.Fatalf("node_modules still present: %v", err)
+	}
+	if _, err := os.Lstat(dist); !os.IsNotExist(err) {
+		t.Fatalf("dist still present: %v", err)
+	}
+
+	// History provenance distinguishes purge from Clean.
+	query := history.NewFileQuery(historyDir)
+	hist := query.Recent(context.Background())
+	if len(hist.Sessions) != 1 {
+		t.Fatalf("history sessions = %#v", hist.Sessions)
+	}
+	sess := hist.Sessions[0]
+	if sess.Command.Command != "purge" {
+		t.Fatalf("command = %#v, want purge (not clean)", sess.Command)
+	}
+	if !strings.HasPrefix(sess.ID, "purge-") {
+		t.Fatalf("session id = %q", sess.ID)
+	}
+	if sess.Mode != purge.ModeExecute || sess.Aggregate.DeletedCount != 2 {
+		t.Fatalf("session = %#v", sess)
+	}
+	if sess.Aggregate.PermanentlyDeletedBytes != 5 {
+		t.Fatalf("aggregate permanently_deleted_bytes = %d", sess.Aggregate.PermanentlyDeletedBytes)
+	}
+}
+
+func TestPurgeExecuteWiresAllowPermanentFlag(t *testing.T) {
+	disableHistoryRecording(t)
+	original := executePurge
+	var captured purge.Options
+	executePurge = func(_ context.Context, opts purge.Options) purge.Result {
+		captured = opts
+		return purge.Result{
+			Status:  purge.StatusOK,
+			Mode:    purge.ModeExecute,
+			Root:    opts.Root,
+			Deleted: []purge.DeletedItem{},
+			Failed:  []purge.FailedItem{},
+			Skipped: []purge.Skipped{},
+			Totals:  purge.Totals{},
+		}
+	}
+	t.Cleanup(func() { executePurge = original })
+
+	root := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"purge", "--execute", "--allow-permanent", "--json", root}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d stderr=%q", code, stderr.String())
+	}
+	if !captured.AllowPermanentDeletion {
+		t.Fatal("AllowPermanentDeletion not set from --allow-permanent")
+	}
+	if captured.Root == "" || captured.CommandParameters.Command != "purge" {
+		t.Fatalf("options = %#v", captured)
+	}
+}
+
+func TestPurgeExecuteHumanOutputMentionsRebuildCost(t *testing.T) {
+	disableHistoryRecording(t)
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		filepath.Join("app", "node_modules", "a"): "x",
+	})
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"purge", "--execute", "--allow-permanent", root}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"Foal purge", "Permanently deleted", "reinstalling", "irreversible"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("human output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestPurgeDefaultRemainsDryRunNonMutating(t *testing.T) {
+	disableHistoryRecording(t)
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		filepath.Join("app", "node_modules", "a"): "keep",
+	})
+	nm := filepath.Join(root, "app", "node_modules")
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"purge", "--json", root}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	var env struct {
+		Result purge.Result `json:"result"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Result.Mode != purge.ModeDryRun || env.Result.Status != purge.StatusPreview {
+		t.Fatalf("result = %#v", env.Result)
+	}
+	if len(env.Result.Deleted) != 0 {
+		t.Fatalf("default path must not delete: %#v", env.Result.Deleted)
+	}
+	if _, err := os.Lstat(nm); err != nil {
+		t.Fatalf("must remain: %v", err)
 	}
 }
 
@@ -203,6 +406,25 @@ func TestPurgeRejectsMultiRoot(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "exactly one explicit root") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestHelpDocumentsPurgeExecuteAndAllowPermanent(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--help"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"foal purge",
+		"--execute",
+		"--allow-permanent",
+		"reinstall/rebuild",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("help missing %q:\n%s", want, out)
+		}
 	}
 }
 
