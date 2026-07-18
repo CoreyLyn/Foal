@@ -79,6 +79,59 @@ func TestDiscoverApplicationCachesCursorExactAllowlistOnly(t *testing.T) {
 	}
 }
 
+func TestDiscoverApplicationCachesVSCodeFamilyEditorsExactAllowlistOnly(t *testing.T) {
+	// Each VS Code-family editor is independent: exact AppData folder, own category,
+	// and sibling editors under the same Roaming base must never leak.
+	cases := []struct {
+		policyID string
+		appDir   string
+		category string
+	}{
+		{applicationCachePolicyVSCodeInsiders, "Code - Insiders", OpportunityCategoryVSCodeInsidersCache},
+		{applicationCachePolicyVSCodium, "VSCodium", OpportunityCategoryVSCodiumCache},
+		{applicationCachePolicyWindsurf, "Windsurf", OpportunityCategoryWindsurfCache},
+	}
+	for _, tc := range cases {
+		t.Run(tc.category, func(t *testing.T) {
+			roaming := t.TempDir()
+			editorRoot := filepath.Join(roaming, tc.appDir)
+			for _, name := range []string{"Cache", "CachedData", "MyCache", "User", "extensions", "workspaceStorage"} {
+				if err := os.MkdirAll(filepath.Join(editorRoot, name), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(editorRoot, name, "f.bin"), []byte(name), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Sibling Stable Code root must not leak.
+			if err := os.MkdirAll(filepath.Join(roaming, "Code", "Cache"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(roaming, "Code", "Cache", "f.bin"), []byte("vscode"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			result := discoverApplicationCaches(context.Background(), tc.policyID, ApplicationCacheDiscoveryOptions{
+				RoamingAppDataDir: roaming,
+			}, pathsafe.Validator{})
+			if len(result.opportunities) != 2 {
+				t.Fatalf("opportunities = %#v, want Cache and CachedData only", result.opportunities)
+			}
+			for _, opportunity := range result.opportunities {
+				if opportunity.Category != tc.category {
+					t.Fatalf("category = %q, want %q", opportunity.Category, tc.category)
+				}
+				if !strings.HasPrefix(opportunity.Path, editorRoot) {
+					t.Fatalf("path %q not under %s root", opportunity.Path, tc.appDir)
+				}
+				base := filepath.Base(opportunity.Path)
+				if base != "Cache" && base != "CachedData" {
+					t.Fatalf("unexpected root %q", base)
+				}
+			}
+		})
+	}
+}
+
 func TestDiscoverApplicationCachesBlankAppDataSilent(t *testing.T) {
 	result := discoverApplicationCaches(context.Background(), applicationCachePolicyVSCode, ApplicationCacheDiscoveryOptions{
 		RoamingAppDataDir: "   ",

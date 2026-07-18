@@ -12,8 +12,11 @@ import (
 )
 
 const (
-	applicationCachePolicyVSCode = "visual_studio_code"
-	applicationCachePolicyCursor = "cursor"
+	applicationCachePolicyVSCode         = "visual_studio_code"
+	applicationCachePolicyCursor         = "cursor"
+	applicationCachePolicyVSCodeInsiders = "visual_studio_code_insiders"
+	applicationCachePolicyVSCodium       = "vscodium"
+	applicationCachePolicyWindsurf       = "windsurf"
 	// CachedExtensionVSIXsRootName is the exact allowlisted relative root that
 	// stores downloaded VSIX packages (not installed extensions).
 	CachedExtensionVSIXsRootName = "CachedExtensionVSIXs"
@@ -63,6 +66,30 @@ var applicationCachePolicies = map[string]applicationCachePolicy{
 		category:           OpportunityCategoryCursorCache,
 		application:        ApplicationCursor,
 		roamingAppDataPath: []string{"Cursor"},
+		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+	},
+	// VS Code Insiders: side-by-side with Stable; isolated %APPDATA%\Code - Insiders
+	// (Microsoft FAQ: Insiders installs side by side with isolated settings).
+	applicationCachePolicyVSCodeInsiders: {
+		category:           OpportunityCategoryVSCodeInsidersCache,
+		application:        ApplicationVisualStudioCodeInsiders,
+		roamingAppDataPath: []string{"Code - Insiders"},
+		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+	},
+	// VSCodium: open-source VS Code fork; BleachBit official cleaner confirms
+	// %AppData%\VSCodium and VSCodium.exe on Windows.
+	applicationCachePolicyVSCodium: {
+		category:           OpportunityCategoryVSCodiumCache,
+		application:        ApplicationVSCodium,
+		roamingAppDataPath: []string{"VSCodium"},
+		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+	},
+	// Windsurf: VS Code-based AI editor; BleachBit official cleaner confirms
+	// %AppData%\Windsurf and Windsurf.exe on Windows.
+	applicationCachePolicyWindsurf: {
+		category:           OpportunityCategoryWindsurfCache,
+		application:        ApplicationWindsurf,
+		roamingAppDataPath: []string{"Windsurf"},
 		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
 	},
 }

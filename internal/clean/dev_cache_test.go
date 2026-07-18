@@ -36,14 +36,17 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.DevCacheCategoryVisualStudioCaches,
 			clean.OpportunityCategoryVSCodeCache,
 			clean.OpportunityCategoryCursorCache,
+			clean.OpportunityCategoryVSCodeInsidersCache,
+			clean.OpportunityCategoryVSCodiumCache,
+			clean.OpportunityCategoryWindsurfCache,
 		}
 		for _, cat := range expectedDevCaches {
 			if !enabled[cat] {
 				t.Fatalf("expected %q to be enabled by \"dev-caches\"", cat)
 			}
 		}
-		if len(enabled) != 19 {
-			t.Fatalf("expected 19 enabled developer-tools categories, got %d", len(enabled))
+		if len(enabled) != 22 {
+			t.Fatalf("expected 22 enabled developer-tools categories, got %d", len(enabled))
 		}
 		// Updater residue is Developer tools but not a cache; exclude from dev-caches.
 		if enabled[clean.CategoryGrokBuildUpdateResidue] {
@@ -85,6 +88,9 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.OpportunityCategoryBrowserCache,
 			clean.OpportunityCategoryVSCodeCache,
 			clean.OpportunityCategoryCursorCache,
+			clean.OpportunityCategoryVSCodeInsidersCache,
+			clean.OpportunityCategoryVSCodiumCache,
+			clean.OpportunityCategoryWindsurfCache,
 		}
 		expectedDevCaches := []string{
 			clean.DevCacheCategoryNPM,
@@ -118,9 +124,9 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 		if !enabled[clean.CategoryGrokBuildUpdateResidue] {
 			t.Fatal("expected grok-build-update-residue to be enabled by \"all\"")
 		}
-		// 12 opportunity + 17 developer-cache + 1 CLI-agent residue = 30
-		if len(enabled) != 12+17+1 {
-			t.Fatalf("expected 30 enabled categories (12+17+1), got %d", len(enabled))
+		// 15 opportunity + 17 developer-cache + 1 CLI-agent residue = 33
+		if len(enabled) != 15+17+1 {
+			t.Fatalf("expected 33 enabled categories (15+17+1), got %d", len(enabled))
 		}
 	})
 

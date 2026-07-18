@@ -76,6 +76,9 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 		ApplicationGrokBuild,
 		ApplicationVisualStudioCode,
 		ApplicationCursor,
+		ApplicationVisualStudioCodeInsiders,
+		ApplicationVSCodium,
+		ApplicationWindsurf,
 	}
 	if len(states) != len(wantOrder) {
 		t.Fatalf("states = %#v, want %d entries", states, len(wantOrder))

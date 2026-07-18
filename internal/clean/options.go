@@ -342,6 +342,12 @@ const (
 	ApplicationBun                        = "bun"
 	ApplicationVisualStudioCode           = "visual_studio_code"
 	ApplicationCursor                     = "cursor"
+	// ApplicationVisualStudioCodeInsiders is VS Code Insiders (Code - Insiders.exe).
+	ApplicationVisualStudioCodeInsiders   = "visual_studio_code_insiders"
+	// ApplicationVSCodium is the VSCodium fork (VSCodium.exe).
+	ApplicationVSCodium                   = "vscodium"
+	// ApplicationWindsurf is the Windsurf editor (Windsurf.exe).
+	ApplicationWindsurf                   = "windsurf"
 	// ApplicationVisualStudio is full Visual Studio (devenv.exe), not VS Code.
 	ApplicationVisualStudio               = "visual_studio"
 	ApplicationIntelliJIDEA               = "intellij_idea"

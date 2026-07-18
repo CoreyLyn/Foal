@@ -1007,6 +1007,9 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 		clean.OpportunityCategoryBrowserCache,
 		clean.OpportunityCategoryVSCodeCache,
 		clean.OpportunityCategoryCursorCache,
+		clean.OpportunityCategoryVSCodeInsidersCache,
+		clean.OpportunityCategoryVSCodiumCache,
+		clean.OpportunityCategoryWindsurfCache,
 	}
 	expectedDevCaches := []string{
 		clean.DevCacheCategoryNPM,
@@ -1114,9 +1117,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// 12 opportunity + 17 dev caches + grok-build-update-residue + "dev-caches" + "cli-agents" + "all" = 33
-	if len(valid) != 33 {
-		t.Fatalf("expected 33 valid names, got %d: %v", len(valid), valid)
+	// 15 opportunity + 17 dev caches + grok-build-update-residue + "dev-caches" + "cli-agents" + "all" = 36
+	if len(valid) != 36 {
+		t.Fatalf("expected 36 valid names, got %d: %v", len(valid), valid)
 	}
 }
 

@@ -1,6 +1,8 @@
 # Idle Application cache opportunities use fixed allowlists and application-idle gating
 
-> **Status note (ADR 0018):** `vscode_cache` and `cursor_cache` now use catalog planned action `delete_permanently` (with idle-before-and-after gates and re-fetch impact notices unchanged). Execute validates immediately before permanent removal; Recycle Bin capacity pre-checks do not apply to these permanent categories. Discovery, allowlists, and independent editor gates in this ADR remain in force.
+> **Status note (ADR 0018 + VS Code-family expansion):** Application cache categories use catalog planned action `delete_permanently` (with idle-before-and-after gates and re-fetch impact notices unchanged). Execute validates immediately before permanent removal; Recycle Bin capacity pre-checks do not apply to these permanent categories. Discovery, allowlists, and independent editor gates in this ADR remain in force.
+>
+> Registered complete Application cache categories are now: `vscode_cache` (`%APPDATA%\Code` / `Code.exe`), `cursor_cache` (`%APPDATA%\Cursor` / `Cursor.exe`), `vscode_insiders_cache` (`%APPDATA%\Code - Insiders` / `Code - Insiders.exe`), `vscodium_cache` (`%APPDATA%\VSCodium` / `VSCodium.exe`), and `windsurf_cache` (`%APPDATA%\Windsurf` / `Windsurf.exe`). All share the same fixed relative-root allowlist. Selecting or running one never authorizes or suppresses another.
 
 Foal already reports browser-owned regenerating caches as skipped-by-default Opportunity categories after browser idle-before-and-after inspection (ADR 0007) and reclaims opted-in categories through shared Clean (ADR 0008, qualified by ADR 0018). Non-browser application-owned cache roots such as Visual Studio Code and Cursor need the same Opportunity model without reusing browser-named policy, browser `Local State` profile catalogs, or developer-tool Review suggestion probes.
 

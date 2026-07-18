@@ -308,6 +308,9 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 var applicationCacheApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationVisualStudioCode, displayName: "Visual Studio Code", executables: []string{"Code.exe"}},
 	{id: ApplicationCursor, displayName: "Cursor", executables: []string{"Cursor.exe"}},
+	{id: ApplicationVisualStudioCodeInsiders, displayName: "VS Code Insiders", executables: []string{"Code - Insiders.exe"}},
+	{id: ApplicationVSCodium, displayName: "VSCodium", executables: []string{"VSCodium.exe"}},
+	{id: ApplicationWindsurf, displayName: "Windsurf", executables: []string{"Windsurf.exe"}},
 }
 
 // categoryCatalogEntry is the private canonical registration point. Every
@@ -549,7 +552,7 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 25 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
+	// 28 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
 	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
 	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
@@ -622,6 +625,44 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		),
 		applicationCachePolicyCursor,
 		ApplicationCursor,
+	), applicationCachePreviewSafetyNote),
+	// Additional VS Code-family editors: same regenerating-cache allowlist and
+	// independent idle gates. Selecting one never authorizes or suppresses another.
+	withPreviewSafetyNote(applicationCacheCategoryEntry(
+		categoryDefinition(
+			OpportunityCategoryVSCodeInsidersCache,
+			"VS Code Insiders cache",
+			ReportCategoryDeveloperTools,
+			CategoryEligibilityOptIn,
+			RunningApplicationPolicyApplicationIdleBeforeAfter,
+			DeletionActionDeletePermanently,
+		),
+		applicationCachePolicyVSCodeInsiders,
+		ApplicationVisualStudioCodeInsiders,
+	), applicationCachePreviewSafetyNote),
+	withPreviewSafetyNote(applicationCacheCategoryEntry(
+		categoryDefinition(
+			OpportunityCategoryVSCodiumCache,
+			"VSCodium cache",
+			ReportCategoryDeveloperTools,
+			CategoryEligibilityOptIn,
+			RunningApplicationPolicyApplicationIdleBeforeAfter,
+			DeletionActionDeletePermanently,
+		),
+		applicationCachePolicyVSCodium,
+		ApplicationVSCodium,
+	), applicationCachePreviewSafetyNote),
+	withPreviewSafetyNote(applicationCacheCategoryEntry(
+		categoryDefinition(
+			OpportunityCategoryWindsurfCache,
+			"Windsurf cache",
+			ReportCategoryDeveloperTools,
+			CategoryEligibilityOptIn,
+			RunningApplicationPolicyApplicationIdleBeforeAfter,
+			DeletionActionDeletePermanently,
+		),
+		applicationCachePolicyWindsurf,
+		ApplicationWindsurf,
 	), applicationCachePreviewSafetyNote),
 	// Package and build caches: proven regenerable roots; env/default
 	// resolvers, gates, and impact notices unchanged.

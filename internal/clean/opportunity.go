@@ -25,6 +25,9 @@ const (
 	OpportunityCategoryBrowserCache           = "browser_cache"
 	OpportunityCategoryVSCodeCache            = "vscode_cache"
 	OpportunityCategoryCursorCache            = "cursor_cache"
+	OpportunityCategoryVSCodeInsidersCache    = "vscode_insiders_cache"
+	OpportunityCategoryVSCodiumCache          = "vscodium_cache"
+	OpportunityCategoryWindsurfCache          = "windsurf_cache"
 	OpportunityStatus                         = "skipped_by_default"
 	OpportunityReason                         = "requires_explicit_opt_in"
 	UserTempOpportunityStatus                 = OpportunityStatus

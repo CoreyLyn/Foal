@@ -542,17 +542,36 @@ func TestNormalizedOptInSetVSCodeAndDevCaches(t *testing.T) {
 	if enabled[clean.OpportunityCategoryVSCodeCache] {
 		t.Fatalf("cursor_cache opt-in must not enable vscode_cache: %#v", enabled)
 	}
+	for _, id := range []string{
+		clean.OpportunityCategoryVSCodeInsidersCache,
+		clean.OpportunityCategoryVSCodiumCache,
+		clean.OpportunityCategoryWindsurfCache,
+	} {
+		enabled, invalid, _ = clean.NormalizedOptInSet([]string{id})
+		if len(invalid) != 0 || !enabled[id] {
+			t.Fatalf("%s opt-in = %#v %#v", id, enabled, invalid)
+		}
+		if enabled[clean.OpportunityCategoryVSCodeCache] || enabled[clean.OpportunityCategoryCursorCache] {
+			t.Fatalf("%s opt-in must not enable vscode/cursor: %#v", id, enabled)
+		}
+	}
 	enabled, invalid, _ = clean.NormalizedOptInSet([]string{"dev-caches"})
 	if len(invalid) != 0 ||
 		!enabled[clean.OpportunityCategoryVSCodeCache] ||
-		!enabled[clean.OpportunityCategoryCursorCache] {
-		t.Fatalf("dev-caches should enable both editor caches: %#v %#v", enabled, invalid)
+		!enabled[clean.OpportunityCategoryCursorCache] ||
+		!enabled[clean.OpportunityCategoryVSCodeInsidersCache] ||
+		!enabled[clean.OpportunityCategoryVSCodiumCache] ||
+		!enabled[clean.OpportunityCategoryWindsurfCache] {
+		t.Fatalf("dev-caches should enable all application-cache editors: %#v %#v", enabled, invalid)
 	}
 	enabled, invalid, _ = clean.NormalizedOptInSet([]string{"all"})
 	if len(invalid) != 0 ||
 		!enabled[clean.OpportunityCategoryVSCodeCache] ||
-		!enabled[clean.OpportunityCategoryCursorCache] {
-		t.Fatalf("all should enable both editor caches: %#v %#v", enabled, invalid)
+		!enabled[clean.OpportunityCategoryCursorCache] ||
+		!enabled[clean.OpportunityCategoryVSCodeInsidersCache] ||
+		!enabled[clean.OpportunityCategoryVSCodiumCache] ||
+		!enabled[clean.OpportunityCategoryWindsurfCache] {
+		t.Fatalf("all should enable all application-cache editors: %#v %#v", enabled, invalid)
 	}
 }
 
