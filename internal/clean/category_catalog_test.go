@@ -31,6 +31,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"vscode_insiders_cache",
 		"vscodium_cache",
 		"windsurf_cache",
+		"trae_cache",
 		"npm-cache",
 		"pnpm-cache",
 		"yarn-cache",
@@ -173,7 +174,7 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 	}
 }
 
-// lockedPermanentCategoryIDs is the complete production permanent matrix (28).
+// lockedPermanentCategoryIDs is the complete production permanent matrix (29).
 // Order matches catalog registration among permanent-action categories.
 func lockedPermanentCategoryIDs() []string {
 	return []string{
@@ -187,6 +188,7 @@ func lockedPermanentCategoryIDs() []string {
 		clean.OpportunityCategoryVSCodeInsidersCache,
 		clean.OpportunityCategoryVSCodiumCache,
 		clean.OpportunityCategoryWindsurfCache,
+		clean.OpportunityCategoryTraeCache,
 		clean.DevCacheCategoryNPM,
 		clean.DevCacheCategoryPNPM,
 		clean.DevCacheCategoryYarn,
@@ -229,13 +231,13 @@ func productionPermanentCategoryIDs() map[string]bool {
 }
 
 // TestCompleteDeletionRuleMatrixLocked is the end-state catalog contract for ADR 0018:
-// exactly 28 delete_permanently, 6 move_to_recycle_bin, and one actionless permission boundary.
+// exactly 29 delete_permanently, 6 move_to_recycle_bin, and one actionless permission boundary.
 func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	wantPermanent := lockedPermanentCategoryIDs()
 	wantRecycleBin := lockedRecycleBinCategoryIDs()
-	if len(wantPermanent) != 28 {
-		t.Fatalf("locked permanent matrix length = %d, want 28", len(wantPermanent))
+	if len(wantPermanent) != 29 {
+		t.Fatalf("locked permanent matrix length = %d, want 29", len(wantPermanent))
 	}
 	if len(wantRecycleBin) != 6 {
 		t.Fatalf("locked Recycle Bin matrix length = %d, want 6", len(wantRecycleBin))
@@ -263,8 +265,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	if len(executable) != 34 {
-		t.Fatalf("executable categories = %d (%v), want 34", len(executable), executable)
+	if len(executable) != 35 {
+		t.Fatalf("executable categories = %d (%v), want 35", len(executable), executable)
 	}
 	if !reflect.DeepEqual(permanent, wantPermanent) {
 		t.Fatalf("permanent matrix = %#v, want %#v", permanent, wantPermanent)
@@ -284,7 +286,7 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		t.Fatal("administrator_only_caches must never start selected")
 	}
 
-	// TUI initial selection when every executable row is present: default + 28 permanent = 29.
+	// TUI initial selection when every executable row is present: default + 29 permanent = 30.
 	selected := 0
 	for _, summary := range catalog.Summaries() {
 		if !clean.InitiallySelectedCategory(summary) {
@@ -297,8 +299,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 				summary.Identifier, summary.Eligibility, summary.PlannedAction)
 		}
 	}
-	if selected != 29 {
-		t.Fatalf("initially selected categories = %d, want 29 (default + 28 permanent)", selected)
+	if selected != 30 {
+		t.Fatalf("initially selected categories = %d, want 30 (default + 29 permanent)", selected)
 	}
 	for _, id := range []string{
 		clean.OpportunityCategoryUserTemp,
@@ -319,10 +321,10 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	// Eager queue is all 34 executable rows; permission boundary is never scanned.
+	// Eager queue is all 35 executable rows; permission boundary is never scanned.
 	queue := clean.EagerPreviewQueue()
-	if len(queue) != 34 {
-		t.Fatalf("EagerPreviewQueue length = %d, want 34 executable categories", len(queue))
+	if len(queue) != 35 {
+		t.Fatalf("EagerPreviewQueue length = %d, want 35 executable categories", len(queue))
 	}
 	for _, summary := range queue {
 		if summary.Identifier == "administrator_only_caches" {
@@ -402,8 +404,8 @@ func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 			}
 		}
 	}
-	if len(permanent) != 28 || len(permanent) != len(want) {
-		t.Fatalf("production permanent categories = %v, want exactly 28", permanent)
+	if len(permanent) != 29 || len(permanent) != len(want) {
+		t.Fatalf("production permanent categories = %v, want exactly 29", permanent)
 	}
 	for _, id := range lockedRecycleBinCategoryIDs() {
 		summary, ok := catalog.Summary(id)
@@ -444,9 +446,9 @@ func TestCategoryCatalogAcceptsSupportedPlannedActions(t *testing.T) {
 
 func TestInitiallySelectedCategoryDerivedFromEligibilityAndAction(t *testing.T) {
 	cases := []struct {
-		name     string
-		summary  clean.CleanupCategorySummary
-		want     bool
+		name    string
+		summary clean.CleanupCategorySummary
+		want    bool
 	}{
 		{
 			name: "default recycle bin",
@@ -548,10 +550,10 @@ func TestInitiallySelectedCategoryUsesInjectedCatalogSummariesWithoutHardCodedLi
 		t.Fatal(err)
 	}
 	wantSelected := map[string]bool{
-		"default_recycle":  true,
-		"permanent_cache":  true,
-		"recycle_opt_in":   false,
-		"admin_boundary":   false,
+		"default_recycle": true,
+		"permanent_cache": true,
+		"recycle_opt_in":  false,
+		"admin_boundary":  false,
 	}
 	for _, summary := range catalog.Summaries() {
 		got := clean.InitiallySelectedCategory(summary)
@@ -628,6 +630,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 			clean.OpportunityCategoryVSCodeInsidersCache,
 			clean.OpportunityCategoryVSCodiumCache,
 			clean.OpportunityCategoryWindsurfCache,
+			clean.OpportunityCategoryTraeCache,
 		},
 		wantDevCaches...,
 	)
@@ -699,7 +702,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		"BUN_INSTALL_CACHE_DIR", "PLAYWRIGHT_BROWSERS_PATH", "PUPPETEER_CACHE_DIR",
 		"electron_config_cache",
 		"go.exe", "cargo.exe", "dotnet.exe", "nuget.exe", "node.exe", "python.exe",
-		"uv.exe", "uvx.exe", "bun.exe", "bunx.exe", "Code.exe", "Cursor.exe",
+		"uv.exe", "uvx.exe", "bun.exe", "bunx.exe", "Code.exe", "Cursor.exe", "Trae.exe",
 		"idea64.exe", "pycharm64.exe", "webstorm64.exe", "phpstorm64.exe",
 		"rubymine64.exe", "clion64.exe", "datagrip64.exe", "dataspell64.exe",
 		"goland64.exe", "rustrover64.exe", "aqua64.exe", "mps64.exe", "writerside64.exe",
@@ -725,7 +728,7 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 	// dev-caches expands developer-cache + application-cache rows only.
 	// CLI-agent residue is Developer tools but excluded from the cache group.
 	wantDevCachesGroup := append(
-		[]string{clean.OpportunityCategoryVSCodeCache, clean.OpportunityCategoryCursorCache},
+		[]string{clean.OpportunityCategoryVSCodeCache, clean.OpportunityCategoryCursorCache, clean.OpportunityCategoryTraeCache},
 		wantDevCaches...,
 	)
 	enabled, invalid, valid := clean.NormalizedOptInSet([]string{"dev-caches"})

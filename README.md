@@ -19,12 +19,12 @@ Permanent deletion is an explicit planned action, not a Recycle Bin fallback.
 
 | Planned action | Categories |
 | --- | --- |
-| `delete_permanently` (28) | `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, `vscode_insiders_cache`, `vscodium_cache`, `windsurf_cache`, package/build caches (`npm-cache`, `pnpm-cache`, `yarn-cache`, `go-cache`, `go-modcache`, `pip-cache`, `cargo-cache`, `nuget-cache`, `nuget-global-packages`, `corepack-cache`, `uv-cache`, `bun-cache`), `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, `jetbrains-ide-caches`, `visual-studio-caches`, `grok-build-update-residue` |
+| `delete_permanently` (29) | `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, `vscode_insiders_cache`, `vscodium_cache`, `windsurf_cache`, `trae_cache`, package/build caches (`npm-cache`, `pnpm-cache`, `yarn-cache`, `go-cache`, `go-modcache`, `pip-cache`, `cargo-cache`, `nuget-cache`, `nuget-global-packages`, `corepack-cache`, `uv-cache`, `bun-cache`), `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, `jetbrains-ide-caches`, `visual-studio-caches`, `grok-build-update-residue` |
 | `move_to_recycle_bin` (6) | `foal_owned_temp_sandboxes` (default), `user_temp`, `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache` |
 
 - Dry-run reports the true planned action without authorization.
 - CLI execute requires per-run `--allow-permanent` in addition to `--execute` (and the matching `--opt-in` when using CLI additive opt-in). Without it, permanent candidates are skipped with `permanent_deletion_not_authorized` while Recycle Bin work continues.
-- The Clean TUI starts the default plus all permanent-action categories selected when safely measured (29 rows), leaves the five Recycle Bin opt-ins unselected, discloses permanent deletion in one confirmation, and passes equivalent authorization to shared Clean.
+- The Clean TUI starts the default plus all permanent-action categories selected when safely measured (30 rows), leaves the five Recycle Bin opt-ins unselected, discloses permanent deletion in one confirmation, and passes equivalent authorization to shared Clean.
 - Permanent deletion is ordinary filesystem removal only: no secure erasure, shred, free-space wipe, or forensic non-recoverability claim.
 
 See [Clean deletion policy](docs/plan/clean-deletion-policy.md) and [ADR 0018](docs/adr/0018-permanent-deletion-is-an-explicit-planned-action.md).
@@ -69,7 +69,7 @@ foal uninstall --json
 - Idle user-temp entries as `user_temp`
 - Existence-observed current-user paths: `crash_dumps`, `windows_error_reporting`, exact-allowlist `explorer_thumbnail_cache` (`thumbcache_*.db` / `iconcache_*.db`) and `inet_cache` (`INetCache\IE`, `INetCache\Low\IE`), `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`
 - Chrome/Edge/Firefox `browser_cache` when the browser is idle before and after complete profile cache inspection
-- Application cache categories when the owning editor is idle before and after exact allowlisted root inspection under standard Roaming AppData: VS Code (`vscode_cache` / `Code`), Cursor (`cursor_cache` / `Cursor`), VS Code Insiders (`vscode_insiders_cache` / `Code - Insiders`), VSCodium (`vscodium_cache` / `VSCodium`), Windsurf (`windsurf_cache` / `Windsurf`)
+- Application cache categories when the owning editor is idle before and after exact allowlisted root inspection under standard Roaming AppData: VS Code (`vscode_cache` / `Code`), Cursor (`cursor_cache` / `Cursor`), VS Code Insiders (`vscode_insiders_cache` / `Code - Insiders`), VSCodium (`vscodium_cache` / `VSCodium`), Windsurf (`windsurf_cache` / `Windsurf`), Trae (`trae_cache` / `Trae`)
 
 Observed opportunity bytes stay separate from `Potential space`. The Recycle Bin is permanently excluded from opportunity discovery. Developer-tool caches remain Review suggestions by default, or become Opt-in candidates via `--opt-in <name>`, `--opt-in dev-caches`, `--opt-in all`, or Clean TUI selection. Product-scoped CLI-agent residue categories (currently `grok-build-update-residue`) are selected via exact name, `--opt-in cli-agents`, `--opt-in all`, or Clean TUI selection — never via `dev-caches`. The `cli-agents` token expands independently registered CLI-agent categories only; it is not a mega-category and does not imply all CLI-agent data is cache or safe to delete. Administrator-only caches (SoftwareDistribution, Delivery Optimization) are permission-boundary notices only.
 

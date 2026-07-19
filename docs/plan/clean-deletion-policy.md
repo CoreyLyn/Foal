@@ -32,6 +32,7 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 | `vscode_insiders_cache` | Opt-in | Proven | Yes | `delete_permanently` | Same allowlist under `%APPDATA%\Code - Insiders`; Insiders (`Code - Insiders.exe`) must be idle before and after inspection. Independent of Stable VS Code. |
 | `vscodium_cache` | Opt-in | Proven | Yes | `delete_permanently` | Same allowlist under `%APPDATA%\VSCodium`; VSCodium (`VSCodium.exe`) must be idle before and after inspection. Evidence: BleachBit official VS Code-family cleaner. |
 | `windsurf_cache` | Opt-in | Proven | Yes | `delete_permanently` | Same allowlist under `%APPDATA%\Windsurf`; Windsurf (`Windsurf.exe`) must be idle before and after inspection. Evidence: BleachBit official VS Code-family cleaner. |
+| `trae_cache` | Opt-in | Proven | Yes | `delete_permanently` | Same allowlist under `%APPDATA%\Trae`; Trae (`Trae.exe`), a VS Code fork, must be idle before and after inspection. Independent of the other editors. |
 | `npm-cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact npm content-addressed cache; existing resolver and shared-runtime caveats remain. |
 | `pnpm-cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact pnpm content-addressable store root from env/default only; shared-runtime (Node); re-download/hardlink impact disclosed. Never project `node_modules`. |
 | `yarn-cache` | Opt-in | Proven | Yes | `delete_permanently` | Exact Yarn global cache root (`YARN_CACHE_FOLDER` or `%LOCALAPPDATA%\Yarn\Cache`); shared-runtime (Node); re-download/offline impact disclosed. Never project-local `.yarn/cache`. |
@@ -56,7 +57,7 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 
 - Dry-run reports the true planned action without requiring authorization.
 - CLI execution requires `--allow-permanent` in addition to `--execute` for permanent actions. Without it, permanent candidates are skipped with `permanent_deletion_not_authorized`; authorized Recycle Bin work continues.
-- The TUI starts with the 29 eligible rows described above selected when safely measurable (1 default + 28 permanent). Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
+- The TUI starts with the 30 eligible rows described above selected when safely measurable (1 default + 29 permanent). Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
 - The one TUI confirmation authorizes both disclosed action groups. Fresh execution may change candidate counts and bytes, but it must not introduce an action type that was not disclosed.
 
 ## Execution, failure, and cancellation

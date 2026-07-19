@@ -55,8 +55,8 @@ func TestNVIDIADXCacheDryRunReportsPermanentWithoutAuthorization(t *testing.T) {
 	}
 
 	result := clean.DryRun(context.Background(), clean.Options{
-		AllowPermanentDeletion: false,
-		OptIn:                  []string{clean.OpportunityCategoryNVIDIADXCache},
+		AllowPermanentDeletion:    false,
+		OptIn:                     []string{clean.OpportunityCategoryNVIDIADXCache},
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 		DiscoverOpportunities: func(context.Context) clean.OpportunityDiscoveryResult {
@@ -381,6 +381,41 @@ func TestCursorCacheUnauthorizedSkipsPermanent(t *testing.T) {
 	for _, skipped := range result.Skipped {
 		if skipped.Reason.Code == "permanent_deletion_not_authorized" &&
 			skipped.Rule == clean.OpportunityCategoryCursorCache {
+			found = true
+			if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+				t.Fatalf("planned action = %q", skipped.PlannedAction)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("skipped = %#v, want permanent_deletion_not_authorized", result.Skipped)
+	}
+}
+
+func TestTraeCacheUnauthorizedSkipsPermanent(t *testing.T) {
+	roaming := t.TempDir()
+	writeTraeRoot(t, roaming, map[string]string{"Cache": "trae"})
+	permanent := &recordingPermanentRemover{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion: false,
+		OptIn:                  []string{clean.OpportunityCategoryTraeCache},
+		PermanentRemover:       permanent,
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleTraeDetector(),
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(permanent.paths) != 0 {
+		t.Fatalf("permanent without auth: %v", permanent.paths)
+	}
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("deleted count = %d", result.Totals.OptInDeletedCount)
+	}
+	found := false
+	for _, skipped := range result.Skipped {
+		if skipped.Reason.Code == "permanent_deletion_not_authorized" &&
+			skipped.Rule == clean.OpportunityCategoryTraeCache {
 			found = true
 			if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
 				t.Fatalf("planned action = %q", skipped.PlannedAction)

@@ -348,6 +348,8 @@ const (
 	ApplicationVSCodium                   = "vscodium"
 	// ApplicationWindsurf is the Windsurf editor (Windsurf.exe).
 	ApplicationWindsurf                   = "windsurf"
+	// ApplicationTrae is the Trae editor (Trae.exe), a VS Code fork.
+	ApplicationTrae                       = "trae"
 	// ApplicationVisualStudio is full Visual Studio (devenv.exe), not VS Code.
 	ApplicationVisualStudio               = "visual_studio"
 	ApplicationIntelliJIDEA               = "intellij_idea"
