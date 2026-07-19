@@ -17,6 +17,7 @@ const (
 	applicationCachePolicyVSCodeInsiders = "visual_studio_code_insiders"
 	applicationCachePolicyVSCodium       = "vscodium"
 	applicationCachePolicyWindsurf       = "windsurf"
+	applicationCachePolicyTrae           = "trae"
 	// CachedExtensionVSIXsRootName is the exact allowlisted relative root that
 	// stores downloaded VSIX packages (not installed extensions).
 	CachedExtensionVSIXsRootName = "CachedExtensionVSIXs"
@@ -90,6 +91,15 @@ var applicationCachePolicies = map[string]applicationCachePolicy{
 		category:           OpportunityCategoryWindsurfCache,
 		application:        ApplicationWindsurf,
 		roamingAppDataPath: []string{"Windsurf"},
+		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+	},
+	// Trae: VS Code fork; %APPDATA%\Trae holds the standard VS Code-family
+	// regenerating-cache layout (including CachedExtensionVSIXs). Trae.exe is
+	// the Windows launcher. Independent of the other editors.
+	applicationCachePolicyTrae: {
+		category:           OpportunityCategoryTraeCache,
+		application:        ApplicationTrae,
+		roamingAppDataPath: []string{"Trae"},
 		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
 	},
 }

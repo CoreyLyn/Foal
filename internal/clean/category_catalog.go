@@ -311,6 +311,7 @@ var applicationCacheApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationVisualStudioCodeInsiders, displayName: "VS Code Insiders", executables: []string{"Code - Insiders.exe"}},
 	{id: ApplicationVSCodium, displayName: "VSCodium", executables: []string{"VSCodium.exe"}},
 	{id: ApplicationWindsurf, displayName: "Windsurf", executables: []string{"Windsurf.exe"}},
+	{id: ApplicationTrae, displayName: "Trae", executables: []string{"Trae.exe"}},
 }
 
 // categoryCatalogEntry is the private canonical registration point. Every
@@ -663,6 +664,21 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		),
 		applicationCachePolicyWindsurf,
 		ApplicationWindsurf,
+	), applicationCachePreviewSafetyNote),
+	// Trae: VS Code fork sharing the VS Code-family regenerating-cache allowlist
+	// (including CachedExtensionVSIXs) under %APPDATA%\Trae. Independent idle
+	// gate; selecting Trae never authorizes or suppresses another editor.
+	withPreviewSafetyNote(applicationCacheCategoryEntry(
+		categoryDefinition(
+			OpportunityCategoryTraeCache,
+			"Trae cache",
+			ReportCategoryDeveloperTools,
+			CategoryEligibilityOptIn,
+			RunningApplicationPolicyApplicationIdleBeforeAfter,
+			DeletionActionDeletePermanently,
+		),
+		applicationCachePolicyTrae,
+		ApplicationTrae,
 	), applicationCachePreviewSafetyNote),
 	// Package and build caches: proven regenerable roots; env/default
 	// resolvers, gates, and impact notices unchanged.

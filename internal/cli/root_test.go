@@ -2076,6 +2076,7 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.OpportunityCategoryVSCodeInsidersCache,
 		clean.OpportunityCategoryVSCodiumCache,
 		clean.OpportunityCategoryWindsurfCache,
+		clean.OpportunityCategoryTraeCache,
 	}
 	expectedDevCaches := []string{
 		clean.DevCacheCategoryNPM,
@@ -2143,6 +2144,7 @@ func TestCleanOptInInvalidName(t *testing.T) {
 		"vscode_insiders_cache",
 		"vscodium_cache",
 		"windsurf_cache",
+		"trae_cache",
 		"npm-cache",
 		"pnpm-cache",
 		"yarn-cache",

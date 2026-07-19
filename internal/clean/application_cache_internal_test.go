@@ -90,6 +90,7 @@ func TestDiscoverApplicationCachesVSCodeFamilyEditorsExactAllowlistOnly(t *testi
 		{applicationCachePolicyVSCodeInsiders, "Code - Insiders", OpportunityCategoryVSCodeInsidersCache},
 		{applicationCachePolicyVSCodium, "VSCodium", OpportunityCategoryVSCodiumCache},
 		{applicationCachePolicyWindsurf, "Windsurf", OpportunityCategoryWindsurfCache},
+		{applicationCachePolicyTrae, "Trae", OpportunityCategoryTraeCache},
 	}
 	for _, tc := range cases {
 		t.Run(tc.category, func(t *testing.T) {

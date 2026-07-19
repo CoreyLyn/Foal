@@ -424,12 +424,12 @@ func TestExecuteFreshRunningGateSkipsBrowserPreview(t *testing.T) {
 		return []clean.RunningApplicationState{{Application: clean.ApplicationGoogleChrome, State: state}, {Application: clean.ApplicationMicrosoftEdge, State: clean.RunningApplicationStateIdle}}
 	}
 	opts := clean.Options{
-		Rules:                         []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
-		OptIn:                         []string{clean.OpportunityCategoryBrowserCache},
-		DetectRunningApplications:     detector,
-		BrowserCacheDiscoveryOptions:  clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: localAppData},
-		DiscoverOpportunities:         noUserTempOpportunities,
-		DiscoverReviewSuggestions:     noReviewSuggestions,
+		Rules:                        []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		OptIn:                        []string{clean.OpportunityCategoryBrowserCache},
+		DetectRunningApplications:    detector,
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: localAppData},
+		DiscoverOpportunities:        noUserTempOpportunities,
+		DiscoverReviewSuggestions:    noReviewSuggestions,
 	}
 	if preview := clean.DryRun(context.Background(), opts); len(preview.OptInCandidates) != 1 {
 		t.Fatalf("preview = %#v", preview.OptInCandidates)
@@ -533,8 +533,8 @@ func TestDryRunOpportunityNeverReachesExecuteAdapterOrHistory(t *testing.T) {
 	adapter := &recordingRecycleBinAdapter{}
 	executeRecorder := &recordingHistoryRecorder{}
 	options := clean.Options{
-		RecycleBinAdapter: adapter,
-		HistoryRecorder:   executeRecorder,
+		RecycleBinAdapter:         adapter,
+		HistoryRecorder:           executeRecorder,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{{
@@ -1010,6 +1010,7 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 		clean.OpportunityCategoryVSCodeInsidersCache,
 		clean.OpportunityCategoryVSCodiumCache,
 		clean.OpportunityCategoryWindsurfCache,
+		clean.OpportunityCategoryTraeCache,
 	}
 	expectedDevCaches := []string{
 		clean.DevCacheCategoryNPM,
@@ -1117,9 +1118,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// 15 opportunity + 17 dev caches + grok-build-update-residue + "dev-caches" + "cli-agents" + "all" = 36
-	if len(valid) != 36 {
-		t.Fatalf("expected 36 valid names, got %d: %v", len(valid), valid)
+	// 16 opportunity + 17 dev caches + grok-build-update-residue + "dev-caches" + "cli-agents" + "all" = 37
+	if len(valid) != 37 {
+		t.Fatalf("expected 37 valid names, got %d: %v", len(valid), valid)
 	}
 }
 
@@ -2907,7 +2908,7 @@ func TestUVCacheOptInDryRunAndExecuteEndToEnd(t *testing.T) {
 		resolverCalled := false
 		adapter := &recordingRecycleBinAdapter{}
 		result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-			OptIn:                nil,
+			OptIn: nil,
 			DevCachePathResolver: func(category string) []string {
 				resolverCalled = true
 				return fakeResolver(category)
@@ -3286,8 +3287,8 @@ func TestPNPMAndYarnCacheOptInDryRunAndExecuteEndToEnd(t *testing.T) {
 
 			t.Run("dry-run without opt-in does not count as Potential space", func(t *testing.T) {
 				result := clean.DryRun(context.Background(), clean.Options{
-					OptIn:                nil,
-					DevCachePathResolver: fakeResolver,
+					OptIn:                 nil,
+					DevCachePathResolver:  fakeResolver,
 					DiscoverOpportunities: noOpportunities,
 					DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
 						return []clean.ReviewSuggestion{

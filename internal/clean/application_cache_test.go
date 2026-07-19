@@ -546,6 +546,7 @@ func TestNormalizedOptInSetVSCodeAndDevCaches(t *testing.T) {
 		clean.OpportunityCategoryVSCodeInsidersCache,
 		clean.OpportunityCategoryVSCodiumCache,
 		clean.OpportunityCategoryWindsurfCache,
+		clean.OpportunityCategoryTraeCache,
 	} {
 		enabled, invalid, _ = clean.NormalizedOptInSet([]string{id})
 		if len(invalid) != 0 || !enabled[id] {
@@ -561,7 +562,8 @@ func TestNormalizedOptInSetVSCodeAndDevCaches(t *testing.T) {
 		!enabled[clean.OpportunityCategoryCursorCache] ||
 		!enabled[clean.OpportunityCategoryVSCodeInsidersCache] ||
 		!enabled[clean.OpportunityCategoryVSCodiumCache] ||
-		!enabled[clean.OpportunityCategoryWindsurfCache] {
+		!enabled[clean.OpportunityCategoryWindsurfCache] ||
+		!enabled[clean.OpportunityCategoryTraeCache] {
 		t.Fatalf("dev-caches should enable all application-cache editors: %#v %#v", enabled, invalid)
 	}
 	enabled, invalid, _ = clean.NormalizedOptInSet([]string{"all"})
@@ -570,8 +572,14 @@ func TestNormalizedOptInSetVSCodeAndDevCaches(t *testing.T) {
 		!enabled[clean.OpportunityCategoryCursorCache] ||
 		!enabled[clean.OpportunityCategoryVSCodeInsidersCache] ||
 		!enabled[clean.OpportunityCategoryVSCodiumCache] ||
-		!enabled[clean.OpportunityCategoryWindsurfCache] {
+		!enabled[clean.OpportunityCategoryWindsurfCache] ||
+		!enabled[clean.OpportunityCategoryTraeCache] {
 		t.Fatalf("all should enable all application-cache editors: %#v %#v", enabled, invalid)
+	}
+	// cli-agents must not expand to Trae (or any editor cache).
+	cliEnabled, cliInvalid, _ := clean.NormalizedOptInSet([]string{clean.CLIAgentCategoryGroup})
+	if len(cliInvalid) != 0 || cliEnabled[clean.OpportunityCategoryTraeCache] {
+		t.Fatalf("cli-agents must not enable trae_cache: %#v", cliEnabled)
 	}
 }
 
@@ -1142,5 +1150,488 @@ func TestExecuteOptInCursorDoesNotAuthorizeVSCode(t *testing.T) {
 		if strings.EqualFold(applicationRoot, "Code") {
 			t.Fatalf("cursor opt-in deleted VS Code path: %v", permanent.paths)
 		}
+	}
+}
+
+func writeTraeRoot(t *testing.T, roamingAppData string, rootContents map[string]string) string {
+	t.Helper()
+	return writeEditorUserDataRoot(t, roamingAppData, "Trae", rootContents)
+}
+
+func idleTraeDetector() func(context.Context) []clean.RunningApplicationState {
+	return func(context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{Application: clean.ApplicationTrae, State: clean.RunningApplicationStateIdle},
+		}
+	}
+}
+
+func idleTraeAndVSCodeDetector() func(context.Context) []clean.RunningApplicationState {
+	return func(context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{Application: clean.ApplicationVisualStudioCode, State: clean.RunningApplicationStateIdle},
+			{Application: clean.ApplicationTrae, State: clean.RunningApplicationStateIdle},
+		}
+	}
+}
+
+// TestDryRunReportsIdleTraeCacheRootsAsIndependentOpportunities reuses the
+// VS Code-family discovery seam: Trae must reclaim exactly the shared
+// regenerating-root allowlist (including CachedExtensionVSIXs) under
+// %APPDATA%\Trae, with settings/storage/session state never as candidates.
+func TestDryRunReportsIdleTraeCacheRootsAsIndependentOpportunities(t *testing.T) {
+	roaming := t.TempDir()
+	contents := map[string]string{}
+	var wantBytes int64
+	for _, root := range editorAllowlistedRoots() {
+		payload := "trae-" + root
+		contents[root] = payload
+		wantBytes += int64(len(payload))
+	}
+	for _, decoy := range []string{
+		"User", "workspaceStorage", "globalStorage", "Backups",
+		"extensions", "Service Worker", "Local Storage", "Session Storage", "WebStorage",
+		"Network", "Cookies", "logs", "Crashpad", "MyCache", "cache-temp",
+	} {
+		contents[decoy] = "must-not-count"
+	}
+	traeRoot := writeTraeRoot(t, roaming, contents)
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder: recorder,
+		DetailedListDir: filepath.Join(t.TempDir(), "Foal", "history"),
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleTraeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	traeOpps := opportunitiesForCategory(result, clean.OpportunityCategoryTraeCache)
+	if len(traeOpps) != len(editorAllowlistedRoots()) {
+		t.Fatalf("trae opportunities = %#v, want one per allowlisted root", traeOpps)
+	}
+	seen := make(map[string]bool)
+	var total int64
+	for _, opportunity := range traeOpps {
+		if opportunity.Status != clean.OpportunityStatus || opportunity.Reason != clean.OpportunityReason {
+			t.Fatalf("opportunity status/reason = %#v", opportunity)
+		}
+		if !strings.HasPrefix(opportunity.Path, traeRoot) {
+			t.Fatalf("opportunity path %q not under Trae root", opportunity.Path)
+		}
+		seen[filepath.Base(opportunity.Path)] = true
+		total += opportunity.Bytes
+	}
+	for _, root := range editorAllowlistedRoots() {
+		if !seen[root] {
+			t.Fatalf("missing allowlisted root %q", root)
+		}
+	}
+	if total != wantBytes || result.Totals.OpportunityObservedBytes != wantBytes || result.Totals.CandidateBytes != 0 {
+		t.Fatalf("totals = %#v total=%d want observed-only %d", result.Totals, total, wantBytes)
+	}
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)) != 0 {
+		t.Fatalf("trae roots must not project as vscode_cache: %#v", result.Opportunities)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonText := string(encoded)
+	if !strings.Contains(jsonText, `"category":"trae_cache"`) {
+		t.Fatalf("JSON missing trae_cache: %s", jsonText)
+	}
+	for _, forbidden := range []string{
+		`"category":"vscode_cache"`, "workspaceStorage", "globalStorage", "Backups",
+		"Service Worker", "Local Storage", "Cookies", "Crashpad", "MyCache", "cache-temp",
+	} {
+		if strings.Contains(jsonText, forbidden) {
+			t.Fatalf("JSON contains excluded data %q: %s", forbidden, jsonText)
+		}
+	}
+
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	for _, want := range []string{
+		"Developer tools",
+		"category: trae_cache",
+		"Observed opportunity bytes:",
+		"Potential space: 0 bytes",
+		"CachedExtensionVSIXs holds downloaded extension packages",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("human report missing %q:\n%s", want, report)
+		}
+	}
+
+	if len(recorder.sessions) != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityCount != len(traeOpps) ||
+		recorder.sessions[0].Aggregate.OpportunityObservedBytes != wantBytes ||
+		len(recorder.items) != 0 {
+		t.Fatalf("history = %#v / %#v, want aggregate-only privacy", recorder.sessions, recorder.items)
+	}
+	if strings.Contains(recorder.encoded, traeRoot) || strings.Contains(recorder.encoded, "CachedData") {
+		t.Fatalf("history leaked editor path: %s", recorder.encoded)
+	}
+}
+
+func TestDryRunTraeMissingRootIsSilentAbsence(t *testing.T) {
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleTraeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryTraeCache {
+			t.Fatalf("unexpected trae opportunity: %#v", opportunity)
+		}
+	}
+	if len(result.IncompleteOpportunityInspections) != 0 {
+		t.Fatalf("incomplete = %#v, want empty for missing Trae root", result.IncompleteOpportunityInspections)
+	}
+}
+
+func TestDryRunTraeRunningSkipsWithoutMeasuring(t *testing.T) {
+	roaming := t.TempDir()
+	writeTraeRoot(t, roaming, map[string]string{"Cache": "cache", "CachedData": "data"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationTrae, State: clean.RunningApplicationStateRunning},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryTraeCache {
+			t.Fatalf("running Trae produced opportunity: %#v", opportunity)
+		}
+	}
+	if result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("observed bytes = %d, want 0", result.Totals.OpportunityObservedBytes)
+	}
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	if !strings.Contains(report, "Trae") {
+		t.Fatalf("report missing Trae running skip:\n%s", report)
+	}
+}
+
+func TestDryRunTraeUnknownFailsClosed(t *testing.T) {
+	roaming := t.TempDir()
+	writeTraeRoot(t, roaming, map[string]string{"Cache": "cache"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationTrae, State: clean.RunningApplicationStateUnknown, Message: "snapshot failed"},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryTraeCache {
+			t.Fatalf("unknown state produced opportunity: %#v", opportunity)
+		}
+	}
+	found := false
+	for _, err := range result.Errors {
+		if err.Code == "running_application_detection_unknown" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("errors = %#v, want unknown diagnostic", result.Errors)
+	}
+}
+
+func TestDryRunTraeOptInConvertsRootsToCandidatesWithoutSelectingVSCode(t *testing.T) {
+	roaming := t.TempDir()
+	writeTraeRoot(t, roaming, map[string]string{
+		"Cache":                "cache",
+		"CachedExtensionVSIXs": "vsix-pkg",
+	})
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "vscode-only"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		OptIn: []string{clean.OpportunityCategoryTraeCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleTraeAndVSCodeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryTraeCache)) != 0 {
+		t.Fatalf("opted-in trae still listed as opportunity: %#v", result.Opportunities)
+	}
+	vscodeOpps := opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)
+	if len(vscodeOpps) != 1 {
+		t.Fatalf("non-opted-in vscode should remain opportunity: %#v", result.Opportunities)
+	}
+	if len(result.OptInCandidates) != 2 {
+		t.Fatalf("opt-in candidates = %#v, want 2 trae roots", result.OptInCandidates)
+	}
+	for _, candidate := range result.OptInCandidates {
+		if candidate.Category != clean.OpportunityCategoryTraeCache {
+			t.Fatalf("candidate category = %q, want trae_cache only", candidate.Category)
+		}
+		if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			t.Fatalf("planned action = %q, want delete_permanently", candidate.PlannedAction)
+		}
+	}
+	model := clean.NewPreviewReadModel(result)
+	foundNotice := false
+	for _, notice := range model.Notices {
+		if notice.Kind == "opt_in_impact" && strings.Contains(notice.Message, "CachedExtensionVSIXs") {
+			foundNotice = true
+		}
+	}
+	if !foundNotice {
+		t.Fatalf("notices = %#v, want VSIX impact notice", model.Notices)
+	}
+}
+
+func TestExecuteWithoutTraeOptInSkipsDetection(t *testing.T) {
+	roaming := t.TempDir()
+	writeTraeRoot(t, roaming, map[string]string{"Cache": "cache"})
+	detectorCalls := 0
+	adapter := &recordingRecycleBinAdapter{}
+	_ = clean.Execute(context.Background(), clean.Options{
+		Rules:             []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			detectorCalls++
+			return idleTraeDetector()(context.Background())
+		},
+	})
+	if detectorCalls != 0 {
+		t.Fatalf("DetectRunningApplications called %d times without opt-in", detectorCalls)
+	}
+	if len(adapter.paths) != 0 {
+		t.Fatalf("adapter paths = %v", adapter.paths)
+	}
+}
+
+func TestExecuteOptInTraeCacheCleansWhenIdle(t *testing.T) {
+	roaming := t.TempDir()
+	traeRoot := writeTraeRoot(t, roaming, map[string]string{
+		"Cache":      "cache-data",
+		"CachedData": "compiled",
+	})
+	cachePath := filepath.Join(traeRoot, "Cache")
+	cachedDataPath := filepath.Join(traeRoot, "CachedData")
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
+	recorder := &recordingHistoryRecorder{}
+
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter:      recycle,
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: true,
+		HistoryRecorder:        recorder,
+		OptIn:                  []string{clean.OpportunityCategoryTraeCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleTraeDetector(),
+	})
+
+	if result.Totals.OptInDeletedCount != 2 {
+		t.Fatalf("OptInDeletedCount = %d, want 2; result=%#v", result.Totals.OptInDeletedCount, result)
+	}
+	if len(recycle.paths) != 0 {
+		t.Fatalf("trae permanent must not use Recycle Bin: %v", recycle.paths)
+	}
+	found := map[string]bool{}
+	for _, path := range permanent.paths {
+		found[path] = true
+	}
+	if !found[cachePath] || !found[cachedDataPath] {
+		t.Fatalf("permanent paths = %v, want Cache and CachedData", permanent.paths)
+	}
+	for _, item := range result.Deleted {
+		if item.Action != string(clean.DeletionActionDeletePermanently) {
+			t.Fatalf("deleted action = %q", item.Action)
+		}
+	}
+	if len(recorder.items) == 0 {
+		t.Fatalf("history items empty, want path-bearing opt-in records")
+	}
+	for _, item := range recorder.items {
+		if item.Path == cachePath || item.Path == cachedDataPath {
+			if item.Action != string(clean.DeletionActionDeletePermanently) {
+				t.Fatalf("history action = %q", item.Action)
+			}
+			return
+		}
+	}
+	t.Fatalf("history items = %#v, want Trae paths", recorder.items)
+}
+
+func TestExecuteOptInTraeFreshResolvesNotPreviewPaths(t *testing.T) {
+	roamingExecute := t.TempDir()
+	traeRoot := writeTraeRoot(t, roamingExecute, map[string]string{"GPUCache": "execute-root"})
+	executePath := filepath.Join(traeRoot, "GPUCache")
+	permanent := &recordingPermanentRemover{}
+
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: true,
+		OptIn:                  []string{clean.OpportunityCategoryTraeCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roamingExecute,
+		},
+		DetectRunningApplications: idleTraeDetector(),
+	})
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("OptInDeletedCount = %d, want 1", result.Totals.OptInDeletedCount)
+	}
+	if len(permanent.paths) != 1 || permanent.paths[0] != executePath {
+		t.Fatalf("permanent paths = %v, want fresh GPUCache %q", permanent.paths, executePath)
+	}
+}
+
+// TestDryRunIndependentEditorGatesTrae asserts the Trae idle gate is
+// independent: a running VS Code must not suppress idle Trae, and a running
+// Trae must not suppress idle VS Code.
+func TestDryRunIndependentEditorGatesTrae(t *testing.T) {
+	roaming := t.TempDir()
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "vscode-cache"})
+	writeTraeRoot(t, roaming, map[string]string{"Cache": "trae-cache"})
+
+	// Running VS Code must not suppress idle Trae.
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		BrowserCacheDiscoveryOptions:     clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: t.TempDir()},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationVisualStudioCode, State: clean.RunningApplicationStateRunning},
+				{Application: clean.ApplicationTrae, State: clean.RunningApplicationStateIdle},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)) != 0 {
+		t.Fatalf("running VS Code still produced opportunities: %#v", result.Opportunities)
+	}
+	traeOpps := opportunitiesForCategory(result, clean.OpportunityCategoryTraeCache)
+	if len(traeOpps) != 1 || filepath.Base(traeOpps[0].Path) != "Cache" {
+		t.Fatalf("idle Trae opportunities = %#v, want Cache only", traeOpps)
+	}
+
+	// Running Trae must not suppress idle VS Code.
+	result = clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		BrowserCacheDiscoveryOptions:     clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: t.TempDir()},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationVisualStudioCode, State: clean.RunningApplicationStateIdle},
+				{Application: clean.ApplicationTrae, State: clean.RunningApplicationStateRunning},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryTraeCache)) != 0 {
+		t.Fatalf("running Trae still produced opportunities: %#v", result.Opportunities)
+	}
+	vscodeOpps := opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)
+	if len(vscodeOpps) != 1 || filepath.Base(vscodeOpps[0].Path) != "Cache" {
+		t.Fatalf("idle VS Code opportunities = %#v, want Cache only", vscodeOpps)
+	}
+}
+
+func TestExecuteOptInTraeDoesNotAuthorizeVSCode(t *testing.T) {
+	roaming := t.TempDir()
+	writeTraeRoot(t, roaming, map[string]string{"Cache": "trae"})
+	writeVSCodeRoot(t, roaming, map[string]string{"Cache": "vscode"})
+	permanent := &recordingPermanentRemover{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: true,
+		OptIn:                  []string{clean.OpportunityCategoryTraeCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleTraeAndVSCodeDetector(),
+	})
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("OptInDeletedCount = %d, want 1 trae root", result.Totals.OptInDeletedCount)
+	}
+	for _, path := range permanent.paths {
+		relative, err := filepath.Rel(roaming, path)
+		if err != nil {
+			t.Fatalf("relative permanent path: %v", err)
+		}
+		applicationRoot := strings.Split(relative, string(filepath.Separator))[0]
+		if strings.EqualFold(applicationRoot, "Code") {
+			t.Fatalf("trae opt-in deleted VS Code path: %v", permanent.paths)
+		}
+	}
+}
+
+func TestDryRunTraeProtectionSuppressesRootBeforeTotals(t *testing.T) {
+	roaming := t.TempDir()
+	traeRoot := writeTraeRoot(t, roaming, map[string]string{
+		"Cache":      "cache",
+		"CachedData": "data",
+		"GPUCache":   "gpu",
+	})
+	protected := filepath.Join(traeRoot, "CachedData")
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator: pathsafe.NewValidator([]string{protected}),
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleTraeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryTraeCache && opportunity.Path == protected {
+			t.Fatalf("protected root leaked: %#v", opportunity)
+		}
+	}
+	var traeCount int
+	var observed int64
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryTraeCache {
+			traeCount++
+			observed += opportunity.Bytes
+		}
+	}
+	if traeCount != 2 || observed != 8 {
+		t.Fatalf("traeCount=%d observed=%d, want 2 siblings totaling 8", traeCount, observed)
 	}
 }

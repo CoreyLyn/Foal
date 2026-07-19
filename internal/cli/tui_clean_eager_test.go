@@ -99,7 +99,7 @@ func TestEagerCleanModelQueueIsCatalogDerived(t *testing.T) {
 }
 
 func TestEagerCleanModelStartRendersFullQueueImmediately(t *testing.T) {
-	// Height must fit all executable rows + group headers after matrix growth (29).
+	// Height must fit all executable rows + group headers after matrix growth (30).
 	model := newEagerCleanModel(120, 60)
 	fixed := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	model.now = func() time.Time { return fixed }
@@ -889,16 +889,16 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 			recycleBinOptIns++
 		}
 	}
-	// Complete rule matrix: 1 default + 28 permanent = 29; 5 Recycle Bin opt-ins unselected.
-	if defaults != 1 || permanentOptIns != 28 || recycleBinOptIns != 5 || wantSelected != 29 {
-		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/28/5/29",
+	// Complete rule matrix: 1 default + 29 permanent = 30; 5 Recycle Bin opt-ins unselected.
+	if defaults != 1 || permanentOptIns != 29 || recycleBinOptIns != 5 || wantSelected != 30 {
+		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/29/5/30",
 			defaults, permanentOptIns, recycleBinOptIns, wantSelected)
 	}
-	if model.selectedCount() != 29 {
-		t.Fatalf("selectedCount = %d, want 29 (default + all permanent when rows present)", model.selectedCount())
+	if model.selectedCount() != 30 {
+		t.Fatalf("selectedCount = %d, want 30 (default + all permanent when rows present)", model.selectedCount())
 	}
-	if len(model.rows) != 34 {
-		t.Fatalf("eager rows = %d, want 34 executable categories", len(model.rows))
+	if len(model.rows) != 35 {
+		t.Fatalf("eager rows = %d, want 35 executable categories", len(model.rows))
 	}
 	for _, id := range model.selectedCategoryIDs() {
 		if strings.Contains(id, `\`) || strings.Contains(id, "/") || strings.Contains(id, " ") {
@@ -1900,7 +1900,7 @@ func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) 
 		activeInHdr bool
 	}
 	steps := []step{
-		{"Fresh scanning", "waiting", false},  // opener leaves waiting
+		{"Fresh scanning", "waiting", false},   // opener leaves waiting
 		{"Fresh scanning", "rechecking", true}, // ActiveCategory
 		{"Recycle Bin safety check", "ready", false},
 		{"Moving to Recycle Bin", "cleaning", true},
@@ -2174,7 +2174,7 @@ func TestEagerCleanExecutionMidFlightCompletionAndFinalOverwrite(t *testing.T) {
 		}},
 		// opt-in ends skipped, not cleaned — must replace mid-flight cleaned.
 		Skipped: []clean.SkippedItem{{
-			Path: `C:\Temp\skip`,
+			Path:  `C:\Temp\skip`,
 			Bytes: 1,
 			Rule:  optInID,
 			Reason: clean.StructuredIssue{
