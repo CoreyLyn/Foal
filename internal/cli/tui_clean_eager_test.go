@@ -889,22 +889,22 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 			recycleBinOptIns++
 		}
 	}
-	// Complete rule matrix: 1 default + 29 permanent = 30; 5 Recycle Bin opt-ins unselected.
-	if defaults != 1 || permanentOptIns != 29 || recycleBinOptIns != 5 || wantSelected != 30 {
-		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/29/5/30",
+	// Complete rule matrix: 1 default + 30 permanent = 31; 5 Recycle Bin opt-ins unselected.
+	if defaults != 1 || permanentOptIns != 30 || recycleBinOptIns != 5 || wantSelected != 31 {
+		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/30/5/31",
 			defaults, permanentOptIns, recycleBinOptIns, wantSelected)
 	}
-	if model.selectedCount() != 30 {
-		t.Fatalf("selectedCount = %d, want 30 (default + all permanent when rows present)", model.selectedCount())
+	if model.selectedCount() != 31 {
+		t.Fatalf("selectedCount = %d, want 31 (default + all permanent when rows present)", model.selectedCount())
 	}
-	if len(model.rows) != 35 {
-		t.Fatalf("eager rows = %d, want 35 executable categories", len(model.rows))
+	if len(model.rows) != 36 {
+		t.Fatalf("eager rows = %d, want 36 executable categories", len(model.rows))
 	}
 	for _, id := range model.selectedCategoryIDs() {
 		if strings.Contains(id, `\`) || strings.Contains(id, "/") || strings.Contains(id, " ") {
 			t.Fatalf("selection id looks path-bearing or alias-like: %q", id)
 		}
-		if id == "dev-caches" || id == "cli-agents" || id == "all" {
+		if id == "dev-caches" || id == "app-caches" || id == "cli-agents" || id == "all" {
 			t.Fatalf("group token in selection: %q", id)
 		}
 	}

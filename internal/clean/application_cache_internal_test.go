@@ -133,6 +133,57 @@ func TestDiscoverApplicationCachesVSCodeFamilyEditorsExactAllowlistOnly(t *testi
 	}
 }
 
+func TestDiscoverApplicationCachesObsidianPlainElectronAllowlistOnly(t *testing.T) {
+	// Obsidian is a non-editor Electron app carrying its own plain-Electron
+	// allowlist: the 6 single-segment regenerating roots, excluding CachedData
+	// and CachedExtensionVSIXs and every state/config/bundle directory.
+	roaming := t.TempDir()
+	obsidianRoot := filepath.Join(roaming, "obsidian")
+	allDirs := make([]string, 0, len(obsidianCacheAllowlistedRelativeRoots)+8)
+	allDirs = append(allDirs, obsidianCacheAllowlistedRelativeRoots...)
+	allDirs = append(allDirs, "CachedData", "CachedExtensionVSIXs", "User", "Local Storage", "IndexedDB", "Service Worker", "Preferences", "logs")
+	for _, name := range allDirs {
+		if err := os.MkdirAll(filepath.Join(obsidianRoot, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(obsidianRoot, name, "f.bin"), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Sibling editor root must not leak into Obsidian discovery.
+	if err := os.MkdirAll(filepath.Join(roaming, "Code", "Cache"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roaming, "Code", "Cache", "f.bin"), []byte("vscode"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := discoverApplicationCaches(context.Background(), applicationCachePolicyObsidian, ApplicationCacheDiscoveryOptions{
+		RoamingAppDataDir: roaming,
+	}, pathsafe.Validator{})
+	if len(result.opportunities) != len(obsidianCacheAllowlistedRelativeRoots) {
+		t.Fatalf("opportunities = %#v, want one per plain-Electron allowlisted root", result.opportunities)
+	}
+	seen := map[string]bool{}
+	for _, opportunity := range result.opportunities {
+		if opportunity.Category != OpportunityCategoryObsidianCache {
+			t.Fatalf("category = %q, want obsidian_cache", opportunity.Category)
+		}
+		if !strings.HasPrefix(opportunity.Path, obsidianRoot) {
+			t.Fatalf("path %q not under obsidian root", opportunity.Path)
+		}
+		base := filepath.Base(opportunity.Path)
+		seen[base] = true
+		if base == "CachedData" || base == "CachedExtensionVSIXs" {
+			t.Fatalf("Obsidian plain-Electron allowlist must not include %q", base)
+		}
+	}
+	for _, root := range obsidianCacheAllowlistedRelativeRoots {
+		if !seen[root] {
+			t.Fatalf("missing allowlisted root %q", root)
+		}
+	}
+}
+
 func TestDiscoverApplicationCachesBlankAppDataSilent(t *testing.T) {
 	result := discoverApplicationCaches(context.Background(), applicationCachePolicyVSCode, ApplicationCacheDiscoveryOptions{
 		RoamingAppDataDir: "   ",

@@ -1635,3 +1635,575 @@ func TestDryRunTraeProtectionSuppressesRootBeforeTotals(t *testing.T) {
 		t.Fatalf("traeCount=%d observed=%d, want 2 siblings totaling 8", traeCount, observed)
 	}
 }
+
+// plainElectronAllowlistedRoots is the Obsidian plain-Electron regenerating-
+// cache allowlist: single-segment roots only, excluding CachedData and
+// CachedExtensionVSIXs (no V8-code-cache or VSIX proof for a non-editor app).
+func plainElectronAllowlistedRoots() []string {
+	return []string{
+		"Cache",
+		"Code Cache",
+		"GPUCache",
+		"DawnCache",
+		"DawnGraphiteCache",
+		"DawnWebGPUCache",
+	}
+}
+
+func writeObsidianRoot(t *testing.T, roamingAppData string, rootContents map[string]string) string {
+	t.Helper()
+	return writeEditorUserDataRoot(t, roamingAppData, "obsidian", rootContents)
+}
+
+func idleObsidianDetector() func(context.Context) []clean.RunningApplicationState {
+	return func(context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{Application: clean.ApplicationObsidian, State: clean.RunningApplicationStateIdle},
+		}
+	}
+}
+
+func idleObsidianAndTraeDetector() func(context.Context) []clean.RunningApplicationState {
+	return func(context.Context) []clean.RunningApplicationState {
+		return []clean.RunningApplicationState{
+			{Application: clean.ApplicationTrae, State: clean.RunningApplicationStateIdle},
+			{Application: clean.ApplicationObsidian, State: clean.RunningApplicationStateIdle},
+		}
+	}
+}
+
+// TestDryRunReportsIdleObsidianCacheRootsAsIndependentOpportunities reuses the
+// Application cache discovery seam with a per-policy plain-Electron allowlist:
+// Obsidian must reclaim exactly the 6 single-segment regenerating roots under
+// %APPDATA%\obsidian, with state/config/bundle (obsidian.json, the .asar bundle,
+// Local Storage, IndexedDB, Service Worker, Preferences, CachedData,
+// CachedExtensionVSIXs, User, logs) never as candidates, and report under the
+// Applications group (not Developer tools) with no VSIX impact notice.
+func TestDryRunReportsIdleObsidianCacheRootsAsIndependentOpportunities(t *testing.T) {
+	roaming := t.TempDir()
+	contents := map[string]string{}
+	var wantBytes int64
+	for _, root := range plainElectronAllowlistedRoots() {
+		payload := "obsidian-" + root
+		contents[root] = payload
+		wantBytes += int64(len(payload))
+	}
+	for _, decoy := range []string{
+		"CachedData", "CachedExtensionVSIXs", "Local Storage", "IndexedDB",
+		"Service Worker", "Preferences", "User", "logs", "Network", "Cookies",
+		"Crashpad", "Session Storage", "WebStorage",
+	} {
+		contents[decoy] = "must-not-count"
+	}
+	obsidianRoot := writeObsidianRoot(t, roaming, contents)
+	// File decoys at the user-data root level: config and the app bundle must
+	// never become candidates (single-segment allowlist only).
+	for _, file := range []string{"obsidian.json", "app.asar", "main.js"} {
+		if err := os.WriteFile(filepath.Join(obsidianRoot, file), []byte("bundle"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recorder := &recordingHistoryRecorder{}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		HistoryRecorder: recorder,
+		DetailedListDir: filepath.Join(t.TempDir(), "Foal", "history"),
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleObsidianDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled_test_rule", DefaultEnabled: false}},
+	})
+
+	obsidianOpps := opportunitiesForCategory(result, clean.OpportunityCategoryObsidianCache)
+	if len(obsidianOpps) != len(plainElectronAllowlistedRoots()) {
+		t.Fatalf("obsidian opportunities = %#v, want one per allowlisted root", obsidianOpps)
+	}
+	seen := make(map[string]bool)
+	var total int64
+	for _, opportunity := range obsidianOpps {
+		if opportunity.Status != clean.OpportunityStatus || opportunity.Reason != clean.OpportunityReason {
+			t.Fatalf("opportunity status/reason = %#v", opportunity)
+		}
+		if !strings.HasPrefix(opportunity.Path, obsidianRoot) {
+			t.Fatalf("opportunity path %q not under Obsidian root", opportunity.Path)
+		}
+		seen[filepath.Base(opportunity.Path)] = true
+		total += opportunity.Bytes
+	}
+	for _, root := range plainElectronAllowlistedRoots() {
+		if !seen[root] {
+			t.Fatalf("missing allowlisted root %q", root)
+		}
+	}
+	if total != wantBytes || result.Totals.OpportunityObservedBytes != wantBytes || result.Totals.CandidateBytes != 0 {
+		t.Fatalf("totals = %#v total=%d want observed-only %d", result.Totals, total, wantBytes)
+	}
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryTraeCache)) != 0 {
+		t.Fatalf("obsidian roots must not project as trae_cache: %#v", result.Opportunities)
+	}
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryVSCodeCache)) != 0 {
+		t.Fatalf("obsidian roots must not project as vscode_cache: %#v", result.Opportunities)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonText := string(encoded)
+	if !strings.Contains(jsonText, `"category":"obsidian_cache"`) {
+		t.Fatalf("JSON missing obsidian_cache: %s", jsonText)
+	}
+	for _, forbidden := range []string{
+		`"category":"vscode_cache"`, `"category":"trae_cache"`,
+		"obsidian.json", "app.asar", ".asar", "CachedData", "CachedExtensionVSIXs",
+		"Local Storage", "IndexedDB", "Service Worker", "Preferences",
+	} {
+		if strings.Contains(jsonText, forbidden) {
+			t.Fatalf("JSON contains excluded data %q: %s", forbidden, jsonText)
+		}
+	}
+
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	for _, want := range []string{
+		"Applications",
+		"application opportunity item(s)",
+		"category: obsidian_cache",
+		"Observed opportunity bytes:",
+		"Potential space: 0 bytes",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("human report missing %q:\n%s", want, report)
+		}
+	}
+	for _, forbidden := range []string{
+		"Developer tools",
+		"CachedExtensionVSIXs holds downloaded extension packages",
+	} {
+		if strings.Contains(report, forbidden) {
+			t.Fatalf("human report must not contain %q:\n%s", forbidden, report)
+		}
+	}
+
+	if len(recorder.sessions) != 1 ||
+		recorder.sessions[0].Aggregate.OpportunityCount != len(obsidianOpps) ||
+		recorder.sessions[0].Aggregate.OpportunityObservedBytes != wantBytes ||
+		len(recorder.items) != 0 {
+		t.Fatalf("history = %#v / %#v, want aggregate-only privacy", recorder.sessions, recorder.items)
+	}
+	if strings.Contains(recorder.encoded, obsidianRoot) || strings.Contains(recorder.encoded, "CachedData") {
+		t.Fatalf("history leaked application path: %s", recorder.encoded)
+	}
+}
+
+func TestDryRunObsidianMissingRootIsSilentAbsence(t *testing.T) {
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleObsidianDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryObsidianCache {
+			t.Fatalf("unexpected obsidian opportunity: %#v", opportunity)
+		}
+	}
+	if len(result.IncompleteOpportunityInspections) != 0 {
+		t.Fatalf("incomplete = %#v, want empty for missing Obsidian root", result.IncompleteOpportunityInspections)
+	}
+}
+
+func TestDryRunObsidianRunningSkipsWithoutMeasuring(t *testing.T) {
+	roaming := t.TempDir()
+	writeObsidianRoot(t, roaming, map[string]string{"Cache": "cache", "CachedData": "data"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationObsidian, State: clean.RunningApplicationStateRunning},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryObsidianCache {
+			t.Fatalf("running Obsidian produced opportunity: %#v", opportunity)
+		}
+	}
+	if result.Totals.OpportunityObservedBytes != 0 {
+		t.Fatalf("observed bytes = %d, want 0", result.Totals.OpportunityObservedBytes)
+	}
+	model := clean.NewPreviewReadModel(result)
+	report := clean.RenderPreviewReport(model)
+	if !strings.Contains(report, "Obsidian") {
+		t.Fatalf("report missing Obsidian running skip:\n%s", report)
+	}
+}
+
+func TestDryRunObsidianUnknownFailsClosed(t *testing.T) {
+	roaming := t.TempDir()
+	writeObsidianRoot(t, roaming, map[string]string{"Cache": "cache"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationObsidian, State: clean.RunningApplicationStateUnknown, Message: "snapshot failed"},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryObsidianCache {
+			t.Fatalf("unknown state produced opportunity: %#v", opportunity)
+		}
+	}
+	found := false
+	for _, err := range result.Errors {
+		if err.Code == "running_application_detection_unknown" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("errors = %#v, want unknown diagnostic", result.Errors)
+	}
+}
+
+// TestDryRunObsidianOptInConvertsRootsToCandidates asserts opt-in obsidian_cache
+// converts the plain-Electron roots to permanent candidates while a non-opted-in
+// Trae root remains an opportunity (independent gate). Obsidian has no
+// CachedExtensionVSIXs root, so no VSIX impact notice is emitted.
+func TestDryRunObsidianOptInConvertsRootsToCandidates(t *testing.T) {
+	roaming := t.TempDir()
+	writeObsidianRoot(t, roaming, map[string]string{
+		"Cache":    "cache",
+		"GPUCache": "gpu",
+	})
+	writeTraeRoot(t, roaming, map[string]string{"Cache": "trae-only"})
+	result := clean.DryRun(context.Background(), clean.Options{
+		OptIn: []string{clean.OpportunityCategoryObsidianCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		BrowserCacheDiscoveryOptions: clean.BrowserCacheDiscoveryOptions{
+			LocalAppDataDir: t.TempDir(),
+		},
+		DetectRunningApplications: idleObsidianAndTraeDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryObsidianCache)) != 0 {
+		t.Fatalf("opted-in obsidian still listed as opportunity: %#v", result.Opportunities)
+	}
+	traeOpps := opportunitiesForCategory(result, clean.OpportunityCategoryTraeCache)
+	if len(traeOpps) != 1 {
+		t.Fatalf("non-opted-in trae should remain opportunity: %#v", result.Opportunities)
+	}
+	if len(result.OptInCandidates) != 2 {
+		t.Fatalf("opt-in candidates = %#v, want 2 obsidian roots", result.OptInCandidates)
+	}
+	for _, candidate := range result.OptInCandidates {
+		if candidate.Category != clean.OpportunityCategoryObsidianCache {
+			t.Fatalf("candidate category = %q, want obsidian_cache only", candidate.Category)
+		}
+		if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			t.Fatalf("planned action = %q, want delete_permanently", candidate.PlannedAction)
+		}
+	}
+	model := clean.NewPreviewReadModel(result)
+	for _, notice := range model.Notices {
+		if notice.Kind == "opt_in_impact" && strings.Contains(notice.Message, "CachedExtensionVSIXs") {
+			t.Fatalf("obsidian must not carry a VSIX impact notice: %#v", notice)
+		}
+	}
+}
+
+func TestExecuteOptInObsidianCacheCleansWhenIdle(t *testing.T) {
+	roaming := t.TempDir()
+	obsidianRoot := writeObsidianRoot(t, roaming, map[string]string{
+		"Cache":      "cache-data",
+		"GPUCache":   "gpu",
+		"CachedData": "compiled",
+	})
+	cachePath := filepath.Join(obsidianRoot, "Cache")
+	gpuPath := filepath.Join(obsidianRoot, "GPUCache")
+	cachedDataPath := filepath.Join(obsidianRoot, "CachedData")
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
+	recorder := &recordingHistoryRecorder{}
+
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter:      recycle,
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: true,
+		HistoryRecorder:        recorder,
+		OptIn:                  []string{clean.OpportunityCategoryObsidianCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleObsidianDetector(),
+	})
+
+	if result.Totals.OptInDeletedCount != 2 {
+		t.Fatalf("OptInDeletedCount = %d, want 2 (Cache+GPUCache only); result=%#v", result.Totals.OptInDeletedCount, result)
+	}
+	if len(recycle.paths) != 0 {
+		t.Fatalf("obsidian permanent must not use Recycle Bin: %v", recycle.paths)
+	}
+	found := map[string]bool{}
+	for _, path := range permanent.paths {
+		found[path] = true
+	}
+	if !found[cachePath] || !found[gpuPath] {
+		t.Fatalf("permanent paths = %v, want Cache and GPUCache", permanent.paths)
+	}
+	if found[cachedDataPath] {
+		t.Fatalf("CachedData is not in the Obsidian allowlist and must not be deleted: %v", permanent.paths)
+	}
+	for _, item := range result.Deleted {
+		if item.Action != string(clean.DeletionActionDeletePermanently) {
+			t.Fatalf("deleted action = %q", item.Action)
+		}
+	}
+	if len(recorder.items) == 0 {
+		t.Fatalf("history items empty, want path-bearing opt-in records")
+	}
+	seenHistory := false
+	for _, item := range recorder.items {
+		if item.Path == cachePath || item.Path == gpuPath {
+			if item.Action != string(clean.DeletionActionDeletePermanently) {
+				t.Fatalf("history action = %q", item.Action)
+			}
+			seenHistory = true
+		}
+	}
+	if !seenHistory {
+		t.Fatalf("history items = %#v, want Obsidian paths", recorder.items)
+	}
+}
+
+// TestExecuteOptInObsidianCacheUnauthorizedSkipsPermanent asserts that without
+// explicit --allow-permanent, Obsidian permanent candidates are skipped with
+// permanent_deletion_not_authorized (no filesystem removal).
+func TestExecuteOptInObsidianCacheUnauthorizedSkipsPermanent(t *testing.T) {
+	roaming := t.TempDir()
+	writeObsidianRoot(t, roaming, map[string]string{"Cache": "cache", "GPUCache": "gpu"})
+	recycle := &recordingRecycleBinAdapter{}
+	permanent := &recordingPermanentRemover{}
+
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		RecycleBinAdapter:      recycle,
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: false,
+		OptIn:                  []string{clean.OpportunityCategoryObsidianCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleObsidianDetector(),
+	})
+	if len(recycle.paths) != 0 {
+		t.Fatalf("recycle must not be used for obsidian: %v", recycle.paths)
+	}
+	if len(permanent.paths) != 0 {
+		t.Fatalf("permanent remover called without auth: %v", permanent.paths)
+	}
+	foundAuthSkip := false
+	for _, skipped := range result.Skipped {
+		if skipped.Reason.Code == "permanent_deletion_not_authorized" &&
+			skipped.Rule == clean.OpportunityCategoryObsidianCache {
+			foundAuthSkip = true
+		}
+	}
+	if !foundAuthSkip {
+		t.Fatalf("skipped = %#v, want permanent_deletion_not_authorized for obsidian_cache", result.Skipped)
+	}
+	if result.Totals.OptInDeletedCount != 0 {
+		t.Fatalf("OptInDeletedCount = %d, want 0 without auth", result.Totals.OptInDeletedCount)
+	}
+}
+
+// TestDryRunIndependentEditorGatesObsidian asserts the Obsidian idle gate is
+// independent: a running Trae must not suppress idle Obsidian, and a running
+// Obsidian must not suppress idle Trae.
+func TestDryRunIndependentEditorGatesObsidian(t *testing.T) {
+	roaming := t.TempDir()
+	writeTraeRoot(t, roaming, map[string]string{"Cache": "trae-cache"})
+	writeObsidianRoot(t, roaming, map[string]string{"Cache": "obsidian-cache"})
+
+	// Running Trae must not suppress idle Obsidian.
+	result := clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		BrowserCacheDiscoveryOptions:     clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: t.TempDir()},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationTrae, State: clean.RunningApplicationStateRunning},
+				{Application: clean.ApplicationObsidian, State: clean.RunningApplicationStateIdle},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryTraeCache)) != 0 {
+		t.Fatalf("running Trae still produced opportunities: %#v", result.Opportunities)
+	}
+	obsidianOpps := opportunitiesForCategory(result, clean.OpportunityCategoryObsidianCache)
+	if len(obsidianOpps) != 1 || filepath.Base(obsidianOpps[0].Path) != "Cache" {
+		t.Fatalf("idle Obsidian opportunities = %#v, want Cache only", obsidianOpps)
+	}
+
+	// Running Obsidian must not suppress idle Trae.
+	result = clean.DryRun(context.Background(), clean.Options{
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roaming},
+		BrowserCacheDiscoveryOptions:     clean.BrowserCacheDiscoveryOptions{LocalAppDataDir: t.TempDir()},
+		DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+			return []clean.RunningApplicationState{
+				{Application: clean.ApplicationTrae, State: clean.RunningApplicationStateIdle},
+				{Application: clean.ApplicationObsidian, State: clean.RunningApplicationStateRunning},
+			}
+		},
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	if len(opportunitiesForCategory(result, clean.OpportunityCategoryObsidianCache)) != 0 {
+		t.Fatalf("running Obsidian still produced opportunities: %#v", result.Opportunities)
+	}
+	traeOpps := opportunitiesForCategory(result, clean.OpportunityCategoryTraeCache)
+	if len(traeOpps) != 1 || filepath.Base(traeOpps[0].Path) != "Cache" {
+		t.Fatalf("idle Trae opportunities = %#v, want Cache only", traeOpps)
+	}
+}
+
+// TestExecuteOptInObsidianDoesNotAuthorizeTrae asserts selecting Obsidian never
+// authorizes deletion of a Trae root (independent opt-in scope).
+func TestExecuteOptInObsidianDoesNotAuthorizeTrae(t *testing.T) {
+	roaming := t.TempDir()
+	writeObsidianRoot(t, roaming, map[string]string{"Cache": "obsidian"})
+	writeTraeRoot(t, roaming, map[string]string{"Cache": "trae"})
+	permanent := &recordingPermanentRemover{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+		PermanentRemover:       permanent,
+		AllowPermanentDeletion: true,
+		OptIn:                  []string{clean.OpportunityCategoryObsidianCache},
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleObsidianAndTraeDetector(),
+	})
+	if result.Totals.OptInDeletedCount != 1 {
+		t.Fatalf("OptInDeletedCount = %d, want 1 obsidian root", result.Totals.OptInDeletedCount)
+	}
+	for _, path := range permanent.paths {
+		relative, err := filepath.Rel(roaming, path)
+		if err != nil {
+			t.Fatalf("relative permanent path: %v", err)
+		}
+		applicationRoot := strings.Split(relative, string(filepath.Separator))[0]
+		if strings.EqualFold(applicationRoot, "Trae") {
+			t.Fatalf("obsidian opt-in deleted Trae path: %v", permanent.paths)
+		}
+	}
+}
+
+func TestDryRunObsidianProtectionSuppressesRootBeforeTotals(t *testing.T) {
+	roaming := t.TempDir()
+	obsidianRoot := writeObsidianRoot(t, roaming, map[string]string{
+		"Cache":     "cache",
+		"GPUCache":  "gpu",
+		"DawnCache": "dawn",
+	})
+	protected := filepath.Join(obsidianRoot, "GPUCache")
+	result := clean.DryRun(context.Background(), clean.Options{
+		Validator: pathsafe.NewValidator([]string{protected}),
+		ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: roaming,
+		},
+		DetectRunningApplications: idleObsidianDetector(),
+		DiscoverOpportunities:     noUserTempOpportunities,
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+	})
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryObsidianCache && opportunity.Path == protected {
+			t.Fatalf("protected root leaked: %#v", opportunity)
+		}
+	}
+	var obsidianCount int
+	var observed int64
+	for _, opportunity := range result.Opportunities {
+		if opportunity.Category == clean.OpportunityCategoryObsidianCache {
+			obsidianCount++
+			observed += opportunity.Bytes
+		}
+	}
+	if obsidianCount != 2 || observed != 9 {
+		t.Fatalf("obsidianCount=%d observed=%d, want 2 siblings totaling 9", obsidianCount, observed)
+	}
+}
+
+// TestNormalizedOptInSetAppCaches asserts the app-caches group expands to
+// exactly the Applications report-category application cache categories
+// (obsidian_cache), never editor caches, dev caches, or CLI-agent categories;
+// exact-name obsidian_cache works; cli-agents excludes both Obsidian and Trae.
+func TestNormalizedOptInSetAppCaches(t *testing.T) {
+	enabled, invalid, _ := clean.NormalizedOptInSet([]string{clean.ApplicationCacheCategoryGroup})
+	if len(invalid) != 0 {
+		t.Fatalf("expected no invalid names for app-caches, got %v", invalid)
+	}
+	if !enabled[clean.OpportunityCategoryObsidianCache] {
+		t.Fatalf("app-caches must enable obsidian_cache: %#v", enabled)
+	}
+	if len(enabled) != 1 {
+		t.Fatalf("app-caches must expand to exactly obsidian_cache, got %d: %#v", len(enabled), enabled)
+	}
+	for _, editor := range []string{
+		clean.OpportunityCategoryVSCodeCache,
+		clean.OpportunityCategoryCursorCache,
+		clean.OpportunityCategoryVSCodeInsidersCache,
+		clean.OpportunityCategoryVSCodiumCache,
+		clean.OpportunityCategoryWindsurfCache,
+		clean.OpportunityCategoryTraeCache,
+	} {
+		if enabled[editor] {
+			t.Fatalf("app-caches must not enable editor cache %q: %#v", editor, enabled)
+		}
+	}
+	if enabled[clean.DevCacheCategoryNPM] {
+		t.Fatal("app-caches must not enable dev caches")
+	}
+	if enabled[clean.CategoryGrokBuildUpdateResidue] {
+		t.Fatal("app-caches must not enable cli-agent categories")
+	}
+
+	// Exact-name obsidian_cache authorizes only Obsidian.
+	enabled, invalid, _ = clean.NormalizedOptInSet([]string{clean.OpportunityCategoryObsidianCache})
+	if len(invalid) != 0 || !enabled[clean.OpportunityCategoryObsidianCache] {
+		t.Fatalf("obsidian_cache opt-in = %#v %#v", enabled, invalid)
+	}
+	if enabled[clean.OpportunityCategoryTraeCache] {
+		t.Fatalf("obsidian_cache opt-in must not enable trae_cache: %#v", enabled)
+	}
+
+	// cli-agents excludes both Obsidian and Trae.
+	cliEnabled, cliInvalid, _ := clean.NormalizedOptInSet([]string{clean.CLIAgentCategoryGroup})
+	if len(cliInvalid) != 0 || cliEnabled[clean.OpportunityCategoryObsidianCache] || cliEnabled[clean.OpportunityCategoryTraeCache] {
+		t.Fatalf("cli-agents must not enable obsidian_cache or trae_cache: %#v", cliEnabled)
+	}
+}

@@ -37,6 +37,13 @@ const (
 	// independently registered product-scoped CLI-agent categories in catalog
 	// order. It owns no resolver, candidates, or deletion action.
 	CLIAgentCategoryGroup = "cli-agents"
+	// ApplicationCacheCategoryGroup is a selection-group token that expands to
+	// application-cache categories whose Report category is Applications
+	// (non-editor end-user application caches). It owns no resolver, candidates,
+	// or deletion action and parallels cli-agents. dev-caches continues to expand
+	// developer-cache plus editor application-cache categories (Developer tools)
+	// and must not include Applications categories.
+	ApplicationCacheCategoryGroup = "app-caches"
 	// CategoryGrokBuildUpdateResidue is defined in grok_build_update_residue.go
 	// (product-scoped CLI-agent residue; not a dev-caches member).
 )
@@ -350,6 +357,10 @@ const (
 	ApplicationWindsurf                   = "windsurf"
 	// ApplicationTrae is the Trae editor (Trae.exe), a VS Code fork.
 	ApplicationTrae                       = "trae"
+	// ApplicationObsidian is the Obsidian note-taking app (Obsidian.exe), a
+	// non-editor Electron application. Independent idle gate; never authorizes
+	// or suppresses an editor or Trae, and vice versa.
+	ApplicationObsidian                   = "obsidian"
 	// ApplicationVisualStudio is full Visual Studio (devenv.exe), not VS Code.
 	ApplicationVisualStudio               = "visual_studio"
 	ApplicationIntelliJIDEA               = "intellij_idea"

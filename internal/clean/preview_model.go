@@ -457,7 +457,7 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 
 func previewOptInCategories(result Result, selected map[string]bool) []PreviewOptInCategory {
 	summaries := make([]PreviewOptInCategory, 0)
-	for _, group := range []ReportCategory{ReportCategorySystem, ReportCategoryUserEssentials, ReportCategoryBrowsers, ReportCategoryDeveloperTools} {
+	for _, group := range []ReportCategory{ReportCategorySystem, ReportCategoryUserEssentials, ReportCategoryBrowsers, ReportCategoryDeveloperTools, ReportCategoryApplications} {
 		for _, category := range canonicalCleanupCategoryCatalog.Summaries() {
 			if category.Eligibility != CategoryEligibilityOptIn || category.ReportCategory != group {
 				continue
@@ -579,6 +579,7 @@ func previewReportCategories(model PreviewReadModel, opts PreviewReportCategoryO
 	}
 	if opts.IncludeReview {
 		add("Developer tools", developerToolReportLines(model, opts))
+		add("Applications", applicationReportLines(model, opts))
 		add("Project artifacts", projectArtifactReportLines(model, opts))
 	}
 	if opts.IncludeReview || opts.IncludeProtectionDiagnostics {
@@ -837,6 +838,33 @@ func developerToolReportLines(model PreviewReadModel, opts PreviewReportCategory
 		}
 		if opts.Expanded && suggestion.Command == "" && suggestion.NextStep != "" {
 			lines = append(lines, fmt.Sprintf("      %s", suggestion.NextStep))
+		}
+	}
+	return lines
+}
+
+// applicationReportLines renders skipped-by-default Application cache
+// opportunities whose Report category is Applications (non-editor end-user
+// application caches such as obsidian_cache). It mirrors developerToolReportLines
+// without Review suggestions: Applications categories have no tool-query probe.
+func applicationReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions) []string {
+	var lines []string
+	appOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
+		return categoryReportGroup(normalizedOpportunityCategory(opportunity.Category)) == ReportCategoryApplications
+	})
+	if len(appOpportunities) > 0 {
+		lines = append(lines, fmt.Sprintf("  Skipped by default: %d application opportunity item(s)", len(appOpportunities)+omitted))
+		lines = append(lines, opportunityLines(appOpportunities, opts)...)
+		if omitted > 0 {
+			lines = append(lines, omittedLine(omitted, model.DetailedListPath))
+		}
+	}
+	if opts.IncludeIncompleteInspections {
+		for _, incomplete := range model.IncompleteOpportunityInspections {
+			if categoryReportGroup(normalizedOpportunityCategory(incomplete.Category)) != ReportCategoryApplications {
+				continue
+			}
+			lines = append(lines, incompleteInspectionLine(incomplete, opts))
 		}
 	}
 	return lines
