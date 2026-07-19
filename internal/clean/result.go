@@ -291,27 +291,32 @@ func issue(code, message string, recoverable bool, path, ruleID string) Structur
 
 // NormalizedOptInSet returns the set of opt-in categories enabled, resolving
 // group tokens: "all" to every implemented opt-in category, "dev-caches" to
-// developer-cache plus Application cache categories, and "cli-agents" to
-// independently registered product-scoped CLI-agent categories. Group tokens
-// own no resolver, candidates, or deletion action.
+// developer-cache plus editor Application cache categories (Developer tools),
+// "app-caches" to non-editor Application cache categories (Applications), and
+// "cli-agents" to independently registered product-scoped CLI-agent categories.
+// Group tokens own no resolver, candidates, or deletion action.
 // Returns the set, a list of invalid names (if any), and the list of valid
 // names for error reporting.
 func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []string, valid []string) {
 	selectable := selectableCategoryIDs()
 	// dev-caches expands from catalog policy: developer-cache categories plus
-	// idle Application cache opportunities under Developer tools.
+	// idle Application cache opportunities under Developer tools (editors+Trae).
 	devCaches := developerToolsOptInCategoryIDs()
+	// app-caches expands application-cache categories under the Applications
+	// report category (non-editor end-user apps, initially just obsidian_cache).
+	appCaches := applicationCachesOptInCategoryIDs()
 	// cli-agents expands independently registered product-scoped CLI-agent
 	// categories in deterministic catalog order (not a mega-category).
 	cliAgents := cliAgentCategoryIDs()
-	valid = make([]string, 0, len(selectable)+3)
+	valid = make([]string, 0, len(selectable)+4)
 	valid = append(valid, selectable...)
-	valid = append(valid, DevCacheCategoryAll, CLIAgentCategoryGroup, "all")
+	valid = append(valid, DevCacheCategoryAll, ApplicationCacheCategoryGroup, CLIAgentCategoryGroup, "all")
 
 	enabled = make(map[string]bool)
 	seen := make(map[string]bool)
 	all := false
 	allDevCaches := false
+	allAppCaches := false
 	allCLIAgents := false
 	for _, name := range optIn {
 		name = strings.ToLower(name)
@@ -325,6 +330,10 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 		}
 		if name == DevCacheCategoryAll {
 			allDevCaches = true
+			continue
+		}
+		if name == ApplicationCacheCategoryGroup {
+			allAppCaches = true
 			continue
 		}
 		if name == CLIAgentCategoryGroup {
@@ -347,6 +356,11 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 		// Group tokens expand independently and compose with exact tokens.
 		if allDevCaches {
 			for _, v := range devCaches {
+				enabled[v] = true
+			}
+		}
+		if allAppCaches {
+			for _, v := range appCaches {
 				enabled[v] = true
 			}
 		}

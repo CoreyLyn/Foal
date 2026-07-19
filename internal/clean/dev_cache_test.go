@@ -53,6 +53,11 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 		if enabled[clean.CategoryGrokBuildUpdateResidue] {
 			t.Fatal("dev-caches must not enable grok-build-update-residue")
 		}
+		// Obsidian is an Applications report-category application cache; it expands
+		// via app-caches, never dev-caches.
+		if enabled[clean.OpportunityCategoryObsidianCache] {
+			t.Fatal("dev-caches must not enable obsidian_cache")
+		}
 		// Verify valid names include dev categories and dev-caches
 		found := make(map[string]bool)
 		for _, name := range valid {
@@ -68,6 +73,9 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 		}
 		if !found[clean.CLIAgentCategoryGroup] {
 			t.Fatalf("valid names missing %q", clean.CLIAgentCategoryGroup)
+		}
+		if !found[clean.ApplicationCacheCategoryGroup] {
+			t.Fatalf("valid names missing %q", clean.ApplicationCacheCategoryGroup)
 		}
 	})
 
@@ -93,6 +101,7 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.OpportunityCategoryVSCodiumCache,
 			clean.OpportunityCategoryWindsurfCache,
 			clean.OpportunityCategoryTraeCache,
+			clean.OpportunityCategoryObsidianCache,
 		}
 		expectedDevCaches := []string{
 			clean.DevCacheCategoryNPM,
@@ -126,9 +135,9 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 		if !enabled[clean.CategoryGrokBuildUpdateResidue] {
 			t.Fatal("expected grok-build-update-residue to be enabled by \"all\"")
 		}
-		// 16 opportunity + 17 developer-cache + 1 CLI-agent residue = 34
-		if len(enabled) != 16+17+1 {
-			t.Fatalf("expected 34 enabled categories (16+17+1), got %d", len(enabled))
+		// 17 opportunity + 17 developer-cache + 1 CLI-agent residue = 35
+		if len(enabled) != 17+17+1 {
+			t.Fatalf("expected 35 enabled categories (17+17+1), got %d", len(enabled))
 		}
 	})
 

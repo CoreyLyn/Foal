@@ -637,6 +637,7 @@ func assertEagerGroupOrder(t *testing.T, queue []clean.CleanupCategorySummary) {
 		clean.ReportCategorySystem,
 		clean.ReportCategoryBrowsers,
 		clean.ReportCategoryDeveloperTools,
+		clean.ReportCategoryApplications,
 	}
 	rank := map[clean.ReportCategory]int{}
 	for i, group := range wantOrder {

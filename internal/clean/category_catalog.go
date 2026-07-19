@@ -13,6 +13,7 @@ const (
 	ReportCategoryUserEssentials ReportCategory = "User essentials"
 	ReportCategoryBrowsers       ReportCategory = "Browsers"
 	ReportCategoryDeveloperTools ReportCategory = "Developer tools"
+	ReportCategoryApplications   ReportCategory = "Applications"
 	ReportCategoryProtection     ReportCategory = "Protection"
 )
 
@@ -151,7 +152,7 @@ func NewCleanupCategoryCatalog(definitions []CleanupCategoryDefinition) (Cleanup
 
 func validReportCategory(category ReportCategory) bool {
 	switch category {
-	case ReportCategorySystem, ReportCategoryUserEssentials, ReportCategoryBrowsers, ReportCategoryDeveloperTools, ReportCategoryProtection:
+	case ReportCategorySystem, ReportCategoryUserEssentials, ReportCategoryBrowsers, ReportCategoryDeveloperTools, ReportCategoryApplications, ReportCategoryProtection:
 		return true
 	default:
 		return false
@@ -312,6 +313,7 @@ var applicationCacheApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationVSCodium, displayName: "VSCodium", executables: []string{"VSCodium.exe"}},
 	{id: ApplicationWindsurf, displayName: "Windsurf", executables: []string{"Windsurf.exe"}},
 	{id: ApplicationTrae, displayName: "Trae", executables: []string{"Trae.exe"}},
+	{id: ApplicationObsidian, displayName: "Obsidian", executables: []string{"Obsidian.exe"}},
 }
 
 // categoryCatalogEntry is the private canonical registration point. Every
@@ -553,7 +555,7 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 28 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
+	// 30 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
 	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
 	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
@@ -826,6 +828,27 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			DeletionActionDeletePermanently,
 		),
 	), staticPreviewSafetyNote(grokBuildUpdateResidueOptInImpactNotice)),
+	// Obsidian: non-editor Electron note-taking app under the Applications report
+	// category (not Developer tools). Carries its own plain-Electron regenerating-
+	// cache allowlist (Cache, Code Cache, GPUCache, DawnCache, DawnGraphiteCache,
+	// DawnWebGPUCache; single-segment roots only) under %APPDATA%\obsidian.
+	// obsidian.json, the .asar bundle, Local Storage, IndexedDB, Service Worker,
+	// and Preferences are never candidates. Independent idle gate; selecting
+	// Obsidian never authorizes or suppresses an editor or Trae, and vice versa.
+	// Registered after the Developer tools categories so the eager preview queue
+	// groups Applications after Developer tools, matching report rendering order.
+	withPreviewSafetyNote(applicationCacheCategoryEntry(
+		categoryDefinition(
+			OpportunityCategoryObsidianCache,
+			"Obsidian cache",
+			ReportCategoryApplications,
+			CategoryEligibilityOptIn,
+			RunningApplicationPolicyApplicationIdleBeforeAfter,
+			DeletionActionDeletePermanently,
+		),
+		applicationCachePolicyObsidian,
+		ApplicationObsidian,
+	), applicationCachePreviewSafetyNote),
 	// Non-executable permission boundary: actionless and cannot enter execution.
 	nonExecutableCategoryEntry(categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable, "")),
 }
@@ -1063,7 +1086,9 @@ func developerCacheCategoryIDs() []string {
 
 // developerToolsOptInCategoryIDs returns Developer tools opt-in categories for
 // the `dev-caches` group: registered developer-cache categories plus idle
-// Application cache opportunity categories (derived from catalog policy).
+// Application cache opportunity categories under Developer tools (the VS Code-
+// family editors plus Trae). It MUST NOT include Applications report-category
+// application-cache categories (Obsidian); those expand via `app-caches`.
 // CLI-agent product categories are intentionally excluded (updater residue is
 // not a cache).
 func developerToolsOptInCategoryIDs() []string {
@@ -1079,6 +1104,27 @@ func developerToolsOptInCategoryIDs() []string {
 			continue
 		}
 		if entry.resolverKind == categoryResolverDeveloperCache || entry.resolverKind == categoryResolverApplicationCache {
+			identifiers = append(identifiers, entry.definition.Identifier)
+		}
+	}
+	return identifiers
+}
+
+// applicationCachesOptInCategoryIDs returns application-cache opt-in categories
+// whose Report category is Applications for the `app-caches` selection group
+// (initially just obsidian_cache), in deterministic catalog order. The token
+// owns no resolver, candidates, or deletion action and parallels cli-agents.
+// Editor application-cache categories stay under Developer tools / dev-caches.
+func applicationCachesOptInCategoryIDs() []string {
+	var identifiers []string
+	for _, entry := range canonicalCategoryEntries {
+		if entry.definition.Eligibility != CategoryEligibilityOptIn {
+			continue
+		}
+		if entry.definition.ReportCategory != ReportCategoryApplications {
+			continue
+		}
+		if entry.resolverKind == categoryResolverApplicationCache {
 			identifiers = append(identifiers, entry.definition.Identifier)
 		}
 	}

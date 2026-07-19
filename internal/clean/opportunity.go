@@ -29,6 +29,7 @@ const (
 	OpportunityCategoryVSCodiumCache          = "vscodium_cache"
 	OpportunityCategoryWindsurfCache          = "windsurf_cache"
 	OpportunityCategoryTraeCache              = "trae_cache"
+	OpportunityCategoryObsidianCache          = "obsidian_cache"
 	OpportunityStatus                         = "skipped_by_default"
 	OpportunityReason                         = "requires_explicit_opt_in"
 	UserTempOpportunityStatus                 = OpportunityStatus

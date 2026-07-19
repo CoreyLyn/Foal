@@ -77,7 +77,7 @@ type CategoryResolution struct {
 
 // CompileAdditiveCategoryPlan builds the CLI-compatible plan: every default
 // category plus opt-in tokens resolved through NormalizedOptInSet (aliases and
-// group tokens such as dev-caches / cli-agents / all are accepted).
+// group tokens such as dev-caches / app-caches / cli-agents / all are accepted).
 func CompileAdditiveCategoryPlan(optInTokens []string) (CategoryPlan, []string) {
 	enabled, invalid, _ := NormalizedOptInSet(optInTokens)
 	categories := make([]string, 0, len(canonicalCategoryEntries))
@@ -234,7 +234,7 @@ func lookupExactCategoryIdentifier(normalized string) (summary CleanupCategorySu
 }
 
 func isGroupCategoryToken(normalized string) bool {
-	return normalized == "all" || normalized == DevCacheCategoryAll || normalized == CLIAgentCategoryGroup
+	return normalized == "all" || normalized == DevCacheCategoryAll || normalized == ApplicationCacheCategoryGroup || normalized == CLIAgentCategoryGroup
 }
 
 func isPathBearingCategoryInput(value string) bool {

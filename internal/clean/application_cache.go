@@ -18,6 +18,7 @@ const (
 	applicationCachePolicyVSCodium       = "vscodium"
 	applicationCachePolicyWindsurf       = "windsurf"
 	applicationCachePolicyTrae           = "trae"
+	applicationCachePolicyObsidian       = "obsidian"
 	// CachedExtensionVSIXsRootName is the exact allowlisted relative root that
 	// stores downloaded VSIX packages (not installed extensions).
 	CachedExtensionVSIXsRootName = "CachedExtensionVSIXs"
@@ -32,6 +33,21 @@ var applicationCacheAllowlistedRelativeRoots = []string{
 	CachedExtensionVSIXsRootName,
 	"Code Cache",
 	"GPUCache",
+	"DawnGraphiteCache",
+	"DawnWebGPUCache",
+}
+
+// obsidianCacheAllowlistedRelativeRoots is the plain-Electron regenerating-cache
+// allowlist for Obsidian. Single-segment roots only. It excludes CachedData and
+// CachedExtensionVSIXs (no V8-code-cache or VSIX proof for a non-editor app) and
+// every state/config/bundle directory: obsidian.json, the app .asar bundle, Local
+// Storage, IndexedDB, Service Worker, and Preferences must never be candidates.
+// DawnCache is included; Service Worker\CacheStorage is multi-segment and deferred.
+var obsidianCacheAllowlistedRelativeRoots = []string{
+	"Cache",
+	"Code Cache",
+	"GPUCache",
+	"DawnCache",
 	"DawnGraphiteCache",
 	"DawnWebGPUCache",
 }
@@ -101,6 +117,19 @@ var applicationCachePolicies = map[string]applicationCachePolicy{
 		application:        ApplicationTrae,
 		roamingAppDataPath: []string{"Trae"},
 		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+	},
+	// Obsidian: non-editor Electron note-taking app; %APPDATA%\obsidian holds a
+	// plain-Electron regenerating-cache layout. Obsidian.exe is the Windows
+	// launcher. Carries its own plain-Electron allowlist (no CachedData/
+	// CachedExtensionVSIXs; single-segment roots only) so obsidian.json, the
+	// .asar bundle, Local Storage, IndexedDB, Service Worker, and Preferences
+	// are never candidates. Independent idle gate; never cross-authorizes an
+	// editor or Trae.
+	applicationCachePolicyObsidian: {
+		category:           OpportunityCategoryObsidianCache,
+		application:        ApplicationObsidian,
+		roamingAppDataPath: []string{"obsidian"},
+		relativeRoots:      append([]string(nil), obsidianCacheAllowlistedRelativeRoots...),
 	},
 }
 

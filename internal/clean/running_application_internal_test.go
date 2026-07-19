@@ -80,6 +80,7 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 		ApplicationVSCodium,
 		ApplicationWindsurf,
 		ApplicationTrae,
+		ApplicationObsidian,
 	}
 	if len(states) != len(wantOrder) {
 		t.Fatalf("states = %#v, want %d entries", states, len(wantOrder))
