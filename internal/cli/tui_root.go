@@ -39,8 +39,8 @@ var mainMenuItems = []mainMenuItem{
 	{
 		title:       "Analyze",
 		command:     "analyze",
-		description: "Inspect disk usage through the existing read-only command path.",
-		selection:   "Analyze TUI path\nAnalyze is available through `foal analyze --json <path>`; the read-only view is not built in this slice.\nNo files were changed.",
+		description: "Read-only directory insight; no cleanup or deletion actions.",
+		selection:   "",
 	},
 	{
 		title:       "Status",
@@ -167,7 +167,7 @@ func (m rootModel) updateMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenCleanPreview
 			m.clean = newEagerCleanModel(m.width, m.height)
 			return m, m.clean.start()
-		case "uninstall", "status", "history":
+		case "uninstall", "status", "history", "analyze":
 			command := mainMenuItems[m.selected].command
 			m.screen = screenViewer
 			m.viewer = newViewerModel(command, m.width, m.height)
@@ -196,21 +196,30 @@ func (m rootModel) updateCleanPreviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 }
 
 func (m rootModel) updateViewerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	key := msg.String()
+	switch key {
 	case "ctrl+c":
 		return m, tea.Interrupt
 	case "q", "esc":
+		// If editing path, escape cancels edit; otherwise quit
+		if m.viewer.editingPath {
+			cmd := m.viewer.handleKey(key)
+			return m, cmd
+		}
 		return m, tea.Quit
 	case "b":
+		// If editing path, b is just a character; otherwise go back
+		if m.viewer.editingPath {
+			cmd := m.viewer.handleKey(key)
+			return m, cmd
+		}
 		m.screen = screenMenu
 		m.notice = ""
 		return m, nil
-	case "r":
-		m.viewer.beginReload()
-		return m, loadViewerCmd(m.viewer.command)
 	}
-	m.viewer.handleKey(msg.String())
-	return m, nil
+	// All other keys (including 'r' reload, 'e' edit path, scrolling, etc.) go to the viewer
+	cmd := m.viewer.handleKey(key)
+	return m, cmd
 }
 
 // content is the plain text frame. It is separate from View so the nil-input
