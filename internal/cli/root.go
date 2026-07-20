@@ -193,8 +193,7 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			return writeJSON(stdout, envelope{Command: command, Result: result})
 		}
 
-		_, _ = fmt.Fprintf(stdout, "Foal analyze\nRoot: %s\nFiles: %d\nDirectories: %d\nSkipped: %d\n",
-			result.Root, result.Totals.FileCount, result.Totals.DirectoryCount, len(result.Skipped))
+		_, _ = fmt.Fprint(stdout, analyze.RenderHumanReport(result))
 		return exitOK
 	}
 

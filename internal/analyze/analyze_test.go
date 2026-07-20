@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -264,4 +265,127 @@ func TestRunNoHistory(t *testing.T) {
 	// No history assertions needed - the fact that analyze doesn't import history
 	// and has no history-related code is the contract. If that changes, this test
 	// should be updated to verify no sessions are created.
+}
+
+func TestRenderHumanReportIncludesStatusOkAndTotals(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "test.txt"), []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	result := RunCompat(root)
+	report := RenderHumanReport(result)
+
+	wantContains := []string{
+		"Foal analyze",
+		"Root: " + root,
+		"Status: ok",
+		"Totals: 7 bytes, 1 files, 1 directories",
+		"Skipped: 0",
+	}
+	for _, want := range wantContains {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
+func TestRenderHumanReportStatusIncompleteClearlyStatesIncomplete(t *testing.T) {
+	result := Result{
+		Status: StatusIncomplete,
+		Root:   `C:\test\root`,
+		Totals: Totals{Bytes: 100, FileCount: 5, DirectoryCount: 3},
+	}
+	report := RenderHumanReport(result)
+	if !strings.Contains(report, "Status: incomplete (partial results only, no full tree size)") {
+		t.Fatalf("incomplete status missing:\n%s", report)
+	}
+	if strings.Contains(report, "Status: ok") {
+		t.Fatalf("incomplete report should not contain ok:\n%s", report)
+	}
+}
+
+func TestRenderHumanReportIncludesTopChildrenWithSizeKindClassification(t *testing.T) {
+	result := Result{
+		Status: StatusOK,
+		Root:   `C:\test\root`,
+		Totals: Totals{Bytes: 1000, FileCount: 10, DirectoryCount: 5},
+		TopChildren: []ChildResult{
+			{
+				Name:           "node_modules",
+				Kind:           "directory",
+				Classification: "project_artifact_clue",
+				Bytes:          500,
+			},
+			{
+				Name:           "target",
+				Kind:           "directory",
+				Classification: "project_artifact_clue",
+				Bytes:          300,
+			},
+			{
+				Name:           "source",
+				Kind:           "directory",
+				Bytes:          200,
+			},
+		},
+	}
+	report := RenderHumanReport(result)
+
+	wantContains := []string{
+		"Top children by size:",
+		"directory",
+		"500",
+		"node_modules",
+		"project_artifact_clue",
+		"target",
+		"200",
+		"source",
+	}
+	for _, want := range wantContains {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
+func TestRenderHumanReportIncludesPurgeHandoffWhenArtifactCluePresent(t *testing.T) {
+	result := Result{
+		Status: StatusOK,
+		Root:   `C:\test\root`,
+		Totals: Totals{Bytes: 1000, FileCount: 10, DirectoryCount: 5},
+		TopChildren: []ChildResult{
+			{
+				Name:           "node_modules",
+				Kind:           "directory",
+				Classification: "project_artifact_clue",
+				Bytes:          500,
+			},
+		},
+	}
+	report := RenderHumanReport(result)
+	if !strings.Contains(report, "foal purge") {
+		t.Fatalf("report missing purge handoff copy:\n%s", report)
+	}
+	if !strings.Contains(report, `C:\test\root`) {
+		t.Fatalf("report missing root in purge handoff:\n%s", report)
+	}
+}
+
+func TestRenderHumanReportDoesNotIncludePurgeHandoffWhenNoArtifactClues(t *testing.T) {
+	result := Result{
+		Status: StatusOK,
+		Root:   `C:\test\root`,
+		Totals: Totals{Bytes: 1000, FileCount: 10, DirectoryCount: 5},
+		TopChildren: []ChildResult{
+			{
+				Name:  "source",
+				Kind:  "directory",
+				Bytes: 500,
+			},
+		},
+	}
+	report := RenderHumanReport(result)
+	if strings.Contains(report, "foal purge") {
+		t.Fatalf("report should not include purge handoff when no clues:\n%s", report)
+	}
 }
