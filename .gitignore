@@ -4,3 +4,4 @@
 /.worktrees
 /dist/
 /.release-verify
+/.gocache-review
