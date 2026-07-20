@@ -102,6 +102,75 @@ func TestRenderPreviewReportShowsCoreSectionsInReviewOrder(t *testing.T) {
 	}
 }
 
+func TestRenderPreviewReportShowsPlannedExecutionClassPerApplication(t *testing.T) {
+	result := WithReviewSections(Result{
+		Status: "preview",
+		Applications: []Application{{
+			Name:                        "Quiet App",
+			QuietUninstallCommand:       `MsiExec.exe /X{GUID} /qn`,
+			InteractiveUninstallCommand: `MsiExec.exe /X{GUID}`,
+			InstallLocation:             `C:\Program Files\Quiet App`,
+			PlannedClass:                PlannedClassOfficialUninstaller,
+			PlannedReason:               "registry-advertised uninstall command is available",
+			Evidence:                    []string{"windows_registry_uninstall_keys:HKLM64"},
+			Confidence:                  "medium",
+			Ownership:                   "unknown",
+		}, {
+			Name:            "Portable App",
+			InstallLocation: `C:\Apps\PortableApp`,
+			PlannedClass:    PlannedClassPortableDirectoryRemoval,
+			PlannedReason:   "no uninstall command; install location is present",
+			Evidence:        []string{"windows_registry_uninstall_keys:HKCU"},
+			Confidence:      "medium",
+			Ownership:       "unknown",
+		}, {
+			Name:          "Bare App",
+			PlannedClass:  PlannedClassNotExecutable,
+			PlannedReason: "no uninstall command and no install location",
+			Evidence:      []string{"windows_registry_uninstall_keys:HKLM64"},
+			Confidence:    "medium",
+			Ownership:     "unknown",
+		}, {
+			Name:                  "Foal",
+			QuietUninstallCommand: `MsiExec.exe /X{FOAL} /qn`,
+			PlannedClass:          PlannedClassHardExclusion,
+			PlannedReason:         "Foal never offers this application for Uninstall execution",
+			Evidence:              []string{"windows_registry_uninstall_keys:HKLM64"},
+			Confidence:            "medium",
+			Ownership:             "unknown",
+		}},
+		Execution: previewOnlyExecution(),
+	})
+
+	output := RenderPreviewReport(result)
+
+	for _, want := range []string{
+		"Official uninstaller invocation",
+		"Portable directory removal",
+		"Not executable",
+		"Uninstall hard exclusion",
+		`C:\Program Files\Quiet App`,
+		`MsiExec.exe /X{GUID} /qn`,
+		`C:\Apps\PortableApp`,
+		"Foal never offers this application for Uninstall execution",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{
+		"foal uninstall --execute",
+		"Run uninstaller",
+		"Stop process",
+		"Delete leftover",
+		"Actions:",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("output contains unsupported execution wording %q:\n%s", forbidden, output)
+		}
+	}
+}
+
 func TestRenderPreviewReportUsesCapabilityAwareEmptyStatesAndConfidenceNote(t *testing.T) {
 	result := WithReviewSections(Result{
 		Status: "preview",
@@ -267,6 +336,82 @@ func TestRenderPreviewReportCapsEverySectionAtTenEntries(t *testing.T) {
 		if !strings.Contains(sectionText, "  1 omitted. See foal uninstall --json.") {
 			t.Fatalf("%s missing JSON overflow line:\n%s", section, sectionText)
 		}
+	}
+}
+
+func TestReviewEvidencePopulatesPlannedClassAndUninstallEvidence(t *testing.T) {
+	result := ReviewEvidence(Evidence{
+		Applications: []ApplicationEvidence{
+			{
+				Name:                        "Installer App",
+				QuietUninstallCommand:       `MsiExec.exe /X{A} /qn`,
+				InteractiveUninstallCommand: `MsiExec.exe /X{A}`,
+				InstallLocation:             `C:\Program Files\InstallerApp`,
+				Sources:                     []string{"windows_registry_uninstall_keys:HKLM64"},
+			},
+			{
+				Name:            "Portable App",
+				InstallLocation: `C:\Apps\PortableApp`,
+				Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
+			},
+			{
+				Name:    "Bare App",
+				Sources: []string{"windows_registry_uninstall_keys:HKLM64"},
+			},
+			{
+				Name:                  "Foal",
+				QuietUninstallCommand: `MsiExec.exe /X{FOAL} /qn`,
+				Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+			},
+		},
+	})
+
+	if len(result.Applications) != 4 {
+		t.Fatalf("applications = %d, want 4", len(result.Applications))
+	}
+	want := []struct {
+		name, class, quiet, interactive, install string
+	}{
+		{"Installer App", PlannedClassOfficialUninstaller, `MsiExec.exe /X{A} /qn`, `MsiExec.exe /X{A}`, `C:\Program Files\InstallerApp`},
+		{"Portable App", PlannedClassPortableDirectoryRemoval, "", "", `C:\Apps\PortableApp`},
+		{"Bare App", PlannedClassNotExecutable, "", "", ""},
+		// Foal is hard-excluded: it stays listed so the user sees Foal
+		// recognized itself, but its executable command evidence is
+		// suppressed so it is not presented as an executable target.
+		{"Foal", PlannedClassHardExclusion, "", "", ""},
+	}
+	for i, w := range want {
+		app := result.Applications[i]
+		if app.Name != w.name {
+			t.Fatalf("app[%d] name = %q, want %q", i, app.Name, w.name)
+		}
+		if app.PlannedClass != w.class {
+			t.Fatalf("app[%d] %q planned_class = %q, want %q", i, w.name, app.PlannedClass, w.class)
+		}
+		if app.QuietUninstallCommand != w.quiet {
+			t.Fatalf("app[%d] %q quiet = %q, want %q", i, w.name, app.QuietUninstallCommand, w.quiet)
+		}
+		if app.InteractiveUninstallCommand != w.interactive {
+			t.Fatalf("app[%d] %q interactive = %q, want %q", i, w.name, app.InteractiveUninstallCommand, w.interactive)
+		}
+		if app.InstallLocation != w.install {
+			t.Fatalf("app[%d] %q install = %q, want %q", i, w.name, app.InstallLocation, w.install)
+		}
+		if app.PlannedReason == "" {
+			t.Fatalf("app[%d] %q planned reason = empty, want non-empty", i, w.name)
+		}
+	}
+	// Hard exclusion must not be presented as an executable target even when a
+	// quiet uninstall command is present.
+	if result.Applications[3].PlannedClass != PlannedClassHardExclusion {
+		t.Fatalf("Foal planned class = %q, want hard_exclusion", result.Applications[3].PlannedClass)
+	}
+	// Preview-only guarantee: review surfaces the plan but authorizes nothing.
+	if result.Execution.Allowed {
+		t.Fatal("execution allowed = true, want false")
+	}
+	if len(result.Execution.Actions) != 0 {
+		t.Fatalf("execution actions = %#v, want empty", result.Execution.Actions)
 	}
 }
 

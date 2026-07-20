@@ -18,6 +18,14 @@ type registryUninstallRoot struct {
 	source string
 }
 
+// registryKeyReader is the subset of registry.Key used to read a single
+// uninstall entry's values. Defining it as an interface keeps entry parsing
+// testable without opening a real Windows registry key.
+type registryKeyReader interface {
+	GetStringValue(name string) (string, uint32, error)
+	GetIntegerValue(name string) (uint64, uint32, error)
+}
+
 func discoverPlatformUninstallEvidence() DiscoveryResult {
 	roots := []registryUninstallRoot{
 		{key: registry.LOCAL_MACHINE, path: registryUninstallPath, access: registry.READ | registry.WOW64_64KEY, source: "windows_registry_uninstall_keys:HKLM64"},
@@ -77,23 +85,36 @@ func readRegistryApplication(parent registry.Key, subkeyName string, access uint
 	}
 	defer key.Close()
 
+	app, ok := readApplicationEvidenceFromKey(key, source)
+	return app, ok, nil
+}
+
+// readApplicationEvidenceFromKey parses one registry uninstall entry from an
+// already-open key. It returns ok=false for hidden system components, entries
+// with a parent key, or entries without a DisplayName; otherwise it surfaces
+// the quiet and interactive uninstall commands and install location so the
+// review layer can classify the app's planned execution class.
+func readApplicationEvidenceFromKey(key registryKeyReader, source string) (ApplicationEvidence, bool) {
 	if hiddenRegistryApplication(key) {
-		return ApplicationEvidence{}, false, nil
+		return ApplicationEvidence{}, false
 	}
 	name := registryStringValue(key, "DisplayName")
 	if name == "" {
-		return ApplicationEvidence{}, false, nil
+		return ApplicationEvidence{}, false
 	}
 
 	return ApplicationEvidence{
-		Name:      name,
-		Version:   registryStringValue(key, "DisplayVersion"),
-		Publisher: registryStringValue(key, "Publisher"),
-		Sources:   []string{source},
-	}, true, nil
+		Name:                        name,
+		Version:                     registryStringValue(key, "DisplayVersion"),
+		Publisher:                   registryStringValue(key, "Publisher"),
+		QuietUninstallCommand:       registryStringValue(key, "QuietUninstallString"),
+		InteractiveUninstallCommand: registryStringValue(key, "UninstallString"),
+		InstallLocation:             registryStringValue(key, "InstallLocation"),
+		Sources:                     []string{source},
+	}, true
 }
 
-func hiddenRegistryApplication(key registry.Key) bool {
+func hiddenRegistryApplication(key registryKeyReader) bool {
 	systemComponent, _, err := key.GetIntegerValue("SystemComponent")
 	if err == nil && systemComponent == 1 {
 		return true
@@ -101,7 +122,7 @@ func hiddenRegistryApplication(key registry.Key) bool {
 	return registryStringValue(key, "ParentKeyName") != ""
 }
 
-func registryStringValue(key registry.Key, name string) string {
+func registryStringValue(key registryKeyReader, name string) string {
 	value, _, err := key.GetStringValue(name)
 	if err != nil {
 		return ""
