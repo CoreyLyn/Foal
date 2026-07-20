@@ -224,6 +224,42 @@ _Avoid_: NuGet HTTP cache, project packages folder, low-impact cleanup, guarante
 The bytes represented by opt-in candidates in a clean preview or execution, reported as a total separate from `Potential space` and `Observed opportunity bytes`. Opt-in reclaimable bytes are never merged into `Potential space`, and `Observed opportunity bytes` excludes any opportunity that has become an opt-in candidate for the run.
 _Avoid_: Potential space, observed opportunity bytes, total hinted space
 
+**Analyze (directory insight)**:
+A read-only Foal command that measures an analysis root's directory totals and top children by size, and may attach only proven high-confidence classification clues. It never deletes, never contributes to Potential space, and is not a Clean opportunity scanner or recursive project-artifact finder.
+_Avoid_: cleanup opportunity scanner, project scanner, disk-wide cleaner, Mole disk analyzer parity
+
+**Analysis root**:
+The single path Analyze measures. Omitting the path means the process current working directory after absolute resolution. Volume roots, well-known system trees (Windows, Program Files), the current user's profile root, UNC, and other pathsafe user-scan-root rejections fail closed before scanning; ordinary project paths under the profile remain allowed.
+_Avoid_: implied multi-root, disk-wide default, purge multi-root parity, scanning the whole user profile as one root
+
+**Analyze incomplete scan**:
+An Analyze run that stopped because it hit the same 100,000-descendant Opportunity inspection limit (or cooperative cancellation) before finishing the tree. Totals and top children then describe only what was safely inspected; the result must not be presented as a complete directory size. JSON and human/TUI surfaces use top-level `status=incomplete` for this case (not `ok` with a side flag, and not a hard command error).
+_Avoid_: silent partial totals, estimated full-tree size, treating over-limit as full success, Analyze-specific higher ceiling by default, incomplete as non-zero crash for ordinary over-limit stops
+
+**Analyze human report**:
+The non-JSON presentation of an Analyze result that surfaces the same core insight as JSON: analysis root, complete-or-incomplete status, totals including bytes, top children with size/kind/classification clues, and a skipped summary. It remains read-only guidance and must not invent cleanup actions or Potential space. Top children stay a fixed top-10 by bytes (name tie-break); no user-facing `--top` knob in this design slice.
+_Avoid_: JSON-only detail, Mole-style cleanup opportunity report, execute/delete affordances, configurable top-N in the first slice
+
+**Analyze protection non-intervention**:
+User Protection rules do not suppress, skip, or reshape Analyze measurement. Analyze still skips only filesystem barriers (permission, reparse, missing, read errors). Protection continues to deny cleanup candidates and path-backed review discoveries on Clean/purge only.
+_Avoid_: protection hides disk usage, analyze respects protection as scan deny-list, read-only scan implies delete authorization
+
+**Analyze TUI viewer**:
+A read-only Command viewer that runs Analyze for a chosen analysis root, renders the Analyze human report (or equivalent read model) as scrollable text with reload, and exposes no cleanup, purge, selection, or permanent-deletion affordance. The default analysis root is the process current working directory; the viewer may accept a simple path edit or paste to rescan another allowed root, without becoming a directory browser, overview launcher, or delete surface.
+_Avoid_: mini-Clean, category selection, path-browser-as-delete-picker, Mole overview parity, TUI-owned scan engine separate from CLI analyze, ad hoc Trash deletion from Analyze
+
+**Analyze classification clue**:
+A high-confidence review label attached to a measured top child of an analysis root (today: `project_artifact_clue` only). Clues explain "what this large child looks like"; they are not cleanup candidates, purge selections, or Potential space. Near-term design keeps this single classification; no expanded name allowlist and no new clue kinds without separate proof.
+_Avoid_: cleanup candidate, opt-in category, reclaimable bytes, nested deep-scan hit, large-file or old-download clue types in this slice
+
+**Analyze purge handoff**:
+Read-only next-step copy on the Analyze human report and Analyze TUI viewer when at least one project artifact clue is present, pointing at `foal purge <root>` for explicit-root preview and permanent reclaim. It never launches purge, selects candidates, or authorizes deletion from Analyze.
+_Avoid_: one-click purge from Analyze, Analyze-owned deletion, treating clues as purge selection
+
+**Analyze history non-recording**:
+Analyze runs do not create Foal History sessions. History remains for confirmed or mutating cleanup-class operations; repeatable read-only directory insight is not operation history.
+_Avoid_: analyze session history, path-bearing analyze audit log, treating insight as cleanup provenance
+
 **Project artifact clue**:
 A review clue for rebuildable project directories or build outputs. Foal may label matching **top children** of an analyzed path via `foal analyze` (`classification=project_artifact_clue`), and Clean dry-run may show a presentation-only pointer toward `foal analyze` / `foal purge`. Clues never become Clean candidates or contribute to Potential space.
 _Avoid_: default project scan, default clean candidate, ordinary Clean opt-in row
@@ -266,8 +302,8 @@ The no-argument `foal` behavior in an interactive terminal, launching the Foal m
 _Avoid_: blocking non-TTY scripts, replacing help semantics everywhere, implicit command execution
 
 **Main menu command entries**:
-Top-level Foal main menu items that expose the implemented command map, where Clean opens its interactive preview and confirmed-action flow, Uninstall, Status, and History open read-only TUI views, and Analyze and future extensions remain command navigation placeholders until their views are designed.
-_Avoid_: pretending every command has a completed TUI, implicit execution, hiding unavailable capability
+Top-level Foal main menu items that expose the implemented command map, where Clean opens its interactive preview and confirmed-action flow, and Uninstall, Status, History, and Analyze open read-only TUI views (Analyze via Command viewer over the Analyze human report / read model). Future extensions may remain placeholders until designed.
+_Avoid_: pretending every command has a completed TUI, implicit execution, hiding unavailable capability, Analyze as a cleanup or purge surface
 
 **Command viewer**:
 A shared read-only TUI shell that renders one command's existing report or read model as scrollable text with reload, without per-command interaction logic or any execution affordance.

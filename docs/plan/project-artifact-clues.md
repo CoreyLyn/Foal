@@ -54,3 +54,7 @@ The read-only analyze labels and Clean presentation-only pointer in this plan re
 ## How to extend later
 
 Further allowlist entries, selection filters, or a purge TUI entry need their own issue/tests. Do not fold project-artifact deletion into ordinary Clean opt-in rows without reopening ADR 0019.
+
+## Related
+
+Broader Analyze product identity (directory insight, incomplete scan, human report, TUI viewer, non-deletion): `docs/plan/analyze-directory-insight.md` and ADR 0025.
