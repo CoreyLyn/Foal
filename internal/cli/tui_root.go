@@ -13,6 +13,7 @@ type tuiScreen int
 const (
 	screenMenu tuiScreen = iota
 	screenCleanPreview
+	screenUninstallPreview
 	screenViewer
 )
 
@@ -33,7 +34,7 @@ var mainMenuItems = []mainMenuItem{
 	{
 		title:       "Uninstall",
 		command:     "uninstall",
-		description: "Review installed application evidence; preview-only, no uninstallers are executed.",
+		description: "Multi-select installed apps, confirm the plan, and run shared Uninstall execute.",
 		selection:   "",
 	},
 	{
@@ -63,13 +64,14 @@ var mainMenuItems = []mainMenuItem{
 }
 
 type rootModel struct {
-	screen   tuiScreen
-	selected int
-	notice   string
-	clean    eagerCleanModel
-	viewer   viewerModel
-	width    int
-	height   int
+	screen    tuiScreen
+	selected  int
+	notice    string
+	clean     eagerCleanModel
+	uninstall uninstallModel
+	viewer    viewerModel
+	width     int
+	height    int
 }
 
 func newRootModel() rootModel {
@@ -87,6 +89,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.clean.setSize(msg.Width, msg.Height)
+		m.uninstall.setSize(msg.Width, msg.Height)
 		m.viewer.setSize(msg.Width, msg.Height)
 		return m, nil
 	case eagerPreviewStartedMsg:
@@ -133,6 +136,18 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clean.applyExactExecuted(msg)
 		return m, nil
+	case uninstallPreviewLoadedMsg:
+		if m.screen != screenUninstallPreview {
+			return m, nil
+		}
+		m.uninstall.applyPreviewLoaded(msg)
+		return m, nil
+	case uninstallExecutedMsg:
+		if m.screen != screenUninstallPreview {
+			return m, nil
+		}
+		m.uninstall.applyExecuted(msg)
+		return m, nil
 	case viewerLoadedMsg:
 		m.viewer.applyLoaded(msg)
 		return m, nil
@@ -140,6 +155,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.screen {
 		case screenCleanPreview:
 			return m.updateCleanPreviewKey(msg)
+		case screenUninstallPreview:
+			return m.updateUninstallPreviewKey(msg)
 		case screenViewer:
 			return m.updateViewerKey(msg)
 		}
@@ -167,7 +184,14 @@ func (m rootModel) updateMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenCleanPreview
 			m.clean = newEagerCleanModel(m.width, m.height)
 			return m, m.clean.start()
-		case "uninstall", "status", "history", "analyze":
+		case "uninstall":
+			// Uninstall TUI: multi-select + confirmation through shared
+			// Execute. The TUI is an adapter only; it owns no uninstaller,
+			// path safety, Protection, elevation, or deletion logic.
+			m.screen = screenUninstallPreview
+			m.uninstall = newUninstallModel(m.width, m.height)
+			return m, m.uninstall.start()
+		case "status", "history", "analyze":
 			command := mainMenuItems[m.selected].command
 			m.screen = screenViewer
 			m.viewer = newViewerModel(command, m.width, m.height)
@@ -190,6 +214,21 @@ func (m rootModel) updateCleanPreviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 	case eagerPreviewNavQuit:
 		return m, tea.Quit
 	case eagerPreviewNavInterrupt:
+		return m, tea.Interrupt
+	}
+	return m, cmd
+}
+
+func (m rootModel) updateUninstallPreviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	nav, cmd := m.uninstall.handleKey(msg.String())
+	switch nav {
+	case uninstallNavMenu:
+		m.screen = screenMenu
+		m.notice = ""
+		return m, nil
+	case uninstallNavQuit:
+		return m, tea.Quit
+	case uninstallNavInterrupt:
 		return m, tea.Interrupt
 	}
 	return m, cmd
@@ -228,6 +267,8 @@ func (m rootModel) content() string {
 	switch m.screen {
 	case screenCleanPreview:
 		return m.clean.content()
+	case screenUninstallPreview:
+		return m.uninstall.content()
 	case screenViewer:
 		return m.viewer.content()
 	}
