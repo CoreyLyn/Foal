@@ -6,9 +6,10 @@ import (
 )
 
 // RenderExecuteReport formats a human execute summary without claiming
-// free-space recovery, secure erasure, or leftover deletion. It mirrors the
-// Purge execute report style so users see one consistent shape across
-// mutating commands.
+// free-space recovery, secure erasure, or permanent deletion for leftovers.
+// It mirrors the Purge execute report style so users see one consistent
+// shape across mutating commands. Leftover path outcomes are rendered per
+// app when present.
 func RenderExecuteReport(result ExecuteResult) string {
 	var b strings.Builder
 	b.WriteString("Foal uninstall\n")
@@ -50,7 +51,29 @@ func RenderExecuteReport(result ExecuteResult) string {
 		writeField(&b, "attempted command", app.AttemptedCommand)
 		writeField(&b, "skipped reason", app.SkippedReason)
 		writeField(&b, "detail", app.Detail)
+		renderLeftoverOutcomes(&b, app)
 	}
-	b.WriteString("\nLeftover deletion is not performed in this slice. A failed or canceled uninstaller does not delete leftovers.\n")
+	b.WriteString("\nLeftover deletion uses the Recycle Bin and runs only after the uninstaller reports success. A failed or canceled uninstaller does not delete leftovers.\n")
 	return b.String()
+}
+
+// renderLeftoverOutcomes writes the per-path leftover outcome list for one
+// app. Paths that were deleted via the Recycle Bin and paths that were
+// skipped (protected, missing, reparse, etc) are both surfaced so the user
+// can audit what was and was not touched. Empty when the uninstaller did
+// not report success or the confirmed set was empty.
+func renderLeftoverOutcomes(b *strings.Builder, app AppOutcome) {
+	if len(app.LeftoverOutcomes) == 0 {
+		return
+	}
+	b.WriteString("    leftover paths:\n")
+	for _, outcome := range app.LeftoverOutcomes {
+		b.WriteString("      - ")
+		b.WriteString(outcome.Path)
+		b.WriteString("\n")
+		writeField(b, "      action", outcome.Action)
+		writeField(b, "      result", outcome.Result)
+		writeField(b, "      reason", outcome.Reason)
+		writeField(b, "      detail", outcome.Detail)
+	}
 }

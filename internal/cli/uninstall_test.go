@@ -285,7 +285,7 @@ func TestUninstallExecuteHumanOutputRendersSummary(t *testing.T) {
 		"Selected: 1",
 		"uninstalled: 1",
 		"Human App",
-		"Leftover deletion is not performed in this slice",
+		"Leftover deletion uses the Recycle Bin",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
@@ -305,7 +305,7 @@ func TestHelpDocumentsUninstallExecuteAndStopProcesses(t *testing.T) {
 		"--execute",
 		"--select",
 		"--allow-stop-processes",
-		"Leftover deletion is not performed in this slice",
+		"Leftover deletion uses the Recycle Bin",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("help missing %q:\n%s", want, out)

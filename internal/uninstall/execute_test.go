@@ -3,9 +3,12 @@ package uninstall
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
@@ -78,6 +81,15 @@ func (f *fakeHistoryRecorder) Record(_ context.Context, session history.SessionR
 // avoid touching the real Windows registry or filesystem.
 func stubDiscovery(t *testing.T, apps []ApplicationEvidence) {
 	t.Helper()
+	stubDiscoveryWithLeftovers(t, apps, nil)
+}
+
+// stubDiscoveryWithLeftovers replaces the discovery vars with fakes that
+// return the given applications and leftover evidence. The leftover evidence
+// flows through the review classifier so app_owned+under_user_profile signals
+// become PossibleLeftovers (the Confirmed leftover path set source).
+func stubDiscoveryWithLeftovers(t *testing.T, apps []ApplicationEvidence, leftovers []LeftoverEvidence) {
+	t.Helper()
 	originalDiscover := discoverUninstallEvidence
 	discoverUninstallEvidence = func() DiscoveryResult {
 		return DiscoveryResult{
@@ -90,7 +102,8 @@ func stubDiscovery(t *testing.T, apps []ApplicationEvidence) {
 	originalLeftover := discoverLeftoverEvidence
 	discoverLeftoverEvidence = func([]ApplicationEvidence) LeftoverDiscoveryResult {
 		return LeftoverDiscoveryResult{
-			Source: EvidenceSource{Source: "known_leftover_locations", Status: "reported"},
+			Leftovers: leftovers,
+			Source:    EvidenceSource{Source: "known_leftover_locations", Status: "reported"},
 		}
 	}
 	t.Cleanup(func() { discoverLeftoverEvidence = originalLeftover })
@@ -98,6 +111,47 @@ func stubDiscovery(t *testing.T, apps []ApplicationEvidence) {
 	stubOrphanedResidue(t, OrphanedResidueDiscoveryResult{
 		Source: EvidenceSource{Source: orphanedResidueSource, Status: "reported"},
 	})
+}
+
+// fakeRecycleBinAdapter records every MoveToRecycleBin call and never
+// actually deletes anything. Tests inject this so no real Recycle Bin API
+// is invoked and no real files are deleted. An optional err is returned for
+// every call when set (to exercise the delete_failed skip path).
+type fakeRecycleBinAdapter struct {
+	calls []string
+	err   error
+}
+
+func (f *fakeRecycleBinAdapter) MoveToRecycleBin(path string) error {
+	f.calls = append(f.calls, path)
+	if f.err != nil {
+		return f.err
+	}
+	return nil
+}
+
+// appOwnedLeftover builds LeftoverEvidence with the signals required for
+// app_owned classification (app_name_match + under_user_profile). The path
+// must be a real directory on disk for pathsafe.Validator.ValidateDeletePath
+// to pass (it calls Lstat).
+func appOwnedLeftover(app, path string) LeftoverEvidence {
+	return LeftoverEvidence{
+		Path:    path,
+		App:     app,
+		Signals: []string{"app_name_match", "under_user_profile"},
+	}
+}
+
+// mkdirTempLeftover creates a real directory under t.TempDir() so the real
+// pathsafe.Validator can Lstat it. The directory is automatically cleaned up
+// by the testing framework.
+func mkdirTempLeftover(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("mkdir leftover %q: %v", dir, err)
+	}
+	return dir
 }
 
 func TestExecutePrefersQuietUninstallerAndDoesNotRunInteractive(t *testing.T) {
@@ -709,5 +763,502 @@ func TestExecuteCaseInsensitiveSelection(t *testing.T) {
 	}
 	if result.Applications[0].Name != "Case App" {
 		t.Fatalf("app name = %q, want Case App", result.Applications[0].Name)
+	}
+}
+
+// TestExecuteDeletesLeftoversToRecycleBinAfterSuccess verifies that on a
+// successful uninstaller Foal freezes the Confirmed leftover path set from
+// PossibleLeftovers, revalidates each path, and moves it to the Recycle Bin
+// via the injected adapter. The fake adapter records calls without deleting,
+// so the real temp directories survive for assertion.
+func TestExecuteDeletesLeftoversToRecycleBinAfterSuccess(t *testing.T) {
+	leftoverPath := mkdirTempLeftover(t, "AppData")
+	stubDiscoveryWithLeftovers(t,
+		[]ApplicationEvidence{{
+			Name:                  "Leftover App",
+			QuietUninstallCommand: `MsiExec.exe /X{Q} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		}},
+		[]LeftoverEvidence{appOwnedLeftover("Leftover App", leftoverPath)},
+	)
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{{ExitCode: 0}},
+	}
+	adapter := &fakeRecycleBinAdapter{}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Leftover App"},
+		UninstallerRunner: runner,
+		Validator:         pathsafe.NewValidator(nil),
+		RecycleBinAdapter: adapter,
+	})
+
+	app := result.Applications[0]
+	if app.Result != ResultUninstalled {
+		t.Fatalf("result = %q, want %q", app.Result, ResultUninstalled)
+	}
+	if len(app.LeftoverPaths) != 1 || app.LeftoverPaths[0] != leftoverPath {
+		t.Fatalf("leftover paths = %#v, want [%q]", app.LeftoverPaths, leftoverPath)
+	}
+	if len(app.LeftoverOutcomes) != 1 {
+		t.Fatalf("leftover outcomes = %d, want 1", len(app.LeftoverOutcomes))
+	}
+	outcome := app.LeftoverOutcomes[0]
+	if outcome.Action != ActionLeftoverRecycleBin || outcome.Result != ResultLeftoverDeleted {
+		t.Fatalf("outcome = %#v, want recycle_bin/deleted", outcome)
+	}
+	if len(adapter.calls) != 1 || adapter.calls[0] != leftoverPath {
+		t.Fatalf("adapter calls = %#v, want [%q]", adapter.calls, leftoverPath)
+	}
+}
+
+// TestExecuteLeftoverCeilingNeverExpandsBeyondConfirmedSet verifies that
+// Foal deletes ONLY paths from the frozen Confirmed leftover path set and
+// never adds new paths. A second directory that looks like app data but was
+// not in the confirmed set must never be touched by the adapter.
+func TestExecuteLeftoverCeilingNeverExpandsBeyondConfirmedSet(t *testing.T) {
+	confirmedPath := mkdirTempLeftover(t, "Confirmed")
+	// unconfirmedPath exists on disk and looks like app data but is NOT in
+	// the PossibleLeftovers set. It must never be passed to the adapter.
+	unconfirmedPath := mkdirTempLeftover(t, "Unconfirmed")
+	stubDiscoveryWithLeftovers(t,
+		[]ApplicationEvidence{{
+			Name:                  "Ceiling App",
+			QuietUninstallCommand: `MsiExec.exe /X{R} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		}},
+		[]LeftoverEvidence{appOwnedLeftover("Ceiling App", confirmedPath)},
+	)
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{{ExitCode: 0}},
+	}
+	adapter := &fakeRecycleBinAdapter{}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Ceiling App"},
+		UninstallerRunner: runner,
+		Validator:         pathsafe.NewValidator(nil),
+		RecycleBinAdapter: adapter,
+	})
+
+	app := result.Applications[0]
+	if app.Result != ResultUninstalled {
+		t.Fatalf("result = %q, want %q", app.Result, ResultUninstalled)
+	}
+	if len(app.LeftoverPaths) != 1 || app.LeftoverPaths[0] != confirmedPath {
+		t.Fatalf("leftover paths = %#v, want only [%q] (ceiling must not expand)", app.LeftoverPaths, confirmedPath)
+	}
+	if len(adapter.calls) != 1 || adapter.calls[0] != confirmedPath {
+		t.Fatalf("adapter calls = %#v, want only [%q] (unconfirmed path must not be touched)", adapter.calls, confirmedPath)
+	}
+	for _, call := range adapter.calls {
+		if call == unconfirmedPath {
+			t.Fatalf("adapter was called with unconfirmed path %q (ceiling violated)", unconfirmedPath)
+		}
+	}
+}
+
+// TestExecuteFailedUninstallerSkipsLeftoverDeletion verifies that a failed
+// uninstaller never triggers leftover deletion. The adapter must not be
+// called and LeftoverPaths/LeftoverOutcomes must be nil.
+func TestExecuteFailedUninstallerSkipsLeftoverDeletion(t *testing.T) {
+	leftoverPath := mkdirTempLeftover(t, "ShouldNotBeDeleted")
+	stubDiscoveryWithLeftovers(t,
+		[]ApplicationEvidence{{
+			Name:                        "Fail App",
+			QuietUninstallCommand:       `MsiExec.exe /X{S} /qn`,
+			InteractiveUninstallCommand: `MsiExec.exe /X{S}`,
+			Sources:                     []string{"windows_registry_uninstall_keys:HKLM64"},
+		}},
+		[]LeftoverEvidence{appOwnedLeftover("Fail App", leftoverPath)},
+	)
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{
+			{ExitCode: 1603}, // quiet fails
+			{ExitCode: 1603}, // interactive also fails
+		},
+	}
+	adapter := &fakeRecycleBinAdapter{}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Fail App"},
+		UninstallerRunner: runner,
+		Validator:         pathsafe.NewValidator(nil),
+		RecycleBinAdapter: adapter,
+	})
+
+	app := result.Applications[0]
+	if app.Result != ResultFailed {
+		t.Fatalf("result = %q, want %q", app.Result, ResultFailed)
+	}
+	if app.LeftoverPaths != nil {
+		t.Fatalf("leftover paths = %#v, want nil (failed uninstaller must not freeze leftover set)", app.LeftoverPaths)
+	}
+	if app.LeftoverOutcomes != nil {
+		t.Fatalf("leftover outcomes = %#v, want nil (failed uninstaller must not delete leftovers)", app.LeftoverOutcomes)
+	}
+	if len(adapter.calls) != 0 {
+		t.Fatalf("adapter calls = %#v, want 0 (failed uninstaller must not delete leftovers)", adapter.calls)
+	}
+}
+
+// TestExecuteCanceledUninstallerSkipsLeftoverDeletion verifies that a
+// canceled uninstaller never triggers leftover deletion.
+func TestExecuteCanceledUninstallerSkipsLeftoverDeletion(t *testing.T) {
+	leftoverPath := mkdirTempLeftover(t, "ShouldNotBeDeleted")
+	stubDiscoveryWithLeftovers(t,
+		[]ApplicationEvidence{{
+			Name:                        "Cancel App",
+			QuietUninstallCommand:       `MsiExec.exe /X{T} /qn`,
+			InteractiveUninstallCommand: `MsiExec.exe /X{T}`,
+			Sources:                     []string{"windows_registry_uninstall_keys:HKLM64"},
+		}},
+		[]LeftoverEvidence{appOwnedLeftover("Cancel App", leftoverPath)},
+	)
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{{ExitCode: -1, Canceled: true}},
+	}
+	adapter := &fakeRecycleBinAdapter{}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Cancel App"},
+		UninstallerRunner: runner,
+		Validator:         pathsafe.NewValidator(nil),
+		RecycleBinAdapter: adapter,
+	})
+
+	app := result.Applications[0]
+	if app.Result != ResultCanceled {
+		t.Fatalf("result = %q, want %q", app.Result, ResultCanceled)
+	}
+	if app.LeftoverPaths != nil {
+		t.Fatalf("leftover paths = %#v, want nil (canceled uninstaller must not freeze leftover set)", app.LeftoverPaths)
+	}
+	if app.LeftoverOutcomes != nil {
+		t.Fatalf("leftover outcomes = %#v, want nil (canceled uninstaller must not delete leftovers)", app.LeftoverOutcomes)
+	}
+	if len(adapter.calls) != 0 {
+		t.Fatalf("adapter calls = %#v, want 0 (canceled uninstaller must not delete leftovers)", adapter.calls)
+	}
+}
+
+// TestExecuteProtectionSuppressesLeftoverTargets verifies that a path
+// protected by a user-defined Protection rule is skipped, never
+// force-deleted. The deny-only validator removes the protected path from the
+// deletion set; a sibling unprotected path is still deleted.
+func TestExecuteProtectionSuppressesLeftoverTargets(t *testing.T) {
+	protectedPath := mkdirTempLeftover(t, "Protected")
+	freePath := mkdirTempLeftover(t, "Free")
+	stubDiscoveryWithLeftovers(t,
+		[]ApplicationEvidence{{
+			Name:                  "Protect App",
+			QuietUninstallCommand: `MsiExec.exe /X{U} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		}},
+		[]LeftoverEvidence{
+			appOwnedLeftover("Protect App", protectedPath),
+			appOwnedLeftover("Protect App", freePath),
+		},
+	)
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{{ExitCode: 0}},
+	}
+	adapter := &fakeRecycleBinAdapter{}
+	validator := pathsafe.NewValidator([]string{protectedPath})
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Protect App"},
+		UninstallerRunner: runner,
+		Validator:         validator,
+		RecycleBinAdapter: adapter,
+	})
+
+	app := result.Applications[0]
+	if app.Result != ResultUninstalled {
+		t.Fatalf("result = %q, want %q", app.Result, ResultUninstalled)
+	}
+	if len(app.LeftoverPaths) != 2 {
+		t.Fatalf("leftover paths = %#v, want 2 (frozen set includes both)", app.LeftoverPaths)
+	}
+	if len(app.LeftoverOutcomes) != 2 {
+		t.Fatalf("leftover outcomes = %d, want 2", len(app.LeftoverOutcomes))
+	}
+	// The free path must be deleted; the protected path must be skipped.
+	freeDeleted := false
+	protectedSkipped := false
+	for _, outcome := range app.LeftoverOutcomes {
+		if outcome.Path == freePath && outcome.Result == ResultLeftoverDeleted {
+			freeDeleted = true
+		}
+		if outcome.Path == protectedPath && outcome.Result == ResultLeftoverSkipped && outcome.Reason == SkipLeftoverProtected {
+			protectedSkipped = true
+		}
+	}
+	if !freeDeleted {
+		t.Fatalf("free path %q was not deleted (outcomes = %#v)", freePath, app.LeftoverOutcomes)
+	}
+	if !protectedSkipped {
+		t.Fatalf("protected path %q was not skipped with protected_path (outcomes = %#v)", protectedPath, app.LeftoverOutcomes)
+	}
+	if len(adapter.calls) != 1 || adapter.calls[0] != freePath {
+		t.Fatalf("adapter calls = %#v, want only [%q] (protected path must not reach the adapter)", adapter.calls, freePath)
+	}
+}
+
+// TestExecuteProtectionLoadErrorFailsClosed verifies that a Protection
+// configuration load error aborts the entire execute before any uninstaller
+// invocation or leftover deletion. This matches Clean/Purge fail-closed
+// behavior.
+func TestExecuteProtectionLoadErrorFailsClosed(t *testing.T) {
+	stubDiscovery(t, []ApplicationEvidence{{
+		Name:                  "Protect Fail App",
+		QuietUninstallCommand: `MsiExec.exe /X{V} /qn`,
+		Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+	}})
+	runner := &fakeUninstallerRunner{}
+	adapter := &fakeRecycleBinAdapter{}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection: []string{"Protect Fail App"},
+		ProtectionLoadError: &ProtectionLoadIssue{
+			Code:    "protection_file_load_failed",
+			Message: "protection file could not be read",
+		},
+		UninstallerRunner: runner,
+		RecycleBinAdapter: adapter,
+	})
+
+	if result.Status != StatusExecuteError {
+		t.Fatalf("status = %q, want %q (fail-closed on Protection load error)", result.Status, StatusExecuteError)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %d, want 0 (no uninstaller on Protection load error)", len(runner.calls))
+	}
+	if len(adapter.calls) != 0 {
+		t.Fatalf("adapter calls = %d, want 0 (no leftover deletion on Protection load error)", len(adapter.calls))
+	}
+	if len(result.Applications) != 1 {
+		t.Fatalf("applications = %d, want 1 (selected app recorded as skipped)", len(result.Applications))
+	}
+	app := result.Applications[0]
+	if app.Result != ResultSkipped {
+		t.Fatalf("result = %q, want %q", app.Result, ResultSkipped)
+	}
+	if app.SkippedReason != "protection_file_load_failed" {
+		t.Fatalf("skipped reason = %q, want protection_file_load_failed", app.SkippedReason)
+	}
+}
+
+// TestExecuteRecordsLeftoverPathHistory verifies that history records one
+// ItemRecord per leftover path outcome in addition to the app-level record.
+func TestExecuteRecordsLeftoverPathHistory(t *testing.T) {
+	leftoverPath := mkdirTempLeftover(t, "HistoryLeftover")
+	stubDiscoveryWithLeftovers(t,
+		[]ApplicationEvidence{{
+			Name:                  "History Leftover App",
+			QuietUninstallCommand: `MsiExec.exe /X{W} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		}},
+		[]LeftoverEvidence{appOwnedLeftover("History Leftover App", leftoverPath)},
+	)
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{{ExitCode: 0}},
+	}
+	adapter := &fakeRecycleBinAdapter{}
+	recorder := &fakeHistoryRecorder{}
+
+	Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"History Leftover App"},
+		UninstallerRunner: runner,
+		Validator:         pathsafe.NewValidator(nil),
+		RecycleBinAdapter: adapter,
+		HistoryRecorder:   recorder,
+	})
+
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("history sessions = %d, want 1", len(recorder.sessions))
+	}
+	items := recorder.sessions[0].Items
+	// One app-level item + one leftover-path item.
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2 (1 app + 1 leftover path)", len(items))
+	}
+	// The app-level item has no path; the leftover item carries the path.
+	var appItem, leftoverItem *history.ItemRecord
+	for i := range items {
+		if items[i].Path == "" {
+			appItem = &items[i]
+		} else if items[i].Path == leftoverPath {
+			leftoverItem = &items[i]
+		}
+	}
+	if appItem == nil {
+		t.Fatal("app-level history item (empty path) not found")
+	}
+	if appItem.Result != ResultUninstalled {
+		t.Fatalf("app item result = %q, want %q", appItem.Result, ResultUninstalled)
+	}
+	if leftoverItem == nil {
+		t.Fatalf("leftover path item for %q not found in history", leftoverPath)
+	}
+	if leftoverItem.Rule != "leftover" {
+		t.Fatalf("leftover item rule = %q, want leftover", leftoverItem.Rule)
+	}
+	if leftoverItem.PlannedAction != ActionLeftoverRecycleBin {
+		t.Fatalf("leftover item planned action = %q, want %q", leftoverItem.PlannedAction, ActionLeftoverRecycleBin)
+	}
+	if leftoverItem.Action != ActionLeftoverRecycleBin || leftoverItem.Result != ResultLeftoverDeleted {
+		t.Fatalf("leftover item = %#v, want recycle_bin/deleted", leftoverItem)
+	}
+}
+
+// TestExecuteLeftoverRevalidationSkipsMissingPath verifies that a path in
+// the confirmed set that no longer exists (already cleaned by the
+// uninstaller) is skipped, not treated as an error. This is the
+// "revalidated subset" behavior: Foal may delete only paths that still
+// exist and pass checks.
+func TestExecuteLeftoverRevalidationSkipsMissingPath(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "AlreadyCleaned")
+	// Note: missingPath is NOT created on disk, so Lstat fails and
+	// pathsafe.Validator rejects it with stat_failed.
+	existingPath := mkdirTempLeftover(t, "StillThere")
+	stubDiscoveryWithLeftovers(t,
+		[]ApplicationEvidence{{
+			Name:                  "Revalidate App",
+			QuietUninstallCommand: `MsiExec.exe /X{X} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		}},
+		[]LeftoverEvidence{
+			appOwnedLeftover("Revalidate App", missingPath),
+			appOwnedLeftover("Revalidate App", existingPath),
+		},
+	)
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{{ExitCode: 0}},
+	}
+	adapter := &fakeRecycleBinAdapter{}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Revalidate App"},
+		UninstallerRunner: runner,
+		Validator:         pathsafe.NewValidator(nil),
+		RecycleBinAdapter: adapter,
+	})
+
+	app := result.Applications[0]
+	if app.Result != ResultUninstalled {
+		t.Fatalf("result = %q, want %q", app.Result, ResultUninstalled)
+	}
+	if len(app.LeftoverPaths) != 2 {
+		t.Fatalf("leftover paths = %d, want 2 (frozen set has both)", len(app.LeftoverPaths))
+	}
+	if len(app.LeftoverOutcomes) != 2 {
+		t.Fatalf("leftover outcomes = %d, want 2", len(app.LeftoverOutcomes))
+	}
+	// The existing path must be deleted; the missing path must be skipped.
+	existingDeleted := false
+	missingSkipped := false
+	for _, outcome := range app.LeftoverOutcomes {
+		if outcome.Path == existingPath && outcome.Result == ResultLeftoverDeleted {
+			existingDeleted = true
+		}
+		if outcome.Path == missingPath && outcome.Result == ResultLeftoverSkipped && outcome.Reason == SkipLeftoverMissing {
+			missingSkipped = true
+		}
+	}
+	if !existingDeleted {
+		t.Fatalf("existing path %q was not deleted", existingPath)
+	}
+	if !missingSkipped {
+		t.Fatalf("missing path %q was not skipped with stat_failed (outcomes = %#v)", missingPath, app.LeftoverOutcomes)
+	}
+	if len(adapter.calls) != 1 || adapter.calls[0] != existingPath {
+		t.Fatalf("adapter calls = %#v, want only [%q] (missing path must not reach adapter)", adapter.calls, existingPath)
+	}
+}
+
+// TestExecuteSharedStateAndUnknownNeverEnterConfirmedSet verifies that
+// leftover evidence classified as shared_state or unknown never enters the
+// Confirmed leftover path set and is never deleted. Only app_owned +
+// high-confidence paths enter the set.
+func TestExecuteSharedStateAndUnknownNeverEnterConfirmedSet(t *testing.T) {
+	appOwnedPath := mkdirTempLeftover(t, "AppOwned")
+	// sharedStatePath carries the shared_program_data signal, so the review
+	// classifier routes it to SharedStateConcerns, not PossibleLeftovers.
+	sharedStatePath := mkdirTempLeftover(t, "SharedState")
+	stubDiscoveryWithLeftovers(t,
+		[]ApplicationEvidence{{
+			Name:                  "Shared App",
+			QuietUninstallCommand: `MsiExec.exe /X{Y} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		}},
+		[]LeftoverEvidence{
+			appOwnedLeftover("Shared App", appOwnedPath),
+			{
+				Path:    sharedStatePath,
+				App:     "Shared App",
+				Signals: []string{"shared_program_data"},
+			},
+		},
+	)
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{{ExitCode: 0}},
+	}
+	adapter := &fakeRecycleBinAdapter{}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Shared App"},
+		UninstallerRunner: runner,
+		Validator:         pathsafe.NewValidator(nil),
+		RecycleBinAdapter: adapter,
+	})
+
+	app := result.Applications[0]
+	if app.Result != ResultUninstalled {
+		t.Fatalf("result = %q, want %q", app.Result, ResultUninstalled)
+	}
+	// Only the app_owned path is in the confirmed set.
+	if len(app.LeftoverPaths) != 1 || app.LeftoverPaths[0] != appOwnedPath {
+		t.Fatalf("leftover paths = %#v, want only [%q] (shared state must not enter confirmed set)", app.LeftoverPaths, appOwnedPath)
+	}
+	for _, call := range adapter.calls {
+		if call == sharedStatePath {
+			t.Fatalf("shared state path %q was sent to the adapter (must never be deleted)", sharedStatePath)
+		}
+	}
+}
+
+// TestExecuteRecycleBinAdapterInjectionIsUsedNotRealAPI verifies that the
+// injected RecycleBinAdapter is called instead of the real Windows Recycle
+// Bin API. The fake adapter records the call and does not delete the file,
+// so the real directory must still exist after Execute returns.
+func TestExecuteRecycleBinAdapterInjectionIsUsedNotRealAPI(t *testing.T) {
+	leftoverPath := mkdirTempLeftover(t, "RealFileNotDeleted")
+	stubDiscoveryWithLeftovers(t,
+		[]ApplicationEvidence{{
+			Name:                  "Inject App",
+			QuietUninstallCommand: `MsiExec.exe /X{Z} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		}},
+		[]LeftoverEvidence{appOwnedLeftover("Inject App", leftoverPath)},
+	)
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{{ExitCode: 0}},
+	}
+	adapter := &fakeRecycleBinAdapter{}
+
+	Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Inject App"},
+		UninstallerRunner: runner,
+		Validator:         pathsafe.NewValidator(nil),
+		RecycleBinAdapter: adapter,
+	})
+
+	if len(adapter.calls) != 1 {
+		t.Fatalf("adapter calls = %d, want 1", len(adapter.calls))
+	}
+	// The real directory must still exist (the fake adapter does not delete).
+	if info, err := os.Stat(leftoverPath); err != nil || !info.IsDir() {
+		t.Fatalf("leftover path %q was deleted by the real Recycle Bin API (must survive when fake adapter is injected)", leftoverPath)
 	}
 }

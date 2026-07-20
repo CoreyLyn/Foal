@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CoreyLyn/Foal/internal/core/delete"
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 	"github.com/CoreyLyn/Foal/internal/history"
 )
 
@@ -86,6 +88,87 @@ const (
 	ReasonUninstallerRunError = "uninstaller_run_error"
 )
 
+// Leftover action and result stable values. These describe the actual
+// per-path leftover deletion outcome after a successful uninstaller.
+const (
+	// ActionLeftoverRecycleBin is the actual action taken for a leftover
+	// path that was moved to the Recycle Bin.
+	ActionLeftoverRecycleBin = "recycle_bin"
+	// ActionLeftoverSkipped means the leftover path was not deleted.
+	ActionLeftoverSkipped = "skipped"
+
+	// ResultLeftoverDeleted means the leftover path was moved to the Recycle
+	// Bin successfully.
+	ResultLeftoverDeleted = "deleted"
+	// ResultLeftoverSkipped means the leftover path was not deleted.
+	ResultLeftoverSkipped = "skipped"
+)
+
+// Leftover skip reason codes (JSON contract). These are the documented
+// reasons that appear in LeftoverPathOutcome.Reason when a leftover path is
+// not deleted. They mirror pathsafe.Reason codes so consumers can rely on
+// one vocabulary across Clean, Purge, and Uninstall.
+const (
+	// SkipLeftoverProtected: the path is protected by a user-defined
+	// Protection rule (deny-only) and was skipped, never force-deleted.
+	SkipLeftoverProtected = "protected_path"
+	// SkipLeftoverMissing: the path does not exist anymore (already cleaned
+	// by the uninstaller or the user). It is a revalidated subset skip, not
+	// an error.
+	SkipLeftoverMissing = "stat_failed"
+	// SkipLeftoverReparse: the path is a reparse point and cannot be cleaned
+	// by default.
+	SkipLeftoverReparse = "reparse_point"
+	// SkipLeftoverHardlink: the file has multiple hardlinks and cannot be
+	// cleaned by default.
+	SkipLeftoverHardlink = "hardlink_path"
+	// SkipLeftoverPermission: permission was denied while validating or
+	// moving the path.
+	SkipLeftoverPermission = "permission_denied"
+	// SkipLeftoverUnsupported: the target cannot be moved to the Recycle Bin.
+	SkipLeftoverUnsupported = "unsupported_target"
+	// SkipLeftoverDeleteFailed: the Recycle Bin adapter returned an error
+	// that does not map to a more specific code.
+	SkipLeftoverDeleteFailed = "delete_failed"
+	// SkipLeftoverContextCanceled: the context was canceled before the path
+	// could be processed.
+	SkipLeftoverContextCanceled = "context_canceled"
+	// SkipLeftoverProtectionNotLoaded: the Protection configuration could not
+	// be loaded; leftover deletion is skipped entirely as a fail-closed
+	// measure. This is recorded per-path when no Validator is available.
+	SkipLeftoverProtectionNotLoaded = "protection_not_loaded"
+	// SkipLeftoverUnknown is a defensive code for paths whose outcome was not
+	// reported by the delete executor. It should not occur in practice.
+	SkipLeftoverUnknown = "leftover_outcome_missing"
+)
+
+// ProtectionLoadIssue describes a Protection configuration load failure.
+// When non-nil on ExecuteOptions, Execute fail-closes before any mutation:
+// no uninstaller is invoked and no leftover is deleted. This mirrors
+// Clean/Purge fail-closed behavior on Protection load errors.
+type ProtectionLoadIssue struct {
+	Code        string `json:"code"`
+	Message     string `json:"message"`
+	Recoverable bool   `json:"recoverable"`
+}
+
+// LeftoverPathOutcome records the actual per-path leftover deletion outcome
+// for one path in the Confirmed leftover path set. Populated only after a
+// successful uninstaller (ResultUninstalled); each entry records whether the
+// path was moved to the Recycle Bin or skipped with a stable reason.
+type LeftoverPathOutcome struct {
+	Path string `json:"path"`
+	// Action is the actual action taken: "recycle_bin" (deleted via Recycle
+	// Bin) or "skipped" (not deleted).
+	Action string `json:"action"`
+	// Result is the terminal outcome: "deleted" or "skipped".
+	Result string `json:"result"`
+	// Reason is a stable skip code when Result is "skipped".
+	Reason string `json:"reason,omitempty"`
+	// Detail is a human-readable explanation.
+	Detail string `json:"detail,omitempty"`
+}
+
 // ExecuteOptions configures Uninstall execution. The CLI and TUI build this
 // from parsed flags and pass it to Execute; tests inject fakes for the
 // runner, process detector, and history recorder so no real vendor
@@ -121,6 +204,28 @@ type ExecuteOptions struct {
 
 	// CommandParameters identify the invocation in History.
 	CommandParameters history.CommandParameters
+
+	// Validator is the deny-only Protection rule validator used to revalidate
+	// each leftover path immediately before deletion. Production loads it
+	// from clean.LoadProtectionConfiguration(); tests inject a real
+	// pathsafe.Validator built from t.TempDir() paths. When nil and leftover
+	// deletion would run, Execute fail-closes by skipping every leftover
+	// path with SkipLeftoverProtectionNotLoaded (a missing validator means
+	// Protection rules are not loaded).
+	Validator pathsafe.Validator
+
+	// ProtectionLoadError fail-closes the entire execute when the Protection
+	// configuration could not be loaded. When non-nil Execute returns
+	// StatusExecuteError without invoking any uninstaller or deleting any
+	// leftover, matching Clean/Purge fail-closed behavior. The CLI sets
+	// this from clean.LoadProtectionConfiguration().LoadError.
+	ProtectionLoadError *ProtectionLoadIssue
+
+	// RecycleBinAdapter moves leftover paths to the Recycle Bin. When nil
+	// Execute uses the default Windows adapter (shell32 SHFileOperationW).
+	// Tests inject a fake adapter so no real Recycle Bin API is ever
+	// invoked and no real files are deleted.
+	RecycleBinAdapter delete.Adapter
 }
 
 // UninstallerRunner runs one uninstall command string and returns its
@@ -200,10 +305,19 @@ type AppOutcome struct {
 	SkippedReason string `json:"skipped_reason,omitempty"`
 	// Detail is a human-readable explanation of the outcome.
 	Detail string `json:"detail,omitempty"`
-	// LeftoverPaths planned for this app. Empty in this slice; leftover
-	// deletion ships in #292 and is never performed when the uninstaller
-	// fails or is canceled.
+	// LeftoverPaths is the frozen Confirmed leftover path set planned for
+	// this app, captured from Possible leftovers (app-owned, high
+	// confidence) at execute time. Populated only when the uninstaller
+	// reports success; nil when the uninstaller fails, is canceled, or the
+	// app is skipped. After success Foal may delete only a revalidated
+	// subset of this set and never adds paths beyond it.
 	LeftoverPaths []string `json:"leftover_paths,omitempty"`
+	// LeftoverOutcomes records the actual per-path leftover deletion
+	// outcome for paths in LeftoverPaths. Populated only after a successful
+	// uninstaller; each entry records whether the path was moved to the
+	// Recycle Bin or skipped with a stable reason (protected, missing,
+	// reparse, etc). The number of entries matches LeftoverPaths.
+	LeftoverOutcomes []LeftoverPathOutcome `json:"leftover_outcomes,omitempty"`
 }
 
 // ExecuteTotals aggregates per-app outcomes for the result.
@@ -224,17 +338,26 @@ type ExecuteTotals struct {
 //  1. Authorize: --execute is required (enforced by the CLI; Execute itself
 //     runs mutation unconditionally but is only reached when the CLI parsed
 //     --execute).
-//  2. Platform gate: non-Windows is refused; every selected app is skipped
+//  2. Protection fail-closed: if ProtectionLoadError is set the entire run
+//     is aborted with StatusExecuteError before any uninstaller invocation
+//     or leftover deletion (matches Clean/Purge).
+//  3. Platform gate: non-Windows is refused; every selected app is skipped
 //     with SkipUnsupportedPlatform.
-//  3. Fresh discovery: Review() rediscovers installed applications so
-//     execution never trusts a stale preview path.
-//  4. Per selected app in stable order: hard exclusion -> planned class
+//  4. Fresh discovery: Review() rediscovers installed applications so
+//     execution never trusts a stale preview path. The review's
+//     PossibleLeftovers (app-owned, high confidence) become the per-app
+//     Confirmed leftover path set ceiling.
+//  5. Per selected app in stable order: hard exclusion -> planned class
 //     check -> process-stop gate -> Official uninstaller invocation
-//     (quiet preferred, then interactive) -> outcome.
-//  5. Leftover deletion is NOT performed in this slice (#292). A failed or
-//     canceled uninstaller never deletes leftovers and never falls back to
-//     Portable directory removal (#294).
-//  6. History records the session and per-app outcomes.
+//     (quiet preferred, then interactive) -> on success only, revalidate
+//     and delete the confirmed leftover subset via the Recycle Bin.
+//  6. Leftover deletion runs ONLY after the uninstaller reports success
+//     (ResultUninstalled). A failed or canceled uninstaller never deletes
+//     leftovers and never falls back to Portable directory removal (#294).
+//     The confirmed set is frozen from Possible leftovers and never
+//     expanded by a post-uninstall deep scan.
+//  7. History records the session, per-app outcomes, and per-leftover-path
+//     outcomes.
 //
 // Cancellation stops remaining apps without rollback. A canceled uninstaller
 // is recorded as ResultCanceled with no leftover deletion.
@@ -250,9 +373,40 @@ func Execute(ctx context.Context, opts ExecuteOptions) ExecuteResult {
 		Applications: []AppOutcome{},
 		Execution: ExecutionPolicy{
 			Allowed: true,
-			Actions: []string{ActionOfficialUninstaller},
-			Reason:  "uninstall execution authorized; official uninstaller invocation only; leftover deletion is not performed in this slice",
+			Actions: []string{ActionOfficialUninstaller, ActionLeftoverRecycleBin},
+			Reason:  "uninstall execution authorized; official uninstaller invocation plus leftover deletion to Recycle Bin for selected apps after success",
 		},
+	}
+
+	// Protection fail-closed: if the Protection configuration could not be
+	// loaded, abort the entire execute before any mutation. No uninstaller
+	// is invoked and no leftover is deleted. This matches Clean/Purge.
+	if opts.ProtectionLoadError != nil {
+		result.Status = StatusExecuteError
+		code := opts.ProtectionLoadError.Code
+		if code == "" {
+			code = "protection_file_load_failed"
+		}
+		message := opts.ProtectionLoadError.Message
+		if message == "" {
+			message = "protection configuration could not be loaded"
+		}
+		result.Message = code + ": " + message
+		// Record each selected app as skipped with the protection load
+		// failure so consumers see why no work was done.
+		for _, name := range stableSelection(opts.Selection) {
+			result.Applications = append(result.Applications, AppOutcome{
+				Name:          name,
+				Action:        ActionSkipped,
+				Result:        ResultSkipped,
+				SkippedReason: code,
+				Detail:        "uninstall execution aborted: " + result.Message,
+			})
+		}
+		result.Totals = computeExecuteTotals(result.Applications)
+		result.ElapsedMS = time.Since(start).Milliseconds()
+		recordHistorySession(ctx, opts, result, start, time.Now())
+		return result
 	}
 
 	// Platform gate: Uninstall mutation is Windows-only. On other platforms
@@ -274,12 +428,15 @@ func Execute(ctx context.Context, opts ExecuteOptions) ExecuteResult {
 		return result
 	}
 
-	// Fresh discovery so execution never trusts stale preview paths.
+	// Fresh discovery so execution never trusts stale preview paths. The
+	// review's PossibleLeftovers (app-owned, high confidence) are the
+	// ceiling for the per-app Confirmed leftover path set.
 	review := Review()
 	appsByLowerName := indexApplicationsByName(review.Applications)
+	possibleLeftovers := review.PossibleLeftovers
 
 	for _, selectedName := range stableSelection(opts.Selection) {
-		outcome := executeOneApp(ctx, opts, selectedName, appsByLowerName)
+		outcome := executeOneApp(ctx, opts, selectedName, appsByLowerName, possibleLeftovers)
 		result.Applications = append(result.Applications, outcome)
 		if ctx.Err() != nil {
 			// Record the cancel on the running app, then stop scheduling more.
@@ -307,7 +464,10 @@ func Execute(ctx context.Context, opts ExecuteOptions) ExecuteResult {
 // It returns an AppOutcome capturing the terminal state. The function never
 // panics on behalf of an injected fake; a fake that panics terminates the
 // batch as expected.
-func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string, appsByLowerName map[string]Application) AppOutcome {
+//
+// possibleLeftovers is the review's PossibleLeftovers slice, used to freeze
+// the Confirmed leftover path set for this app on uninstaller success only.
+func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string, appsByLowerName map[string]Application, possibleLeftovers []LeftoverCandidate) AppOutcome {
 	app, ok := appsByLowerName[strings.ToLower(strings.TrimSpace(selectedName))]
 	if !ok {
 		return AppOutcome{
@@ -407,12 +567,14 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 			outcome.Version = app.Version
 			outcome.Publisher = app.Publisher
 			outcome.PlannedClass = app.PlannedClass
-			outcome.LeftoverPaths = nil // not deleted in this slice
+			outcome.Detail = "uninstaller completed successfully; revalidating confirmed leftover set for Recycle Bin deletion"
+			attachLeftoverOutcomes(ctx, opts, &outcome, possibleLeftovers, app.Name)
 			return outcome
 		}
 		// Quiet failed or was canceled: fall back to interactive only when
 		// the quiet attempt did not indicate cancellation. A canceled quiet
-		// run must not start a second interactive process.
+		// run must not start a second interactive process. Leftover deletion
+		// is skipped on failure or cancel.
 		if outcome.Result == ResultCanceled {
 			outcome.Name = app.Name
 			outcome.Version = app.Version
@@ -427,10 +589,14 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 			interactiveOutcome.Version = app.Version
 			interactiveOutcome.Publisher = app.Publisher
 			interactiveOutcome.PlannedClass = app.PlannedClass
-			interactiveOutcome.LeftoverPaths = nil
+			if interactiveOutcome.Result == ResultUninstalled {
+				interactiveOutcome.Detail = "uninstaller completed successfully; revalidating confirmed leftover set for Recycle Bin deletion"
+				attachLeftoverOutcomes(ctx, opts, &interactiveOutcome, possibleLeftovers, app.Name)
+			}
 			return interactiveOutcome
 		}
-		// No interactive fallback: report the quiet failure.
+		// No interactive fallback: report the quiet failure. Leftovers are
+		// not deleted on failure.
 		outcome.Name = app.Name
 		outcome.Version = app.Version
 		outcome.Publisher = app.Publisher
@@ -444,8 +610,22 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 	outcome.Version = app.Version
 	outcome.Publisher = app.Publisher
 	outcome.PlannedClass = app.PlannedClass
-	outcome.LeftoverPaths = nil
+	if outcome.Result == ResultUninstalled {
+		outcome.Detail = "uninstaller completed successfully; revalidating confirmed leftover set for Recycle Bin deletion"
+		attachLeftoverOutcomes(ctx, opts, &outcome, possibleLeftovers, app.Name)
+	}
 	return outcome
+}
+
+// attachLeftoverOutcomes freezes the Confirmed leftover path set for the app
+// from possibleLeftovers and, when the set is non-empty, revalidates and
+// deletes a subset via the Recycle Bin. It mutates outcome in place. This
+// is called ONLY after the uninstaller reports success (ResultUninstalled);
+// the caller must not invoke it on failure or cancel paths.
+func attachLeftoverOutcomes(ctx context.Context, opts ExecuteOptions, outcome *AppOutcome, possibleLeftovers []LeftoverCandidate, appName string) {
+	confirmed := confirmedLeftoverPaths(possibleLeftovers, appName)
+	outcome.LeftoverPaths = confirmed
+	outcome.LeftoverOutcomes = deleteLeftovers(ctx, opts, confirmed)
 }
 
 // runUninstaller invokes one uninstall command string via the runner and
@@ -501,7 +681,7 @@ func runUninstaller(ctx context.Context, runner UninstallerRunner, command, mode
 		Result:           ResultUninstalled,
 		AttemptedCommand: command,
 		CommandMode:      mode,
-		Detail:           "uninstaller completed successfully; leftover deletion is not performed in this slice",
+		Detail:           "uninstaller completed successfully",
 	}
 }
 
@@ -584,4 +764,126 @@ func truncateForDetail(s string) string {
 		return s
 	}
 	return s[:max] + "...(truncated)"
+}
+
+// confirmedLeftoverPaths freezes the Confirmed leftover path set for one app
+// from the review's Possible leftovers. Only app-owned, high-confidence
+// paths whose App field matches the selected app (case-insensitive) enter
+// the set. Shared-state, unknown-state, and orphaned residue never enter.
+// The returned slice is the frozen upper bound: post-success revalidation
+// may delete only a subset and must never add paths beyond it.
+//
+// This is the "ceiling" from ADR 0027 and the Uninstall execution spec:
+// confirmation freezes the upper bound from Possible leftovers disclosed at
+// confirmation; after a successful Official uninstaller Foal may delete only
+// a revalidated subset of that set and must never add paths that were not
+// confirmed.
+func confirmedLeftoverPaths(possible []LeftoverCandidate, appName string) []string {
+	target := strings.ToLower(strings.TrimSpace(appName))
+	if target == "" || len(possible) == 0 {
+		return nil
+	}
+	var confirmed []string
+	seen := make(map[string]bool)
+	for _, candidate := range possible {
+		if strings.ToLower(strings.TrimSpace(candidate.App)) != target {
+			continue
+		}
+		// PossibleLeftovers only contains app_owned+high candidates (the
+		// review classifier routes shared_state and unknown to other
+		// slices), but we defend against a future classifier change by
+		// re-checking ownership and confidence here.
+		if candidate.Ownership != "app_owned" || candidate.Confidence != "high" {
+			continue
+		}
+		path := strings.TrimSpace(candidate.Path)
+		if path == "" {
+			continue
+		}
+		identity := pathsafe.NormalizePathForIdentity(path)
+		if identity == "" || seen[identity] {
+			continue
+		}
+		seen[identity] = true
+		confirmed = append(confirmed, path)
+	}
+	return confirmed
+}
+
+// deleteLeftovers revalidates and deletes a revalidated subset of the frozen
+// confirmed leftover path set for one app. It runs only after the
+// uninstaller reports success (ResultUninstalled). Each path is revalidated
+// immediately before deletion via the injected pathsafe.Validator (which
+// enforces Protection rules, reparse rejection, hardlink rejection, and
+// system-root exclusion). Protected paths are skipped, never force-deleted.
+// The Recycle Bin adapter is injectable so tests never invoke the real
+// Recycle Bin API. The function never adds paths beyond the confirmed set.
+//
+// Safety: the fail-closed boundary for missing Protection is in Execute,
+// which returns StatusExecuteError when ProtectionLoadError is set before
+// any mutation. deleteLeftovers is only reached after that gate passes, so
+// opts.Validator is always a loaded validator in production. The defensive
+// nil-adapter fallback selects the real Windows adapter, which is never
+// exercised in tests (tests inject a fake adapter).
+func deleteLeftovers(ctx context.Context, opts ExecuteOptions, confirmed []string) []LeftoverPathOutcome {
+	if len(confirmed) == 0 {
+		return nil
+	}
+
+	adapter := opts.RecycleBinAdapter
+	if adapter == nil {
+		adapter = delete.WindowsRecycleBinAdapter{}
+	}
+
+	candidates := make([]delete.Candidate, 0, len(confirmed))
+	for _, path := range confirmed {
+		candidates = append(candidates, delete.Candidate{Path: path})
+	}
+
+	deleteResult := delete.ExecuteWithValidator(ctx, candidates, adapter, opts.Validator)
+
+	// Map results back to the confirmed-set order so the JSON contract is
+	// deterministic and consumers can pair LeftoverPaths[i] with
+	// LeftoverOutcomes[i].
+	deletedByPath := make(map[string]struct{}, len(deleteResult.Deleted))
+	for _, item := range deleteResult.Deleted {
+		deletedByPath[item.Path] = struct{}{}
+	}
+	skippedByPath := make(map[string]LeftoverPathOutcome, len(deleteResult.Skipped))
+	for _, item := range deleteResult.Skipped {
+		skippedByPath[item.Path] = LeftoverPathOutcome{
+			Path:   item.Path,
+			Action: ActionLeftoverSkipped,
+			Result: ResultLeftoverSkipped,
+			Reason: item.Reason.Code,
+			Detail: item.Reason.Message,
+		}
+	}
+
+	outcomes := make([]LeftoverPathOutcome, 0, len(confirmed))
+	for _, path := range confirmed {
+		if _, ok := deletedByPath[path]; ok {
+			outcomes = append(outcomes, LeftoverPathOutcome{
+				Path:   path,
+				Action: ActionLeftoverRecycleBin,
+				Result: ResultLeftoverDeleted,
+				Detail: "leftover path moved to the Recycle Bin",
+			})
+			continue
+		}
+		if outcome, ok := skippedByPath[path]; ok {
+			outcomes = append(outcomes, outcome)
+			continue
+		}
+		// Defensive: delete.ExecuteWithValidator classifies every candidate
+		// as either Deleted or Skipped, so this branch should not occur.
+		outcomes = append(outcomes, LeftoverPathOutcome{
+			Path:   path,
+			Action: ActionLeftoverSkipped,
+			Result: ResultLeftoverSkipped,
+			Reason: SkipLeftoverUnknown,
+			Detail: "leftover path outcome was not reported by the delete executor",
+		})
+	}
+	return outcomes
 }
