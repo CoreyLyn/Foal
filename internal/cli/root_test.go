@@ -664,6 +664,51 @@ func TestAnalyzeNonJSONDangerousRootReportsError(t *testing.T) {
 	}
 }
 
+func TestAnalyzeNonJSONHumanReportIncludesBytesTopCluesAndPurgeHandoff(t *testing.T) {
+	root := t.TempDir()
+	// Add node_modules directory with a file inside to trigger project_artifact_clue
+	nodeModules := filepath.Join(root, "node_modules")
+	if err := os.Mkdir(nodeModules, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeModules, "test.txt"), []byte("test content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Add an ordinary directory too
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "main.go"), []byte("package main"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"analyze", root}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	output := stdout.String()
+
+	// Assert all key elements are present in the human report
+	wantContains := []string{
+		"Status: ok",
+		"bytes",
+		"node_modules",
+		"project_artifact_clue",
+		"foal purge",
+	}
+	for _, want := range wantContains {
+		if !strings.Contains(output, want) {
+			t.Fatalf("analyze output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestUninstallJSONReportsPreviewOnlyReviewContract(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
