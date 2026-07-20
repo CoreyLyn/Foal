@@ -493,6 +493,103 @@ func TestExecuteBatchContinuesAfterFailure(t *testing.T) {
 	}
 }
 
+// TestExecuteBatchContinuesAfterRunError verifies that a per-app runner error
+// (ReasonUninstallerRunError) does not abort the remaining selected apps.
+// The batch must process every selection in stable order regardless of
+// whether one app's uninstaller could not be started.
+func TestExecuteBatchContinuesAfterRunError(t *testing.T) {
+	stubDiscovery(t, []ApplicationEvidence{
+		{
+			Name:                  "Broken App",
+			QuietUninstallCommand: `not-a-real-command`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		},
+		{
+			Name:                  "Good App",
+			QuietUninstallCommand: `MsiExec.exe /X{G2} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		},
+	})
+	runner := &fakeUninstallerRunner{
+		errs: []error{
+			errors.New("command parse failed"), // Broken App quiet run error
+			// Good App: default success (results empty -> success).
+		},
+	}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Broken App", "Good App"},
+		UninstallerRunner: runner,
+	})
+
+	if len(result.Applications) != 2 {
+		t.Fatalf("applications = %d, want 2 (batch must continue after run error)", len(result.Applications))
+	}
+	// stableSelection sorts alphabetically: "Broken App" before "Good App".
+	if result.Applications[0].Name != "Broken App" || result.Applications[0].Result != ResultFailed {
+		t.Fatalf("app[0] = %#v, want Broken App/failed", result.Applications[0])
+	}
+	if result.Applications[0].SkippedReason != ReasonUninstallerRunError {
+		t.Fatalf("app[0] reason = %q, want %q", result.Applications[0].SkippedReason, ReasonUninstallerRunError)
+	}
+	if result.Applications[1].Name != "Good App" || result.Applications[1].Result != ResultUninstalled {
+		t.Fatalf("app[1] = %#v, want Good App/uninstalled", result.Applications[1])
+	}
+	if result.Totals.FailedCount != 1 || result.Totals.UninstalledCount != 1 {
+		t.Fatalf("totals = %#v, want 1 failed 1 uninstalled", result.Totals)
+	}
+}
+
+// TestExecuteBatchContinuesAfterMultipleFailures verifies batch isolation
+// across a larger selection where the first two apps fail and the third
+// succeeds. Every selected app is processed; the batch never aborts on a
+// per-app failure.
+func TestExecuteBatchContinuesAfterMultipleFailures(t *testing.T) {
+	stubDiscovery(t, []ApplicationEvidence{
+		{
+			Name:                  "Alpha Fail",
+			QuietUninstallCommand: `MsiExec.exe /X{F1} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		},
+		{
+			Name:                  "Bravo Fail",
+			QuietUninstallCommand: `MsiExec.exe /X{F2} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		},
+		{
+			Name:                  "Charlie OK",
+			QuietUninstallCommand: `MsiExec.exe /X{C1} /qn`,
+			Sources:               []string{"windows_registry_uninstall_keys:HKLM64"},
+		},
+	})
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{
+			{ExitCode: 1603}, // Alpha Fail
+			{ExitCode: 1603}, // Bravo Fail
+			{ExitCode: 0},    // Charlie OK
+		},
+	}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Charlie OK", "Alpha Fail", "Bravo Fail"},
+		UninstallerRunner: runner,
+	})
+
+	if len(result.Applications) != 3 {
+		t.Fatalf("applications = %d, want 3 (batch must process every selection)", len(result.Applications))
+	}
+	// Stable order is alphabetical regardless of selection order.
+	wantOrder := []string{"Alpha Fail", "Bravo Fail", "Charlie OK"}
+	for i, want := range wantOrder {
+		if result.Applications[i].Name != want {
+			t.Fatalf("app[%d] name = %q, want %q (stable order)", i, result.Applications[i].Name, want)
+		}
+	}
+	if result.Totals.FailedCount != 2 || result.Totals.UninstalledCount != 1 {
+		t.Fatalf("totals = %#v, want 2 failed 1 uninstalled", result.Totals)
+	}
+}
+
 func TestExecuteFailedUninstallerDoesNotDeleteLeftovers(t *testing.T) {
 	stubDiscovery(t, []ApplicationEvidence{{
 		Name:                        "Failed App",

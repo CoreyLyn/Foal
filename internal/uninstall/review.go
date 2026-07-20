@@ -1,6 +1,9 @@
 package uninstall
 
-import "runtime"
+import (
+	"runtime"
+	"strings"
+)
 
 type Evidence struct {
 	Applications    []ApplicationEvidence
@@ -54,7 +57,13 @@ type Application struct {
 	Evidence                    []string `json:"evidence"`
 	Confidence                  string   `json:"confidence"`
 	Ownership                   string   `json:"ownership"`
-	SkippedReason               string   `json:"skipped_reason,omitempty"`
+	// RequiresAdmin reports whether this application likely needs
+	// administrator rights to uninstall, detected conservatively from the
+	// install source hive (HKLM / machine-wide sources). It is a disclosure
+	// signal surfaced before confirmation so UAC is expected, not surprising
+	// mid-batch (ADR 0028). HKCU-only apps report false.
+	RequiresAdmin bool   `json:"requires_admin"`
+	SkippedReason string `json:"skipped_reason,omitempty"`
 }
 
 type EvidenceSource struct {
@@ -178,6 +187,7 @@ func ReviewEvidence(evidence Evidence) Result {
 			Evidence:      append([]string{}, appEvidence.Sources...),
 			Confidence:    confidence,
 			Ownership:     ownershipForConfidence(confidence),
+			RequiresAdmin: sourcesRequireAdmin(appEvidence.Sources),
 		}
 		// Surface uninstall command and install location evidence only for
 		// apps Foal would consider executing. Hard exclusions remain listed
@@ -293,6 +303,21 @@ func classifyLeftover(leftover LeftoverEvidence) string {
 func hasSignal(signals []string, want string) bool {
 	for _, signal := range signals {
 		if signal == want {
+			return true
+		}
+	}
+	return false
+}
+
+// sourcesRequireAdmin reports whether any evidence source indicates a
+// machine-wide (HKLM) install that likely requires administrator rights to
+// uninstall. Detection is conservative and based on the install source hive
+// only (ADR 0028): HKLM64/HKLM32 sources map to per-machine installs that
+// typically need UAC, while HKCU sources map to per-user installs that do not.
+// This is a disclosure signal, not a permission probe.
+func sourcesRequireAdmin(sources []string) bool {
+	for _, source := range sources {
+		if strings.Contains(source, "HKLM") {
 			return true
 		}
 	}

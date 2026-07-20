@@ -20,6 +20,8 @@ func RenderPreviewReport(result Result) string {
 	}
 	builder.WriteString("\n")
 
+	renderAdminRequiredDisclosure(&builder, result.Applications)
+
 	for _, section := range result.ReviewSections {
 		switch section.ID {
 		case "applications":
@@ -74,10 +76,36 @@ func renderApplications(builder *strings.Builder, label string, applications []A
 		writeField(builder, "quiet uninstall command", app.QuietUninstallCommand)
 		writeField(builder, "interactive uninstall command", app.InteractiveUninstallCommand)
 		writeListField(builder, "evidence", app.Evidence)
+		if app.RequiresAdmin {
+			writeField(builder, "requires admin", "true (machine-wide install; UAC may be required to uninstall)")
+		}
 		writeField(builder, "skipped reason", app.SkippedReason)
 	}
 	writeOmittedLine(builder, len(applications))
 	builder.WriteString("\n")
+}
+
+// renderAdminRequiredDisclosure writes a grouping disclosure of applications
+// that likely require administrator rights, so UAC is expected before
+// confirmation rather than surprising mid-batch (ADR 0028). The disclosure
+// appears before the per-section detail and is path-free.
+func renderAdminRequiredDisclosure(builder *strings.Builder, applications []Application) {
+	var adminApps []string
+	for _, app := range applications {
+		if app.RequiresAdmin {
+			adminApps = append(adminApps, app.Name)
+		}
+	}
+	if len(adminApps) == 0 {
+		return
+	}
+	builder.WriteString("Applications likely requiring administrator rights (UAC):\n")
+	for _, name := range adminApps {
+		builder.WriteString("  - ")
+		builder.WriteString(valueOrUnknown(name))
+		builder.WriteString("\n")
+	}
+	builder.WriteString("Selecting these for --execute may prompt for elevation; without it they are skipped with a stable reason.\n\n")
 }
 
 func renderEvidenceSources(builder *strings.Builder, label string, sources []EvidenceSource) {
