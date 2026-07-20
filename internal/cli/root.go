@@ -175,13 +175,40 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 		if len(positional) > 1 {
 			root = positional[1]
 		}
-		result := analyze.Run(root)
+		result, reason, ok := analyze.Run(context.Background(), root, analyze.Options{})
+		if !ok {
+			code := reason.Code
+			if code == "" {
+				code = "invalid_root"
+			}
+			return writeError(stderr, opts.json, command, args, jsonError{
+				Code:        code,
+				Message:     reason.Message,
+				Recoverable: true,
+				Command:     command,
+				Args:        args,
+			})
+		}
 		if opts.json {
 			return writeJSON(stdout, envelope{Command: command, Result: result})
 		}
 
-		_, _ = fmt.Fprintf(stdout, "Foal analyze\nRoot: %s\nFiles: %d\nDirectories: %d\nSkipped: %d\n",
-			result.Root, result.Totals.FileCount, result.Totals.DirectoryCount, len(result.Skipped))
+		statusText := "complete"
+		if result.Status == analyze.StatusIncomplete {
+			statusText = "incomplete (hit descendant limit)"
+		}
+		_, _ = fmt.Fprintf(stdout, "Foal analyze\nRoot: %s\nStatus: %s\nBytes: %d\nFiles: %d\nDirectories: %d\nSkipped: %d\n",
+			result.Root, statusText, result.Totals.Bytes, result.Totals.FileCount, result.Totals.DirectoryCount, len(result.Skipped))
+		if len(result.TopChildren) > 0 {
+			_, _ = fmt.Fprintf(stdout, "\nTop children:\n")
+			for _, child := range result.TopChildren {
+				classLabel := ""
+				if child.Classification != "" {
+					classLabel = " (" + child.Classification + ")"
+				}
+				_, _ = fmt.Fprintf(stdout, "  %10d  %s%s\n", child.Bytes, child.Name, classLabel)
+			}
+		}
 		return exitOK
 	}
 
