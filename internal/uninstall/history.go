@@ -76,6 +76,19 @@ func uninstallHistoryItems(sessionID string, result ExecuteResult) []history.Ite
 			Action:        app.Action,
 			Result:        app.Result,
 		}
+		// Portable removal targets a specific install location path and is a
+		// permanent deletion (ordinary filesystem removal, NOT the Recycle
+		// Bin). Record the targeted path and set PlannedAction to
+		// portable_removal so the audit trail distinguishes a planned
+		// permanent deletion from an actual skip. This lets consumers tell
+		// portable removal (permanent deletion of the install tree) apart
+		// from leftover deletion (Recycle Bin move) and from official
+		// uninstaller invocation, matching the spec's "planned vs actual
+		// permanent action" recording requirement.
+		if app.PlannedClass == PlannedClassPortableDirectoryRemoval {
+			item.Path = app.PortableRemovalPath
+			item.PlannedAction = ActionPortableRemoval
+		}
 		switch app.Result {
 		case ResultSkipped:
 			item.SkippedReason = &history.Issue{

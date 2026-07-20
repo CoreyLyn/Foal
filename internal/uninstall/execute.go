@@ -2,6 +2,7 @@ package uninstall
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -27,6 +28,12 @@ const (
 	// ActionOfficialUninstaller is the action Foal attempted: it ran the
 	// registry-advertised uninstall command for this app.
 	ActionOfficialUninstaller = "official_uninstaller"
+	// ActionPortableRemoval is the action Foal attempted: it permanently
+	// deleted the trusted install location of a portable app (no uninstaller
+	// command). Portable removal is ordinary filesystem removal, NOT the
+	// Recycle Bin, and requires per-run --allow-permanent authorization
+	// separate from --execute.
+	ActionPortableRemoval = "portable_removal"
 	// ActionSkipped means Foal did not attempt any uninstaller for this app.
 	ActionSkipped = "skipped"
 
@@ -58,11 +65,21 @@ const (
 	// SkipNotExecutable: the app has no uninstall command and no install
 	// location, so Foal cannot plan any execution for it.
 	SkipNotExecutable = "not_executable"
-	// SkipPortableRemovalNotSupported: the app has no uninstall command but
-	// has an install location, which would map to Portable directory removal.
-	// That path belongs to #294 and is intentionally not executed in this
-	// slice; the app is skipped rather than force-deleted.
-	SkipPortableRemovalNotSupported = "portable_removal_not_supported"
+	// SkipPortableRemovalNotAuthorized: the app is classified as portable
+	// directory removal (no uninstall command + trusted install location) but
+	// the caller did not pass --allow-permanent. Portable removal is permanent
+	// deletion and requires authorization separate from --execute. The app is
+	// skipped and nothing is permanently deleted; the planned action is
+	// unchanged and never silently falls back to the Recycle Bin.
+	SkipPortableRemovalNotAuthorized = "portable_removal_not_authorized"
+	// SkipPortableRemovalDangerousRoot: the portable install location failed
+	// the trusted-install-location policy (volume root, Windows tree, Program
+	// Files root, user profile root, AppData root, reparse point, or other
+	// dangerous root). Foal never permanently deletes a dangerous root; the
+	// app is skipped with this stable reason instead. The reason code mirrors
+	// pathsafe.Reason codes (dangerous_root, protected_path, stat_failed,
+	// reparse_point, etc.) so consumers can rely on one vocabulary.
+	SkipPortableRemovalDangerousRoot = "dangerous_root"
 	// SkipUninstallCommandMissing: the app classified as official_uninstaller
 	// but neither a quiet nor an interactive command is present. This is a
 	// defensive guard; classification should prevent this case.
@@ -93,6 +110,13 @@ const (
 	// ReasonUninstallerRunError: the runner could not start or complete the
 	// uninstaller process (e.g. the command string could not be parsed).
 	ReasonUninstallerRunError = "uninstaller_run_error"
+	// ReasonPortableRemovalFailed: the permanent remover returned a non-nil
+	// error while deleting the portable install tree. Mutation may have begun
+	// before the error stopped the operation; some descendants may already be
+	// permanently deleted. Recorded as ResultFailed with a partial-risk
+	// warning, matching Purge permanent deletion semantics. Leftovers are NOT
+	// deleted on this outcome.
+	ReasonPortableRemovalFailed = "portable_removal_failed"
 )
 
 // Leftover action and result stable values. These describe the actual
@@ -195,6 +219,16 @@ type ExecuteOptions struct {
 	// future concern and is not performed in this slice.
 	AllowStopProcesses bool
 
+	// AllowPermanent is the separate per-run authorization for portable
+	// directory removal (permanent deletion of the install tree). It is
+	// distinct from --execute: --execute authorizes mutation generally,
+	// while --allow-permanent authorizes the irreversible permanent action
+	// specifically. Without it, portable-class apps are skipped with
+	// SkipPortableRemovalNotAuthorized and nothing is permanently deleted.
+	// Portable removal never silently falls back to the Recycle Bin. Mirrors
+	// Purge/Clean --allow-permanent semantics.
+	AllowPermanent bool
+
 	// UninstallerRunner runs one uninstall command string. When nil Execute
 	// uses the default Windows runner (cmd /c). Tests inject a fake.
 	UninstallerRunner UninstallerRunner
@@ -233,6 +267,13 @@ type ExecuteOptions struct {
 	// Tests inject a fake adapter so no real Recycle Bin API is ever
 	// invoked and no real files are deleted.
 	RecycleBinAdapter delete.Adapter
+
+	// PermanentRemover permanently deletes a portable install tree via
+	// ordinary filesystem removal (NOT the Recycle Bin). When nil Execute
+	// uses the default filesystem remover. Tests inject a fake so no real
+	// files are ever permanently deleted in tests. Only reached for
+	// portable_directory_removal apps when AllowPermanent is true.
+	PermanentRemover delete.PermanentRemover
 
 	// ElevationPort is the injectable seam through which Uninstall Execute
 	// MAY request UAC when a selected app needs admin (ADR 0028). When nil
@@ -360,6 +401,13 @@ type AppOutcome struct {
 	AttemptedCommand string `json:"attempted_command,omitempty"`
 	// CommandMode is "quiet" or "interactive" for the attempted command.
 	CommandMode string `json:"command_mode,omitempty"`
+	// PortableRemovalPath is the install location targeted by portable
+	// directory removal (permanent deletion). Populated only for apps
+	// classified as portable_directory_removal; empty for official
+	// uninstaller apps. When the app is skipped without --allow-permanent
+	// the path is still recorded so consumers can see what would have been
+	// targeted.
+	PortableRemovalPath string `json:"portable_removal_path,omitempty"`
 	// SkippedReason is a stable code when Result is "skipped" or "failed".
 	SkippedReason string `json:"skipped_reason,omitempty"`
 	// Detail is a human-readable explanation of the outcome.
@@ -432,8 +480,8 @@ func Execute(ctx context.Context, opts ExecuteOptions) ExecuteResult {
 		Applications: []AppOutcome{},
 		Execution: ExecutionPolicy{
 			Allowed: true,
-			Actions: []string{ActionOfficialUninstaller, ActionLeftoverRecycleBin},
-			Reason:  "uninstall execution authorized; official uninstaller invocation plus leftover deletion to Recycle Bin for selected apps after success",
+			Actions: buildExecutionActions(opts.AllowPermanent),
+			Reason:  "uninstall execution authorized; official uninstaller invocation plus leftover deletion to Recycle Bin for selected apps after success" + portableAuthorizationSuffix(opts.AllowPermanent),
 		},
 	}
 
@@ -646,20 +694,16 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 		}
 	}
 
-	// Portable directory removal is intentionally not executed in this slice
-	// (#294). Skip with a stable reason rather than force-deleting the tree.
+	// Portable directory removal (#294): when an app has no uninstall command
+	// but a trusted install location is known, Foal may permanently delete the
+	// install tree after explicit per-run --allow-permanent authorization.
+	// Without that authorization the app is skipped with a stable reason and
+	// nothing is permanently deleted. A failed official uninstaller never
+	// reaches this branch (classification routes official_uninstaller apps to
+	// the uninstaller path above), so portable removal is never a silent
+	// fallback.
 	if app.PlannedClass == PlannedClassPortableDirectoryRemoval {
-		return AppOutcome{
-			Name:          app.Name,
-			Version:       app.Version,
-			Publisher:     app.Publisher,
-			PlannedClass:  app.PlannedClass,
-			RequiresAdmin: requiresAdmin,
-			Action:        ActionSkipped,
-			Result:        ResultSkipped,
-			SkippedReason: SkipPortableRemovalNotSupported,
-			Detail:        "portable directory removal is not executed in this slice; use the app's own uninstaller or wait for portable removal execution",
-		}
+		return executePortableRemoval(ctx, opts, app, requiresAdmin)
 	}
 
 	// Only official_uninstaller proceeds. Not-executable apps are skipped.
@@ -796,6 +840,152 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 		attachLeftoverOutcomes(ctx, opts, &outcome, possibleLeftovers, app.Name)
 	}
 	return outcome
+}
+
+// executePortableRemoval handles the portable_directory_removal class: an app
+// with no uninstall command but a trusted install location. The install tree
+// is permanently deleted (ordinary filesystem removal, NOT the Recycle Bin)
+// only when --allow-permanent is present. Without it the app is skipped and
+// nothing is permanently deleted. A failed official uninstaller never reaches
+// this function (classification routes official_uninstaller apps to the
+// uninstaller path), so portable removal is never a silent fallback.
+//
+// Safety gates, in order:
+//  1. Authorization: --allow-permanent required (separate from --execute).
+//  2. Process-stop gate: a running app is skipped when stop is not authorized,
+//     matching the official uninstaller path. Removing a locked directory tree
+//     would fail or leave partial state.
+//  3. Trusted install location: the install location must be non-empty and pass
+//     pathsafe.Validator.ValidatePortableRemovalPath, which enforces user
+//     Protection rules (deny-only), rejects dangerous roots (volume roots,
+//     Windows tree, Program Files/AppData roots, user profile root), rejects
+//     reparse points, and revalidates existence immediately before deletion.
+//  4. Cancel check immediately before mutation.
+//  5. Permanent removal via the injectable PermanentRemover (fake in tests,
+//     filesystem in production). A failed removal is recorded as failed with
+//     PartialRisk because mutation may have begun.
+//
+// The outcome records Action=portable_removal (permanent deletion) so consumers
+// can distinguish it from Recycle Bin leftover deletion and from official
+// uninstaller invocation.
+func executePortableRemoval(ctx context.Context, opts ExecuteOptions, app Application, requiresAdmin bool) AppOutcome {
+	installLocation := strings.TrimSpace(app.InstallLocation)
+	base := AppOutcome{
+		Name:                app.Name,
+		Version:             app.Version,
+		Publisher:           app.Publisher,
+		PlannedClass:        app.PlannedClass,
+		RequiresAdmin:       requiresAdmin,
+		PortableRemovalPath: installLocation,
+	}
+
+	// 1. Authorization gate: --allow-permanent is required, separate from
+	// --execute. Without it the app is skipped and nothing is permanently
+	// deleted. The planned action is unchanged; portable removal never
+	// silently falls back to the Recycle Bin.
+	if !opts.AllowPermanent {
+		base.Action = ActionSkipped
+		base.Result = ResultSkipped
+		base.SkippedReason = SkipPortableRemovalNotAuthorized
+		base.Detail = "portable directory removal requires --allow-permanent (separate from --execute); nothing was permanently deleted"
+		return base
+	}
+
+	// 2. Process-stop gate: a running app's directory tree may have locked
+	// files. Foal never kills a process without explicit authorization, so a
+	// running app is skipped when stop is not authorized. This mirrors the
+	// official uninstaller path's process-stop gate.
+	state := detectProcessState(ctx, opts, app.Name)
+	if state.State == ProcessStateRunning && !opts.AllowStopProcesses {
+		base.Action = ActionSkipped
+		base.Result = ResultSkipped
+		base.SkippedReason = SkipProcessRunningStopNotAuthorized
+		base.Detail = "application is running and process stopping is not authorized; Foal does not remove a locked install tree without explicit authorization"
+		return base
+	}
+
+	// 3. Trusted install location validation. An empty install location is a
+	// defensive guard (classification should prevent this case).
+	if installLocation == "" {
+		base.Action = ActionSkipped
+		base.Result = ResultSkipped
+		base.SkippedReason = SkipNotExecutable
+		base.Detail = "portable removal classified but install location is empty; Foal cannot plan any execution for this application"
+		return base
+	}
+	// opts.Validator is a loaded validator here: the ProtectionLoadError gate
+	// in Execute aborts the run before any mutation when Protection could not
+	// be loaded. ValidatePortableRemovalPath enforces user Protection rules
+	// (deny-only), rejects dangerous roots, rejects reparse points, and
+	// revalidates existence via Lstat immediately before deletion.
+	reason, ok := opts.Validator.ValidatePortableRemovalPath(installLocation)
+	if !ok {
+		base.Action = ActionSkipped
+		base.Result = ResultSkipped
+		base.SkippedReason = reason.Code
+		base.Detail = "portable install location failed validation: " + reason.Message
+		return base
+	}
+
+	// 4. Cancel check immediately before mutation.
+	if ctx.Err() != nil {
+		base.Action = ActionSkipped
+		base.Result = ResultCanceled
+		base.SkippedReason = ReasonUninstallerCanceled
+		base.Detail = "portable removal was interrupted by context cancellation before deletion; nothing was permanently deleted"
+		return base
+	}
+
+	// 5. Permanent removal via the injectable remover. Production uses the
+	// real filesystem remover; tests inject a fake so no real files are ever
+	// permanently deleted in tests.
+	remover := opts.PermanentRemover
+	if remover == nil {
+		remover = delete.FilesystemPermanentRemover{}
+	}
+	err := remover.Remove(ctx, installLocation)
+	if err == nil {
+		base.Action = ActionPortableRemoval
+		base.Result = ResultUninstalled
+		base.Detail = "portable install tree permanently deleted (ordinary filesystem removal, not the Recycle Bin); irreversible"
+		return base
+	}
+	// Mutation may have begun once Remove was invoked: some descendants may
+	// already be gone. Record as failed/canceled with a partial-risk warning,
+	// matching Purge permanent deletion semantics.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		base.Action = ActionPortableRemoval
+		base.Result = ResultCanceled
+		base.SkippedReason = ReasonUninstallerCanceled
+		base.Detail = "portable removal was interrupted by context cancellation after mutation may have begun; some content may already be permanently deleted: " + err.Error()
+		return base
+	}
+	base.Action = ActionPortableRemoval
+	base.Result = ResultFailed
+	base.SkippedReason = ReasonPortableRemovalFailed
+	base.Detail = "portable removal failed after mutation may have begun; some content may already be permanently deleted: " + err.Error()
+	return base
+}
+
+// buildExecutionActions returns the authorized action vocabulary for the
+// execution policy. Portable removal is included only when --allow-permanent is
+// present so consumers can see whether permanent deletion was authorized for
+// the run.
+func buildExecutionActions(allowPermanent bool) []string {
+	actions := []string{ActionOfficialUninstaller, ActionLeftoverRecycleBin}
+	if allowPermanent {
+		actions = append(actions, ActionPortableRemoval)
+	}
+	return actions
+}
+
+// portableAuthorizationSuffix returns the execution policy reason suffix that
+// discloses portable removal authorization state.
+func portableAuthorizationSuffix(allowPermanent bool) string {
+	if allowPermanent {
+		return "; portable directory removal authorized (permanent deletion of trusted install locations)"
+	}
+	return "; portable directory removal not authorized (portable targets skipped without --allow-permanent)"
 }
 
 // attachLeftoverOutcomes freezes the Confirmed leftover path set for the app
