@@ -35,13 +35,13 @@ const (
 const helperEstablishTimeout = 2 * time.Minute
 
 // serverExchange is the coordinator side of the one-request protocol. It sends
-// exactly one analysis request bound to nonce and reads exactly one response,
-// validating the protocol version. It performs no second request.
-func serverExchange(rw io.ReadWriter, nonce string) (pipeResponse, error) {
+// exactly one request for the given capability bound to nonce and reads exactly
+// one response, validating the protocol version. It performs no second request.
+func serverExchange(rw io.ReadWriter, nonce string, capability wireCapability) (pipeResponse, error) {
 	req := pipeRequest{
 		Version:    protocolVersion,
 		Nonce:      nonce,
-		Capability: wireCapabilityAnalyzeComponentStore,
+		Capability: capability,
 	}
 	if err := writeMessage(rw, req); err != nil {
 		return pipeResponse{}, err
@@ -57,11 +57,11 @@ func serverExchange(rw io.ReadWriter, nonce string) (pipeResponse, error) {
 }
 
 // helperExchange is the helper side of the one-request protocol. It reads and
-// validates exactly one request, runs analyze only on success, writes exactly
-// one response, and returns — it never reads a second request, so a replayed or
-// injected follow-up is ignored. A validation failure runs no work and returns
-// the error without responding.
-func helperExchange(rw io.ReadWriter, nonce string, analyze func() clean.ServicingAnalysisResult) error {
+// validates exactly one request, dispatches the fixed capability to run, writes
+// exactly one response, and returns — it never reads a second request, so a
+// replayed or injected follow-up is ignored. A validation failure runs no work
+// and returns the error without responding.
+func helperExchange(rw io.ReadWriter, nonce string, run func(wireCapability) pipeResponse) error {
 	var req pipeRequest
 	if err := readMessage(rw, &req); err != nil {
 		return err
@@ -69,18 +69,38 @@ func helperExchange(rw io.ReadWriter, nonce string, analyze func() clean.Servici
 	if err := validateRequest(req, nonce); err != nil {
 		return err
 	}
-	return writeMessage(rw, responseFromResult(analyze()))
+	return writeMessage(rw, run(req.Capability))
 }
 
-// responseFromResult projects a path-free analysis result onto the wire
+// responseFromAnalysis projects a path-free analysis result onto the wire
 // response. Only stable fields cross the pipe; no raw output or path is carried.
-func responseFromResult(res clean.ServicingAnalysisResult) pipeResponse {
+func responseFromAnalysis(res clean.ServicingAnalysisResult) pipeResponse {
 	resp := pipeResponse{
 		Version:             protocolVersion,
 		Outcome:             string(res.Outcome),
 		Reason:              res.Reason,
 		ReclaimablePackages: res.ReclaimablePackages,
 		CleanupRecommended:  res.CleanupRecommended,
+	}
+	if res.ExitCode != nil {
+		resp.HasExitCode = true
+		resp.ExitCode = *res.ExitCode
+	}
+	return resp
+}
+
+// responseFromExecute projects a path-free composite execute result onto the
+// wire response, adding the mutation restart-required/cancellation-request
+// state. No raw output or path is carried.
+func responseFromExecute(res clean.ServicingExecuteResult) pipeResponse {
+	resp := pipeResponse{
+		Version:             protocolVersion,
+		Outcome:             string(res.Outcome),
+		Reason:              res.Reason,
+		ReclaimablePackages: res.ReclaimablePackages,
+		CleanupRecommended:  res.CleanupRecommended,
+		RestartRequired:     res.RestartRequired,
+		CancelRequested:     res.CancelRequested,
 	}
 	if res.ExitCode != nil {
 		resp.HasExitCode = true
@@ -106,6 +126,25 @@ func resultFromResponse(resp pipeResponse) clean.ServicingAnalysisResult {
 	return res
 }
 
+// executeResultFromResponse reconstructs a path-free composite execute result
+// from a wire response. The clean package's fail-closed mapping re-checks
+// outcome validity, so an unknown value can never be read as success.
+func executeResultFromResponse(resp pipeResponse) clean.ServicingExecuteResult {
+	res := clean.ServicingExecuteResult{
+		Outcome:             clean.ServicingOutcome(resp.Outcome),
+		Reason:              resp.Reason,
+		ReclaimablePackages: resp.ReclaimablePackages,
+		CleanupRecommended:  resp.CleanupRecommended,
+		RestartRequired:     resp.RestartRequired,
+		CancelRequested:     resp.CancelRequested,
+	}
+	if resp.HasExitCode {
+		code := resp.ExitCode
+		res.ExitCode = &code
+	}
+	return res
+}
+
 // skipResult builds a path-free skipped analysis result with a stable reason.
 func skipResult(reason string) clean.ServicingAnalysisResult {
 	return clean.ServicingAnalysisResult{Outcome: clean.ServicingOutcomeSkipped, Reason: reason}
@@ -114,4 +153,19 @@ func skipResult(reason string) clean.ServicingAnalysisResult {
 // failResult builds a path-free failed analysis result with a stable reason.
 func failResult(reason string) clean.ServicingAnalysisResult {
 	return clean.ServicingAnalysisResult{Outcome: clean.ServicingOutcomeFailed, Reason: reason}
+}
+
+// skipExecuteResult builds a path-free skipped composite execute result.
+func skipExecuteResult(reason string) clean.ServicingExecuteResult {
+	return clean.ServicingExecuteResult{Outcome: clean.ServicingOutcomeSkipped, Reason: reason}
+}
+
+// failExecuteResult builds a path-free failed composite execute result.
+func failExecuteResult(reason string) clean.ServicingExecuteResult {
+	return clean.ServicingExecuteResult{Outcome: clean.ServicingOutcomeFailed, Reason: reason}
+}
+
+// canceledExecuteResult builds a path-free pre-mutation canceled execute result.
+func canceledExecuteResult() clean.ServicingExecuteResult {
+	return clean.ServicingExecuteResult{Outcome: clean.ServicingOutcomeCanceled, Reason: clean.ServicingReasonContextCanceled}
 }

@@ -8,18 +8,27 @@ import (
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 )
 
-// fakeServicingGateway records calls and returns a canned analysis so core
-// tests never launch UAC or DISM.
+// fakeServicingGateway records calls and returns a canned analysis/execute
+// outcome so core tests never launch UAC or DISM.
 type fakeServicingGateway struct {
-	result  clean.ServicingAnalysisResult
-	calls   int
-	lastReq clean.ServicingAnalysisRequest
+	result      clean.ServicingAnalysisResult
+	calls       int
+	lastReq     clean.ServicingAnalysisRequest
+	execResult  clean.ServicingExecuteResult
+	execCalls   int
+	lastExecReq clean.ServicingExecuteRequest
 }
 
 func (f *fakeServicingGateway) AnalyzeComponentStore(_ context.Context, req clean.ServicingAnalysisRequest) clean.ServicingAnalysisResult {
 	f.calls++
 	f.lastReq = req
 	return f.result
+}
+
+func (f *fakeServicingGateway) ExecuteComponentStoreCleanup(_ context.Context, req clean.ServicingExecuteRequest) clean.ServicingExecuteResult {
+	f.execCalls++
+	f.lastExecReq = req
+	return f.execResult
 }
 
 func exactWinSxSPlan(t *testing.T) *clean.CategoryPlan {

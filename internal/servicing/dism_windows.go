@@ -24,6 +24,19 @@ var analyzeComponentStoreArgs = []string{
 	"/NoRestart",
 }
 
+// startComponentCleanupArgs is the fixed, user-input-free DISM argument array
+// for confirmed component-store cleanup (ADR 0029), equivalent to
+// `DISM /Online /Cleanup-Image /StartComponentCleanup /English /NoRestart`.
+// /ResetBase, /SPSuperseded, /Remove-Package, and any custom argument are
+// deliberately absent and cannot be added over the wire.
+var startComponentCleanupArgs = []string{
+	"/Online",
+	"/Cleanup-Image",
+	"/StartComponentCleanup",
+	"/English",
+	"/NoRestart",
+}
+
 // dismExecutableName is the only executable the helper will launch, resolved
 // exclusively from the Windows system directory.
 const dismExecutableName = "Dism.exe"
@@ -85,14 +98,48 @@ func validateOrdinaryExecutable(path string) error {
 // fail-closed. It never uses PATH, a shell, cmd.exe, PowerShell, or a
 // caller-supplied argument, and returns a path-free, byte-free result.
 func runComponentStoreAnalysis() clean.ServicingAnalysisResult {
+	exitCode, output, ok := runSystemDISM(analyzeComponentStoreArgs)
+	if !ok {
+		return failResult(clean.ServicingReasonToolUnavailable)
+	}
+	return classifyComponentStoreAnalysis(exitCode, output)
+}
+
+// runComponentStoreCleanup is the composite execute capability: it performs a
+// fresh AnalyzeComponentStore, enforces the guard, and starts
+// StartComponentCleanup only when analysis is ready (positive reclaimable
+// packages explicitly recommended) — all within this one elevated helper
+// session, so preview analysis never authorizes mutation and no inter-process
+// analysis-to-mutation gap exists. A non-ready analysis is projected as the
+// composite outcome (no_work or failed) with no mutation.
+func runComponentStoreCleanup() clean.ServicingExecuteResult {
+	analysis := runComponentStoreAnalysis()
+	proceed, projected := projectAnalysisForExecute(analysis)
+	if !proceed {
+		return projected
+	}
+	exitCode, _, ok := runSystemDISM(startComponentCleanupArgs)
+	if !ok {
+		return failExecuteResult(clean.ServicingReasonToolUnavailable)
+	}
+	return cleanupResultFromExit(analysis, exitCode)
+}
+
+// runSystemDISM resolves the system DISM, re-validates its ordinary non-reparse
+// identity immediately before launch, and runs it directly with the fixed
+// argument array. It returns the DISM exit code and bounded output; ok is false
+// only when DISM could not be resolved or launched at all (distinct from a
+// non-zero exit). It never uses PATH, %WINDIR%, environment overrides, CWD, a
+// shell, cmd.exe, PowerShell, or a caller-supplied argument.
+func runSystemDISM(args []string) (exitCode int, output string, ok bool) {
 	dismPath, err := resolveSystemDISM()
 	if err != nil {
-		return failResult(clean.ServicingReasonToolUnavailable)
+		return 0, "", false
 	}
 	// Re-validate the ordinary non-reparse identity immediately before launch, so
 	// a race after resolution cannot swap the target.
 	if err := validateOrdinaryExecutable(dismPath); err != nil {
-		return failResult(clean.ServicingReasonToolUnavailable)
+		return 0, "", false
 	}
 
 	// Construct the command explicitly from the absolute path so exec performs no
@@ -100,7 +147,7 @@ func runComponentStoreAnalysis() clean.ServicingAnalysisResult {
 	// than an inherited CWD.
 	cmd := &exec.Cmd{
 		Path: dismPath,
-		Args: append([]string{dismPath}, analyzeComponentStoreArgs...),
+		Args: append([]string{dismPath}, args...),
 		Dir:  filepath.Dir(dismPath),
 	}
 	var out boundedBuffer
@@ -108,17 +155,15 @@ func runComponentStoreAnalysis() clean.ServicingAnalysisResult {
 	cmd.Stderr = &out
 
 	runErr := cmd.Run()
-	exitCode := 0
 	if runErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(runErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		} else {
-			// Failure to launch DISM at all (not a nonzero exit).
-			return failResult(clean.ServicingReasonToolUnavailable)
+			return exitErr.ExitCode(), out.String(), true
 		}
+		// Failure to launch DISM at all (not a non-zero exit).
+		return 0, "", false
 	}
-	return classifyComponentStoreAnalysis(exitCode, out.String())
+	return 0, out.String(), true
 }
 
 // boundedBuffer captures at most maxAnalysisOutputBytes of DISM output. Excess

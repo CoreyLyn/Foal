@@ -35,16 +35,56 @@ type ServicingAnalysisResult struct {
 	ExitCode *int
 }
 
+// ServicingExecuteRequest is the path-free, argument-free request the shared
+// Clean boundary hands to a ServicingGateway for confirmed component-store
+// cleanup. Like the analysis request it names only the canonical category and
+// the fixed composite capability; the elevated helper derives the fixed DISM
+// invocations (fresh analysis then StartComponentCleanup) from the capability
+// alone.
+type ServicingExecuteRequest struct {
+	Category   string
+	Capability ServicingCapability
+}
+
+// ServicingExecuteResult is a gateway's structured outcome of one composite
+// execute_component_store_cleanup invocation. The gateway performs a fresh
+// analysis, enforces the guard, and starts cleanup only when a positive
+// reclaimable-package count is explicitly recommended; the result reports what
+// actually happened. It is path-free and byte-free.
+type ServicingExecuteResult struct {
+	// Outcome is a stable mutation outcome: completed, no_work, skipped, failed,
+	// or pre-mutation canceled. A ready outcome is never valid here.
+	Outcome ServicingOutcome
+	// Reason is a stable Foal-owned reason, required for skipped, failed, and
+	// pre-mutation canceled; empty for completed and no_work.
+	Reason string
+	// ReclaimablePackages and CleanupRecommended are the fresh-analysis fields.
+	// Meaningful for completed and no_work; zero-valued for skips and failures.
+	ReclaimablePackages int
+	CleanupRecommended  bool
+	// ExitCode is present only when DISM actually ran to exit (analysis or
+	// cleanup). Authorization skips and pre-launch failures leave it nil.
+	ExitCode *int
+	// RestartRequired is derived from DISM cleanup exit semantics (3010 or 3017).
+	RestartRequired bool
+	// CancelRequested records that cancellation arrived after cleanup started.
+	// It never replaces the actual completed or failed outcome; a pre-mutation
+	// cancellation instead uses Outcome canceled with CancelRequested false.
+	CancelRequested bool
+}
+
 // ServicingGateway is the high-level seam for Windows component-store servicing.
 // Shared Clean depends only on this interface: production wires an isolated
 // elevated helper coordinator (nonce-bound named pipe + fixed DISM capability),
 // while tests inject canned outcomes so ordinary core tests never launch UAC or
-// DISM. AnalyzeComponentStore performs one read-only component-store analysis
-// and returns a structured, path-free result. It must never mutate the
-// filesystem or component store, expose raw tool output, or run an arbitrary
-// command.
+// DISM. AnalyzeComponentStore performs one read-only component-store analysis;
+// ExecuteComponentStoreCleanup performs the composite fresh-analysis-then-cleanup
+// transaction. Both return structured, path-free results and must never expose
+// raw tool output or run an arbitrary command. There is no standalone
+// start-cleanup capability, so analysis can never be asserted across processes.
 type ServicingGateway interface {
 	AnalyzeComponentStore(ctx context.Context, req ServicingAnalysisRequest) ServicingAnalysisResult
+	ExecuteComponentStoreCleanup(ctx context.Context, req ServicingExecuteRequest) ServicingExecuteResult
 }
 
 // appendServicingAnalysis runs read-only component-store analysis for each
@@ -122,25 +162,97 @@ func applyServicingAnalysisResult(op ServicingOperation, res ServicingAnalysisRe
 	return op
 }
 
-// appendServicingExecuteSkips records each opted-in servicing category at
-// execute time as a skip with windows_servicing_not_authorized and no exit
-// code. Component-store mutation requires dedicated per-run authorization that
-// this slice does not provide, so execute never opens UAC or analyzes WinSxS.
-// The record keeps the composite execute capability so History and Result
-// distinguish a would-be cleanup from a dry-run analysis.
-func appendServicingExecuteSkips(servicingCategories []string, result *Result) {
+// appendServicingExecution runs the composite execute_component_store_cleanup
+// capability for each opted-in servicing category and appends a path-free
+// ServicingOperation to the result. It is the final mutation phase of Execute
+// (ADR 0029): it runs only after Recycle Bin and Permanent deletion work, and
+// once a servicing operation starts no later action begins. Missing servicing
+// authorization skips with windows_servicing_not_authorized and never opens
+// UAC; a run canceled before servicing starts records a pre-mutation cancel.
+func appendServicingExecution(ctx context.Context, opts Options, servicingCategories []string, result *Result) {
 	if result == nil {
 		return
 	}
 	for _, category := range servicingCategories {
-		result.ServicingOperations = append(result.ServicingOperations, ServicingOperation{
-			Category:      category,
-			PlannedAction: PlannedActionInvokeWindowsServicing,
-			Capability:    ServicingCapabilityExecuteComponentStoreCleanup,
-			Outcome:       ServicingOutcomeSkipped,
-			Reason:        ServicingReasonNotAuthorized,
-		})
+		reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseServicingOperations, category)
+		result.ServicingOperations = append(result.ServicingOperations, executeServicingCategory(ctx, opts, category))
 	}
+}
+
+func executeServicingCategory(ctx context.Context, opts Options, category string) ServicingOperation {
+	op := ServicingOperation{
+		Category:      category,
+		PlannedAction: PlannedActionInvokeWindowsServicing,
+		Capability:    ServicingCapabilityExecuteComponentStoreCleanup,
+	}
+	// Independent per-run authorization: without --allow-servicing there is no
+	// UAC, no analysis, and no gateway call. This is distinct from and never
+	// implied by permanent-deletion authorization.
+	if !opts.AllowServicing {
+		op.Outcome = ServicingOutcomeSkipped
+		op.Reason = ServicingReasonNotAuthorized
+		return op
+	}
+	// Pre-mutation cancellation: never begin a Windows servicing action after
+	// cancellation. No UAC, no DISM.
+	if ctx != nil && ctx.Err() != nil {
+		op.Outcome = ServicingOutcomeCanceled
+		op.Reason = ServicingReasonContextCanceled
+		return op
+	}
+	gateway := opts.ServicingGateway
+	if gateway == nil {
+		// No servicing gateway wired (unsupported platform or absent coordinator):
+		// fail closed with a stable skip; never guess reclaimable work or open UAC.
+		op.Outcome = ServicingOutcomeSkipped
+		op.Reason = ServicingReasonUnsupportedPlatform
+		return op
+	}
+	res := gateway.ExecuteComponentStoreCleanup(ctx, ServicingExecuteRequest{
+		Category:   category,
+		Capability: ServicingCapabilityExecuteComponentStoreCleanup,
+	})
+	return applyServicingExecuteResult(op, res)
+}
+
+// applyServicingExecuteResult maps a composite gateway result onto the operation
+// record with a fail-closed guard. It copies the DISM exit code, restart-required
+// flag, and cancellation-request state, then classifies the outcome. A read-only
+// ready outcome or any unknown value from a mutation capability is downgraded to
+// a stable helper failure so ambiguous state can never be read as success.
+func applyServicingExecuteResult(op ServicingOperation, res ServicingExecuteResult) ServicingOperation {
+	op.ExitCode = res.ExitCode
+	op.RestartRequired = res.RestartRequired
+	op.CancelRequested = res.CancelRequested
+	switch res.Outcome {
+	case ServicingOutcomeCompleted:
+		op.Outcome = ServicingOutcomeCompleted
+		op.ReclaimablePackages = res.ReclaimablePackages
+		op.CleanupRecommended = res.CleanupRecommended
+	case ServicingOutcomeNoWork:
+		op.Outcome = ServicingOutcomeNoWork
+		op.ReclaimablePackages = res.ReclaimablePackages
+		op.CleanupRecommended = res.CleanupRecommended
+	case ServicingOutcomeFailed:
+		op.Outcome = ServicingOutcomeFailed
+		op.ReclaimablePackages = res.ReclaimablePackages
+		op.CleanupRecommended = res.CleanupRecommended
+		op.Reason = normalizeServicingReason(ServicingOutcomeFailed, res.Reason)
+	case ServicingOutcomeSkipped:
+		op.Outcome = ServicingOutcomeSkipped
+		op.Reason = normalizeServicingReason(ServicingOutcomeSkipped, res.Reason)
+	case ServicingOutcomeCanceled:
+		// Pre-mutation cancellation only: a post-start cancel keeps the actual
+		// completed/failed outcome with CancelRequested set instead.
+		op.Outcome = ServicingOutcomeCanceled
+		op.Reason = normalizeServicingReason(ServicingOutcomeCanceled, res.Reason)
+	default:
+		// Unknown, or a read-only ready outcome returned from a mutation
+		// capability: fail closed.
+		op.Outcome = ServicingOutcomeFailed
+		op.Reason = ServicingReasonHelperFailed
+	}
+	return op
 }
 
 // normalizeServicingReason keeps only known stable reasons on a skip, failure,

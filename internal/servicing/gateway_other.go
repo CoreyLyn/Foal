@@ -20,5 +20,9 @@ func (unsupportedGateway) AnalyzeComponentStore(context.Context, clean.Servicing
 	return skipResult(clean.ServicingReasonUnsupportedPlatform)
 }
 
+func (unsupportedGateway) ExecuteComponentStoreCleanup(context.Context, clean.ServicingExecuteRequest) clean.ServicingExecuteResult {
+	return skipExecuteResult(clean.ServicingReasonUnsupportedPlatform)
+}
+
 // RunHelper is unsupported off Windows; the elevated helper only exists there.
 func RunHelper([]string) int { return helperExitUnsupported }
