@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 )
 
 // CategoryNVIDIAInstallerCache is the canonical exact-selection-only opt-in
@@ -42,12 +44,12 @@ const nvidiaInstallerCacheOptInImpactNotice = "Opt-in NVIDIA installer cache cle
 // Stable NVIDIA skip/diagnostic reason codes. Codes never embed candidate paths
 // or raw operating-system messages.
 const (
-	nvidiaActivitySkipCode      = "nvidia_application_running"
-	nvidiaRootUnreadableCode    = "nvidia_downloader_unreadable"
-	nvidiaStatusUnreadableCode  = "nvidia_status_registry_unreadable"
-	nvidiaExecutionPendingCode  = "nvidia_installer_cache_execution_pending"
-	nvidiaLegacyCompletedStatus = 2
-	nvidiaDisplayDriverType     = 1
+	nvidiaActivitySkipCode       = "nvidia_application_running"
+	nvidiaRootUnreadableCode     = "nvidia_downloader_unreadable"
+	nvidiaStatusUnreadableCode   = "nvidia_status_registry_unreadable"
+	nvidiaRevalidationFailedCode = "nvidia_installer_cache_revalidation_failed"
+	nvidiaLegacyCompletedStatus  = 2
+	nvidiaDisplayDriverType      = 1
 )
 
 // nvidiaStatusMaxBytes bounds status.json and gfeupdate.json parsing so a
@@ -199,6 +201,68 @@ func nvidiaInstallerCacheCategoryEntry(definition CleanupCategoryDefinition) cat
 		resolverKind: categoryResolverNVIDIAInstallerCache,
 		resolver:     nvidiaInstallerCacheResolver{},
 	}
+}
+
+func init() {
+	registerCategoryIdentityValidator(CategoryNVIDIAInstallerCache, validateNVIDIAInstallerCacheIdentity)
+}
+
+// validateNVIDIAInstallerCacheIdentity is the action-neutral, category-owned
+// immediate pre-mutation validator (#310). Immediately before the Recycle Bin
+// move it repeats the per-task NVIDIA proof against a fresh read of the fixed
+// Downloader root: task identity, the unique matching completed display-driver
+// record, required fields, the NVIDIA-owned HTTPS URL, single-file containment,
+// payload forensics (single hard link, no alternate data streams), the
+// recent-write exclusion, active-handoff reference exclusion, checksum integrity,
+// the Authenticode signature, metadata stability, filesystem safety, and
+// Protection. It never mutates, never expands candidates, and never repeats the
+// category-wide process/service idle gate (that belongs to fresh resolution).
+// Any changed, ambiguous, protected, unsupported, or invalid state returns
+// ok=false so the candidate is skipped fail-closed; the move_to_recycle_bin
+// action is preserved and never becomes permanent deletion.
+func validateNVIDIAInstallerCacheIdentity(candidate CategoryIdentityCandidate) (pathsafe.Reason, bool) {
+	reject := func(message string) (pathsafe.Reason, bool) {
+		return pathsafe.Reason{Code: nvidiaRevalidationFailedCode, Message: message}, false
+	}
+	if candidate.Category != CategoryNVIDIAInstallerCache {
+		return pathsafe.Reason{Code: "identity_mismatch", Message: "category identity does not match NVIDIA installer cache"}, false
+	}
+	taskDir := strings.TrimSpace(candidate.Path)
+	if taskDir == "" {
+		return reject("NVIDIA installer cache candidate path is empty")
+	}
+
+	deps := productionNVIDIAInstallerCacheDeps(candidate.nvidiaDiscovery)
+	root := deps.root
+	if strings.TrimSpace(root) == "" {
+		return reject("NVIDIA Downloader root is no longer resolvable")
+	}
+	name := filepath.Base(taskDir)
+	if !isNVIDIAHexTaskName(name) || !isDirectChildPath(root, taskDir) {
+		return reject("NVIDIA installer cache candidate is not a direct 32-hex task directory of the Downloader root")
+	}
+
+	// Fresh bounded read of the task registry and active-handoff references.
+	opts := Options{
+		Validator:                            candidate.validator,
+		NVIDIAInstallerCacheDiscoveryOptions: candidate.nvidiaDiscovery,
+	}
+	var core categoryCoreResult
+	statusByTask, ok := parseNVIDIAStatusRegistry(deps, root, candidate.Category, &core)
+	if !ok || len(statusByTask) == 0 {
+		return reject("NVIDIA task registry is no longer readable or no longer lists a matching task")
+	}
+	referencedContent := parseNVIDIAReferencedContent(deps, root)
+
+	// Repeat the full single-task evidence chain against the current tree.
+	candidatePath, bytes, ok := validateNVIDIATaskDirectory(deps, opts, root, taskDir, name, statusByTask, referencedContent, candidate.Category, &core)
+	if !ok {
+		return reject("NVIDIA installer cache candidate no longer matches the verified completed driver download; it was not moved to the Recycle Bin")
+	}
+	if !pathIdentityEqual(candidatePath, taskDir) || bytes != candidate.Bytes {
+		return reject("NVIDIA installer cache candidate identity or size changed since resolution; it was not moved to the Recycle Bin")
+	}
+	return pathsafe.Reason{}, true
 }
 
 // nvidiaStatusRecord is the bounded, safety-relevant subset of one legacy

@@ -121,36 +121,36 @@ func TestNVIDIAInstallerCache_DryRunReportsRecycleBinAndImpact(t *testing.T) {
 	}
 }
 
-func TestNVIDIAInstallerCache_ExecuteDoesNotMutate(t *testing.T) {
+func TestNVIDIAInstallerCache_ExecuteMovesCandidateToRecycleBin(t *testing.T) {
 	fx := buildValidNVIDIAFixture(t)
-	opts := nvidiaResolveOptions(fx)
-	opts.OptIn = []string{clean.CategoryNVIDIAInstallerCache}
+	opts := nvidiaExecuteOptions(fx)
 	adapter := &recordingRecycleBinAdapter{}
 	opts.RecycleBinAdapter = adapter
 
 	result := clean.Execute(context.Background(), opts)
 
-	if len(adapter.paths) != 0 {
-		t.Fatalf("execution must not move NVIDIA candidates, adapter saw %v", adapter.paths)
+	if len(adapter.paths) != 1 || !strings.EqualFold(adapter.paths[0], fx.taskDir) {
+		t.Fatalf("adapter saw %v, want the task dir %q", adapter.paths, fx.taskDir)
 	}
-	for _, deleted := range result.Deleted {
-		if deleted.Rule == clean.CategoryNVIDIAInstallerCache {
-			t.Fatalf("NVIDIA candidate was unexpectedly deleted: %#v", deleted)
-		}
+	if len(result.Deleted) != 1 {
+		t.Fatalf("deleted = %#v, want one Recycle Bin move", result.Deleted)
 	}
-	skipped := false
+	deleted := result.Deleted[0]
+	if deleted.Rule != clean.CategoryNVIDIAInstallerCache {
+		t.Fatalf("deleted rule = %q", deleted.Rule)
+	}
+	if deleted.Action != string(clean.PlannedActionMoveToRecycleBin) {
+		t.Fatalf("deleted action = %q, want move_to_recycle_bin", deleted.Action)
+	}
+	if !deleted.IsOptIn {
+		t.Fatal("NVIDIA move must be recorded as an opt-in deletion")
+	}
+	if result.Totals.RecycleBinMovedBytes <= 0 || result.Totals.PermanentlyDeletedBytes != 0 {
+		t.Fatalf("totals = %#v, want recycle bin bytes only", result.Totals)
+	}
 	for _, item := range result.Skipped {
 		if item.Rule == clean.CategoryNVIDIAInstallerCache {
-			skipped = true
-			if item.Reason.Code != "nvidia_installer_cache_execution_pending" {
-				t.Fatalf("skip reason = %q, want nvidia_installer_cache_execution_pending", item.Reason.Code)
-			}
-			if item.PlannedAction != string(clean.PlannedActionMoveToRecycleBin) {
-				t.Fatalf("skip planned action = %q, want move_to_recycle_bin", item.PlannedAction)
-			}
+			t.Fatalf("candidate must not be skipped: %#v", item)
 		}
-	}
-	if !skipped {
-		t.Fatalf("expected NVIDIA candidate to be fail-closed skipped, skipped = %#v", result.Skipped)
 	}
 }
