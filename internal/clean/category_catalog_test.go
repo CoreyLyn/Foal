@@ -25,6 +25,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"nvidia_dx_cache",
 		"amd_gpu_shader_caches",
 		"intel_gpu_shader_cache",
+		"winsxs_component_store",
 		"browser_cache",
 		"vscode_cache",
 		"cursor_cache",
@@ -245,7 +246,7 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		t.Fatalf("locked Recycle Bin matrix length = %d, want 6", len(wantRecycleBin))
 	}
 
-	var permanent, recycleBin, executable []string
+	var permanent, recycleBin, servicing, executable []string
 	for _, definition := range catalog.Definitions() {
 		switch definition.Eligibility {
 		case clean.CategoryEligibilityDefault, clean.CategoryEligibilityOptIn:
@@ -255,6 +256,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 				permanent = append(permanent, definition.Identifier)
 			case clean.PlannedActionMoveToRecycleBin:
 				recycleBin = append(recycleBin, definition.Identifier)
+			case clean.PlannedActionInvokeWindowsServicing:
+				servicing = append(servicing, definition.Identifier)
 			default:
 				t.Fatalf("executable %q has unsupported planned_action %q", definition.Identifier, definition.PlannedAction)
 			}
@@ -267,8 +270,13 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	if len(executable) != 36 {
-		t.Fatalf("executable categories = %d (%v), want 36", len(executable), executable)
+	// ADR 0029 adds exactly one invoke_windows_servicing category
+	// (winsxs_component_store). Permanent and Recycle Bin counts are unchanged.
+	if len(servicing) != 1 || servicing[0] != clean.CategoryWinSxSComponentStore {
+		t.Fatalf("servicing matrix = %#v, want [%q]", servicing, clean.CategoryWinSxSComponentStore)
+	}
+	if len(executable) != 37 {
+		t.Fatalf("executable categories = %d (%v), want 37 (36 deletion + 1 servicing)", len(executable), executable)
 	}
 	if !reflect.DeepEqual(permanent, wantPermanent) {
 		t.Fatalf("permanent matrix = %#v, want %#v", permanent, wantPermanent)
@@ -323,17 +331,18 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	// Eager queue is all 36 executable rows; permission boundary is never scanned.
+	// Eager queue is all 37 executable rows; permission boundary is never scanned.
 	queue := clean.EagerPreviewQueue()
-	if len(queue) != 36 {
-		t.Fatalf("EagerPreviewQueue length = %d, want 36 executable categories", len(queue))
+	if len(queue) != 37 {
+		t.Fatalf("EagerPreviewQueue length = %d, want 37 executable categories", len(queue))
 	}
 	for _, summary := range queue {
 		if summary.Identifier == "administrator_only_caches" {
 			t.Fatal("permission boundary must not enter the eager queue")
 		}
 		if summary.PlannedAction != clean.PlannedActionDeletePermanently &&
-			summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
+			summary.PlannedAction != clean.PlannedActionMoveToRecycleBin &&
+			summary.PlannedAction != clean.PlannedActionInvokeWindowsServicing {
 			t.Fatalf("queue %q planned_action = %q", summary.Identifier, summary.PlannedAction)
 		}
 	}
@@ -345,6 +354,18 @@ func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T
 	for _, definition := range catalog.Definitions() {
 		switch definition.Eligibility {
 		case clean.CategoryEligibilityDefault, clean.CategoryEligibilityOptIn:
+			if definition.PlannedAction == clean.PlannedActionInvokeWindowsServicing {
+				// Servicing categories declare invoke_windows_servicing rather than
+				// a deletion action; they are validated by the servicing matrix.
+				if definition.Identifier != clean.CategoryWinSxSComponentStore {
+					t.Fatalf("unexpected servicing category %q", definition.Identifier)
+				}
+				summary, ok := catalog.Summary(definition.Identifier)
+				if !ok || summary.PlannedAction != clean.PlannedActionInvokeWindowsServicing {
+					t.Fatalf("servicing summary for %q = %#v", definition.Identifier, summary)
+				}
+				continue
+			}
 			want := clean.PlannedActionMoveToRecycleBin
 			if wantPermanent[definition.Identifier] {
 				want = clean.PlannedActionDeletePermanently

@@ -897,8 +897,8 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 	if model.selectedCount() != 31 {
 		t.Fatalf("selectedCount = %d, want 31 (default + all permanent when rows present)", model.selectedCount())
 	}
-	if len(model.rows) != 36 {
-		t.Fatalf("eager rows = %d, want 36 executable categories", len(model.rows))
+	if len(model.rows) != 37 {
+		t.Fatalf("eager rows = %d, want 37 executable categories", len(model.rows))
 	}
 	for _, id := range model.selectedCategoryIDs() {
 		if strings.Contains(id, `\`) || strings.Contains(id, "/") || strings.Contains(id, " ") {
@@ -1104,6 +1104,14 @@ func TestEagerCleanModelBulkSelectAndClear(t *testing.T) {
 				t.Fatalf("disabled %s %q selected by a", row.State, row.Identifier)
 			}
 		default:
+			// Exact-selection-only rows (Windows servicing) are never bulk-selected
+			// by Select All, even while in a selectable state.
+			if row.SelectionPolicy == clean.CategorySelectionPolicyExactOnly {
+				if row.Selected {
+					t.Fatalf("exact-selection-only %q selected by a", row.Identifier)
+				}
+				continue
+			}
 			if !row.Selected {
 				t.Fatalf("selectable %s %q not selected by a", row.State, row.Identifier)
 			}
@@ -3175,16 +3183,20 @@ func TestEagerCleanInitialSelectionDerivedFromInjectedSummaries(t *testing.T) {
 			t.Fatalf("clear mutated action for %q", row.Identifier)
 		}
 	}
-	// Production catalog: defaults + all delete_permanently categories start selected.
+	// Production catalog: defaults + all delete_permanently categories start
+	// selected, except exact-selection-only rows (Windows servicing) which never
+	// start selected.
 	prod := newEagerCleanModel(80, 24)
 	for _, row := range prod.rows {
-		wantSelected := row.Eligibility == clean.CategoryEligibilityDefault ||
-			row.PlannedAction == clean.PlannedActionDeletePermanently
+		wantSelected := row.SelectionPolicy != clean.CategorySelectionPolicyExactOnly &&
+			(row.Eligibility == clean.CategoryEligibilityDefault ||
+				row.PlannedAction == clean.PlannedActionDeletePermanently)
 		if row.Selected != wantSelected {
 			t.Fatalf("production %q selected=%v, want %v", row.Identifier, row.Selected, wantSelected)
 		}
 		if row.PlannedAction != clean.PlannedActionDeletePermanently &&
-			row.PlannedAction != clean.PlannedActionMoveToRecycleBin {
+			row.PlannedAction != clean.PlannedActionMoveToRecycleBin &&
+			row.PlannedAction != clean.PlannedActionInvokeWindowsServicing {
 			t.Fatalf("production %q action = %q, want a supported planned action", row.Identifier, row.PlannedAction)
 		}
 	}
