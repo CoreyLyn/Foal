@@ -363,7 +363,7 @@ func TestPlaywrightBrowsersExecuteHistoryAndCanceled(t *testing.T) {
 	if result.Totals.OptInDeletedCount != 1 || len(permanent.paths) != 1 || permanent.paths[0] != child {
 		t.Fatalf("execute result/permanent = %#v / %v", result, permanent.paths)
 	}
-	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("deleted = %#v, want delete_permanently", result.Deleted)
 	}
 	if len(recorder.sessions) != 1 {
@@ -373,7 +373,7 @@ func TestPlaywrightBrowsersExecuteHistoryAndCanceled(t *testing.T) {
 	for _, item := range recorder.items {
 		if item.Path == child {
 			found = true
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 		}

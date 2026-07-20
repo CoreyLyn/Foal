@@ -337,7 +337,7 @@ func TestElectronCache_ExecuteFreshResolveAndHistory(t *testing.T) {
 	if execResult.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("opt-in deleted = %d", execResult.Totals.OptInDeletedCount)
 	}
-	if len(execResult.Deleted) != 1 || execResult.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if len(execResult.Deleted) != 1 || execResult.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("deleted = %#v, want delete_permanently", execResult.Deleted)
 	}
 	if len(recorder.items) == 0 {
@@ -350,7 +350,7 @@ func TestElectronCache_ExecuteFreshResolveAndHistory(t *testing.T) {
 			if item.Rule != clean.DevCacheCategoryElectron {
 				t.Fatalf("history rule = %q", item.Rule)
 			}
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 		}

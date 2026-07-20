@@ -40,7 +40,7 @@ type PreviewOptInCategory struct {
 	Label          string
 	ReportCategory ReportCategory
 	// PlannedAction is the catalog-owned deletion action for this opt-in category.
-	PlannedAction    DeletionAction
+	PlannedAction    PlannedAction
 	Selected         bool
 	CandidateCount   int
 	ReclaimableBytes int64

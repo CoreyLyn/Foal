@@ -67,7 +67,7 @@ type CategoryPreviewObservation struct {
 	Eligibility    CategoryEligibility `json:"eligibility"`
 	// PlannedAction is the catalog-owned deletion action for this executable
 	// category. Non-executable categories never appear in the eager queue.
-	PlannedAction        DeletionAction       `json:"planned_action,omitempty"`
+	PlannedAction        PlannedAction        `json:"planned_action,omitempty"`
 	State                CategoryPreviewState `json:"state"`
 	CandidateCount       int                  `json:"candidate_count"`
 	Bytes                int64                `json:"bytes"`

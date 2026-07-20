@@ -112,8 +112,8 @@ func TestAppendStructuredDevCacheCandidatesInspectionLimit(t *testing.T) {
 		root,
 		[]string{child},
 		structuredDevCacheMeasureDependencies{
-			lstat: os.Lstat,
-			walkDir: fakeWalk,
+			lstat:           os.Lstat,
+			walkDir:         fakeWalk,
 			descendantLimit: 2,
 		},
 	)
@@ -185,10 +185,10 @@ func TestCanonicalStructuredDevCachePolicyIsPlaywrightAndPuppeteer(t *testing.T)
 	// Structured child discovery: playwright-browsers, puppeteer-browsers,
 	// jetbrains-ide-caches, and visual-studio-caches. Whole-root categories stay nil.
 	structured := map[string]bool{
-		DevCacheCategoryPlaywright:          true,
-		DevCacheCategoryPuppeteerBrowsers:   true,
-		DevCacheCategoryJetBrainsIDECaches:  true,
-		DevCacheCategoryVisualStudioCaches:  true,
+		DevCacheCategoryPlaywright:         true,
+		DevCacheCategoryPuppeteerBrowsers:  true,
+		DevCacheCategoryJetBrainsIDECaches: true,
+		DevCacheCategoryVisualStudioCaches: true,
 	}
 	for _, id := range developerCacheCategoryIDs() {
 		has := categoryHasStructuredDevCacheDiscovery(id)
@@ -209,7 +209,7 @@ func TestValidateDeveloperCacheRegistryRejectsChildDiscoveryOnNonDevCache(t *tes
 		definition: categoryDefinition(
 			"user_temp", "User temp", ReportCategoryUserEssentials,
 			CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable,
-			DeletionActionMoveToRecycleBin,
+			PlannedActionMoveToRecycleBin,
 		),
 		resolverKind: categoryResolverExistenceOpportunity,
 		resolver:     existenceOpportunityResolver{},
@@ -231,7 +231,7 @@ func TestDeveloperCacheEntryWithChildrenBindsPolicy(t *testing.T) {
 		categoryDefinition(
 			"future-structured", "Future structured", ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime,
-			DeletionActionMoveToRecycleBin,
+			PlannedActionMoveToRecycleBin,
 		),
 		func(devCachePathDependencies) []string { return []string{`C:\root`} },
 		discover,

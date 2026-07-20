@@ -461,7 +461,7 @@ func TestOptInFirefoxBrowserCacheCandidatesAreCache2Only(t *testing.T) {
 	if result.OptInCandidates[0].Path != cache2 {
 		t.Fatalf("path = %q, want %q", result.OptInCandidates[0].Path, cache2)
 	}
-	if result.OptInCandidates[0].PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if result.OptInCandidates[0].PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned_action = %q", result.OptInCandidates[0].PlannedAction)
 	}
 	if result.OptInCandidates[0].Category != clean.OpportunityCategoryBrowserCache {
@@ -516,7 +516,7 @@ func TestExecuteOptInFirefoxBrowserCacheCleansWhenIdleAndAuthorized(t *testing.T
 		t.Fatalf("non-allowlisted sibling removed: %v", err)
 	}
 	for _, d := range result.Deleted {
-		if d.IsOptIn && d.Action != string(clean.DeletionActionDeletePermanently) {
+		if d.IsOptIn && d.Action != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("deleted action = %#v", d)
 		}
 	}

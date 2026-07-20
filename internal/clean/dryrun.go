@@ -236,7 +236,7 @@ func plannedActionLabel(action string) string {
 	switch action {
 	case plannedRecycleBinAction:
 		return "Recycle Bin"
-	case string(DeletionActionDeletePermanently):
+	case string(PlannedActionDeletePermanently):
 		return "Permanent deletion"
 	default:
 		return action

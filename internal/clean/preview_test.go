@@ -959,7 +959,7 @@ func TestDryRunReportsCandidateContractWithoutDeleting(t *testing.T) {
 			CandidatePaths: []string{candidate},
 		}},
 	})
-	if len(defaultResult.Candidates) != 1 || defaultResult.Candidates[0].PlannedAction != string(clean.DeletionActionMoveToRecycleBin) {
+	if len(defaultResult.Candidates) != 1 || defaultResult.Candidates[0].PlannedAction != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("default category planned_action = %#v", defaultResult.Candidates)
 	}
 	summary, ok := clean.CanonicalCleanupCategoryCatalog().Summary(clean.DefaultCategoryFoalOwnedTempSandboxes)
@@ -2853,8 +2853,8 @@ func TestDryRunCancellationDoesNotReportPartialOptInBytes(t *testing.T) {
 	cancel()
 
 	result := clean.DryRun(ctx, clean.Options{
-		OptIn:                     []string{clean.DevCacheCategoryNPM},
-		DevCachePathResolver:      func(category string) []string { return []string{npmPath} },
+		OptIn:                         []string{clean.DevCacheCategoryNPM},
+		DevCachePathResolver:          func(category string) []string { return []string{npmPath} },
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		DiscoverReviewSuggestions:     noReviewSuggestions,
 		Rules: []clean.Rule{{
@@ -2887,8 +2887,8 @@ func TestDryRunSuppressesReviewSuggestionsByWindowsPathIdentity(t *testing.T) {
 	pathForwardSlashes := strings.ReplaceAll(cacheDir, `\`, `/`)
 
 	result := clean.DryRun(context.Background(), clean.Options{
-		OptIn:                     []string{clean.DevCacheCategoryNPM},
-		DevCachePathResolver:      func(category string) []string { return []string{pathStandard} },
+		OptIn:                         []string{clean.DevCacheCategoryNPM},
+		DevCachePathResolver:          func(category string) []string { return []string{pathStandard} },
 		DiscoverUserTempOpportunities: noUserTempOpportunities,
 		DiscoverReviewSuggestions: func(context.Context) []clean.ReviewSuggestion {
 			return []clean.ReviewSuggestion{

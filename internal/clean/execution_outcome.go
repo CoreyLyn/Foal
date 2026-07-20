@@ -147,8 +147,8 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		}
 		b.deleted++
 		if item.Bytes > 0 {
-			switch DeletionAction(item.Action) {
-			case DeletionActionDeletePermanently:
+			switch PlannedAction(item.Action) {
+			case PlannedActionDeletePermanently:
 				b.permanentlyDeletedBytes += item.Bytes
 			default:
 				// Empty action (legacy/test fixtures) and move_to_recycle_bin
@@ -303,13 +303,13 @@ const PermanentPartialRiskWarning = "Some permanent deletion may have partially 
 func ResultHasPermanentPartialRisk(result Result) bool {
 	for _, item := range result.Failed {
 		if item.Reason.Code == permanentDeleteFailedIssueCode ||
-			DeletionAction(item.Action) == DeletionActionDeletePermanently ||
-			DeletionAction(item.PlannedAction) == DeletionActionDeletePermanently {
+			PlannedAction(item.Action) == PlannedActionDeletePermanently ||
+			PlannedAction(item.PlannedAction) == PlannedActionDeletePermanently {
 			return true
 		}
 	}
 	for _, item := range result.Skipped {
-		if DeletionAction(item.PlannedAction) != DeletionActionDeletePermanently {
+		if PlannedAction(item.PlannedAction) != PlannedActionDeletePermanently {
 			continue
 		}
 		if item.Reason.Code == "context_canceled" {
@@ -328,5 +328,3 @@ func ResultHasPermanentPartialRisk(result Result) bool {
 	}
 	return false
 }
-
-

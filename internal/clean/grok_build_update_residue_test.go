@@ -95,7 +95,7 @@ func TestGrokBuildUpdateResidue_CatalogAndSelection(t *testing.T) {
 	if summary.RunningApplicationPolicy != clean.RunningApplicationPolicyDistinctiveProcessIdle {
 		t.Fatalf("running policy = %q", summary.RunningApplicationPolicy)
 	}
-	if summary.PlannedAction != clean.DeletionActionDeletePermanently {
+	if summary.PlannedAction != clean.PlannedActionDeletePermanently {
 		t.Fatalf("planned_action = %q", summary.PlannedAction)
 	}
 	if !clean.InitiallySelectedCategory(summary) {
@@ -254,7 +254,7 @@ func TestGrokBuildUpdateResidue_FilenameAllowlist(t *testing.T) {
 		if c.Category != clean.CategoryGrokBuildUpdateResidue {
 			t.Fatalf("unexpected category %q", c.Category)
 		}
-		if c.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if c.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned_action = %q", c.PlannedAction)
 		}
 		got[filepath.Base(c.Path)] = c.Bytes
@@ -455,7 +455,7 @@ func TestGrokBuildUpdateResidue_DryRunJSONNoMutation(t *testing.T) {
 	if len(result.OptInCandidates) != 1 {
 		t.Fatalf("candidates = %#v", result.OptInCandidates)
 	}
-	if result.OptInCandidates[0].PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if result.OptInCandidates[0].PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned_action = %q", result.OptInCandidates[0].PlannedAction)
 	}
 	if len(result.Deleted) != 0 {
@@ -510,7 +510,7 @@ func TestGrokBuildUpdateResidue_ExecuteUnauthorized(t *testing.T) {
 	for _, s := range result.Skipped {
 		if s.Rule == clean.CategoryGrokBuildUpdateResidue && s.Reason.Code == "permanent_deletion_not_authorized" {
 			found = true
-			if s.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			if s.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("skip planned action = %q", s.PlannedAction)
 			}
 		}
@@ -555,7 +555,7 @@ func TestGrokBuildUpdateResidue_ExecuteAuthorizedHistory(t *testing.T) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	for _, d := range result.Deleted {
-		if d.Action != string(clean.DeletionActionDeletePermanently) {
+		if d.Action != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("deleted action = %q", d.Action)
 		}
 		if d.Rule != clean.CategoryGrokBuildUpdateResidue {
@@ -580,7 +580,7 @@ func TestGrokBuildUpdateResidue_ExecuteAuthorizedHistory(t *testing.T) {
 
 	foundHistory := false
 	for _, item := range recorder.items {
-		if item.Rule == clean.CategoryGrokBuildUpdateResidue && item.Action == string(clean.DeletionActionDeletePermanently) {
+		if item.Rule == clean.CategoryGrokBuildUpdateResidue && item.Action == string(clean.PlannedActionDeletePermanently) {
 			foundHistory = true
 		}
 	}

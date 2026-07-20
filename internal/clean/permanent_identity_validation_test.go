@@ -25,8 +25,8 @@ func TestExecuteCategoryOwnedPreMutationReceivesFreshCandidateContext(t *testing
 	permanent := &recordingPermanentRemover{}
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{path}},
@@ -49,7 +49,7 @@ func TestExecuteCategoryOwnedPreMutationReceivesFreshCandidateContext(t *testing
 	if seen.Path != path || seen.Bytes != 4 || seen.Category != testPermanentRule {
 		t.Fatalf("validator context = %#v, want path/bytes/category", seen)
 	}
-	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	if len(permanent.paths) != 1 {
@@ -65,16 +65,16 @@ func TestExecuteCategoryOwnedRejectionSkipsWithoutRemoverOrRecycleFallback(t *te
 	recorder := &recordingHistoryRecorder{}
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{path}},
 		},
-		RecycleBinAdapter:  recycle,
-		PermanentRemover:   permanent,
-		HistoryRecorder:    recorder,
-		CommandParameters:  history.CommandParameters{Command: "clean", Args: []string{"clean", "--execute"}},
+		RecycleBinAdapter: recycle,
+		PermanentRemover:  permanent,
+		HistoryRecorder:   recorder,
+		CommandParameters: history.CommandParameters{Command: "clean", Args: []string{"clean", "--execute"}},
 		PermanentIdentityValidators: map[string]clean.PermanentIdentityValidator{
 			testPermanentRule: func(clean.PermanentIdentityCandidate) (pathsafe.Reason, bool) {
 				return pathsafe.Reason{
@@ -104,7 +104,7 @@ func TestExecuteCategoryOwnedRejectionSkipsWithoutRemoverOrRecycleFallback(t *te
 	if skipped.Rule != testPermanentRule || skipped.Bytes != 4 {
 		t.Fatalf("skip identity = %#v", skipped)
 	}
-	if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if skipped.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned action = %q, want delete_permanently", skipped.PlannedAction)
 	}
 	if skipped.Reason.Code != "identity_mismatch" {
@@ -118,7 +118,7 @@ func TestExecuteCategoryOwnedRejectionSkipsWithoutRemoverOrRecycleFallback(t *te
 	for _, item := range recorder.items {
 		if item.Result == "skipped" && item.SkippedReason != nil && item.SkippedReason.Code == "identity_mismatch" {
 			found = true
-			if item.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			if item.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history planned action = %q", item.PlannedAction)
 			}
 			if item.Rule != testPermanentRule || item.Bytes == nil || *item.Bytes != 4 {
@@ -150,8 +150,8 @@ func TestExecuteCategoryOwnedRejectionIsolatesValidSiblings(t *testing.T) {
 	permanent := &recordingPermanentRemover{}
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{reject, keep}},
@@ -176,13 +176,13 @@ func TestExecuteCategoryOwnedRejectionIsolatesValidSiblings(t *testing.T) {
 	if len(result.Deleted) != 1 || result.Deleted[0].Path != keep {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
-	if result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("deleted action = %q", result.Deleted[0].Action)
 	}
 	if len(result.Skipped) != 1 || result.Skipped[0].Path != reject {
 		t.Fatalf("skipped = %#v", result.Skipped)
 	}
-	if result.Skipped[0].PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if result.Skipped[0].PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("skipped planned action = %q", result.Skipped[0].PlannedAction)
 	}
 	if result.Totals.PermanentlyDeletedBytes != 4 || result.Totals.RecycleBinMovedBytes != 0 {
@@ -203,8 +203,8 @@ func TestExecuteWithoutCategoryValidatorKeepsSharedPermanentRemover(t *testing.T
 	permanent := &recordingPermanentRemover{}
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{path}},
@@ -218,7 +218,7 @@ func TestExecuteWithoutCategoryValidatorKeepsSharedPermanentRemover(t *testing.T
 	if len(permanent.paths) != 1 || permanent.paths[0] != path {
 		t.Fatalf("shared remover paths = %v", permanent.paths)
 	}
-	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	if result.Totals.PermanentlyDeletedBytes != 5 {
@@ -248,8 +248,8 @@ func TestExecutePathSafeRejectionPrecedesCategoryOwnedValidator(t *testing.T) {
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
 		Validator:              pathsafe.NewValidator([]string{root}),
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{path}},
@@ -294,8 +294,8 @@ func TestExecuteCategoryOwnedValidationCancelSemanticsUnchanged(t *testing.T) {
 	})
 	result := clean.Execute(ctx, clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{first, second}},
@@ -325,7 +325,7 @@ func TestExecuteCategoryOwnedValidationCancelSemanticsUnchanged(t *testing.T) {
 		t.Fatalf("skipped = %#v", result.Skipped)
 	}
 	for _, skipped := range result.Skipped {
-		if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if skipped.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("cancel skip planned action = %#v", skipped)
 		}
 		if skipped.Reason.Code != "context_canceled" {

@@ -21,7 +21,7 @@ func TestValidateCategoryResolverRegistryRejectsInvalidBindings(t *testing.T) {
 	executable := categoryDefinition(
 		"future-cache", "Future cache", ReportCategoryDeveloperTools,
 		CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime,
-		DeletionActionDeletePermanently,
+		PlannedActionDeletePermanently,
 	)
 	nonExecutable := categoryDefinition(
 		"future-notice", "Future notice", ReportCategorySystem,
@@ -74,7 +74,7 @@ func TestValidateDeveloperCacheRegistryRejectsIncompleteEntries(t *testing.T) {
 		ReportCategoryDeveloperTools,
 		CategoryEligibilityOptIn,
 		RunningApplicationPolicyDistinctiveProcessIdle,
-		DeletionActionMoveToRecycleBin,
+		PlannedActionMoveToRecycleBin,
 	)
 
 	t.Run("missing resolver", func(t *testing.T) {

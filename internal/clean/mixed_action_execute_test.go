@@ -68,9 +68,9 @@ func mixedActionOpts(t *testing.T, root string, recyclePath, permanentPath strin
 	t.Helper()
 	return clean.Options{
 		AllowPermanentDeletion: allowPermanent,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
-			testRecycleRule:   clean.DeletionActionMoveToRecycleBin,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
+			testRecycleRule:   clean.PlannedActionMoveToRecycleBin,
 		},
 		Rules: []clean.Rule{
 			{ID: testRecycleRule, DefaultEnabled: true, CandidatePaths: []string{recyclePath}},
@@ -112,10 +112,10 @@ func TestExecuteMixedActionDispatchesCollaboratorsByPlannedAction(t *testing.T) 
 	for _, item := range result.Deleted {
 		byRule[item.Rule] = item
 	}
-	if byRule[testRecycleRule].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if byRule[testRecycleRule].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("recycle action = %#v", byRule[testRecycleRule])
 	}
-	if byRule[testPermanentRule].Action != string(clean.DeletionActionDeletePermanently) {
+	if byRule[testPermanentRule].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("permanent action = %#v", byRule[testPermanentRule])
 	}
 	if result.Totals.RecycleBinMovedBytes != 4 || result.Totals.PermanentlyDeletedBytes != 4 {
@@ -137,9 +137,9 @@ func TestExecuteMixedActionOrderRecycleBinBeforePermanent(t *testing.T) {
 	collab := &orderedCollaborators{}
 	opts := clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
-			testRecycleRule:   clean.DeletionActionMoveToRecycleBin,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
+			testRecycleRule:   clean.PlannedActionMoveToRecycleBin,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{permanentPath}},
@@ -177,7 +177,7 @@ func TestExecuteMissingPermanentAuthorizationSkipsWithoutChangingPlannedAction(t
 	if len(permanent.paths) != 0 {
 		t.Fatalf("permanent remover called: %v", permanent.paths)
 	}
-	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	if len(result.Skipped) != 1 {
@@ -187,7 +187,7 @@ func TestExecuteMissingPermanentAuthorizationSkipsWithoutChangingPlannedAction(t
 	if skipped.Reason.Code != "permanent_deletion_not_authorized" {
 		t.Fatalf("skip code = %q", skipped.Reason.Code)
 	}
-	if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if skipped.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned action changed: %q", skipped.PlannedAction)
 	}
 	if result.Totals.PermanentlyDeletedBytes != 0 || result.Totals.RecycleBinMovedBytes != 4 {
@@ -200,7 +200,7 @@ func TestExecuteMissingPermanentAuthorizationSkipsWithoutChangingPlannedAction(t
 	for _, item := range recorder.items {
 		if item.Result == "skipped" && item.SkippedReason != nil && item.SkippedReason.Code == "permanent_deletion_not_authorized" {
 			foundAuthSkip = true
-			if item.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			if item.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history planned action = %q", item.PlannedAction)
 			}
 		}
@@ -225,9 +225,9 @@ func TestExecuteCapacityChecksExcludePermanentCandidates(t *testing.T) {
 	collab := &orderedCollaborators{}
 	opts := clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
-			testRecycleRule:   clean.DeletionActionMoveToRecycleBin,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
+			testRecycleRule:   clean.PlannedActionMoveToRecycleBin,
 		},
 		Rules: []clean.Rule{
 			{ID: testRecycleRule, DefaultEnabled: true, CandidatePaths: []string{recyclePath}},
@@ -257,14 +257,14 @@ func TestExecuteRecycleBinFailureNeverFallsBackToPermanent(t *testing.T) {
 	// deletion for recycle-planned candidates.
 	opts := clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testRecycleRule: clean.DeletionActionMoveToRecycleBin,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testRecycleRule: clean.PlannedActionMoveToRecycleBin,
 		},
 		Rules: []clean.Rule{
 			{ID: testRecycleRule, DefaultEnabled: true, CandidatePaths: []string{recyclePath, permanentPath}},
 		},
-		RecycleBinAdapter:  &recordingRecycleBinAdapter{},
-		PermanentRemover:   permanent,
+		RecycleBinAdapter: &recordingRecycleBinAdapter{},
+		PermanentRemover:  permanent,
 		RecycleBinCapacityProbe: func(string) (clean.RecycleBinVolumeConfig, error) {
 			return clean.RecycleBinVolumeConfig{Volume: "v", NukeOnDelete: true, MaxCapacity: 1 << 60}, nil
 		},
@@ -280,7 +280,7 @@ func TestExecuteRecycleBinFailureNeverFallsBackToPermanent(t *testing.T) {
 		if skipped.Reason.Code != "recycle_bin_disabled" {
 			t.Fatalf("skip = %#v", skipped)
 		}
-		if skipped.PlannedAction != string(clean.DeletionActionMoveToRecycleBin) {
+		if skipped.PlannedAction != string(clean.PlannedActionMoveToRecycleBin) {
 			t.Fatalf("planned action changed under recycle failure: %q", skipped.PlannedAction)
 		}
 	}
@@ -348,8 +348,8 @@ func TestExecutePermanentImmediateValidationAndIntroducedReparse(t *testing.T) {
 	permanent := &recordingPermanentRemover{}
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{link}},
@@ -374,8 +374,8 @@ func TestExecutePermanentProtectionSkipBeforeRemover(t *testing.T) {
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
 		Validator:              pathsafe.NewValidator([]string{root}),
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{path}},
@@ -409,8 +409,8 @@ func TestExecutePermanentPartialFailureSiblingContinuationAndHistory(t *testing.
 	recorder := &recordingHistoryRecorder{}
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{first, second}},
@@ -433,7 +433,7 @@ func TestExecutePermanentPartialFailureSiblingContinuationAndHistory(t *testing.
 	if failed.Reason.Code != "permanent_delete_failed" || failed.Bytes != 4 {
 		t.Fatalf("failed item = %#v", failed)
 	}
-	if failed.Action != string(clean.DeletionActionDeletePermanently) || failed.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if failed.Action != string(clean.PlannedActionDeletePermanently) || failed.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("failed actions = %#v", failed)
 	}
 	if !strings.Contains(failed.Reason.Message, "may already be permanently deleted") {
@@ -454,7 +454,7 @@ func TestExecutePermanentPartialFailureSiblingContinuationAndHistory(t *testing.
 			if item.Error == nil || item.Error.Code != "permanent_delete_failed" {
 				t.Fatalf("history failed item = %#v", item)
 			}
-			if item.Action != string(clean.DeletionActionDeletePermanently) || item.Bytes == nil || *item.Bytes != 4 {
+			if item.Action != string(clean.PlannedActionDeletePermanently) || item.Bytes == nil || *item.Bytes != 4 {
 				t.Fatalf("history failed action/bytes = %#v", item)
 			}
 		}
@@ -492,8 +492,8 @@ func TestExecutePermanentCancellationZerosInterruptedBytes(t *testing.T) {
 	recorder := &recordingHistoryRecorder{}
 	result := clean.Execute(ctx, clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{first, second}},
@@ -577,18 +577,18 @@ func TestExecuteReportsActiveCategoryAroundResolveAndMutateBoundaries(t *testing
 	var events []clean.ExecutionProgress
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			ruleA: clean.DeletionActionMoveToRecycleBin,
-			ruleB: clean.DeletionActionMoveToRecycleBin,
-			ruleC: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			ruleA: clean.PlannedActionMoveToRecycleBin,
+			ruleB: clean.PlannedActionMoveToRecycleBin,
+			ruleC: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: ruleA, DefaultEnabled: true, CandidatePaths: []string{recycleA}},
 			{ID: ruleB, DefaultEnabled: true, CandidatePaths: []string{recycleB}},
 			{ID: ruleC, DefaultEnabled: true, CandidatePaths: []string{permanentC}},
 		},
-		RecycleBinAdapter:  &recordingRecycleBinAdapter{},
-		PermanentRemover:   &recordingPermanentRemover{},
+		RecycleBinAdapter: &recordingRecycleBinAdapter{},
+		PermanentRemover:  &recordingPermanentRemover{},
 		RecycleBinCapacityProbe: func(string) (clean.RecycleBinVolumeConfig, error) {
 			return clean.RecycleBinVolumeConfig{Volume: "v", MaxCapacity: 1 << 60}, nil
 		},
@@ -650,10 +650,10 @@ func TestExecuteReportsCategoryCompletionBeforeFinalResult(t *testing.T) {
 	var events []clean.ExecutionProgress
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			ruleA: clean.DeletionActionMoveToRecycleBin,
-			ruleB: clean.DeletionActionMoveToRecycleBin,
-			ruleC: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			ruleA: clean.PlannedActionMoveToRecycleBin,
+			ruleB: clean.PlannedActionMoveToRecycleBin,
+			ruleC: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: ruleA, DefaultEnabled: true, CandidatePaths: []string{recycleA}},
@@ -817,8 +817,8 @@ func TestExecutePermanentOnlyPopulatesSplitTotalsAndJSON(t *testing.T) {
 	path := writeTestFile(t, root, "p.tmp", "hello")
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		Rules: []clean.Rule{
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{path}},
@@ -851,8 +851,8 @@ func TestDryRunInjectedPermanentPlannedActionNeedsNoAuthorization(t *testing.T) 
 	root := t.TempDir()
 	path := writeTestFile(t, root, "p.tmp", "data")
 	result := clean.DryRun(context.Background(), clean.Options{
-		CategoryPlannedActions: map[string]clean.DeletionAction{
-			testPermanentRule: clean.DeletionActionDeletePermanently,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
 		},
 		DiscoverOpportunities:     noUserTempOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
@@ -860,7 +860,7 @@ func TestDryRunInjectedPermanentPlannedActionNeedsNoAuthorization(t *testing.T) 
 			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{path}},
 		},
 	})
-	if len(result.Candidates) != 1 || result.Candidates[0].PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if len(result.Candidates) != 1 || result.Candidates[0].PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("candidates = %#v", result.Candidates)
 	}
 	if len(result.Deleted) != 0 {
@@ -886,7 +886,7 @@ func TestProductionDefaultCategoryStaysRecycleBinWithoutInjection(t *testing.T) 
 	if len(adapter.paths) != 1 || len(permanent.paths) != 0 {
 		t.Fatalf("default path must stay recycle-bin: recycle=%v permanent=%v", adapter.paths, permanent.paths)
 	}
-	if result.Deleted[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if result.Deleted[0].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("action = %q", result.Deleted[0].Action)
 	}
 	if result.Totals.PermanentlyDeletedBytes != 0 {

@@ -26,8 +26,8 @@ func TestD3DDryRunReportsPermanentPlannedActionWithoutAuthorization(t *testing.T
 
 	result := clean.DryRun(context.Background(), clean.Options{
 		// Dry-run must not require permanent authorization.
-		AllowPermanentDeletion: false,
-		OptIn:                  []string{clean.OpportunityCategoryD3DShaderCache},
+		AllowPermanentDeletion:    false,
+		OptIn:                     []string{clean.OpportunityCategoryD3DShaderCache},
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 		DiscoverOpportunities: func(context.Context) clean.OpportunityDiscoveryResult {
@@ -50,7 +50,7 @@ func TestD3DDryRunReportsPermanentPlannedActionWithoutAuthorization(t *testing.T
 	if candidate.Category != clean.OpportunityCategoryD3DShaderCache {
 		t.Fatalf("category = %q", candidate.Category)
 	}
-	if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if candidate.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned_action = %q, want delete_permanently", candidate.PlannedAction)
 	}
 	if len(result.Deleted) != 0 {
@@ -117,7 +117,7 @@ func TestD3DExecuteWithoutAllowPermanentSkipsAndContinuesRecycleBin(t *testing.T
 	if len(permanent.paths) != 0 {
 		t.Fatalf("permanent remover called without auth: %v", permanent.paths)
 	}
-	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	if len(result.Skipped) != 1 {
@@ -127,7 +127,7 @@ func TestD3DExecuteWithoutAllowPermanentSkipsAndContinuesRecycleBin(t *testing.T
 	if skipped.Reason.Code != "permanent_deletion_not_authorized" {
 		t.Fatalf("skip code = %q", skipped.Reason.Code)
 	}
-	if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if skipped.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned action changed: %q", skipped.PlannedAction)
 	}
 	if skipped.Rule != clean.OpportunityCategoryD3DShaderCache {
@@ -143,7 +143,7 @@ func TestD3DExecuteWithoutAllowPermanentSkipsAndContinuesRecycleBin(t *testing.T
 	for _, item := range recorder.items {
 		if item.Result == "skipped" && item.SkippedReason != nil && item.SkippedReason.Code == "permanent_deletion_not_authorized" {
 			foundAuthSkip = true
-			if item.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			if item.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history planned action = %q", item.PlannedAction)
 			}
 			if item.Rule != clean.OpportunityCategoryD3DShaderCache {
@@ -207,11 +207,11 @@ func TestD3DExecuteWithAllowPermanentDispatchesSharedPermanentRemover(t *testing
 	for _, item := range result.Deleted {
 		byRule[item.Rule] = item
 	}
-	if byRule[clean.DefaultCategoryFoalOwnedTempSandboxes].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if byRule[clean.DefaultCategoryFoalOwnedTempSandboxes].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("recycle deleted = %#v", byRule[clean.DefaultCategoryFoalOwnedTempSandboxes])
 	}
 	d3dDeleted, ok := byRule[clean.OpportunityCategoryD3DShaderCache]
-	if !ok || d3dDeleted.Action != string(clean.DeletionActionDeletePermanently) {
+	if !ok || d3dDeleted.Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("d3d deleted = %#v", byRule[clean.OpportunityCategoryD3DShaderCache])
 	}
 	if result.Totals.RecycleBinMovedBytes != 2 {
@@ -231,7 +231,7 @@ func TestD3DExecuteWithAllowPermanentDispatchesSharedPermanentRemover(t *testing
 	for _, item := range recorder.items {
 		if item.Rule == clean.OpportunityCategoryD3DShaderCache && item.Result == "deleted" {
 			foundPermanentHistory = true
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 		}
@@ -353,8 +353,8 @@ func TestD3DPermanentFailureNeverFallsBackToRecycleBin(t *testing.T) {
 	if failed.Rule != clean.OpportunityCategoryD3DShaderCache {
 		t.Fatalf("failed rule = %q", failed.Rule)
 	}
-	if failed.Action != string(clean.DeletionActionDeletePermanently) ||
-		failed.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if failed.Action != string(clean.PlannedActionDeletePermanently) ||
+		failed.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("failed actions = %#v", failed)
 	}
 	if failed.Reason.Code != "permanent_delete_failed" {

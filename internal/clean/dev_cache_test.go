@@ -221,7 +221,7 @@ func TestDryRun_OptInDevCaches(t *testing.T) {
 		if candidate.Category != clean.DevCacheCategoryNPM {
 			t.Fatalf("expected category %q, got %q", clean.DevCacheCategoryNPM, candidate.Category)
 		}
-		if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if candidate.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("expected planned action delete_permanently, got %q", candidate.PlannedAction)
 		}
 		if candidate.Bytes != 4 {
@@ -530,7 +530,7 @@ func TestExecute_OptInDevCaches(t *testing.T) {
 				if d.Rule != clean.DevCacheCategoryNPM {
 					t.Fatalf("expected deleted item rule to be %q, got %q", clean.DevCacheCategoryNPM, d.Rule)
 				}
-				if d.Action != string(clean.DeletionActionDeletePermanently) {
+				if d.Action != string(clean.PlannedActionDeletePermanently) {
 					t.Fatalf("expected permanent action, got %q", d.Action)
 				}
 			}
