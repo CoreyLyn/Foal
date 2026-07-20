@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -165,6 +166,78 @@ func TestRootModelAnalyzeOpensViewer(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Fatalf("Analyze viewer missing %q:\n%s", want, content)
 		}
+	}
+}
+
+func TestAnalyzeViewerRendersCoreHumanReportFields(t *testing.T) {
+	// The viewer uses renderAnalyzeBody, so we can test that directly
+	body := renderAnalyzeBody("")
+
+	// Should show status, bytes, and top children
+	for _, want := range []string{"Status:", "Totals:", "bytes", "Top children"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Analyze body missing core report field %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestViewerModelAnalyzeDangerousRootFailsClosed(t *testing.T) {
+	// Test with C:\ which should be rejected by ValidateUserScanRoot
+	body := renderAnalyzeBody(`C:\`)
+
+	// Should show read-only feedback
+	if !strings.Contains(body, "read-only") {
+		t.Fatalf("Dangerous root should show read-only feedback:\n%s", body)
+	}
+	if !strings.Contains(body, "invalid root") && !strings.Contains(body, "Status: invalid") {
+		t.Fatalf("Dangerous root should show invalid root status:\n%s", body)
+	}
+
+	// Should NOT contain cleanup actions
+	forbiddenPhrases := []string{
+		"delete this", "remove this", "clean up", "reclaim space",
+		"execute cleanup", "confirm deletion", "select items", "move to trash",
+		"permanent delete", "click to delete", "press to remove",
+	}
+	for _, phrase := range forbiddenPhrases {
+		if strings.Contains(strings.ToLower(body), phrase) {
+			t.Fatalf("Dangerous root body contains forbidden phrase %q:\n%s", phrase, body)
+		}
+	}
+
+	// Also test USERPROFILE if available
+	if userProfile := os.Getenv("USERPROFILE"); userProfile != "" {
+		body = renderAnalyzeBody(userProfile)
+		// User profile root should also be rejected
+		if !strings.Contains(body, "read-only") {
+			t.Fatalf("User profile root should show read-only feedback:\n%s", body)
+		}
+	}
+}
+
+func TestViewerModelAnalyzeReloadTriggersRescan(t *testing.T) {
+	vm := newViewerModel("analyze", 80, 24)
+
+	// First, simulate loading completed so we're not in initial loading state
+	vm.applyLoaded(viewerLoadedMsg{command: "analyze", body: "test"})
+	if vm.loading {
+		t.Fatal("should not be loading after applyLoaded")
+	}
+
+	// Press 'r' to reload
+	cmd := vm.handleKey("r")
+
+	// Should be in loading state after beginReload
+	if !vm.loading {
+		t.Fatal("should be in loading state after 'r' key")
+	}
+	if !strings.Contains(vm.notice, "Reloading") {
+		t.Fatalf("should show reloading notice, got: %q", vm.notice)
+	}
+
+	// Should return a non-nil cmd (loadAnalyzeViewerCmd)
+	if cmd == nil {
+		t.Fatal("reload should return a non-nil tea.Cmd")
 	}
 }
 

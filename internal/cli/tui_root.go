@@ -216,18 +216,8 @@ func (m rootModel) updateViewerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.screen = screenMenu
 		m.notice = ""
 		return m, nil
-	case "r":
-		// If editing path, r is just a character; otherwise reload
-		if m.viewer.editingPath {
-			cmd := m.viewer.handleKey(key)
-			return m, cmd
-		}
-		m.viewer.beginReload()
-		if m.viewer.command == "analyze" {
-			return m, loadAnalyzeViewerCmd(m.viewer.analyzePath)
-		}
-		return m, loadViewerCmd(m.viewer.command)
 	}
+	// All other keys (including 'r' reload, 'e' edit path, scrolling, etc.) go to the viewer
 	cmd := m.viewer.handleKey(key)
 	return m, cmd
 }

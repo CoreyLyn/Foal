@@ -167,6 +167,10 @@ func (m *viewerModel) handleKey(key string) tea.Cmd {
 			m.cursorPos = len(m.analyzePath)
 			m.notice = "Editing path: type to edit, enter to rescan, esc to cancel"
 			return nil
+		case "r":
+			// Reload with current path
+			m.beginReload()
+			return loadAnalyzeViewerCmd(m.analyzePath)
 		}
 	}
 
@@ -175,6 +179,10 @@ func (m *viewerModel) handleKey(key string) tea.Cmd {
 		m.vp.ScrollDown(1)
 	case "k", "up":
 		m.vp.ScrollUp(1)
+	case "r":
+		// Reload for non-analyze commands
+		m.beginReload()
+		return loadViewerCmd(m.command)
 	default:
 		if m.command == "analyze" {
 			m.notice = "Unknown key. Use j/k, r, e (edit path), b, or q."
