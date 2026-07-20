@@ -193,22 +193,8 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			return writeJSON(stdout, envelope{Command: command, Result: result})
 		}
 
-		statusText := "complete"
-		if result.Status == analyze.StatusIncomplete {
-			statusText = "incomplete (hit descendant limit)"
-		}
-		_, _ = fmt.Fprintf(stdout, "Foal analyze\nRoot: %s\nStatus: %s\nBytes: %d\nFiles: %d\nDirectories: %d\nSkipped: %d\n",
-			result.Root, statusText, result.Totals.Bytes, result.Totals.FileCount, result.Totals.DirectoryCount, len(result.Skipped))
-		if len(result.TopChildren) > 0 {
-			_, _ = fmt.Fprintf(stdout, "\nTop children:\n")
-			for _, child := range result.TopChildren {
-				classLabel := ""
-				if child.Classification != "" {
-					classLabel = " (" + child.Classification + ")"
-				}
-				_, _ = fmt.Fprintf(stdout, "  %10d  %s%s\n", child.Bytes, child.Name, classLabel)
-			}
-		}
+		_, _ = fmt.Fprintf(stdout, "Foal analyze\nRoot: %s\nFiles: %d\nDirectories: %d\nSkipped: %d\n",
+			result.Root, result.Totals.FileCount, result.Totals.DirectoryCount, len(result.Skipped))
 		return exitOK
 	}
 

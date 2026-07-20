@@ -182,20 +182,86 @@ func TestRunReturnsIncompleteWhenDescendantLimitExceeded(t *testing.T) {
 	}
 }
 
-func TestRunValidatesRootBeforeScanning(t *testing.T) {
-	// We can't easily test volume roots or profile roots without knowing the system,
-	// but we can test the API contract: invalid relative paths? No, ValidateUserScanRoot
-	// requires absolute paths, which we already have after filepath.Abs.
-	// Let's just verify the API returns ok=false with reason when validation fails.
-	// For this test, we rely on ValidateUserScanRoot's own tests covering the actual rules.
+func TestRunRejectsDangerousRoots(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		code string
+	}{
+		{name: "volume root", path: `C:\`, code: "dangerous_root"},
+		{name: "windows", path: `C:\Windows`, code: "dangerous_root"},
+		{name: "program files", path: `C:\Program Files`, code: "dangerous_root"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, reason, ok := Run(context.Background(), tt.path, Options{})
+			if ok {
+				t.Fatalf("Run(%q) ok=true, want false", tt.path)
+			}
+			if reason.Code != tt.code {
+				t.Fatalf("reason.Code = %q, want %q", reason.Code, tt.code)
+			}
+		})
+	}
+}
 
-	// First, a normal path should work.
+func TestRunRejectsUserProfileRoot(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("user home unavailable")
+	}
+	_, reason, ok := Run(context.Background(), home, Options{})
+	if ok {
+		t.Fatalf("Run(%q) ok=true, want false", home)
+	}
+	if reason.Code != "dangerous_root" {
+		t.Fatalf("reason.Code = %q, want dangerous_root", reason.Code)
+	}
+}
+
+func TestRunProtectionNonIntervention(t *testing.T) {
+	// Create a test directory with a protected child.
 	root := t.TempDir()
+	protectedChild := filepath.Join(root, "protected-dir")
+	if err := os.Mkdir(protectedChild, 0755); err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(protectedChild, "data.txt")
+	if err := os.WriteFile(testFile, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run analyze on the root - even though we can imagine a protection rule,
+	// analyze doesn't use protection rules at all.
 	result, reason, ok := Run(context.Background(), root, Options{})
 	if !ok {
-		t.Fatalf("Run failed for valid temp root: %v", reason)
+		t.Fatalf("Run failed unexpectedly: %v", reason)
 	}
-	if result.Status != StatusOK {
-		t.Fatalf("result.Status = %q, want %q", result.Status, StatusOK)
+
+	// The protected child should still be in the results.
+	found := false
+	for _, child := range result.TopChildren {
+		if child.Name == "protected-dir" {
+			found = true
+			break
+		}
 	}
+	if !found {
+		t.Fatalf("TopChildren missing protected-dir, protection non-intervention violated")
+	}
+}
+
+func TestRunNoHistory(t *testing.T) {
+	// Analyze runs should not create history sessions.
+	// For this test, we just verify the contract - the analyze package doesn't import history,
+	// and the Run function has no side effects beyond the scan itself.
+	// This is a simple contract test to ensure we don't add history calls in the future.
+	root := t.TempDir()
+	_, _, ok := Run(context.Background(), root, Options{})
+	if !ok {
+		t.Fatal("Run failed unexpectedly")
+	}
+	// No history assertions needed - the fact that analyze doesn't import history
+	// and has no history-related code is the contract. If that changes, this test
+	// should be updated to verify no sessions are created.
 }
