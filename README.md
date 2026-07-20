@@ -111,7 +111,7 @@ foal clean --dry-run --opt-in vscode_cache
 foal clean --execute --opt-in vscode_cache --allow-permanent
 ```
 
-### Windows component store (WinSxS) analysis
+### Windows component store (WinSxS) analysis and cleanup
 
 `winsxs_component_store` is an exact-selection-only category with the planned action `invoke_windows_servicing`. Foal never treats `WinSxS` as a directory of deletion candidates and never estimates reclaimable bytes. Instead, an exact dry-run opt-in delegates a read-only component-store analysis to the Windows servicing stack through an isolated, capability-limited elevated helper:
 
@@ -119,7 +119,15 @@ foal clean --execute --opt-in vscode_cache --allow-permanent
 foal clean --dry-run --opt-in winsxs_component_store
 ```
 
-This runs `DISM /Online /Cleanup-Image /AnalyzeComponentStore /English /NoRestart` under a disclosed UAC prompt and reports a path-free servicing operation (`ready`, `no_work`, `skipped`, `failed`, or `canceled`) with the reclaimable package count and cleanup recommendation — it deletes nothing. Because the category is exact-selection-only, default Dry-run, the `all`/`dev-caches`/`app-caches`/`cli-agents` group tokens, and TUI entry never analyze `WinSxS` or trigger UAC. Component-store cleanup (mutation) and its dedicated `--allow-servicing` authorization are a later slice.
+This runs `DISM /Online /Cleanup-Image /AnalyzeComponentStore /English /NoRestart` under a disclosed UAC prompt and reports a path-free servicing operation (`ready`, `no_work`, `skipped`, `failed`, or `canceled`) with the reclaimable package count and cleanup recommendation — it deletes nothing. Because the category is exact-selection-only, default Dry-run, the `all`/`dev-caches`/`app-caches`/`cli-agents` group tokens, and TUI entry never analyze `WinSxS` or trigger UAC.
+
+Component-store cleanup (mutation) requires `--execute`, an exact selection of the category, and the dedicated per-run `--allow-servicing` authorization, which is independent of and never implied by `--allow-permanent`:
+
+```powershell
+foal clean --execute --opt-in winsxs_component_store --allow-servicing
+```
+
+Missing `--allow-servicing` skips the category with `windows_servicing_not_authorized` and never opens UAC. When authorized, the elevated helper runs a fresh analysis and starts `DISM /Online /Cleanup-Image /StartComponentCleanup /English /NoRestart` in the same session, only when the reclaimable package count is positive and cleanup is recommended. Servicing is always the final action group, after Recycle Bin and permanent-delete work. Foal never runs `/ResetBase`, `/SPSuperseded`, `/Remove-Package`, or custom DISM arguments, never deletes `WinSxS` files itself, and never forces a reboot: exit `0` is completed, `3010` is completed with a restart required, `3017` is failed with a restart required, and any other non-zero exit is failed. Once cleanup starts, cancellation is recorded but DISM, the helper, and TrustedInstaller are never killed — Foal waits for the actual outcome.
 
 
 The authoritative category list, action matrix, impact notes, and exclusions live in the [Clean deletion policy](docs/plan/clean-deletion-policy.md).

@@ -19,11 +19,11 @@ func runExchange(t *testing.T, serverNonce, helperNonce string, analyze func() c
 
 	helperErr := make(chan error, 1)
 	go func() {
-		helperErr <- helperExchange(helperConn, helperNonce, analyze)
+		helperErr <- helperExchange(helperConn, helperNonce, analyzeDispatch(analyze))
 	}()
 
 	_ = serverConn.SetDeadline(time.Now().Add(5 * time.Second))
-	resp, serverError := serverExchange(serverConn, serverNonce)
+	resp, serverError := serverExchange(serverConn, serverNonce, wireCapabilityAnalyzeComponentStore)
 
 	var hErr error
 	select {
@@ -32,6 +32,15 @@ func runExchange(t *testing.T, serverNonce, helperNonce string, analyze func() c
 		t.Fatal("helper exchange did not return")
 	}
 	return resp, serverError, hErr
+}
+
+// analyzeDispatch adapts a read-only analyze function to the capability
+// dispatcher the helper expects. The capability is ignored because these tests
+// only exercise the analysis path.
+func analyzeDispatch(analyze func() clean.ServicingAnalysisResult) func(wireCapability) pipeResponse {
+	return func(wireCapability) pipeResponse {
+		return responseFromAnalysis(analyze())
+	}
 }
 
 func readyAnalyze() clean.ServicingAnalysisResult {
@@ -82,10 +91,10 @@ func TestExchangeVersionMismatchFailsClosed(t *testing.T) {
 	analyzed := false
 	helperErr := make(chan error, 1)
 	go func() {
-		helperErr <- helperExchange(helperConn, "n", func() clean.ServicingAnalysisResult {
+		helperErr <- helperExchange(helperConn, "n", analyzeDispatch(func() clean.ServicingAnalysisResult {
 			analyzed = true
 			return readyAnalyze()
-		})
+		}))
 	}()
 
 	// Send a well-formed request with an unsupported protocol version.
@@ -113,7 +122,7 @@ func TestExchangeUnknownCapabilityFailsClosed(t *testing.T) {
 
 	helperErr := make(chan error, 1)
 	go func() {
-		helperErr <- helperExchange(helperConn, "n", readyAnalyze)
+		helperErr <- helperExchange(helperConn, "n", analyzeDispatch(readyAnalyze))
 	}()
 	_ = serverConn.SetDeadline(time.Now().Add(5 * time.Second))
 	if err := writeMessage(serverConn, pipeRequest{Version: protocolVersion, Nonce: "n", Capability: wireCapability(99)}); err != nil {
@@ -140,10 +149,10 @@ func TestExchangeRejectsSecondRequest(t *testing.T) {
 	calls := 0
 	done := make(chan error, 1)
 	go func() {
-		done <- helperExchange(helperConn, "n", func() clean.ServicingAnalysisResult {
+		done <- helperExchange(helperConn, "n", analyzeDispatch(func() clean.ServicingAnalysisResult {
 			calls++
 			return readyAnalyze()
-		})
+		}))
 	}()
 
 	_ = serverConn.SetDeadline(time.Now().Add(5 * time.Second))
@@ -179,7 +188,7 @@ func TestExchangeMalformedMessageFailsClosed(t *testing.T) {
 
 	helperErr := make(chan error, 1)
 	go func() {
-		helperErr <- helperExchange(helperConn, "n", readyAnalyze)
+		helperErr <- helperExchange(helperConn, "n", analyzeDispatch(readyAnalyze))
 	}()
 	_ = serverConn.SetDeadline(time.Now().Add(5 * time.Second))
 	if _, err := serverConn.Write([]byte("{ not json \n")); err != nil {

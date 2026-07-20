@@ -28,8 +28,12 @@ type PreviewReadModel struct {
 	OpportunityObservedBytes         int64
 	OptInReclaimableBytes            int64
 	OptInCategories                  []PreviewOptInCategory
-	DetailedListPath                 string
-	Summary                          string
+	// ServicingOperations carries the path-free Windows servicing operation
+	// records (analysis on dry-run, cleanup on execute) for human rendering. It
+	// never contributes candidates, bytes, or a WinSxS path.
+	ServicingOperations []ServicingOperation
+	DetailedListPath    string
+	Summary             string
 }
 
 // PreviewOptInCategory is the path-free selection projection consumed by the
@@ -451,6 +455,7 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		OpportunityObservedBytes:         result.Totals.OpportunityObservedBytes,
 		OptInReclaimableBytes:            result.Totals.OptInReclaimableBytes,
 		OptInCategories:                  categorySummaries,
+		ServicingOperations:              append([]ServicingOperation(nil), result.ServicingOperations...),
 		DetailedListPath:                 result.DetailedListPath,
 		Summary:                          "Dry-run summary: No changes were made. Re-run with foal clean --execute to move these default candidates to the Recycle Bin.",
 	}
@@ -628,6 +633,12 @@ func systemReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions
 				continue
 			}
 			lines = append(lines, incompleteInspectionLine(incomplete, opts))
+		}
+	}
+	if servicingLines := ServicingOperationLines(model.ServicingOperations); len(servicingLines) > 0 {
+		lines = append(lines, "  Windows servicing")
+		for _, servicingLine := range servicingLines {
+			lines = append(lines, "    "+servicingLine)
 		}
 	}
 	return lines

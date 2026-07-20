@@ -392,6 +392,10 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			},
 			OptIn:                  optInSlice,
 			AllowPermanentDeletion: invocation.allowPermanent,
+			// Per-run Windows servicing authorization is independent of permanent
+			// deletion. On execute, missing authorization skips the servicing
+			// category with windows_servicing_not_authorized and never opens UAC.
+			AllowServicing: invocation.allowServicing,
 			// Windows component-store analysis is delegated to the platform
 			// servicing gateway. It is consulted only when a servicing category is
 			// exactly opted in on dry-run; off Windows it fails closed with
@@ -535,6 +539,7 @@ type cleanInvocation struct {
 	dryRun         bool
 	execute        bool
 	allowPermanent bool
+	allowServicing bool
 	optIn          []string
 }
 
@@ -660,6 +665,7 @@ func validateCleanArgs(args []string) (cleanInvocation, error) {
 	dryRun := false
 	execute := false
 	allowPermanent := false
+	allowServicing := false
 	var optIn []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -673,6 +679,12 @@ func validateCleanArgs(args []string) (cleanInvocation, error) {
 			// the flag but does not require or consume it; execute without it skips
 			// permanent candidates with permanent_deletion_not_authorized.
 			allowPermanent = true
+		case "--allow-servicing":
+			// Per-run Windows servicing authorization (ADR 0029). Independent of and
+			// never implied by --allow-permanent. Dry-run accepts the flag but does
+			// not consume it; execute without it skips a selected servicing category
+			// with windows_servicing_not_authorized and never opens UAC.
+			allowServicing = true
 		case "--opt-in":
 			if i+1 >= len(args) {
 				return invocation, fmt.Errorf("--opt-in requires an argument (use \"all\" for all available, or a specific name like \"user_temp\")")
@@ -683,7 +695,7 @@ func validateCleanArgs(args []string) (cleanInvocation, error) {
 			return invocation, fmt.Errorf("unknown clean option: %s", arg)
 		}
 	}
-	invocation = cleanInvocation{dryRun: dryRun, execute: execute, allowPermanent: allowPermanent, optIn: optIn}
+	invocation = cleanInvocation{dryRun: dryRun, execute: execute, allowPermanent: allowPermanent, allowServicing: allowServicing, optIn: optIn}
 	if dryRun && execute {
 		return invocation, fmt.Errorf("clean accepts either --dry-run or --execute, not both")
 	}
@@ -693,6 +705,9 @@ func validateCleanArgs(args []string) (cleanInvocation, error) {
 		}
 		if allowPermanent {
 			return invocation, fmt.Errorf("--allow-permanent requires --execute (or may accompany --dry-run without authorizing mutation)")
+		}
+		if allowServicing {
+			return invocation, fmt.Errorf("--allow-servicing requires --execute (or may accompany --dry-run without authorizing mutation)")
 		}
 		return invocation, fmt.Errorf("clean requires explicit --dry-run preview or --execute confirmation")
 	}
@@ -710,6 +725,10 @@ func renderCleanExecuteHumanSummary(result clean.Result) string {
 		result.Totals.RecycleBinMovedBytes, result.Totals.PermanentlyDeletedBytes, result.Totals.AffectedBytes))
 	if result.Totals.PermanentlyDeletedBytes > 0 {
 		builder.WriteString("Permanent deletion is ordinary filesystem removal; it is irreversible and is not a secure-erasure wipe.\n")
+	}
+	for _, line := range clean.ServicingOperationLines(result.ServicingOperations) {
+		builder.WriteString(line)
+		builder.WriteString("\n")
 	}
 	return builder.String()
 }
@@ -732,6 +751,12 @@ func helpText() string {
 	builder.WriteString("                       Without it, permanent categories are skipped; Recycle Bin work continues.\n")
 	builder.WriteString("                       Permanent deletion is ordinary filesystem removal (not secure erasure)\n")
 	builder.WriteString("                       and is never used as a Recycle Bin fallback.\n")
+	builder.WriteString("  --allow-servicing    Per-run authorization for Windows component-store servicing (with\n")
+	builder.WriteString("                       --execute). Independent of --allow-permanent and never implied by it.\n")
+	builder.WriteString("                       Without it, a selected winsxs_component_store is skipped with\n")
+	builder.WriteString("                       windows_servicing_not_authorized and no UAC prompt. When authorized,\n")
+	builder.WriteString("                       Foal runs a fresh DISM analysis and starts component cleanup through an\n")
+	builder.WriteString("                       elevated helper; it never deletes WinSxS files itself or forces a reboot.\n")
 	builder.WriteString("  --opt-in <name>      Include an opt-in category (repeatable).\n")
 	builder.WriteString("                       Group tokens: \"all\", \"dev-caches\", \"app-caches\", \"cli-agents\".\n")
 	builder.WriteString("                       \"app-caches\" expands non-editor Application cache categories under\n")
@@ -777,6 +802,7 @@ func helpText() string {
 	builder.WriteString("  foal clean --execute --opt-in d3d_shader_cache --allow-permanent\n")
 	builder.WriteString("  foal clean --execute --opt-in playwright-browsers --allow-permanent\n")
 	builder.WriteString("  foal clean --dry-run --opt-in winsxs_component_store\n")
+	builder.WriteString("  foal clean --execute --opt-in winsxs_component_store --allow-servicing\n")
 	builder.WriteString("  foal purge .\\my-project\n")
 	builder.WriteString("  foal purge --json .\\proj-a .\\proj-b\n")
 	builder.WriteString("  foal purge --execute --allow-permanent .\\my-project\n")

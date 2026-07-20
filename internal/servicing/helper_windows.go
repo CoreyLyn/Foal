@@ -54,10 +54,22 @@ func RunHelper(args []string) int {
 		return helperExitError
 	}
 
-	if err := helperExchange(conn, launchNonce, func() clean.ServicingAnalysisResult {
-		return runComponentStoreAnalysis()
-	}); err != nil {
+	if err := helperExchange(conn, launchNonce, dispatchCapability); err != nil {
 		return helperExitError
 	}
 	return helperExitSuccess
+}
+
+// dispatchCapability runs the fixed built-in capability requested over the pipe.
+// Only the two known capabilities exist; validateRequest already rejected any
+// other value, so the default is defensive and runs no DISM.
+func dispatchCapability(capability wireCapability) pipeResponse {
+	switch capability {
+	case wireCapabilityAnalyzeComponentStore:
+		return responseFromAnalysis(runComponentStoreAnalysis())
+	case wireCapabilityExecuteComponentStoreCleanup:
+		return responseFromExecute(runComponentStoreCleanup())
+	default:
+		return responseFromExecute(failExecuteResult(clean.ServicingReasonHelperFailed))
+	}
 }

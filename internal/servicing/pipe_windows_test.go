@@ -59,10 +59,10 @@ func TestNamedPipeRoundTripAuthenticatesAndExchanges(t *testing.T) {
 			helperDone <- verr
 			return
 		}
-		helperDone <- helperExchange(clientConn, nonce, func() clean.ServicingAnalysisResult {
+		helperDone <- helperExchange(clientConn, nonce, analyzeDispatch(func() clean.ServicingAnalysisResult {
 			analyzed <- struct{}{}
 			return readyAnalyze()
-		})
+		}))
 	}()
 
 	if err := connectServerPipe(server, 10*time.Second); err != nil {
@@ -79,7 +79,7 @@ func TestNamedPipeRoundTripAuthenticatesAndExchanges(t *testing.T) {
 		t.Fatalf("client peer validation failed: %v", err)
 	}
 
-	resp, err := serverExchange(serverConn, nonce)
+	resp, err := serverExchange(serverConn, nonce, wireCapabilityAnalyzeComponentStore)
 	if err != nil {
 		t.Fatalf("serverExchange: %v", err)
 	}
@@ -132,17 +132,17 @@ func TestNamedPipeRoundTripRejectsNonceMismatch(t *testing.T) {
 		}
 		clientConn := &pipeConn{h: client}
 		defer clientConn.Close()
-		helperDone <- helperExchange(clientConn, "helper-launch-nonce", func() clean.ServicingAnalysisResult {
+		helperDone <- helperExchange(clientConn, "helper-launch-nonce", analyzeDispatch(func() clean.ServicingAnalysisResult {
 			analyzed = true
 			return readyAnalyze()
-		})
+		}))
 	}()
 
 	if err := connectServerPipe(server, 10*time.Second); err != nil {
 		t.Fatalf("connectServerPipe: %v", err)
 	}
 	// Coordinator sends a different nonce.
-	_, _ = serverExchange(serverConn, "coordinator-nonce")
+	_, _ = serverExchange(serverConn, "coordinator-nonce", wireCapabilityAnalyzeComponentStore)
 
 	select {
 	case err := <-helperDone:
