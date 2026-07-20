@@ -324,3 +324,31 @@ func TestUninstallCommandDescriptionMentionsExecute(t *testing.T) {
 		t.Fatalf("help missing 'official uninstallers' in uninstall description:\n%s", out)
 	}
 }
+
+// TestUninstallExecuteDoesNotWireElevationPortByDefault verifies the CLI does
+// not wire a real ElevationPort (which could trigger real UAC). Uninstall
+// Execute uses the nil-port default: it proceeds with current process
+// privileges and never prompts UAC itself in this slice (ADR 0028). Tests
+// inject fakes at the Execute seam; the CLI must never trigger real UAC.
+func TestUninstallExecuteDoesNotWireElevationPortByDefault(t *testing.T) {
+	disableHistoryRecording(t)
+	original := executeUninstall
+	var captured uninstall.ExecuteOptions
+	executeUninstall = func(_ context.Context, opts uninstall.ExecuteOptions) uninstall.ExecuteResult {
+		captured = opts
+		return uninstall.ExecuteResult{
+			Status: uninstall.StatusExecuteOK,
+			Mode:   uninstall.ModeExecute,
+		}
+	}
+	t.Cleanup(func() { executeUninstall = original })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"uninstall", "--execute", "--select", "Any App", "--json"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d stderr=%q", code, stderr.String())
+	}
+	if captured.ElevationPort != nil {
+		t.Fatal("ElevationPort = non-nil, want nil (CLI must not wire a real UAC port)")
+	}
+}

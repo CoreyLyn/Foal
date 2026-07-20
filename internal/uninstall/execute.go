@@ -73,6 +73,13 @@ const (
 	// SkipUnsupportedPlatform: Foal only mutates on Windows. On other
 	// platforms execution is refused and every selected app is skipped.
 	SkipUnsupportedPlatform = "unsupported_platform"
+	// SkipElevationRequiredNotGranted: the app likely needs administrator
+	// rights (machine-wide / HKLM install) and the injectable ElevationPort
+	// did not grant elevation for this batch. Foal fail-closes by skipping
+	// the app with this stable reason rather than attempting an uninstaller
+	// that would fail with an opaque permission error. Uninstall-only
+	// (ADR 0028); Clean/Purge never request elevation.
+	SkipElevationRequiredNotGranted = "elevation_required_not_granted"
 )
 
 // Failed/canceled runner outcome reason codes.
@@ -226,6 +233,14 @@ type ExecuteOptions struct {
 	// Tests inject a fake adapter so no real Recycle Bin API is ever
 	// invoked and no real files are deleted.
 	RecycleBinAdapter delete.Adapter
+
+	// ElevationPort is the injectable seam through which Uninstall Execute
+	// MAY request UAC when a selected app needs admin (ADR 0028). When nil
+	// Execute does not request UAC itself and proceeds with current process
+	// privileges (preserving machine-wide uninstall capability when Foal is
+	// already elevated). Uninstall-only; Clean/Purge never wire this field.
+	// Tests inject a fake so no real UAC prompt is ever triggered.
+	ElevationPort ElevationPort
 }
 
 // UninstallerRunner runs one uninstall command string and returns its
@@ -271,6 +286,41 @@ type ProcessDetector interface {
 	IsRunning(ctx context.Context, appName string) (ProcessState, error)
 }
 
+// ElevationPort is the injectable seam through which Uninstall Execute MAY
+// request Windows administrator consent (UAC) when a selected app needs it.
+// It is Uninstall-ONLY (ADR 0028): Clean, Purge, and every other command stay
+// non-elevating and never call this port. Tests inject a fake so no real UAC
+// prompt is ever triggered.
+//
+// RequestElevation is called at most once per Execute batch, and only when at
+// least one selected app likely requires admin (HKLM / machine-wide source).
+// When granted is false the caller skips admin-required apps with the stable
+// SkipElevationRequiredNotGranted reason; non-admin apps proceed unaffected.
+//
+// When no port is wired (nil) Execute does not request UAC itself and proceeds
+// with the current process privileges: a user running Foal elevated can still
+// uninstall machine-wide apps, matching pre-elevation-port capability. A
+// future slice may wire a real Windows UAC request; tests inject a fake that
+// grants or denies to exercise both paths without real UAC.
+type ElevationPort interface {
+	RequestElevation(ctx context.Context) (granted bool, err error)
+}
+
+// ElevationOutcome records whether Uninstall Execute requested and obtained
+// administrator consent for the batch. It is Uninstall-only metadata
+// (ADR 0028): Clean/Purge results never carry elevation state.
+type ElevationOutcome struct {
+	// Requested is true when at least one selected app likely required admin.
+	// When false, no admin-required app was selected and no port was called.
+	Requested bool `json:"requested"`
+	// Granted is true when admin-required apps may proceed. When Requested is
+	// true and Granted is false, admin-required apps were skipped with
+	// SkipElevationRequiredNotGranted.
+	Granted bool `json:"granted"`
+	// Reason is a stable, human-readable explanation of the outcome.
+	Reason string `json:"reason,omitempty"`
+}
+
 // ExecuteResult is the JSON-contract read model for Uninstall execution. It
 // is distinct from the preview Result so preview and execute contracts can
 // evolve independently.
@@ -280,8 +330,13 @@ type ExecuteResult struct {
 	Applications []AppOutcome    `json:"applications"`
 	Totals       ExecuteTotals   `json:"totals"`
 	Execution    ExecutionPolicy `json:"execution"`
-	ElapsedMS    int64           `json:"elapsed_ms"`
-	Message      string          `json:"message,omitempty"`
+	// Elevation records the Uninstall-only elevation outcome for the batch
+	// (ADR 0028). It is absent (zero-value) on Clean/Purge results, which
+	// never request elevation. Makes batch and elevation outcomes clear in
+	// result metadata.
+	Elevation ElevationOutcome `json:"elevation"`
+	ElapsedMS int64            `json:"elapsed_ms"`
+	Message   string           `json:"message,omitempty"`
 }
 
 // AppOutcome records what happened for one selected application.
@@ -292,6 +347,10 @@ type AppOutcome struct {
 	// PlannedClass is the preview-time classification (official_uninstaller,
 	// portable_directory_removal, not_executable, hard_exclusion).
 	PlannedClass string `json:"planned_class"`
+	// RequiresAdmin reports whether this app likely needed administrator
+	// rights (HKLM / machine-wide source). Disclosed per-app so the result
+	// makes elevation outcomes clear alongside per-app skip reasons.
+	RequiresAdmin bool `json:"requires_admin"`
 	// Action is what Foal attempted: "official_uninstaller" or "skipped".
 	Action string `json:"action"`
 	// Result is the terminal outcome: "uninstalled", "skipped", "failed",
@@ -435,8 +494,17 @@ func Execute(ctx context.Context, opts ExecuteOptions) ExecuteResult {
 	appsByLowerName := indexApplicationsByName(review.Applications)
 	possibleLeftovers := review.PossibleLeftovers
 
+	// Elevation (Uninstall-only, ADR 0028): request administrator consent
+	// once per batch when at least one selected app likely needs admin
+	// (HKLM / machine-wide source). The port is injectable so tests fake
+	// it without real UAC. When elevation is not granted, admin-required
+	// apps are skipped with SkipElevationRequiredNotGranted; non-admin apps
+	// and cancellation semantics are unaffected. Clean/Purge never reach
+	// this code path.
+	elevationGranted := requestBatchElevation(ctx, opts, appsByLowerName, &result)
+
 	for _, selectedName := range stableSelection(opts.Selection) {
-		outcome := executeOneApp(ctx, opts, selectedName, appsByLowerName, possibleLeftovers)
+		outcome := executeOneApp(ctx, opts, selectedName, appsByLowerName, possibleLeftovers, elevationGranted)
 		result.Applications = append(result.Applications, outcome)
 		if ctx.Err() != nil {
 			// Record the cancel on the running app, then stop scheduling more.
@@ -460,6 +528,82 @@ func Execute(ctx context.Context, opts ExecuteOptions) ExecuteResult {
 	return result
 }
 
+// requestBatchElevation decides whether admin-required apps may proceed. It
+// is the ONLY elevation call site in Foal (ADR 0028): Clean, Purge, and other
+// commands never request elevation.
+//
+// When no selected app requires admin, no request is made and the outcome
+// reports Requested=false (non-admin batches never trigger UAC). When at
+// least one admin-required app is selected:
+//   - nil port (production default): Foal does not request UAC itself in this
+//     slice; it proceeds with the current process privileges so a user running
+//     Foal elevated can still uninstall machine-wide apps. Granted=true with a
+//     reason that makes clear no UAC was prompted.
+//   - wired port: the port is called once. A false result or an error skips
+//     admin-required apps with SkipElevationRequiredNotGranted; a true result
+//     proceeds. Tests inject a fake to exercise both paths without real UAC.
+//
+// Non-admin apps proceed regardless of the elevation decision. The decision is
+// per-batch (one request at most), matching UAC semantics.
+func requestBatchElevation(ctx context.Context, opts ExecuteOptions, appsByLowerName map[string]Application, result *ExecuteResult) bool {
+	anyAdmin := false
+	for _, selectedName := range stableSelection(opts.Selection) {
+		app, ok := appsByLowerName[strings.ToLower(strings.TrimSpace(selectedName))]
+		if !ok {
+			continue
+		}
+		// Only apps Foal would actually try to execute (official_uninstaller)
+		// can need elevation. Hard exclusions, portable-removal, and
+		// not-executable apps never reach the uninstaller, so they do not
+		// count toward an elevation request.
+		if app.RequiresAdmin && app.PlannedClass == PlannedClassOfficialUninstaller {
+			anyAdmin = true
+			break
+		}
+	}
+	if !anyAdmin {
+		result.Elevation = ElevationOutcome{
+			Requested: false,
+			Granted:   false,
+			Reason:    "no selected application requires administrator rights",
+		}
+		return false
+	}
+
+	if opts.ElevationPort == nil {
+		result.Elevation = ElevationOutcome{
+			Requested: true,
+			Granted:   true,
+			Reason:    "no elevation port configured; proceeding with current process privileges (Foal did not request UAC)",
+		}
+		return true
+	}
+
+	granted, err := opts.ElevationPort.RequestElevation(ctx)
+	if err != nil {
+		result.Elevation = ElevationOutcome{
+			Requested: true,
+			Granted:   false,
+			Reason:    "elevation request failed: " + err.Error(),
+		}
+		return false
+	}
+	if granted {
+		result.Elevation = ElevationOutcome{
+			Requested: true,
+			Granted:   true,
+			Reason:    "elevation granted for admin-required applications",
+		}
+		return true
+	}
+	result.Elevation = ElevationOutcome{
+		Requested: true,
+		Granted:   false,
+		Reason:    "elevation denied or unavailable; admin-required applications will be skipped",
+	}
+	return false
+}
+
 // executeOneApp runs the per-app pipeline for one selected application name.
 // It returns an AppOutcome capturing the terminal state. The function never
 // panics on behalf of an injected fake; a fake that panics terminates the
@@ -467,7 +611,13 @@ func Execute(ctx context.Context, opts ExecuteOptions) ExecuteResult {
 //
 // possibleLeftovers is the review's PossibleLeftovers slice, used to freeze
 // the Confirmed leftover path set for this app on uninstaller success only.
-func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string, appsByLowerName map[string]Application, possibleLeftovers []LeftoverCandidate) AppOutcome {
+//
+// elevationGranted carries the per-batch elevation decision (ADR 0028). When
+// the app likely requires admin and elevation was not granted, the app is
+// skipped with SkipElevationRequiredNotGranted before any uninstaller runs.
+// Non-admin apps proceed regardless of elevation. This keeps per-app skip
+// reasons stable when elevation is denied or unavailable.
+func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string, appsByLowerName map[string]Application, possibleLeftovers []LeftoverCandidate, elevationGranted bool) AppOutcome {
 	app, ok := appsByLowerName[strings.ToLower(strings.TrimSpace(selectedName))]
 	if !ok {
 		return AppOutcome{
@@ -479,6 +629,8 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 		}
 	}
 
+	requiresAdmin := app.RequiresAdmin
+
 	// Hard exclusion takes precedence over everything else.
 	if app.PlannedClass == PlannedClassHardExclusion {
 		return AppOutcome{
@@ -486,6 +638,7 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 			Version:       app.Version,
 			Publisher:     app.Publisher,
 			PlannedClass:  app.PlannedClass,
+			RequiresAdmin: requiresAdmin,
 			Action:        ActionSkipped,
 			Result:        ResultSkipped,
 			SkippedReason: SkipHardExclusion,
@@ -501,6 +654,7 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 			Version:       app.Version,
 			Publisher:     app.Publisher,
 			PlannedClass:  app.PlannedClass,
+			RequiresAdmin: requiresAdmin,
 			Action:        ActionSkipped,
 			Result:        ResultSkipped,
 			SkippedReason: SkipPortableRemovalNotSupported,
@@ -515,6 +669,7 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 			Version:       app.Version,
 			Publisher:     app.Publisher,
 			PlannedClass:  app.PlannedClass,
+			RequiresAdmin: requiresAdmin,
 			Action:        ActionSkipped,
 			Result:        ResultSkipped,
 			SkippedReason: SkipNotExecutable,
@@ -530,10 +685,30 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 			Version:       app.Version,
 			Publisher:     app.Publisher,
 			PlannedClass:  app.PlannedClass,
+			RequiresAdmin: requiresAdmin,
 			Action:        ActionSkipped,
 			Result:        ResultSkipped,
 			SkippedReason: SkipUninstallCommandMissing,
 			Detail:        "app classified as official_uninstaller but no uninstall command is present",
+		}
+	}
+
+	// Elevation gate (Uninstall-only, ADR 0028): an admin-required app is
+	// skipped with a stable reason when elevation was not granted or is
+	// unavailable. Foal does not attempt an uninstaller it cannot complete;
+	// non-admin apps are unaffected. This keeps per-app skip reasons stable
+	// when elevation is denied or unavailable.
+	if requiresAdmin && !elevationGranted {
+		return AppOutcome{
+			Name:          app.Name,
+			Version:       app.Version,
+			Publisher:     app.Publisher,
+			PlannedClass:  app.PlannedClass,
+			RequiresAdmin: requiresAdmin,
+			Action:        ActionSkipped,
+			Result:        ResultSkipped,
+			SkippedReason: SkipElevationRequiredNotGranted,
+			Detail:        "application likely requires administrator rights and elevation was not granted; Foal does not attempt the uninstaller without it",
 		}
 	}
 
@@ -547,6 +722,7 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 			Version:       app.Version,
 			Publisher:     app.Publisher,
 			PlannedClass:  app.PlannedClass,
+			RequiresAdmin: requiresAdmin,
 			Action:        ActionSkipped,
 			Result:        ResultSkipped,
 			SkippedReason: SkipProcessRunningStopNotAuthorized,
@@ -567,6 +743,7 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 			outcome.Version = app.Version
 			outcome.Publisher = app.Publisher
 			outcome.PlannedClass = app.PlannedClass
+			outcome.RequiresAdmin = requiresAdmin
 			outcome.Detail = "uninstaller completed successfully; revalidating confirmed leftover set for Recycle Bin deletion"
 			attachLeftoverOutcomes(ctx, opts, &outcome, possibleLeftovers, app.Name)
 			return outcome
@@ -580,6 +757,7 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 			outcome.Version = app.Version
 			outcome.Publisher = app.Publisher
 			outcome.PlannedClass = app.PlannedClass
+			outcome.RequiresAdmin = requiresAdmin
 			return outcome
 		}
 		// Quiet failed: try interactive as the fallback if one exists.
@@ -589,6 +767,7 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 			interactiveOutcome.Version = app.Version
 			interactiveOutcome.Publisher = app.Publisher
 			interactiveOutcome.PlannedClass = app.PlannedClass
+			interactiveOutcome.RequiresAdmin = requiresAdmin
 			if interactiveOutcome.Result == ResultUninstalled {
 				interactiveOutcome.Detail = "uninstaller completed successfully; revalidating confirmed leftover set for Recycle Bin deletion"
 				attachLeftoverOutcomes(ctx, opts, &interactiveOutcome, possibleLeftovers, app.Name)
@@ -601,6 +780,7 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 		outcome.Version = app.Version
 		outcome.Publisher = app.Publisher
 		outcome.PlannedClass = app.PlannedClass
+		outcome.RequiresAdmin = requiresAdmin
 		return outcome
 	}
 
@@ -610,6 +790,7 @@ func executeOneApp(ctx context.Context, opts ExecuteOptions, selectedName string
 	outcome.Version = app.Version
 	outcome.Publisher = app.Publisher
 	outcome.PlannedClass = app.PlannedClass
+	outcome.RequiresAdmin = requiresAdmin
 	if outcome.Result == ResultUninstalled {
 		outcome.Detail = "uninstaller completed successfully; revalidating confirmed leftover set for Recycle Bin deletion"
 		attachLeftoverOutcomes(ctx, opts, &outcome, possibleLeftovers, app.Name)
