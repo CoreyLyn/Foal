@@ -31,6 +31,10 @@ func dryRun(ctx context.Context, opts Options) Result {
 	exactDefaults := categoryPlan.Mode == SelectionModeExact
 	appendDefaultCandidates(ctx, opts, planDefaultSet(categoryPlan), exactDefaults, &result)
 	if ctx.Err() != nil {
+		// Cancellation before opt-in resolution still records a pre-mutation
+		// canceled servicing operation for any exactly selected servicing
+		// category, so a canceled analysis is distinguishable from an absent one.
+		appendServicingAnalysis(ctx, opts, planServicingCategories(categoryPlan), &result)
 		result.ElapsedMS = time.Since(start).Milliseconds()
 		result.Totals = totals(result)
 		return result
@@ -47,6 +51,11 @@ func dryRun(ctx context.Context, opts Options) Result {
 	if categoryPlan.Mode != SelectionModeExact {
 		applyOptInReviewProjection(ctx, opts, &result, optInPlan, resolution)
 	}
+
+	// Windows servicing (read-only analysis): only an exact opt-in of a servicing
+	// category reaches here (they are exact-selection-only), so default Dry-run,
+	// `all`, group tokens, and TUI entry never analyze WinSxS or trigger UAC.
+	appendServicingAnalysis(ctx, opts, planServicingCategories(categoryPlan), &result)
 
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)

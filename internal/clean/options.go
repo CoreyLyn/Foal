@@ -215,6 +215,14 @@ type Options struct {
 	// --- observation ---
 	ProgressReporter ProgressReporter
 
+	// ServicingGateway is the high-level seam for Windows component-store
+	// servicing (ADR 0029). When set, an exact opt-in of a servicing category may
+	// request read-only analysis through it on dry-run. Production wires an
+	// isolated elevated helper coordinator; tests inject canned outcomes. Nil
+	// fails servicing analysis closed with unsupported_platform and never opens
+	// UAC. It never applies to file deletion.
+	ServicingGateway ServicingGateway
+
 	// --- discovery injects (tests + gated surfaces; production often nil) ---
 	UserTempDiscoveryOptions         UserTempDiscoveryOptions
 	DiscoverUserTempOpportunities    func(context.Context) UserTempDiscoveryResult

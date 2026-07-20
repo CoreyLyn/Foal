@@ -111,6 +111,17 @@ foal clean --dry-run --opt-in vscode_cache
 foal clean --execute --opt-in vscode_cache --allow-permanent
 ```
 
+### Windows component store (WinSxS) analysis
+
+`winsxs_component_store` is an exact-selection-only category with the planned action `invoke_windows_servicing`. Foal never treats `WinSxS` as a directory of deletion candidates and never estimates reclaimable bytes. Instead, an exact dry-run opt-in delegates a read-only component-store analysis to the Windows servicing stack through an isolated, capability-limited elevated helper:
+
+```powershell
+foal clean --dry-run --opt-in winsxs_component_store
+```
+
+This runs `DISM /Online /Cleanup-Image /AnalyzeComponentStore /English /NoRestart` under a disclosed UAC prompt and reports a path-free servicing operation (`ready`, `no_work`, `skipped`, `failed`, or `canceled`) with the reclaimable package count and cleanup recommendation — it deletes nothing. Because the category is exact-selection-only, default Dry-run, the `all`/`dev-caches`/`app-caches`/`cli-agents` group tokens, and TUI entry never analyze `WinSxS` or trigger UAC. Component-store cleanup (mutation) and its dedicated `--allow-servicing` authorization are a later slice.
+
+
 The authoritative category list, action matrix, impact notes, and exclusions live in the [Clean deletion policy](docs/plan/clean-deletion-policy.md).
 
 ## Project artifact purge
