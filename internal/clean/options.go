@@ -192,6 +192,16 @@ type Options struct {
 	// package-private permanent identity registry; Options injects override tests.
 	PermanentIdentityValidators map[string]PermanentIdentityValidator
 
+	// CategoryIdentityValidators optionally re-checks action-neutral category-owned
+	// identity immediately before each mutation (for example a Recycle Bin move),
+	// after PathSafe validation. Keyed by category/rule ID. Missing or nil entry
+	// means PathSafe-only for that category. Validators must not mutate or own the
+	// mutation. Rejection is a recoverable skip that preserves the candidate's
+	// planned action and never falls back to a different action. Production
+	// categories may also register via the package-private category identity
+	// registry; Options injects override tests.
+	CategoryIdentityValidators map[string]CategoryIdentityValidator
+
 	// --- history / detailed list ---
 	HistoryRecorder   history.Recorder
 	DetailedListDir   string
