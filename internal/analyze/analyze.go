@@ -1,14 +1,23 @@
 package analyze
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 )
 
-const defaultTopChildLimit = 10
+const (
+	StatusOK       = "ok"
+	StatusIncomplete = "incomplete"
+	defaultTopChildLimit = 10
+	// defaultDescendantLimit matches Clean opportunity inspection ceilings.
+	defaultDescendantLimit = 100_000
+)
 
 var projectArtifactDirectoryNames = map[string]struct{}{
 	"node_modules": {},
@@ -19,6 +28,10 @@ var projectArtifactDirectoryNames = map[string]struct{}{
 	".next":        {},
 	"__pycache__":  {},
 }
+
+var (
+	errInspectionLimit = errors.New("analyze inspection descendant limit exceeded")
+)
 
 type Result struct {
 	Status      string        `json:"status"`
@@ -51,42 +64,91 @@ type SkippedItem struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-func Run(root string) Result {
+// Options configures analyze.Run behavior (zero values select defaults).
+type Options struct {
+	// DescendantLimit caps inspected descendants (zero selects default 100_000).
+	DescendantLimit int
+}
+
+// Run performs directory insight on the supplied root (or current working
+// directory when empty). Returns (Result, Reason, ok) where ok is false when
+// the root was invalid/dangerous (Reason contains the failure details).
+// Complete scans return StatusOK; scans halted by limits/cancellation return
+// StatusIncomplete with partial totals describing only inspected content.
+func Run(ctx context.Context, root string, opts Options) (Result, pathsafe.Reason, bool) {
 	start := time.Now()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if root == "" {
 		root = "."
 	}
 	cleanRoot, err := filepath.Abs(root)
 	if err != nil {
-		cleanRoot = root
+		return Result{}, pathsafe.Reason{Code: "invalid_root", Message: "invalid analyze root: " + err.Error()}, false
+	}
+
+	// Fail-closed: validate root before any filesystem walk.
+	if reason, ok := pathsafe.ValidateUserScanRoot(cleanRoot); !ok {
+		return Result{}, reason, false
+	}
+
+	limit := opts.DescendantLimit
+	if limit <= 0 {
+		limit = defaultDescendantLimit
 	}
 
 	scanner := scanner{
-		root:     cleanRoot,
-		children: map[string]ChildResult{},
-		skipped:  []SkippedItem{},
+		root:       cleanRoot,
+		limit:      limit,
+		children:   map[string]ChildResult{},
+		skipped:    []SkippedItem{},
+		incomplete: false,
 	}
-	scanner.scan(cleanRoot)
+	scanner.scan(ctx, cleanRoot)
 	topChildren := scanner.topChildren(defaultTopChildLimit)
 
+	status := StatusOK
+	if scanner.incomplete {
+		status = StatusIncomplete
+	}
+
 	return Result{
-		Status:      "ok",
+		Status:      status,
 		Root:        cleanRoot,
 		Totals:      scanner.totals,
 		TopChildren: topChildren,
 		Skipped:     scanner.skipped,
 		ElapsedMS:   time.Since(start).Milliseconds(),
-	}
+	}, pathsafe.Reason{}, true
+}
+
+// RunCompat is a compatibility wrapper for the old Run signature (no context,
+// no options). Used by existing tests and callers that haven't migrated yet.
+func RunCompat(root string) Result {
+	result, _, _ := Run(context.Background(), root, Options{})
+	return result
 }
 
 type scanner struct {
-	root     string
-	totals   Totals
-	children map[string]ChildResult
-	skipped  []SkippedItem
+	root        string
+	limit       int
+	totals      Totals
+	children    map[string]ChildResult
+	skipped     []SkippedItem
+	incomplete  bool
+	descendants int
 }
 
-func (s *scanner) scan(path string) Totals {
+func (s *scanner) scan(ctx context.Context, path string) Totals {
+	// Check for cancellation first.
+	select {
+	case <-ctx.Done():
+		s.incomplete = true
+		return Totals{}
+	default:
+	}
+
 	info, err := os.Lstat(path)
 	if err != nil {
 		s.skip(path, classifyError(err), err.Error())
@@ -111,14 +173,36 @@ func (s *scanner) scan(path string) Totals {
 	}
 
 	for _, entry := range entries {
+		// Stop if we've already hit limits or been canceled.
+		if s.incomplete {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			s.incomplete = true
+			break
+		default:
+		}
+
+		// Count descendants (children of the root are first counted here).
+		if path != s.root {
+			s.descendants++
+			if s.descendants > s.limit {
+				s.incomplete = true
+				break
+			}
+		}
+
 		childPath := filepath.Join(path, entry.Name())
-		childTotals := s.scan(childPath)
+		childTotals := s.scan(ctx, childPath)
 		if path == s.root {
 			s.addTopChild(childPath, childKind(entry), childTotals)
 		}
 		totals.add(childTotals)
 	}
 
+	// Always add what we found for this directory, even if incomplete.
+	// This maintains original counting behavior.
 	s.totals.add(Totals{DirectoryCount: 1})
 	return totals
 }

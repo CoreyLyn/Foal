@@ -586,6 +586,84 @@ func TestAnalyzeJSONReportsMissingRootAsSkippedWithStableExit(t *testing.T) {
 	}
 }
 
+func TestAnalyzeJSONValidRootReportsOK(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "test.txt"), []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"analyze", "--json", root}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	result := readResultObject(t, stdout.Bytes())
+	if result["status"] != "ok" {
+		t.Fatalf("result.status = %v, want ok", result["status"])
+	}
+	if result["root"] != root {
+		t.Fatalf("result.root = %v, want %v", result["root"], root)
+	}
+	if result["totals"] == nil {
+		t.Fatal("result.totals is nil")
+	}
+	if result["top_children"] == nil {
+		t.Fatal("result.top_children is nil")
+	}
+}
+
+func TestAnalyzeJSONDangerousRootReportsError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"analyze", "--json", `C:\`}, &stdout, &stderr)
+
+	if code != exitUsage {
+		t.Fatalf("Run returned %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+
+	var got envelope
+	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON error: %v\n%s", err, stderr.String())
+	}
+	if got.Command != "analyze" {
+		t.Fatalf("command = %q, want analyze", got.Command)
+	}
+	if got.Error == nil {
+		t.Fatal("error is nil")
+	}
+	if got.Error.Code != "dangerous_root" {
+		t.Fatalf("error.code = %q, want dangerous_root", got.Error.Code)
+	}
+	if got.Error.Message == "" {
+		t.Fatal("error.message is empty")
+	}
+	if !got.Error.Recoverable {
+		t.Fatal("error.recoverable = false, want true")
+	}
+}
+
+func TestAnalyzeNonJSONDangerousRootReportsError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"analyze", `C:\`}, &stdout, &stderr)
+
+	if code != exitUsage {
+		t.Fatalf("Run returned %d, want %d", code, exitUsage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "dangerous_root") {
+		t.Fatalf("stderr = %q, want dangerous_root", stderr.String())
+	}
+}
+
 func TestUninstallJSONReportsPreviewOnlyReviewContract(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
