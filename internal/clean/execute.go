@@ -120,6 +120,26 @@ func resolveExecuteCandidates(ctx context.Context, opts Options, categoryPlan Ca
 		if opts.Validator.IsUserProtected(c.Path) {
 			continue
 		}
+		// nvidia_installer_cache is preview/resolution only in this slice: Recycle
+		// Bin execution (fresh re-resolve, action-neutral immediate revalidation,
+		// Result/History) is delivered by #310. Until then, resolved candidates are
+		// fail-closed skipped rather than moved, so no mutation occurs here.
+		if c.Category == CategoryNVIDIAInstallerCache {
+			result.Skipped = append(result.Skipped, SkippedItem{
+				Path:          c.Path,
+				Bytes:         c.Bytes,
+				Rule:          c.Category,
+				PlannedAction: plannedActionForOpts(opts, c.Category),
+				Reason: issue(
+					nvidiaExecutionPendingCode,
+					"NVIDIA installer cache execution is not enabled in this build; the candidate was previewed but not moved",
+					true,
+					c.Path,
+					c.Category,
+				),
+			})
+			continue
+		}
 		executionCandidates = append(executionCandidates, actionExecutionCandidate{
 			candidate:     delete.Candidate{Path: c.Path, Bytes: c.Bytes},
 			rule:          c.Category,

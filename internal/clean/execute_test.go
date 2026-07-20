@@ -1119,9 +1119,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// 17 opportunity + winsxs_component_store servicing + 17 dev caches + grok-build-update-residue + "dev-caches" + "app-caches" + "cli-agents" + "all" = 40
-	if len(valid) != 40 {
-		t.Fatalf("expected 40 valid names, got %d: %v", len(valid), valid)
+	// 17 opportunity + nvidia_installer_cache + winsxs_component_store servicing + 17 dev caches + grok-build-update-residue + "dev-caches" + "app-caches" + "cli-agents" + "all" = 41
+	if len(valid) != 41 {
+		t.Fatalf("expected 41 valid names, got %d: %v", len(valid), valid)
 	}
 }
 

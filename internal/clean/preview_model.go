@@ -266,11 +266,13 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 			Message: "Permission boundary: Foal skipped protected or administrator-only locations during preview. Review the skipped entries as boundaries; Foal will not request elevation automatically.",
 		})
 	}
-	var hasBrowserCacheOptIn, hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPNPMOptIn, hasYarnOptIn, hasGoModCacheOptIn, hasCargoOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasVisualStudioOptIn, hasApplicationCacheVSIX bool
+	var hasBrowserCacheOptIn, hasUVOptIn, hasNuGetGlobalPackagesOptIn, hasBunOptIn, hasPNPMOptIn, hasYarnOptIn, hasGoModCacheOptIn, hasCargoOptIn, hasPlaywrightOptIn, hasPuppeteerOptIn, hasElectronOptIn, hasJetBrainsOptIn, hasVisualStudioOptIn, hasApplicationCacheVSIX, hasNVIDIAInstallerCacheOptIn bool
 	for _, candidate := range result.OptInCandidates {
 		switch candidate.Category {
 		case OpportunityCategoryBrowserCache:
 			hasBrowserCacheOptIn = true
+		case CategoryNVIDIAInstallerCache:
+			hasNVIDIAInstallerCacheOptIn = true
 		case DevCacheCategoryUV:
 			hasUVOptIn = true
 		case DevCacheCategoryNuGetGlobalPackages:
@@ -389,6 +391,12 @@ func NewPreviewReadModelForSelection(result Result, selected []string) PreviewRe
 		notices = append(notices, PreviewNotice{
 			Kind:    "opt_in_impact",
 			Message: applicationCacheCachedExtensionVSIXsImpactNotice,
+		})
+	}
+	if hasNVIDIAInstallerCacheOptIn {
+		notices = append(notices, PreviewNotice{
+			Kind:    "opt_in_impact",
+			Message: nvidiaInstallerCacheOptInImpactNotice,
 		})
 	}
 
