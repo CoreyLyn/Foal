@@ -258,6 +258,38 @@ func TestCleanDryRunEnablesRunningApplicationDetection(t *testing.T) {
 	}
 }
 
+// TestCleanDryRunWiresServicingGatewayForExactOptIn proves an exact WinSxS
+// opt-in is accepted and the platform servicing gateway is wired onto the shared
+// Clean options. dryRunClean is stubbed so no real UAC or DISM runs.
+func TestCleanDryRunWiresServicingGatewayForExactOptIn(t *testing.T) {
+	disableHistoryRecording(t)
+	originalDryRun := dryRunClean
+	var captured clean.Options
+	dryRunClean = func(_ context.Context, opts clean.Options) clean.Result {
+		captured = opts
+		return clean.Result{Status: "preview", Mode: "dry_run"}
+	}
+	t.Cleanup(func() { dryRunClean = originalDryRun })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"clean", "--dry-run", "--json", "--opt-in", "winsxs_component_store"}, &stdout, &stderr)
+	if code != exitOK || stderr.Len() != 0 {
+		t.Fatalf("Run returned %d; stderr=%q", code, stderr.String())
+	}
+	if captured.ServicingGateway == nil {
+		t.Fatal("clean dry-run did not wire a servicing gateway")
+	}
+	found := false
+	for _, id := range captured.OptIn {
+		if id == "winsxs_component_store" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("opt-in slice %v missing winsxs_component_store", captured.OptIn)
+	}
+}
+
 func TestCleanExecuteDoesNotEnableRunningApplicationDetection(t *testing.T) {
 	disableHistoryRecording(t)
 	originalExecute := executeClean

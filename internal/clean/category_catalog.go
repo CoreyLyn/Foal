@@ -683,6 +683,15 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		categoryDefinition(OpportunityCategoryIntelGPUShaderCache, "Intel GPU shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently),
 		existenceRootSpec{base: existenceRootLocalAppDataLow, segments: []string{"Intel", "ShaderCache"}},
 	), staticPreviewSafetyNote(gpuShaderCacheOptInImpactNotice)),
+	// Windows component store (WinSxS): exact-selection-only servicing category
+	// with planned action invoke_windows_servicing. It never yields a file
+	// candidate or byte estimate; read-only component-store analysis is delegated
+	// to the Windows servicing stack through the injected ServicingGateway. It is
+	// excluded from `all`, every group token, and TUI Select All, starts
+	// unselected, and never analyzes WinSxS or requests UAC on default Dry-run or
+	// TUI entry. See ADR 0029. Registered among the System report group so the
+	// eager preview keeps report-group order.
+	windowsServicingCategoryEntry(categoryDefinition(CategoryWinSxSComponentStore, "Windows component store", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionInvokeWindowsServicing)),
 	withPreviewSafetyNote(browserCacheCategoryEntry(categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, PlannedActionDeletePermanently)), staticPreviewSafetyNote(browserCacheOptInImpactNotice)),
 	withPreviewSafetyNote(applicationCacheCategoryEntry(
 		categoryDefinition(
@@ -995,6 +1004,23 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 		case categoryResolverNonExecutable:
 			if executable {
 				return fmt.Errorf("executable cleanup category %q must register a resolver kind", id)
+			}
+		case categoryResolverWindowsServicing:
+			// Servicing categories are executable opt-ins that delegate a
+			// non-file Windows servicing operation. They must be exact-selection-
+			// only and declare invoke_windows_servicing so they never enter
+			// deletion, aggregate selection, or produce file candidates.
+			if entry.definition.Eligibility != CategoryEligibilityOptIn {
+				return fmt.Errorf("windows servicing category %q must use opt-in eligibility", id)
+			}
+			if entry.definition.PlannedAction != PlannedActionInvokeWindowsServicing {
+				return fmt.Errorf("windows servicing category %q must declare invoke_windows_servicing", id)
+			}
+			if entry.definition.SelectionPolicy != CategorySelectionPolicyExactOnly {
+				return fmt.Errorf("windows servicing category %q must be exact-selection-only", id)
+			}
+			if entry.definition.RunningApplicationPolicy != RunningApplicationPolicyNotApplicable {
+				return fmt.Errorf("windows servicing category %q must use not-applicable running policy", id)
 			}
 		default:
 			return fmt.Errorf("cleanup category %q has unsupported resolver kind %q", id, entry.resolverKind)

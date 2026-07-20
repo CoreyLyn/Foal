@@ -74,6 +74,12 @@ func runExecute(ctx context.Context, opts Options) Result {
 		executePermanentCandidates(ctx, opts, permanentCandidates, &result, completedCategories)
 	}
 
+	// Windows servicing is the final action group (ADR 0029). This slice ships
+	// read-only analysis only: component-store mutation needs dedicated per-run
+	// authorization that is not provided here, so a selected servicing category
+	// is recorded as a fail-closed not-authorized skip. Execute never opens UAC.
+	appendServicingExecuteSkips(planServicingCategories(categoryPlan), &result)
+
 	// Phase 7: history + completion
 	result.ElapsedMS = time.Since(start).Milliseconds()
 	result.Totals = totals(result)

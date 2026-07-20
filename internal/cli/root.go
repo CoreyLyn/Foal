@@ -15,6 +15,7 @@ import (
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/history"
 	"github.com/CoreyLyn/Foal/internal/purge"
+	"github.com/CoreyLyn/Foal/internal/servicing"
 	"github.com/CoreyLyn/Foal/internal/status"
 	"github.com/CoreyLyn/Foal/internal/uninstall"
 )
@@ -391,6 +392,11 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 			},
 			OptIn:                  optInSlice,
 			AllowPermanentDeletion: invocation.allowPermanent,
+			// Windows component-store analysis is delegated to the platform
+			// servicing gateway. It is consulted only when a servicing category is
+			// exactly opted in on dry-run; off Windows it fails closed with
+			// unsupported_platform and never opens UAC.
+			ServicingGateway: servicing.NewGateway(),
 		}
 		protectionConfig := loadProtectionConfiguration()
 		cleanOptions.Validator = protectionConfig.Validator
@@ -734,6 +740,10 @@ func helpText() string {
 	builder.WriteString("                       \"cli-agents\" expands independently registered product-scoped\n")
 	builder.WriteString("                       CLI-agent categories only; it is not a mega-category and does not\n")
 	builder.WriteString("                       imply all CLI-agent data is cache or safe to delete.\n")
+	builder.WriteString("                       \"winsxs_component_store\" is exact-selection-only (never in a group\n")
+	builder.WriteString("                       token): an exact dry-run opt-in requests read-only Windows\n")
+	builder.WriteString("                       component-store analysis through an elevated helper (UAC) and never\n")
+	builder.WriteString("                       deletes files; default Dry-run and group tokens never analyze it.\n")
 	builder.WriteString("\nPurge options:\n")
 	builder.WriteString("  <root> [root...]     Required explicit project/workspace root(s) to scan (never implied).\n")
 	builder.WriteString("                       Multiple roots must each be valid; volume roots and system paths are rejected.\n")
@@ -766,6 +776,7 @@ func helpText() string {
 	builder.WriteString("  foal clean --execute\n")
 	builder.WriteString("  foal clean --execute --opt-in d3d_shader_cache --allow-permanent\n")
 	builder.WriteString("  foal clean --execute --opt-in playwright-browsers --allow-permanent\n")
+	builder.WriteString("  foal clean --dry-run --opt-in winsxs_component_store\n")
 	builder.WriteString("  foal purge .\\my-project\n")
 	builder.WriteString("  foal purge --json .\\proj-a .\\proj-b\n")
 	builder.WriteString("  foal purge --execute --allow-permanent .\\my-project\n")
