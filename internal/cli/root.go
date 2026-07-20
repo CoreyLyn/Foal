@@ -222,14 +222,23 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 		}
 
 		recorder, _ := newHistoryRecorder()
+		protectionConfig := loadProtectionConfiguration()
 		executeOptions := uninstall.ExecuteOptions{
 			Selection:          append([]string(nil), invocation.selection...),
 			AllowStopProcesses: invocation.allowStopProcesses,
+			Validator:          protectionConfig.Validator,
 			HistoryRecorder:    recorder,
 			CommandParameters: history.CommandParameters{
 				Command: "uninstall",
 				Args:    append([]string(nil), args...),
 			},
+		}
+		if protectionConfig.LoadError != nil {
+			executeOptions.ProtectionLoadError = &uninstall.ProtectionLoadIssue{
+				Code:        protectionConfig.LoadError.Code,
+				Message:     protectionConfig.LoadError.Message,
+				Recoverable: protectionConfig.LoadError.Recoverable,
+			}
 		}
 		result := executeUninstall(context.Background(), executeOptions)
 		if opts.json {
@@ -732,7 +741,8 @@ func helpText() string {
 	builder.WriteString("                       A bare name is accepted as shorthand: foal uninstall --execute \"Example App\".\n")
 	builder.WriteString("  --allow-stop-processes  Separate per-run authorization for process stopping. Default is off;\n")
 	builder.WriteString("                       --execute alone never kills a process. Running apps without this flag are\n")
-	builder.WriteString("                       skipped with a stable reason. Leftover deletion is not performed in this slice.\n")
+	builder.WriteString("                       skipped with a stable reason. Leftover deletion uses the Recycle Bin and runs only\n")
+	builder.WriteString("                       after the uninstaller reports success; a failed or canceled uninstaller deletes nothing.\n")
 	builder.WriteString("\nExamples:\n")
 	builder.WriteString("  foal status --json\n")
 	builder.WriteString("  foal clean --dry-run\n")

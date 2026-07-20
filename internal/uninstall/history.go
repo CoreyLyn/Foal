@@ -39,8 +39,10 @@ func recordHistorySession(ctx context.Context, opts ExecuteOptions, result Execu
 			// double-counting.
 			SkippedCount: result.Totals.SkippedCount,
 			ErrorCount:   result.Totals.FailedCount + result.Totals.CanceledCount,
-			// Uninstall does not reclaim bytes in this slice; leftover
-			// deletion (#292) will populate affected bytes later.
+			// Uninstall leftover deletion uses the Recycle Bin but does not
+			// measure leftover path bytes (no size scan in this slice), so
+			// AffectedBytes stays zero. Per-path outcomes are recorded as
+			// individual ItemRecords below for path-level audit.
 		},
 	}
 	// Cancellation must not erase already-produced outcomes; history write is
@@ -52,15 +54,23 @@ func newUninstallHistorySessionID(mode string, at time.Time) string {
 	return fmt.Sprintf("uninstall-%s-%s", mode, at.UTC().Format("20060102T150405.000000000Z"))
 }
 
-// uninstallHistoryItems builds one ItemRecord per selected application. The
-// Rule field carries the app's planned class so the audit trail records what
-// Foal attempted, and SkippedReason/Error capture the stable failure code.
+// uninstallHistoryItems builds one ItemRecord per selected application plus
+// one ItemRecord per leftover path outcome. The Rule field carries the app's
+// planned class (for app records) or "leftover" (for path records) so the
+// audit trail records what Foal attempted, and SkippedReason/Error capture
+// the stable failure code.
+//
+// Leftover path items are distinct from the app-level record so consumers
+// can audit which paths were deleted via the Recycle Bin and which were
+// skipped. They carry PlannedAction=recycle_bin and the actual per-path
+// Action/Result; a skipped path records SkippedReason with the stable
+// pathsafe.Reason code (protected_path, stat_failed, reparse_point, etc).
 func uninstallHistoryItems(sessionID string, result ExecuteResult) []history.ItemRecord {
 	items := make([]history.ItemRecord, 0, len(result.Applications))
 	for _, app := range result.Applications {
 		item := history.ItemRecord{
 			SessionID:     sessionID,
-			Path:          "", // Uninstall targets applications, not paths, in this slice.
+			Path:          "", // App-level record targets the application, not a path.
 			Rule:          app.PlannedClass,
 			PlannedAction: app.Action,
 			Action:        app.Action,
@@ -81,6 +91,28 @@ func uninstallHistoryItems(sessionID string, result ExecuteResult) []history.Ite
 			}
 		}
 		items = append(items, item)
+
+		// One ItemRecord per leftover path outcome. These are populated
+		// only after a successful uninstaller; on failure or cancel the
+		// app has no LeftoverOutcomes and this loop is a no-op.
+		for _, leftover := range app.LeftoverOutcomes {
+			leftoverItem := history.ItemRecord{
+				SessionID:     sessionID,
+				Path:          leftover.Path,
+				Rule:          "leftover",
+				PlannedAction: ActionLeftoverRecycleBin,
+				Action:        leftover.Action,
+				Result:        leftover.Result,
+			}
+			if leftover.Result == ResultLeftoverSkipped {
+				leftoverItem.SkippedReason = &history.Issue{
+					Code:        leftover.Reason,
+					Message:     leftover.Detail,
+					Recoverable: true,
+				}
+			}
+			items = append(items, leftoverItem)
+		}
 	}
 	return items
 }
