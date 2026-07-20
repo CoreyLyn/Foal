@@ -142,8 +142,8 @@ func plannedActionForOpts(opts Options, identifier string) string {
 // resolvePlannedAction returns the planned action for identifier, honoring an
 // optional per-run test override map before the catalog. Production leaves
 // overrides nil so the catalog remains the sole source of truth.
-func resolvePlannedAction(identifier string, overrides map[string]DeletionAction) string {
-	if action, ok := overrides[identifier]; ok && validDeletionAction(action) {
+func resolvePlannedAction(identifier string, overrides map[string]PlannedAction) string {
+	if action, ok := overrides[identifier]; ok && validPlannedAction(action) {
 		return string(action)
 	}
 	if summary, ok := canonicalCleanupCategoryCatalog.Summary(identifier); ok {
@@ -290,10 +290,12 @@ func issue(code, message string, recoverable bool, path, ruleID string) Structur
 }
 
 // NormalizedOptInSet returns the set of opt-in categories enabled, resolving
-// group tokens: "all" to every implemented opt-in category, "dev-caches" to
-// developer-cache plus editor Application cache categories (Developer tools),
-// "app-caches" to non-editor Application cache categories (Applications), and
-// "cli-agents" to independently registered product-scoped CLI-agent categories.
+// group tokens: "all" to every implemented opt-in category except exact-
+// selection-only categories, "dev-caches" to developer-cache plus editor
+// Application cache categories (Developer tools), "app-caches" to non-editor
+// Application cache categories (Applications), and "cli-agents" to independently
+// registered product-scoped CLI-agent categories. Exact-selection-only
+// categories remain valid exact names but are never expanded by any token.
 // Group tokens own no resolver, candidates, or deletion action.
 // Returns the set, a list of invalid names (if any), and the list of valid
 // names for error reporting.
@@ -349,7 +351,7 @@ func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []stri
 		enabled[summary.Identifier] = true
 	}
 	if all {
-		for _, v := range selectable {
+		for _, v := range aggregateSelectableCategoryIDs() {
 			enabled[v] = true
 		}
 	} else {
@@ -395,7 +397,7 @@ func totals(result Result) Totals {
 	var optInDeletedCount int
 	for _, deleted := range result.Deleted {
 		switch deleted.Action {
-		case string(DeletionActionDeletePermanently):
+		case string(PlannedActionDeletePermanently):
 			permanentlyDeletedBytes += deleted.Bytes
 		default:
 			// Empty action (legacy History / fixtures) and move_to_recycle_bin
@@ -418,8 +420,8 @@ func totals(result Result) Totals {
 		optInReclaimableBytes += candidate.Bytes
 	}
 	return Totals{
-		CandidateCount:           len(result.Candidates),
-		DeletedCount:             len(result.Deleted),
+		CandidateCount: len(result.Candidates),
+		DeletedCount:   len(result.Deleted),
 		// Failed permanent candidates are not successes; surface them with skips
 		// so aggregate counts stay path-complete without claiming permanent bytes.
 		SkippedCount:             len(result.Skipped) + len(result.Failed),
@@ -433,5 +435,7 @@ func totals(result Result) Totals {
 		RecycleBinMovedBytes:     recycleBinMovedBytes,
 		PermanentlyDeletedBytes:  permanentlyDeletedBytes,
 		AffectedBytes:            affectedBytes,
+		// Servicing is action-neutral: count only, never a byte contribution.
+		ServicingOperationCount: len(result.ServicingOperations),
 	}
 }

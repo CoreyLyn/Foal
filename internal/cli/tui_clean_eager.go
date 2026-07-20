@@ -68,8 +68,11 @@ type eagerCategoryRow struct {
 	ReportCategory clean.ReportCategory
 	Eligibility    clean.CategoryEligibility
 	// PlannedAction is catalog-owned; the TUI never chooses or overrides it.
-	PlannedAction clean.DeletionAction
-	State         clean.CategoryPreviewState
+	PlannedAction clean.PlannedAction
+	// SelectionPolicy is catalog-owned. Exact-selection-only rows are excluded
+	// from Select All (they may still be toggled individually when selectable).
+	SelectionPolicy clean.CategorySelectionPolicy
+	State           clean.CategoryPreviewState
 	// Selected is session-only cleanup authorization. Independent of cursor.
 	// Initial selection is derived from shared eligibility + planned action
 	// (defaults and delete_permanently start selected; non-default Recycle Bin
@@ -287,12 +290,13 @@ func eagerRowsFromSummaries(queue []clean.CleanupCategorySummary) []eagerCategor
 	rows := make([]eagerCategoryRow, 0, len(queue))
 	for _, summary := range queue {
 		rows = append(rows, eagerCategoryRow{
-			Identifier:     summary.Identifier,
-			Label:          summary.Label,
-			ReportCategory: summary.ReportCategory,
-			Eligibility:    summary.Eligibility,
-			PlannedAction:  summary.PlannedAction,
-			State:          clean.CategoryPreviewWaiting,
+			Identifier:      summary.Identifier,
+			Label:           summary.Label,
+			ReportCategory:  summary.ReportCategory,
+			Eligibility:     summary.Eligibility,
+			PlannedAction:   summary.PlannedAction,
+			SelectionPolicy: summary.SelectionPolicy,
+			State:           clean.CategoryPreviewWaiting,
 			// ADR 0018 / deletion policy: derive initial selection from shared
 			// eligibility + planned action (no hard-coded permanent list).
 			Selected: clean.InitiallySelectedCategory(summary),
@@ -601,9 +605,13 @@ func (m *eagerCleanModel) toggleFocusedSelection() {
 
 // selectAllSelectable authorizes every currently selectable waiting, scanning,
 // complete, or partial category. Permission notices are not in the queue;
-// disabled terminal rows stay excluded.
+// disabled terminal rows stay excluded. Exact-selection-only categories are
+// excluded from Select All and may only be toggled individually.
 func (m *eagerCleanModel) selectAllSelectable() {
 	for i := range m.rows {
+		if m.rows[i].SelectionPolicy == clean.CategorySelectionPolicyExactOnly {
+			continue
+		}
 		if m.rowSelectable(m.rows[i]) {
 			m.rows[i].Selected = true
 		}

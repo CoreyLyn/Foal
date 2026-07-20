@@ -100,10 +100,10 @@ func TestEagerNoWorkStatePure(t *testing.T) {
 
 func TestEagerConfirmationActionGroupsPure(t *testing.T) {
 	rows := []eagerCategoryRow{
-		{Identifier: "recycle", Selected: true, PlannedAction: clean.DeletionActionMoveToRecycleBin, CandidateCount: 2, Bytes: 100},
-		{Identifier: "perm", Selected: true, PlannedAction: clean.DeletionActionDeletePermanently, CandidateCount: 1, Bytes: 50},
-		{Identifier: "off", Selected: false, PlannedAction: clean.DeletionActionDeletePermanently, CandidateCount: 9, Bytes: 9},
-		{Identifier: "unknown", Selected: true, PlannedAction: clean.DeletionAction(""), CandidateCount: 3, Bytes: 30},
+		{Identifier: "recycle", Selected: true, PlannedAction: clean.PlannedActionMoveToRecycleBin, CandidateCount: 2, Bytes: 100},
+		{Identifier: "perm", Selected: true, PlannedAction: clean.PlannedActionDeletePermanently, CandidateCount: 1, Bytes: 50},
+		{Identifier: "off", Selected: false, PlannedAction: clean.PlannedActionDeletePermanently, CandidateCount: 9, Bytes: 9},
+		{Identifier: "unknown", Selected: true, PlannedAction: clean.PlannedAction(""), CandidateCount: 3, Bytes: 30},
 	}
 	permanent, recycle := eagerConfirmationActionGroups(rows)
 	if len(permanent) != 1 || permanent[0].Identifier != "perm" {
@@ -144,7 +144,7 @@ func TestEagerPreviewMarkersAndLabelsPure(t *testing.T) {
 		State:          clean.CategoryPreviewComplete,
 		CandidateCount: 2,
 		Bytes:          2048,
-		PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+		PlannedAction:  clean.PlannedActionMoveToRecycleBin,
 	}
 	if got := eagerPreviewRowLabel(row); got != "Temp · 2 item(s) · 2 KB" {
 		t.Fatalf("label = %q", got)
@@ -169,7 +169,7 @@ func TestEagerPreviewRowLabelOmitsPlannedActionPrefix(t *testing.T) {
 		State:          clean.CategoryPreviewComplete,
 		CandidateCount: 1,
 		Bytes:          1024,
-		PlannedAction:  clean.DeletionActionDeletePermanently,
+		PlannedAction:  clean.PlannedActionDeletePermanently,
 	}
 	if got := eagerPreviewRowLabel(perm); got != "D3D · 1 item(s) · 1 KB" {
 		t.Fatalf("complete = %q", got)
@@ -191,7 +191,7 @@ func TestEagerPreviewRowLabelOmitsPlannedActionPrefix(t *testing.T) {
 		clean.CategoryPreviewIncomplete,
 		clean.CategoryPreviewFailed,
 	} {
-		row := eagerCategoryRow{Label: "Cache", State: state, PlannedAction: clean.DeletionActionDeletePermanently}
+		row := eagerCategoryRow{Label: "Cache", State: state, PlannedAction: clean.PlannedActionDeletePermanently}
 		got := eagerPreviewRowLabel(row)
 		if strings.HasPrefix(got, "perm · ") || strings.HasPrefix(got, "bin · ") {
 			t.Fatalf("state %q has planned-action prefix: %q", state, got)
@@ -203,7 +203,7 @@ func TestEagerPreviewRowLabelOmitsPlannedActionPrefix(t *testing.T) {
 	waiting := eagerCategoryRow{
 		Label:         "Temp",
 		State:         clean.CategoryPreviewWaiting,
-		PlannedAction: clean.DeletionActionMoveToRecycleBin,
+		PlannedAction: clean.PlannedActionMoveToRecycleBin,
 	}
 	if got := eagerPreviewRowLabel(waiting); got != "Temp · waiting" {
 		t.Fatalf("waiting = %q", got)
@@ -212,8 +212,8 @@ func TestEagerPreviewRowLabelOmitsPlannedActionPrefix(t *testing.T) {
 
 func TestEagerPermanentSelectionNoticePresence(t *testing.T) {
 	withPerm := []eagerCategoryRow{
-		{Identifier: "a", Selected: true, PlannedAction: clean.DeletionActionDeletePermanently},
-		{Identifier: "b", Selected: true, PlannedAction: clean.DeletionActionMoveToRecycleBin},
+		{Identifier: "a", Selected: true, PlannedAction: clean.PlannedActionDeletePermanently},
+		{Identifier: "b", Selected: true, PlannedAction: clean.PlannedActionMoveToRecycleBin},
 	}
 	notice := eagerPermanentSelectionNotice(eagerSelectionIncludesPermanent(withPerm))
 	if notice == "" || !strings.Contains(notice, "includes permanent deletion") {
@@ -229,8 +229,8 @@ func TestEagerPermanentSelectionNoticePresence(t *testing.T) {
 
 	// Unselected permanent categories do not count.
 	permOff := []eagerCategoryRow{
-		{Identifier: "a", Selected: false, PlannedAction: clean.DeletionActionDeletePermanently},
-		{Identifier: "b", Selected: true, PlannedAction: clean.DeletionActionMoveToRecycleBin},
+		{Identifier: "a", Selected: false, PlannedAction: clean.PlannedActionDeletePermanently},
+		{Identifier: "b", Selected: true, PlannedAction: clean.PlannedActionMoveToRecycleBin},
 	}
 	if got := eagerPermanentSelectionNotice(eagerSelectionIncludesPermanent(permOff)); got != "" {
 		t.Fatalf("cleared permanent selection must remove notice, got %q", got)
@@ -331,7 +331,7 @@ func TestEagerPreviewFooterFramedByRules(t *testing.T) {
 	model.rows[0].State = clean.CategoryPreviewComplete
 	model.rows[0].Bytes = 1 << 30
 	model.rows[0].CandidateCount = 1
-	model.rows[0].PlannedAction = clean.DeletionActionDeletePermanently
+	model.rows[0].PlannedAction = clean.PlannedActionDeletePermanently
 	model.cursor = 0
 
 	footer := model.fixedFooterLines()
@@ -525,10 +525,10 @@ func TestCleanMagnitudeTierFromFormattedToken(t *testing.T) {
 
 func TestEagerPreviewByteColumnAlignment(t *testing.T) {
 	rows := []eagerCategoryRow{
-		{Label: "Short", State: clean.CategoryPreviewComplete, CandidateCount: 1, Bytes: 2048, PlannedAction: clean.DeletionActionMoveToRecycleBin},
-		{Label: "Much Longer Category Label", State: clean.CategoryPreviewPartial, CandidateCount: 12, Bytes: 3 * 1024 * 1024 * 1024, PlannedAction: clean.DeletionActionDeletePermanently},
-		{Label: "Waiting", State: clean.CategoryPreviewWaiting, PlannedAction: clean.DeletionActionMoveToRecycleBin},
-		{Label: "Empty", State: clean.CategoryPreviewEmpty, PlannedAction: clean.DeletionActionDeletePermanently},
+		{Label: "Short", State: clean.CategoryPreviewComplete, CandidateCount: 1, Bytes: 2048, PlannedAction: clean.PlannedActionMoveToRecycleBin},
+		{Label: "Much Longer Category Label", State: clean.CategoryPreviewPartial, CandidateCount: 12, Bytes: 3 * 1024 * 1024 * 1024, PlannedAction: clean.PlannedActionDeletePermanently},
+		{Label: "Waiting", State: clean.CategoryPreviewWaiting, PlannedAction: clean.PlannedActionMoveToRecycleBin},
+		{Label: "Empty", State: clean.CategoryPreviewEmpty, PlannedAction: clean.PlannedActionDeletePermanently},
 	}
 	leftWidth, byteWidth := eagerPreviewByteColumnWidths(rows)
 	if leftWidth == 0 || byteWidth == 0 {
@@ -864,7 +864,7 @@ func TestConfirmationBodyEntriesSummaryFirst(t *testing.T) {
 			Identifier:     "go-cache",
 			Label:          "Go cache",
 			Selected:       true,
-			PlannedAction:  clean.DeletionActionDeletePermanently,
+			PlannedAction:  clean.PlannedActionDeletePermanently,
 			State:          clean.CategoryPreviewComplete,
 			CandidateCount: 2,
 			Bytes:          1024 * 1024 * 1024,
@@ -874,7 +874,7 @@ func TestConfirmationBodyEntriesSummaryFirst(t *testing.T) {
 			Identifier:     "user_temp",
 			Label:          "User temp",
 			Selected:       true,
-			PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+			PlannedAction:  clean.PlannedActionMoveToRecycleBin,
 			State:          clean.CategoryPreviewComplete,
 			CandidateCount: 1,
 			Bytes:          100 * 1024 * 1024,
@@ -883,7 +883,7 @@ func TestConfirmationBodyEntriesSummaryFirst(t *testing.T) {
 			Identifier:    "off",
 			Label:         "Off row",
 			Selected:      false,
-			PlannedAction: clean.DeletionActionDeletePermanently,
+			PlannedAction: clean.PlannedActionDeletePermanently,
 			State:         clean.CategoryPreviewComplete,
 			Bytes:         99,
 		},
@@ -951,7 +951,7 @@ func TestConfirmationPlainFrameByteAndWarningCopy(t *testing.T) {
 			Identifier:     "go-cache",
 			Label:          "Go cache",
 			Selected:       true,
-			PlannedAction:  clean.DeletionActionDeletePermanently,
+			PlannedAction:  clean.PlannedActionDeletePermanently,
 			State:          clean.CategoryPreviewComplete,
 			CandidateCount: 2,
 			Bytes:          1024 * 1024 * 1024, // 1 GB
@@ -961,7 +961,7 @@ func TestConfirmationPlainFrameByteAndWarningCopy(t *testing.T) {
 			Identifier:     "user_temp",
 			Label:          "User temp",
 			Selected:       true,
-			PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+			PlannedAction:  clean.PlannedActionMoveToRecycleBin,
 			State:          clean.CategoryPreviewComplete,
 			CandidateCount: 1,
 			Bytes:          100 * 1024 * 1024, // 100 MB
@@ -970,7 +970,7 @@ func TestConfirmationPlainFrameByteAndWarningCopy(t *testing.T) {
 			Identifier:    "off",
 			Label:         "Off row",
 			Selected:      false,
-			PlannedAction: clean.DeletionActionDeletePermanently,
+			PlannedAction: clean.PlannedActionDeletePermanently,
 			State:         clean.CategoryPreviewComplete,
 			Bytes:         99,
 		},

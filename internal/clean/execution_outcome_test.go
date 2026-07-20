@@ -92,8 +92,8 @@ func TestProjectCategoryExecutionOutcomesCleanedFullSuccess(t *testing.T) {
 		Status: "ok",
 		Mode:   "execute",
 		Deleted: []clean.DeletedItem{
-			{Path: `C:\Users\me\AppData\Local\Temp\foal-a`, Bytes: 10, Rule: id, Action: string(clean.DeletionActionMoveToRecycleBin)},
-			{Path: `C:\Users\me\AppData\Local\Temp\foal-b`, Bytes: 20, Rule: id, Action: string(clean.DeletionActionMoveToRecycleBin)},
+			{Path: `C:\Users\me\AppData\Local\Temp\foal-a`, Bytes: 10, Rule: id, Action: string(clean.PlannedActionMoveToRecycleBin)},
+			{Path: `C:\Users\me\AppData\Local\Temp\foal-b`, Bytes: 20, Rule: id, Action: string(clean.PlannedActionMoveToRecycleBin)},
 		},
 		Totals: clean.Totals{DeletedCount: 2, AffectedBytes: 30, RecycleBinMovedBytes: 30},
 	}
@@ -117,8 +117,8 @@ func TestProjectCategoryExecutionOutcomesSplitsMixedActions(t *testing.T) {
 		Status: "ok",
 		Mode:   "execute",
 		Deleted: []clean.DeletedItem{
-			{Path: `C:\Temp\a`, Bytes: 5, Rule: recycleID, Action: string(clean.DeletionActionMoveToRecycleBin)},
-			{Path: `C:\Cache\b`, Bytes: 7, Rule: permanentID, Action: string(clean.DeletionActionDeletePermanently)},
+			{Path: `C:\Temp\a`, Bytes: 5, Rule: recycleID, Action: string(clean.PlannedActionMoveToRecycleBin)},
+			{Path: `C:\Cache\b`, Bytes: 7, Rule: permanentID, Action: string(clean.PlannedActionDeletePermanently)},
 		},
 		Totals: clean.Totals{
 			DeletedCount:            2,
@@ -162,8 +162,8 @@ func TestResultHasPermanentPartialRisk(t *testing.T) {
 			Path:          `C:\Cache\x`,
 			Bytes:         4,
 			Rule:          "go-cache",
-			PlannedAction: string(clean.DeletionActionDeletePermanently),
-			Action:        string(clean.DeletionActionDeletePermanently),
+			PlannedAction: string(clean.PlannedActionDeletePermanently),
+			Action:        string(clean.PlannedActionDeletePermanently),
 			Reason:        clean.StructuredIssue{Code: "permanent_delete_failed", Message: `may already be permanently deleted under C:\Cache\x`},
 		}},
 	}
@@ -174,7 +174,7 @@ func TestResultHasPermanentPartialRisk(t *testing.T) {
 		Skipped: []clean.SkippedItem{{
 			Path:          `C:\Cache\y`,
 			Rule:          "go-cache",
-			PlannedAction: string(clean.DeletionActionDeletePermanently),
+			PlannedAction: string(clean.PlannedActionDeletePermanently),
 			Reason: clean.StructuredIssue{
 				Code:    "context_canceled",
 				Message: "context canceled; some content may already be permanently deleted",
@@ -189,7 +189,7 @@ func TestResultHasPermanentPartialRisk(t *testing.T) {
 		Skipped: []clean.SkippedItem{{
 			Path:          `C:\Cache\z`,
 			Rule:          "go-cache",
-			PlannedAction: string(clean.DeletionActionDeletePermanently),
+			PlannedAction: string(clean.PlannedActionDeletePermanently),
 			Reason:        clean.StructuredIssue{Code: "context_canceled", Message: "context canceled"},
 		}},
 	}
@@ -366,7 +366,7 @@ func TestProjectProvisionalCategoryOutcomeMatchesFinalMapping(t *testing.T) {
 	result := clean.Result{
 		Status: "ok",
 		Deleted: []clean.DeletedItem{{
-			Path: `C:\Temp\a`, Bytes: 5, Rule: id, Action: string(clean.DeletionActionMoveToRecycleBin),
+			Path: `C:\Temp\a`, Bytes: 5, Rule: id, Action: string(clean.PlannedActionMoveToRecycleBin),
 		}},
 		Skipped: []clean.SkippedItem{{
 			Path: `C:\Temp\b`, Bytes: 1, Rule: id,

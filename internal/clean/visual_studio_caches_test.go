@@ -79,7 +79,7 @@ func TestVisualStudioCaches_CatalogAndGroupTokens(t *testing.T) {
 	if summary.RunningApplicationPolicy != clean.RunningApplicationPolicyDistinctiveProcessIdle {
 		t.Fatalf("running policy = %q", summary.RunningApplicationPolicy)
 	}
-	if summary.PlannedAction != clean.DeletionActionDeletePermanently {
+	if summary.PlannedAction != clean.PlannedActionDeletePermanently {
 		t.Fatalf("planned action = %q, want delete_permanently", summary.PlannedAction)
 	}
 	if !clean.InitiallySelectedCategory(summary) {
@@ -161,7 +161,7 @@ func TestVisualStudioCaches_AllowlistOnlyAndSilentAbsence(t *testing.T) {
 		if c.Category != clean.DevCacheCategoryVisualStudioCaches {
 			t.Fatalf("category = %q", c.Category)
 		}
-		if c.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if c.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned action = %q", c.PlannedAction)
 		}
 		base := filepath.Base(c.Path)
@@ -385,7 +385,7 @@ func TestVisualStudioCaches_ExecuteFreshResolvePermanentAuthAndHistory(t *testin
 	if len(dry.OptInCandidates) != 1 || dry.OptInCandidates[0].Path != previewCMC {
 		t.Fatalf("dry-run candidates = %#v", dry.OptInCandidates)
 	}
-	if dry.OptInCandidates[0].PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if dry.OptInCandidates[0].PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("dry-run planned action = %q", dry.OptInCandidates[0].PlannedAction)
 	}
 
@@ -456,7 +456,7 @@ func TestVisualStudioCaches_ExecuteFreshResolvePermanentAuthAndHistory(t *testin
 		t.Fatalf("deleted = %#v", execResult.Deleted)
 	}
 	for _, d := range execResult.Deleted {
-		if d.Action != string(clean.DeletionActionDeletePermanently) {
+		if d.Action != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("deleted action = %q", d.Action)
 		}
 	}
@@ -467,7 +467,7 @@ func TestVisualStudioCaches_ExecuteFreshResolvePermanentAuthAndHistory(t *testin
 			if item.Rule != clean.DevCacheCategoryVisualStudioCaches {
 				t.Fatalf("history rule = %q", item.Rule)
 			}
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 		}

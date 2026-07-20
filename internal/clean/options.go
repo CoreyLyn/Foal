@@ -11,7 +11,7 @@ import (
 // plannedRecycleBinAction is the stable Recycle Bin action string. Catalog
 // ownership is the source of planned actions; this alias remains for actual
 // Recycle Bin execution outcomes and label helpers.
-const plannedRecycleBinAction = string(DeletionActionMoveToRecycleBin)
+const plannedRecycleBinAction = string(PlannedActionMoveToRecycleBin)
 
 // Dev cache categories - these are Review suggestions that become opt-in candidates
 const (
@@ -210,7 +210,7 @@ type Options struct {
 	// CategoryPlannedActions injects planned actions by category ID for tests.
 	// Production leaves it nil so the catalog remains the sole source of truth.
 	// Used to exercise permanent deletion without activating production rules.
-	CategoryPlannedActions map[string]DeletionAction
+	CategoryPlannedActions map[string]PlannedAction
 
 	// --- observation ---
 	ProgressReporter ProgressReporter
@@ -265,9 +265,13 @@ type Result struct {
 	IncompleteOpportunityInspections []IncompleteOpportunityInspection `json:"incomplete_opportunity_inspections"`
 	ReviewSuggestions                []ReviewSuggestion                `json:"review_suggestions"`
 	RunningApplications              []RunningApplicationState         `json:"running_applications"`
-	Totals                           Totals                            `json:"totals"`
-	DetailedListPath                 string                            `json:"-"`
-	ElapsedMS                        int64                             `json:"elapsed_ms"`
+	// ServicingOperations holds path-free, byte-free Windows servicing operation
+	// records. It is separate from every file array and never contributes bytes.
+	// Omitted when empty so existing deletion-only contracts are unchanged.
+	ServicingOperations []ServicingOperation `json:"servicing_operations,omitempty"`
+	Totals              Totals               `json:"totals"`
+	DetailedListPath    string               `json:"-"`
+	ElapsedMS           int64                `json:"elapsed_ms"`
 }
 
 type ProtectionRule struct {
@@ -307,10 +311,10 @@ type DeletedItem struct {
 // FailedItem is a permanent-deletion candidate that failed after mutation may
 // have begun. It is not a pre-mutation skip and never falls back to the Recycle Bin.
 type FailedItem struct {
-	Path          string          `json:"path"`
-	Bytes         int64           `json:"bytes"`
-	Rule          string          `json:"rule"`
-	PlannedAction string          `json:"planned_action"`
+	Path          string `json:"path"`
+	Bytes         int64  `json:"bytes"`
+	Rule          string `json:"rule"`
+	PlannedAction string `json:"planned_action"`
 	// Action is the attempted action (always delete_permanently for this ticket).
 	Action string          `json:"action"`
 	Reason StructuredIssue `json:"reason"`
@@ -336,58 +340,58 @@ type ReviewSuggestion struct {
 type RunningApplicationStatus string
 
 const (
-	ApplicationGoogleChrome               = "google_chrome"
-	ApplicationMicrosoftEdge              = "microsoft_edge"
-	ApplicationMozillaFirefox             = "mozilla_firefox"
-	ApplicationGo                         = "go"
-	ApplicationCargo                      = "cargo"
-	ApplicationDotNet                     = "dotnet"
-	ApplicationNuGet                      = "nuget"
-	ApplicationNode                       = "node"
-	ApplicationPython                     = "python"
-	ApplicationUV                         = "uv"
-	ApplicationBun                        = "bun"
-	ApplicationVisualStudioCode           = "visual_studio_code"
-	ApplicationCursor                     = "cursor"
+	ApplicationGoogleChrome     = "google_chrome"
+	ApplicationMicrosoftEdge    = "microsoft_edge"
+	ApplicationMozillaFirefox   = "mozilla_firefox"
+	ApplicationGo               = "go"
+	ApplicationCargo            = "cargo"
+	ApplicationDotNet           = "dotnet"
+	ApplicationNuGet            = "nuget"
+	ApplicationNode             = "node"
+	ApplicationPython           = "python"
+	ApplicationUV               = "uv"
+	ApplicationBun              = "bun"
+	ApplicationVisualStudioCode = "visual_studio_code"
+	ApplicationCursor           = "cursor"
 	// ApplicationVisualStudioCodeInsiders is VS Code Insiders (Code - Insiders.exe).
-	ApplicationVisualStudioCodeInsiders   = "visual_studio_code_insiders"
+	ApplicationVisualStudioCodeInsiders = "visual_studio_code_insiders"
 	// ApplicationVSCodium is the VSCodium fork (VSCodium.exe).
-	ApplicationVSCodium                   = "vscodium"
+	ApplicationVSCodium = "vscodium"
 	// ApplicationWindsurf is the Windsurf editor (Windsurf.exe).
-	ApplicationWindsurf                   = "windsurf"
+	ApplicationWindsurf = "windsurf"
 	// ApplicationTrae is the Trae editor (Trae.exe), a VS Code fork.
-	ApplicationTrae                       = "trae"
+	ApplicationTrae = "trae"
 	// ApplicationObsidian is the Obsidian note-taking app (Obsidian.exe), a
 	// non-editor Electron application. Independent idle gate; never authorizes
 	// or suppresses an editor or Trae, and vice versa.
-	ApplicationObsidian                   = "obsidian"
+	ApplicationObsidian = "obsidian"
 	// ApplicationVisualStudio is full Visual Studio (devenv.exe), not VS Code.
-	ApplicationVisualStudio               = "visual_studio"
-	ApplicationIntelliJIDEA               = "intellij_idea"
-	ApplicationPyCharm                    = "pycharm"
-	ApplicationWebStorm                   = "webstorm"
-	ApplicationPhpStorm                   = "phpstorm"
-	ApplicationRubyMine                   = "rubymine"
-	ApplicationCLion                      = "clion"
-	ApplicationDataGrip                   = "datagrip"
-	ApplicationDataSpell                  = "dataspell"
-	ApplicationGoLand                     = "goland"
-	ApplicationRustRover                  = "rustrover"
-	ApplicationAqua                       = "aqua"
-	ApplicationMPS                        = "mps"
-	ApplicationWriterside                 = "writerside"
-	ApplicationRider                      = "rider"
+	ApplicationVisualStudio = "visual_studio"
+	ApplicationIntelliJIDEA = "intellij_idea"
+	ApplicationPyCharm      = "pycharm"
+	ApplicationWebStorm     = "webstorm"
+	ApplicationPhpStorm     = "phpstorm"
+	ApplicationRubyMine     = "rubymine"
+	ApplicationCLion        = "clion"
+	ApplicationDataGrip     = "datagrip"
+	ApplicationDataSpell    = "dataspell"
+	ApplicationGoLand       = "goland"
+	ApplicationRustRover    = "rustrover"
+	ApplicationAqua         = "aqua"
+	ApplicationMPS          = "mps"
+	ApplicationWriterside   = "writerside"
+	ApplicationRider        = "rider"
 	// ApplicationGrokBuild is defined in grok_build_update_residue.go.
-	RunningApplicationStateRunning        = RunningApplicationStatus("running")
-	RunningApplicationStateIdle           = RunningApplicationStatus("idle")
-	RunningApplicationStateUnknown        = RunningApplicationStatus("unknown")
-	runningApplicationDetectionIssueCode  = "running_application_detection_unknown"
-	recycleBinDisabledIssueCode           = "recycle_bin_disabled"
-	recycleBinCapacityIssueCode           = "recycle_bin_capacity"
-	recycleBinCapacityProbeFailedIssueCode = "recycle_bin_capacity_probe_failed"
+	RunningApplicationStateRunning          = RunningApplicationStatus("running")
+	RunningApplicationStateIdle             = RunningApplicationStatus("idle")
+	RunningApplicationStateUnknown          = RunningApplicationStatus("unknown")
+	runningApplicationDetectionIssueCode    = "running_application_detection_unknown"
+	recycleBinDisabledIssueCode             = "recycle_bin_disabled"
+	recycleBinCapacityIssueCode             = "recycle_bin_capacity"
+	recycleBinCapacityProbeFailedIssueCode  = "recycle_bin_capacity_probe_failed"
 	permanentDeletionNotAuthorizedIssueCode = "permanent_deletion_not_authorized"
-	permanentDeleteFailedIssueCode        = "permanent_delete_failed"
-	devToolRunningIssueCode               = "dev_tool_running"
+	permanentDeleteFailedIssueCode          = "permanent_delete_failed"
+	devToolRunningIssueCode                 = "dev_tool_running"
 )
 
 type RunningApplicationState struct {
@@ -421,4 +425,8 @@ type Totals struct {
 	RecycleBinMovedBytes    int64 `json:"recycle_bin_moved_bytes"`
 	PermanentlyDeletedBytes int64 `json:"permanently_deleted_bytes"`
 	AffectedBytes           int64 `json:"affected_bytes"`
+	// ServicingOperationCount counts Windows servicing operation records. It is a
+	// count only: servicing never contributes to any byte total. Omitted when
+	// zero so existing deletion-only contracts are byte-for-byte unchanged.
+	ServicingOperationCount int `json:"servicing_operation_count,omitempty"`
 }

@@ -354,7 +354,7 @@ func TestDryRunVSCodeOptInConvertsRootsToCandidates(t *testing.T) {
 		if candidate.Category != clean.OpportunityCategoryVSCodeCache {
 			t.Fatalf("candidate category = %q", candidate.Category)
 		}
-		if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if candidate.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned action = %q, want delete_permanently", candidate.PlannedAction)
 		}
 		reclaimable += candidate.Bytes
@@ -445,7 +445,7 @@ func TestExecuteOptInVSCodeCacheCleansWhenIdle(t *testing.T) {
 		t.Fatalf("permanent paths = %v, want Cache and CachedData", permanent.paths)
 	}
 	for _, item := range result.Deleted {
-		if item.Action != string(clean.DeletionActionDeletePermanently) {
+		if item.Action != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("deleted action = %q", item.Action)
 		}
 	}
@@ -455,7 +455,7 @@ func TestExecuteOptInVSCodeCacheCleansWhenIdle(t *testing.T) {
 	}
 	for _, item := range recorder.items {
 		if item.Path == cachePath || item.Path == cachedDataPath {
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 			return
@@ -973,7 +973,7 @@ func TestDryRunCursorOptInConvertsRootsToCandidatesWithoutSelectingVSCode(t *tes
 		if candidate.Category != clean.OpportunityCategoryCursorCache {
 			t.Fatalf("candidate category = %q, want cursor_cache only", candidate.Category)
 		}
-		if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if candidate.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned action = %q, want delete_permanently", candidate.PlannedAction)
 		}
 	}
@@ -1056,7 +1056,7 @@ func TestExecuteOptInCursorCacheCleansWhenIdle(t *testing.T) {
 	}
 	for _, item := range recorder.items {
 		if item.Path == cachePath || item.Path == cachedDataPath {
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 			return
@@ -1396,7 +1396,7 @@ func TestDryRunTraeOptInConvertsRootsToCandidatesWithoutSelectingVSCode(t *testi
 		if candidate.Category != clean.OpportunityCategoryTraeCache {
 			t.Fatalf("candidate category = %q, want trae_cache only", candidate.Category)
 		}
-		if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if candidate.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned action = %q, want delete_permanently", candidate.PlannedAction)
 		}
 	}
@@ -1475,7 +1475,7 @@ func TestExecuteOptInTraeCacheCleansWhenIdle(t *testing.T) {
 		t.Fatalf("permanent paths = %v, want Cache and CachedData", permanent.paths)
 	}
 	for _, item := range result.Deleted {
-		if item.Action != string(clean.DeletionActionDeletePermanently) {
+		if item.Action != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("deleted action = %q", item.Action)
 		}
 	}
@@ -1484,7 +1484,7 @@ func TestExecuteOptInTraeCacheCleansWhenIdle(t *testing.T) {
 	}
 	for _, item := range recorder.items {
 		if item.Path == cachePath || item.Path == cachedDataPath {
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 			return
@@ -1963,7 +1963,7 @@ func TestDryRunObsidianOptInConvertsRootsToCandidates(t *testing.T) {
 		if candidate.Category != clean.OpportunityCategoryObsidianCache {
 			t.Fatalf("candidate category = %q, want obsidian_cache only", candidate.Category)
 		}
-		if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if candidate.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned action = %q, want delete_permanently", candidate.PlannedAction)
 		}
 	}
@@ -2019,7 +2019,7 @@ func TestExecuteOptInObsidianCacheCleansWhenIdle(t *testing.T) {
 		t.Fatalf("CachedData is not in the Obsidian allowlist and must not be deleted: %v", permanent.paths)
 	}
 	for _, item := range result.Deleted {
-		if item.Action != string(clean.DeletionActionDeletePermanently) {
+		if item.Action != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("deleted action = %q", item.Action)
 		}
 	}
@@ -2029,7 +2029,7 @@ func TestExecuteOptInObsidianCacheCleansWhenIdle(t *testing.T) {
 	seenHistory := false
 	for _, item := range recorder.items {
 		if item.Path == cachePath || item.Path == gpuPath {
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 			seenHistory = true
@@ -2121,7 +2121,7 @@ func TestExecuteNewApplicationCacheCategoriesRecordPermanentFailureAndCancellati
 					t.Fatalf("history = sessions %#v items %#v, want one item", recorder.sessions, recorder.items)
 				}
 				historyItem := recorder.items[0]
-				if historyItem.Path != cachePath || historyItem.Rule != category.category || historyItem.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+				if historyItem.Path != cachePath || historyItem.Rule != category.category || historyItem.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 					t.Fatalf("history identity/action = %#v", historyItem)
 				}
 
@@ -2129,10 +2129,10 @@ func TestExecuteNewApplicationCacheCategoriesRecordPermanentFailureAndCancellati
 					if len(result.Failed) != 1 || result.Failed[0].Reason.Code != "permanent_delete_failed" {
 						t.Fatalf("failed = %#v", result.Failed)
 					}
-					if result.Failed[0].Rule != category.category || result.Failed[0].Action != string(clean.DeletionActionDeletePermanently) {
+					if result.Failed[0].Rule != category.category || result.Failed[0].Action != string(clean.PlannedActionDeletePermanently) {
 						t.Fatalf("failed identity/action = %#v", result.Failed[0])
 					}
-					if historyItem.Result != "failed" || historyItem.Action != string(clean.DeletionActionDeletePermanently) || historyItem.Error == nil || historyItem.Error.Code != "permanent_delete_failed" {
+					if historyItem.Result != "failed" || historyItem.Action != string(clean.PlannedActionDeletePermanently) || historyItem.Error == nil || historyItem.Error.Code != "permanent_delete_failed" {
 						t.Fatalf("failed history item = %#v", historyItem)
 					}
 					return

@@ -90,7 +90,7 @@ func eagerRowSelectable(row eagerCategoryRow) bool {
 // any delete_permanently planned action (catalog-owned).
 func eagerSelectionIncludesPermanent(rows []eagerCategoryRow) bool {
 	for _, row := range rows {
-		if row.Selected && row.PlannedAction == clean.DeletionActionDeletePermanently {
+		if row.Selected && row.PlannedAction == clean.PlannedActionDeletePermanently {
 			return true
 		}
 	}
@@ -106,7 +106,7 @@ func eagerConfirmationActionGroups(rows []eagerCategoryRow) (permanent, recycle 
 			continue
 		}
 		switch row.PlannedAction {
-		case clean.DeletionActionDeletePermanently:
+		case clean.PlannedActionDeletePermanently:
 			permanent = append(permanent, row)
 		default:
 			recycle = append(recycle, row)
@@ -176,7 +176,7 @@ func confirmationBodyEntriesFromGroups(permanent, recycle []eagerCategoryRow) []
 		}
 		lines = append(lines, eagerBodyLine{text: title, rowIndex: -1, outcomeIndex: -1})
 		for _, row := range rows {
-			action := clean.DeletionActionLabel(row.PlannedAction)
+			action := clean.PlannedActionLabel(row.PlannedAction)
 			lines = append(lines, eagerBodyLine{
 				text: fmt.Sprintf("  - %s · %d item(s) · %s · %s",
 					row.Label, row.CandidateCount, cleanFormatBytes(row.Bytes), action),

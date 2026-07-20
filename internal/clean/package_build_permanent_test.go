@@ -38,7 +38,7 @@ func TestPackageBuildCachesDeclarePermanentPlannedAction(t *testing.T) {
 		if !ok {
 			t.Fatalf("%q missing from catalog", id)
 		}
-		if summary.PlannedAction != clean.DeletionActionDeletePermanently {
+		if summary.PlannedAction != clean.PlannedActionDeletePermanently {
 			t.Fatalf("%q planned_action = %q, want delete_permanently", id, summary.PlannedAction)
 		}
 		if summary.Eligibility != clean.CategoryEligibilityOptIn {
@@ -109,7 +109,7 @@ func TestPackageBuildDryRunReportsPermanentWithoutAuthorization(t *testing.T) {
 			if candidate.Category != category {
 				t.Fatalf("category = %q", candidate.Category)
 			}
-			if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			if candidate.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("planned_action = %q, want delete_permanently", candidate.PlannedAction)
 			}
 			if len(result.Deleted) != 0 {
@@ -175,7 +175,7 @@ func TestPackageBuildExecuteWithoutAllowPermanentSkips(t *testing.T) {
 	if len(permanent.paths) != 0 {
 		t.Fatalf("permanent remover called without auth: %v", permanent.paths)
 	}
-	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	if len(result.Skipped) != 1 {
@@ -185,7 +185,7 @@ func TestPackageBuildExecuteWithoutAllowPermanentSkips(t *testing.T) {
 	if skipped.Reason.Code != "permanent_deletion_not_authorized" {
 		t.Fatalf("skip code = %q", skipped.Reason.Code)
 	}
-	if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if skipped.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned action changed: %q", skipped.PlannedAction)
 	}
 	if skipped.Rule != clean.DevCacheCategoryNPM {
@@ -253,11 +253,11 @@ func TestPackageBuildExecuteWithAllowPermanentDispatchesPermanentRemover(t *test
 	for _, item := range result.Deleted {
 		byRule[item.Rule] = item
 	}
-	if byRule[clean.DefaultCategoryFoalOwnedTempSandboxes].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if byRule[clean.DefaultCategoryFoalOwnedTempSandboxes].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("recycle deleted = %#v", byRule[clean.DefaultCategoryFoalOwnedTempSandboxes])
 	}
 	goDeleted, ok := byRule[clean.DevCacheCategoryGo]
-	if !ok || goDeleted.Action != string(clean.DeletionActionDeletePermanently) {
+	if !ok || goDeleted.Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("go deleted = %#v", byRule[clean.DevCacheCategoryGo])
 	}
 	if result.Totals.RecycleBinMovedBytes != 2 {
@@ -277,7 +277,7 @@ func TestPackageBuildExecuteWithAllowPermanentDispatchesPermanentRemover(t *test
 	for _, item := range recorder.items {
 		if item.Rule == clean.DevCacheCategoryGo && item.Result == "deleted" {
 			foundPermanentHistory = true
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 		}
@@ -331,7 +331,7 @@ func TestPackageBuildNineCategoriesExecutePermanentlyWhenAuthorized(t *testing.T
 			if len(result.Deleted) != 1 {
 				t.Fatalf("deleted = %#v", result.Deleted)
 			}
-			if result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+			if result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("action = %q", result.Deleted[0].Action)
 			}
 			if result.Deleted[0].Rule != category {
@@ -437,8 +437,8 @@ func TestPackageBuildPermanentFailureNeverFallsBackToRecycleBin(t *testing.T) {
 	if failed.Rule != clean.DevCacheCategoryPip {
 		t.Fatalf("failed rule = %q", failed.Rule)
 	}
-	if failed.Action != string(clean.DeletionActionDeletePermanently) ||
-		failed.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if failed.Action != string(clean.PlannedActionDeletePermanently) ||
+		failed.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("failed actions = %#v", failed)
 	}
 	if failed.Reason.Code != "permanent_delete_failed" {
@@ -550,7 +550,7 @@ func TestUVCacheImpactNoticePreservedWithPermanentAction(t *testing.T) {
 	if len(result.OptInCandidates) != 1 {
 		t.Fatalf("opt-in candidates = %#v", result.OptInCandidates)
 	}
-	if result.OptInCandidates[0].PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if result.OptInCandidates[0].PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned_action = %q", result.OptInCandidates[0].PlannedAction)
 	}
 	model := clean.NewPreviewReadModel(result)

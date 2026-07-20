@@ -104,7 +104,7 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 		ReportCategory:           clean.ReportCategorySystem,
 		Eligibility:              clean.CategoryEligibilityOptIn,
 		RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
-		PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+		PlannedAction:            clean.PlannedActionMoveToRecycleBin,
 	}
 
 	tests := []struct {
@@ -159,7 +159,7 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 			Identifier: "boundary-with-action", Label: "Boundary", ReportCategory: clean.ReportCategorySystem,
 			Eligibility:              clean.CategoryEligibilityPermissionBoundary,
 			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
-			PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+			PlannedAction:            clean.PlannedActionMoveToRecycleBin,
 		}}},
 		// Ensure a valid executable definition still constructs (control case uses
 		// a separate positive test below; this only lists rejection cases).
@@ -251,9 +251,9 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		case clean.CategoryEligibilityDefault, clean.CategoryEligibilityOptIn:
 			executable = append(executable, definition.Identifier)
 			switch definition.PlannedAction {
-			case clean.DeletionActionDeletePermanently:
+			case clean.PlannedActionDeletePermanently:
 				permanent = append(permanent, definition.Identifier)
-			case clean.DeletionActionMoveToRecycleBin:
+			case clean.PlannedActionMoveToRecycleBin:
 				recycleBin = append(recycleBin, definition.Identifier)
 			default:
 				t.Fatalf("executable %q has unsupported planned_action %q", definition.Identifier, definition.PlannedAction)
@@ -296,7 +296,7 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 		selected++
 		if summary.Eligibility != clean.CategoryEligibilityDefault &&
-			summary.PlannedAction != clean.DeletionActionDeletePermanently {
+			summary.PlannedAction != clean.PlannedActionDeletePermanently {
 			t.Fatalf("unexpected initial selection %q eligibility=%q action=%q",
 				summary.Identifier, summary.Eligibility, summary.PlannedAction)
 		}
@@ -318,7 +318,7 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		if clean.InitiallySelectedCategory(summary) {
 			t.Fatalf("%s must start unselected (Recycle Bin opt-in)", id)
 		}
-		if summary.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+		if summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
 			t.Fatalf("%s planned_action = %q, want move_to_recycle_bin", id, summary.PlannedAction)
 		}
 	}
@@ -332,8 +332,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		if summary.Identifier == "administrator_only_caches" {
 			t.Fatal("permission boundary must not enter the eager queue")
 		}
-		if summary.PlannedAction != clean.DeletionActionDeletePermanently &&
-			summary.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+		if summary.PlannedAction != clean.PlannedActionDeletePermanently &&
+			summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
 			t.Fatalf("queue %q planned_action = %q", summary.Identifier, summary.PlannedAction)
 		}
 	}
@@ -345,9 +345,9 @@ func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T
 	for _, definition := range catalog.Definitions() {
 		switch definition.Eligibility {
 		case clean.CategoryEligibilityDefault, clean.CategoryEligibilityOptIn:
-			want := clean.DeletionActionMoveToRecycleBin
+			want := clean.PlannedActionMoveToRecycleBin
 			if wantPermanent[definition.Identifier] {
-				want = clean.DeletionActionDeletePermanently
+				want = clean.PlannedActionDeletePermanently
 			}
 			if definition.PlannedAction != want {
 				t.Fatalf("executable category %q planned_action = %q, want %q",
@@ -389,7 +389,7 @@ func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 	want := productionPermanentCategoryIDs()
 	var permanent []string
 	for _, definition := range catalog.Definitions() {
-		if definition.PlannedAction == clean.DeletionActionDeletePermanently {
+		if definition.PlannedAction == clean.PlannedActionDeletePermanently {
 			permanent = append(permanent, definition.Identifier)
 			if !want[definition.Identifier] {
 				t.Fatalf("unexpected permanent category %q", definition.Identifier)
@@ -414,7 +414,7 @@ func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s missing", id)
 		}
-		if summary.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+		if summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
 			t.Fatalf("%s planned_action = %q, want move_to_recycle_bin", id, summary.PlannedAction)
 		}
 		if summary.Eligibility == clean.CategoryEligibilityOptIn && clean.InitiallySelectedCategory(summary) {
@@ -424,9 +424,9 @@ func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 }
 
 func TestCategoryCatalogAcceptsSupportedPlannedActions(t *testing.T) {
-	for _, action := range []clean.DeletionAction{
-		clean.DeletionActionMoveToRecycleBin,
-		clean.DeletionActionDeletePermanently,
+	for _, action := range []clean.PlannedAction{
+		clean.PlannedActionMoveToRecycleBin,
+		clean.PlannedActionDeletePermanently,
 	} {
 		catalog, err := clean.NewCleanupCategoryCatalog([]clean.CleanupCategoryDefinition{{
 			Identifier:               "sample",
@@ -457,7 +457,7 @@ func TestInitiallySelectedCategoryDerivedFromEligibilityAndAction(t *testing.T) 
 			summary: clean.CleanupCategorySummary{
 				Identifier:    "foal_owned_temp_sandboxes",
 				Eligibility:   clean.CategoryEligibilityDefault,
-				PlannedAction: clean.DeletionActionMoveToRecycleBin,
+				PlannedAction: clean.PlannedActionMoveToRecycleBin,
 			},
 			want: true,
 		},
@@ -466,7 +466,7 @@ func TestInitiallySelectedCategoryDerivedFromEligibilityAndAction(t *testing.T) 
 			summary: clean.CleanupCategorySummary{
 				Identifier:    "go-cache",
 				Eligibility:   clean.CategoryEligibilityOptIn,
-				PlannedAction: clean.DeletionActionDeletePermanently,
+				PlannedAction: clean.PlannedActionDeletePermanently,
 			},
 			want: true,
 		},
@@ -475,7 +475,7 @@ func TestInitiallySelectedCategoryDerivedFromEligibilityAndAction(t *testing.T) 
 			summary: clean.CleanupCategorySummary{
 				Identifier:    "user_temp",
 				Eligibility:   clean.CategoryEligibilityOptIn,
-				PlannedAction: clean.DeletionActionMoveToRecycleBin,
+				PlannedAction: clean.PlannedActionMoveToRecycleBin,
 			},
 			want: false,
 		},
@@ -500,7 +500,7 @@ func TestInitiallySelectedCategoryDerivedFromEligibilityAndAction(t *testing.T) 
 			summary: clean.CleanupCategorySummary{
 				Identifier:    "future_default",
 				Eligibility:   clean.CategoryEligibilityDefault,
-				PlannedAction: clean.DeletionActionDeletePermanently,
+				PlannedAction: clean.PlannedActionDeletePermanently,
 			},
 			want: true,
 		},
@@ -522,7 +522,7 @@ func TestInitiallySelectedCategoryUsesInjectedCatalogSummariesWithoutHardCodedLi
 			ReportCategory:           clean.ReportCategoryUserEssentials,
 			Eligibility:              clean.CategoryEligibilityDefault,
 			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
-			PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+			PlannedAction:            clean.PlannedActionMoveToRecycleBin,
 		},
 		{
 			Identifier:               "permanent_cache",
@@ -530,7 +530,7 @@ func TestInitiallySelectedCategoryUsesInjectedCatalogSummariesWithoutHardCodedLi
 			ReportCategory:           clean.ReportCategoryDeveloperTools,
 			Eligibility:              clean.CategoryEligibilityOptIn,
 			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
-			PlannedAction:            clean.DeletionActionDeletePermanently,
+			PlannedAction:            clean.PlannedActionDeletePermanently,
 		},
 		{
 			Identifier:               "recycle_opt_in",
@@ -538,7 +538,7 @@ func TestInitiallySelectedCategoryUsesInjectedCatalogSummariesWithoutHardCodedLi
 			ReportCategory:           clean.ReportCategorySystem,
 			Eligibility:              clean.CategoryEligibilityOptIn,
 			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
-			PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+			PlannedAction:            clean.PlannedActionMoveToRecycleBin,
 		},
 		{
 			Identifier:               "admin_boundary",
@@ -566,7 +566,7 @@ func TestInitiallySelectedCategoryUsesInjectedCatalogSummariesWithoutHardCodedLi
 	// Production catalog: defaults + every permanent-action category start selected.
 	for _, summary := range clean.EagerPreviewQueue() {
 		want := summary.Eligibility == clean.CategoryEligibilityDefault ||
-			summary.PlannedAction == clean.DeletionActionDeletePermanently
+			summary.PlannedAction == clean.PlannedActionDeletePermanently
 		if clean.InitiallySelectedCategory(summary) != want {
 			t.Fatalf("production %q selected=%v, want %v",
 				summary.Identifier, clean.InitiallySelectedCategory(summary), want)
@@ -574,11 +574,11 @@ func TestInitiallySelectedCategoryUsesInjectedCatalogSummariesWithoutHardCodedLi
 	}
 }
 
-func TestDeletionActionLabel(t *testing.T) {
-	if clean.DeletionActionLabel(clean.DeletionActionMoveToRecycleBin) != "Recycle Bin" {
+func TestPlannedActionLabel(t *testing.T) {
+	if clean.PlannedActionLabel(clean.PlannedActionMoveToRecycleBin) != "Recycle Bin" {
 		t.Fatal("recycle label")
 	}
-	if clean.DeletionActionLabel(clean.DeletionActionDeletePermanently) != "Permanent deletion" {
+	if clean.PlannedActionLabel(clean.PlannedActionDeletePermanently) != "Permanent deletion" {
 		t.Fatal("permanent label")
 	}
 }

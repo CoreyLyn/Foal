@@ -88,7 +88,7 @@ func TestAMDGPUShaderCaches_CatalogPermanentAndInitiallySelected(t *testing.T) {
 	if summary.RunningApplicationPolicy != clean.RunningApplicationPolicyNotApplicable {
 		t.Fatalf("running policy = %q", summary.RunningApplicationPolicy)
 	}
-	if summary.PlannedAction != clean.DeletionActionDeletePermanently {
+	if summary.PlannedAction != clean.PlannedActionDeletePermanently {
 		t.Fatalf("planned_action = %q, want delete_permanently", summary.PlannedAction)
 	}
 	if !clean.InitiallySelectedCategory(summary) {
@@ -121,7 +121,7 @@ func TestIntelGPUShaderCache_CatalogPermanentAndInitiallySelected(t *testing.T) 
 	if !ok {
 		t.Fatal("intel_gpu_shader_cache missing from catalog")
 	}
-	if summary.PlannedAction != clean.DeletionActionDeletePermanently {
+	if summary.PlannedAction != clean.PlannedActionDeletePermanently {
 		t.Fatalf("planned_action = %q", summary.PlannedAction)
 	}
 	if !clean.InitiallySelectedCategory(summary) {
@@ -326,7 +326,7 @@ func TestAMDGPUShaderCaches_DryRunReportsPermanentWithoutAuthorization(t *testin
 	if c.Category != clean.OpportunityCategoryAMDGPUShaderCaches || c.Path != dx {
 		t.Fatalf("candidate = %#v", c)
 	}
-	if c.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if c.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned_action = %q", c.PlannedAction)
 	}
 	if len(result.Deleted) != 0 {
@@ -366,7 +366,7 @@ func TestIntelGPUShaderCache_DryRunReportsPermanentWithoutAuthorization(t *testi
 	if len(result.OptInCandidates) != 1 || result.OptInCandidates[0].Path != root {
 		t.Fatalf("candidates = %#v", result.OptInCandidates)
 	}
-	if result.OptInCandidates[0].PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if result.OptInCandidates[0].PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned_action = %q", result.OptInCandidates[0].PlannedAction)
 	}
 	if _, err := os.Lstat(root); err != nil {
@@ -466,7 +466,7 @@ func TestAMDGPUShaderCaches_ExecuteWithAllowPermanentDeletesRoots(t *testing.T) 
 		if item.Rule != clean.OpportunityCategoryAMDGPUShaderCaches {
 			t.Fatalf("deleted rule = %q", item.Rule)
 		}
-		if item.Action != string(clean.DeletionActionDeletePermanently) {
+		if item.Action != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("action = %q", item.Action)
 		}
 	}
@@ -496,7 +496,7 @@ func TestIntelGPUShaderCache_ExecuteWithAllowPermanent(t *testing.T) {
 	if len(permanent.paths) != 1 || permanent.paths[0] != root {
 		t.Fatalf("permanent paths = %v, want %q", permanent.paths, root)
 	}
-	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	if result.Deleted[0].Rule != clean.OpportunityCategoryIntelGPUShaderCache {

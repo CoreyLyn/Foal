@@ -118,7 +118,7 @@ func TestExplorerThumbnailCache_CatalogRecycleBinAndInitiallyUnselected(t *testi
 	if summary.Eligibility != clean.CategoryEligibilityOptIn {
 		t.Fatalf("eligibility = %q", summary.Eligibility)
 	}
-	if summary.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+	if summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
 		t.Fatalf("planned_action = %q, want move_to_recycle_bin", summary.PlannedAction)
 	}
 	if clean.InitiallySelectedCategory(summary) {
@@ -138,7 +138,7 @@ func TestINetCache_CatalogRecycleBinAndInitiallyUnselected(t *testing.T) {
 	if !ok {
 		t.Fatal("inet_cache missing from catalog")
 	}
-	if summary.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+	if summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
 		t.Fatalf("planned_action = %q", summary.PlannedAction)
 	}
 	if clean.InitiallySelectedCategory(summary) {
@@ -430,7 +430,7 @@ func TestExplorerThumbnailCache_DryRunOptInRecycleBinAction(t *testing.T) {
 		if c.Category != clean.OpportunityCategoryExplorerThumbnailCache {
 			t.Fatalf("category = %q", c.Category)
 		}
-		if c.PlannedAction != string(clean.DeletionActionMoveToRecycleBin) {
+		if c.PlannedAction != string(clean.PlannedActionMoveToRecycleBin) {
 			t.Fatalf("planned_action = %q", c.PlannedAction)
 		}
 		if _, err := os.Lstat(c.Path); err != nil {
@@ -470,7 +470,7 @@ func TestINetCache_DryRunOptInRecycleBinAction(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, c := range result.OptInCandidates {
-		if c.PlannedAction != string(clean.DeletionActionMoveToRecycleBin) {
+		if c.PlannedAction != string(clean.PlannedActionMoveToRecycleBin) {
 			t.Fatalf("planned_action = %q", c.PlannedAction)
 		}
 		seen[c.Path] = true
@@ -507,7 +507,7 @@ func TestExplorerThumbnailCache_ExecuteMovesAllowlistedFilesToRecycleBin(t *test
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	for _, item := range result.Deleted {
-		if item.Action != string(clean.DeletionActionMoveToRecycleBin) {
+		if item.Action != string(clean.PlannedActionMoveToRecycleBin) {
 			t.Fatalf("action = %q", item.Action)
 		}
 		if item.Rule != clean.OpportunityCategoryExplorerThumbnailCache {
@@ -548,7 +548,7 @@ func TestINetCache_ExecuteMovesAllowlistedRootsToRecycleBin(t *testing.T) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	for _, item := range result.Deleted {
-		if item.Action != string(clean.DeletionActionMoveToRecycleBin) {
+		if item.Action != string(clean.PlannedActionMoveToRecycleBin) {
 			t.Fatalf("action = %q", item.Action)
 		}
 	}

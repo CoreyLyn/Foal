@@ -30,7 +30,7 @@ func TestIssue220CategoriesDeclareDeletePermanently(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s missing from catalog", id)
 		}
-		if summary.PlannedAction != clean.DeletionActionDeletePermanently {
+		if summary.PlannedAction != clean.PlannedActionDeletePermanently {
 			t.Fatalf("%s planned_action = %q", id, summary.PlannedAction)
 		}
 		if !clean.InitiallySelectedCategory(summary) {
@@ -39,7 +39,7 @@ func TestIssue220CategoriesDeclareDeletePermanently(t *testing.T) {
 	}
 	// D3D tracer remains permanent and unchanged.
 	d3d, ok := catalog.Summary(clean.OpportunityCategoryD3DShaderCache)
-	if !ok || d3d.PlannedAction != clean.DeletionActionDeletePermanently {
+	if !ok || d3d.PlannedAction != clean.PlannedActionDeletePermanently {
 		t.Fatalf("d3d tracer broken: %#v", d3d)
 	}
 }
@@ -74,7 +74,7 @@ func TestNVIDIADXCacheDryRunReportsPermanentWithoutAuthorization(t *testing.T) {
 	if len(result.OptInCandidates) != 1 {
 		t.Fatalf("candidates = %#v", result.OptInCandidates)
 	}
-	if result.OptInCandidates[0].PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if result.OptInCandidates[0].PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned_action = %q", result.OptInCandidates[0].PlannedAction)
 	}
 	if _, err := os.Lstat(nvidiaRoot); err != nil {
@@ -197,7 +197,7 @@ func TestNVIDIADXCacheExecuteWithAllowPermanentDispatchesPermanentRemover(t *tes
 	for _, item := range result.Deleted {
 		byRule[item.Rule] = item
 	}
-	if byRule[clean.OpportunityCategoryNVIDIADXCache].Action != string(clean.DeletionActionDeletePermanently) {
+	if byRule[clean.OpportunityCategoryNVIDIADXCache].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("nvidia deleted = %#v", byRule[clean.OpportunityCategoryNVIDIADXCache])
 	}
 	if result.Totals.PermanentlyDeletedBytes == 0 {
@@ -254,7 +254,7 @@ func TestBrowserCacheDryRunReportsPermanentWithoutAuthorization(t *testing.T) {
 	if result.OptInCandidates[0].Path != defaultCache {
 		t.Fatalf("path = %q, want %q", result.OptInCandidates[0].Path, defaultCache)
 	}
-	if result.OptInCandidates[0].PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if result.OptInCandidates[0].PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned_action = %q", result.OptInCandidates[0].PlannedAction)
 	}
 }
@@ -293,7 +293,7 @@ func TestBrowserCacheUnauthorizedSkipsPermanentOnly(t *testing.T) {
 		if skipped.Reason.Code == "permanent_deletion_not_authorized" &&
 			skipped.Rule == clean.OpportunityCategoryBrowserCache {
 			foundAuthSkip = true
-			if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			if skipped.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("planned action = %q", skipped.PlannedAction)
 			}
 		}
@@ -327,7 +327,7 @@ func TestVSCodeCacheDryRunReportsPermanentAndVSIXImpact(t *testing.T) {
 		t.Fatalf("candidates = %#v", result.OptInCandidates)
 	}
 	for _, c := range result.OptInCandidates {
-		if c.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if c.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned_action = %q for %q", c.PlannedAction, c.Path)
 		}
 	}
@@ -382,7 +382,7 @@ func TestCursorCacheUnauthorizedSkipsPermanent(t *testing.T) {
 		if skipped.Reason.Code == "permanent_deletion_not_authorized" &&
 			skipped.Rule == clean.OpportunityCategoryCursorCache {
 			found = true
-			if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			if skipped.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("planned action = %q", skipped.PlannedAction)
 			}
 		}
@@ -417,7 +417,7 @@ func TestTraeCacheUnauthorizedSkipsPermanent(t *testing.T) {
 		if skipped.Reason.Code == "permanent_deletion_not_authorized" &&
 			skipped.Rule == clean.OpportunityCategoryTraeCache {
 			found = true
-			if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			if skipped.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("planned action = %q", skipped.PlannedAction)
 			}
 		}
@@ -443,7 +443,7 @@ func TestIssue220RecycleBinCategoriesUnchanged(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s missing", id)
 		}
-		if summary.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+		if summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
 			t.Fatalf("%s planned_action = %q, want recycle bin", id, summary.PlannedAction)
 		}
 	}

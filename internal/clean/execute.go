@@ -129,7 +129,7 @@ func resolveExecuteCandidates(ctx context.Context, opts Options, categoryPlan Ca
 // Recycle Bin capacity preflight.
 func partitionByPlannedAction(candidates []actionExecutionCandidate) (recycleBin, permanent []actionExecutionCandidate) {
 	for _, candidate := range candidates {
-		if candidate.plannedAction == string(DeletionActionDeletePermanently) {
+		if candidate.plannedAction == string(PlannedActionDeletePermanently) {
 			permanent = append(permanent, candidate)
 			continue
 		}
@@ -378,7 +378,7 @@ func executePermanentCandidates(ctx context.Context, opts Options, candidates []
 	if len(candidates) == 0 {
 		return
 	}
-	permanentAction := string(DeletionActionDeletePermanently)
+	permanentAction := string(PlannedActionDeletePermanently)
 	// Progress at category boundaries only (first-seen rule order). Mutation
 	// order and safety model stay candidate-list order within each category.
 	// Each category has one planned action, so finishing its permanent batch

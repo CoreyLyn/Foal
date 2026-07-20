@@ -336,7 +336,7 @@ func TestStructuredDevCacheDiscovery_ExecuteFreshResolvesChildren(t *testing.T) 
 	if execResult.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("opt-in deleted = %d, want 1", execResult.Totals.OptInDeletedCount)
 	}
-	if execResult.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if execResult.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("action = %q", execResult.Deleted[0].Action)
 	}
 }

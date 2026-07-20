@@ -859,7 +859,7 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 		case clean.CategoryEligibilityOptIn:
 			optIns++
 			// Permanent-action opt-ins (complete 20-category matrix) start selected.
-			if row.PlannedAction == clean.DeletionActionDeletePermanently {
+			if row.PlannedAction == clean.PlannedActionDeletePermanently {
 				if !row.Selected {
 					t.Fatalf("permanent opt-in %q must start selected", row.Identifier)
 				}
@@ -881,11 +881,11 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 	permanentOptIns := 0
 	recycleBinOptIns := 0
 	for _, row := range model.rows {
-		if row.Eligibility == clean.CategoryEligibilityOptIn && row.PlannedAction == clean.DeletionActionDeletePermanently {
+		if row.Eligibility == clean.CategoryEligibilityOptIn && row.PlannedAction == clean.PlannedActionDeletePermanently {
 			wantSelected++
 			permanentOptIns++
 		}
-		if row.Eligibility == clean.CategoryEligibilityOptIn && row.PlannedAction == clean.DeletionActionMoveToRecycleBin {
+		if row.Eligibility == clean.CategoryEligibilityOptIn && row.PlannedAction == clean.PlannedActionMoveToRecycleBin {
 			recycleBinOptIns++
 		}
 	}
@@ -1137,14 +1137,14 @@ func TestEagerCleanModelPermanentSelectionNoticeWithoutRowMarkers(t *testing.T) 
 			Label:          "Recycle one",
 			ReportCategory: clean.ReportCategoryUserEssentials,
 			Eligibility:    clean.CategoryEligibilityDefault,
-			PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+			PlannedAction:  clean.PlannedActionMoveToRecycleBin,
 		},
 		{
 			Identifier:     "perm_one",
 			Label:          "Perm one",
 			ReportCategory: clean.ReportCategorySystem,
 			Eligibility:    clean.CategoryEligibilityOptIn,
-			PlannedAction:  clean.DeletionActionDeletePermanently,
+			PlannedAction:  clean.PlannedActionDeletePermanently,
 		},
 	}
 	model := newEagerCleanModelFromSummaries(queue, 100, 40)
@@ -1180,7 +1180,7 @@ func TestEagerCleanModelPermanentSelectionNoticeWithoutRowMarkers(t *testing.T) 
 
 	// Clearing all permanent categories removes the notice.
 	for i := range model.rows {
-		if model.rows[i].PlannedAction == clean.DeletionActionDeletePermanently {
+		if model.rows[i].PlannedAction == clean.PlannedActionDeletePermanently {
 			model.rows[i].Selected = false
 		}
 	}
@@ -1488,7 +1488,7 @@ func TestEagerCleanFirstEnterOpensConfirmationWithoutExecutionOrHistory(t *testi
 	// and select one Recycle Bin opt-in.
 	optInIndex := -1
 	for i, row := range model.rows {
-		if row.PlannedAction == clean.DeletionActionDeletePermanently {
+		if row.PlannedAction == clean.PlannedActionDeletePermanently {
 			model.rows[i].Selected = false
 			continue
 		}
@@ -2170,7 +2170,7 @@ func TestEagerCleanExecutionMidFlightCompletionAndFinalOverwrite(t *testing.T) {
 			Path:   `C:\Temp\real`,
 			Bytes:  100,
 			Rule:   defaultID,
-			Action: string(clean.DeletionActionMoveToRecycleBin),
+			Action: string(clean.PlannedActionMoveToRecycleBin),
 		}},
 		// opt-in ends skipped, not cleaned — must replace mid-flight cleaned.
 		Skipped: []clean.SkippedItem{{
@@ -3094,28 +3094,28 @@ func injectedMixedActionSummaries() []clean.CleanupCategorySummary {
 			Label:          "Foal-owned temp sandboxes",
 			ReportCategory: clean.ReportCategoryUserEssentials,
 			Eligibility:    clean.CategoryEligibilityDefault,
-			PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+			PlannedAction:  clean.PlannedActionMoveToRecycleBin,
 		},
 		{
 			Identifier:     clean.DevCacheCategoryGo,
 			Label:          "Go cache",
 			ReportCategory: clean.ReportCategoryDeveloperTools,
 			Eligibility:    clean.CategoryEligibilityOptIn,
-			PlannedAction:  clean.DeletionActionDeletePermanently,
+			PlannedAction:  clean.PlannedActionDeletePermanently,
 		},
 		{
 			Identifier:     clean.OpportunityCategoryUserTemp,
 			Label:          "User temp",
 			ReportCategory: clean.ReportCategoryUserEssentials,
 			Eligibility:    clean.CategoryEligibilityOptIn,
-			PlannedAction:  clean.DeletionActionMoveToRecycleBin,
+			PlannedAction:  clean.PlannedActionMoveToRecycleBin,
 		},
 		{
 			Identifier:     clean.DevCacheCategoryNPM,
 			Label:          "npm cache",
 			ReportCategory: clean.ReportCategoryDeveloperTools,
 			Eligibility:    clean.CategoryEligibilityOptIn,
-			PlannedAction:  clean.DeletionActionDeletePermanently,
+			PlannedAction:  clean.PlannedActionDeletePermanently,
 		},
 	}
 }
@@ -3179,18 +3179,18 @@ func TestEagerCleanInitialSelectionDerivedFromInjectedSummaries(t *testing.T) {
 	prod := newEagerCleanModel(80, 24)
 	for _, row := range prod.rows {
 		wantSelected := row.Eligibility == clean.CategoryEligibilityDefault ||
-			row.PlannedAction == clean.DeletionActionDeletePermanently
+			row.PlannedAction == clean.PlannedActionDeletePermanently
 		if row.Selected != wantSelected {
 			t.Fatalf("production %q selected=%v, want %v", row.Identifier, row.Selected, wantSelected)
 		}
-		if row.PlannedAction != clean.DeletionActionDeletePermanently &&
-			row.PlannedAction != clean.DeletionActionMoveToRecycleBin {
+		if row.PlannedAction != clean.PlannedActionDeletePermanently &&
+			row.PlannedAction != clean.PlannedActionMoveToRecycleBin {
 			t.Fatalf("production %q action = %q, want a supported planned action", row.Identifier, row.PlannedAction)
 		}
 	}
 }
 
-func summariesWantAction(summaries []clean.CleanupCategorySummary, id string) clean.DeletionAction {
+func summariesWantAction(summaries []clean.CleanupCategorySummary, id string) clean.PlannedAction {
 	for _, s := range summaries {
 		if s.Identifier == id {
 			return s.PlannedAction
@@ -3214,8 +3214,8 @@ func TestEagerCleanConfirmationGroupsMixedActionsAndHandoff(t *testing.T) {
 			Status: "ok",
 			Mode:   "execute",
 			Deleted: []clean.DeletedItem{
-				{Path: `C:\Temp\a`, Bytes: 4, Rule: defaultID, Action: string(clean.DeletionActionMoveToRecycleBin)},
-				{Path: `C:\Cache\b`, Bytes: 8, Rule: permanentID, Action: string(clean.DeletionActionDeletePermanently)},
+				{Path: `C:\Temp\a`, Bytes: 4, Rule: defaultID, Action: string(clean.PlannedActionMoveToRecycleBin)},
+				{Path: `C:\Cache\b`, Bytes: 8, Rule: permanentID, Action: string(clean.PlannedActionDeletePermanently)},
 			},
 			Totals: clean.Totals{
 				DeletedCount:            2,
@@ -3383,14 +3383,14 @@ func TestEagerCleanResultProjectsMixedOutcomesAndPartialRisk(t *testing.T) {
 			Status: "partial",
 			Mode:   "execute",
 			Deleted: []clean.DeletedItem{
-				{Path: `C:\Temp\ok`, Bytes: 3, Rule: defaultID, Action: string(clean.DeletionActionMoveToRecycleBin)},
+				{Path: `C:\Temp\ok`, Bytes: 3, Rule: defaultID, Action: string(clean.PlannedActionMoveToRecycleBin)},
 			},
 			Failed: []clean.FailedItem{{
 				Path:          `C:\Cache\fail`,
 				Bytes:         9,
 				Rule:          permanentID,
-				PlannedAction: string(clean.DeletionActionDeletePermanently),
-				Action:        string(clean.DeletionActionDeletePermanently),
+				PlannedAction: string(clean.PlannedActionDeletePermanently),
+				Action:        string(clean.PlannedActionDeletePermanently),
 				Reason: clean.StructuredIssue{
 					Code:    "permanent_delete_failed",
 					Message: `may already be permanently deleted under C:\Cache\fail`,
@@ -3510,9 +3510,9 @@ func TestEagerCleanProductionPermanentCategoriesInitialSelectionAndConfirmation(
 			Status: "ok",
 			Mode:   "execute",
 			Deleted: []clean.DeletedItem{
-				{Path: `C:\Temp\a`, Bytes: 4, Rule: defaultID, Action: string(clean.DeletionActionMoveToRecycleBin)},
-				{Path: `C:\Users\corey\AppData\Local\D3DSCache`, Bytes: 16, Rule: d3dID, Action: string(clean.DeletionActionDeletePermanently)},
-				{Path: `C:\Users\corey\AppData\Local\npm-cache`, Bytes: 8, Rule: npmID, Action: string(clean.DeletionActionDeletePermanently)},
+				{Path: `C:\Temp\a`, Bytes: 4, Rule: defaultID, Action: string(clean.PlannedActionMoveToRecycleBin)},
+				{Path: `C:\Users\corey\AppData\Local\D3DSCache`, Bytes: 16, Rule: d3dID, Action: string(clean.PlannedActionDeletePermanently)},
+				{Path: `C:\Users\corey\AppData\Local\npm-cache`, Bytes: 8, Rule: npmID, Action: string(clean.PlannedActionDeletePermanently)},
 			},
 			Totals: clean.Totals{
 				DeletedCount:            3,
@@ -3528,14 +3528,14 @@ func TestEagerCleanProductionPermanentCategoriesInitialSelectionAndConfirmation(
 	// Permanent-action opt-ins start selected; recycle-bin opt-ins stay unselected.
 	seenPermanent := 0
 	for _, row := range model.rows {
-		if row.PlannedAction == clean.DeletionActionDeletePermanently {
+		if row.PlannedAction == clean.PlannedActionDeletePermanently {
 			seenPermanent++
 			if !row.Selected {
 				t.Fatalf("%q must start selected", row.Identifier)
 			}
 		}
 		if row.Eligibility == clean.CategoryEligibilityOptIn {
-			if row.PlannedAction == clean.DeletionActionDeletePermanently {
+			if row.PlannedAction == clean.PlannedActionDeletePermanently {
 				if !row.Selected {
 					t.Fatalf("permanent opt-in %q must start selected", row.Identifier)
 				}
@@ -3577,7 +3577,7 @@ func TestEagerCleanProductionPermanentCategoriesInitialSelectionAndConfirmation(
 
 	// User may clear permanent rows from the exact selection.
 	for i := range model.rows {
-		if model.rows[i].PlannedAction == clean.DeletionActionDeletePermanently {
+		if model.rows[i].PlannedAction == clean.PlannedActionDeletePermanently {
 			model.rows[i].Selected = false
 		}
 	}
@@ -3692,7 +3692,7 @@ func TestEagerCleanGrokBuildUpdateResidueRowSelectionAndHandoff(t *testing.T) {
 	for _, summary := range queue {
 		if summary.Identifier == grokID {
 			foundInQueue = true
-			if summary.PlannedAction != clean.DeletionActionDeletePermanently {
+			if summary.PlannedAction != clean.PlannedActionDeletePermanently {
 				t.Fatalf("grok planned_action = %q", summary.PlannedAction)
 			}
 			if !clean.InitiallySelectedCategory(summary) {
@@ -3720,7 +3720,7 @@ func TestEagerCleanGrokBuildUpdateResidueRowSelectionAndHandoff(t *testing.T) {
 				Path:   `C:\Users\corey\.grok\bin\grok.exe.old`,
 				Bytes:  138 << 20,
 				Rule:   grokID,
-				Action: string(clean.DeletionActionDeletePermanently),
+				Action: string(clean.PlannedActionDeletePermanently),
 			}},
 			Totals: clean.Totals{
 				DeletedCount:            1,
@@ -3739,7 +3739,7 @@ func TestEagerCleanGrokBuildUpdateResidueRowSelectionAndHandoff(t *testing.T) {
 			if !row.Selected {
 				t.Fatal("safely measurable Grok permanent row must start selected")
 			}
-			if row.PlannedAction != clean.DeletionActionDeletePermanently {
+			if row.PlannedAction != clean.PlannedActionDeletePermanently {
 				t.Fatalf("row planned_action = %q", row.PlannedAction)
 			}
 		}

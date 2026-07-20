@@ -38,16 +38,60 @@ const (
 	RunningApplicationPolicySharedRuntime              RunningApplicationPolicy = "shared-runtime-not-attributable"
 )
 
-// DeletionAction is the stable planned or actual Clean deletion action.
+// PlannedAction is the stable planned or actual Clean action for a category.
 // Catalog ownership: every executable canonical rule must declare exactly one
 // of these values. Permanent-delete eligibility is this declaration; there is
-// no parallel eligibility boolean.
-type DeletionAction string
+// no parallel eligibility boolean. The vocabulary is action-neutral: the two
+// deletion actions produce filesystem candidates, while invoke_windows_servicing
+// delegates a non-file mutation to the Windows servicing stack and never yields
+// a deletion candidate or byte estimate.
+type PlannedAction string
 
 const (
-	DeletionActionMoveToRecycleBin  DeletionAction = "move_to_recycle_bin"
-	DeletionActionDeletePermanently DeletionAction = "delete_permanently"
+	PlannedActionMoveToRecycleBin  PlannedAction = "move_to_recycle_bin"
+	PlannedActionDeletePermanently PlannedAction = "delete_permanently"
+	// PlannedActionInvokeWindowsServicing delegates component-store cleanup to
+	// Windows servicing. It is not a deletion: categories declaring it never
+	// enter file candidates, deleted/failed/skipped file items, path History, or
+	// byte totals. Servicing runs are represented by dedicated ServicingOperation
+	// records instead. See ADR 0029.
+	PlannedActionInvokeWindowsServicing PlannedAction = "invoke_windows_servicing"
 )
+
+// PlannedActionIsDeletion reports whether a planned action produces filesystem
+// deletion candidates. invoke_windows_servicing is action-neutral and returns
+// false so callers never route it through file resolution, deletion, or byte
+// accounting.
+func PlannedActionIsDeletion(action PlannedAction) bool {
+	switch action {
+	case PlannedActionMoveToRecycleBin, PlannedActionDeletePermanently:
+		return true
+	default:
+		return false
+	}
+}
+
+// CategorySelectionPolicy is the catalog-owned selection metadata for a
+// category. The empty (standard) policy keeps a category's existing selection
+// behavior. Exact-selection-only categories may be chosen only by their exact
+// identifier: they start unselected, are excluded from the `all` token, every
+// selection group token, and TUI Select All, and no single-member group token
+// is introduced for them.
+type CategorySelectionPolicy string
+
+const (
+	CategorySelectionPolicyStandard  CategorySelectionPolicy = ""
+	CategorySelectionPolicyExactOnly CategorySelectionPolicy = "exact-selection-only"
+)
+
+func validCategorySelectionPolicy(policy CategorySelectionPolicy) bool {
+	switch policy {
+	case CategorySelectionPolicyStandard, CategorySelectionPolicyExactOnly:
+		return true
+	default:
+		return false
+	}
+}
 
 // CleanupCategoryDefinition is the path-free policy vocabulary shared by
 // Clean callers. Discovery paths and executable configuration stay private to
@@ -61,7 +105,11 @@ type CleanupCategoryDefinition struct {
 	RunningApplicationPolicy RunningApplicationPolicy `json:"running_application_policy"`
 	// PlannedAction is required for executable (default/opt-in) categories and
 	// must be empty for non-executable entries (permission-boundary, review-only).
-	PlannedAction DeletionAction `json:"planned_action,omitempty"`
+	PlannedAction PlannedAction `json:"planned_action,omitempty"`
+	// SelectionPolicy is catalog-owned selection metadata. Empty means standard
+	// selection; exact-selection-only categories are excluded from aggregate and
+	// group selection. It has no effect on non-executable entries.
+	SelectionPolicy CategorySelectionPolicy `json:"selection_policy,omitempty"`
 }
 
 // CleanupCategorySummary is the stable, path-free projection intended for
@@ -74,7 +122,10 @@ type CleanupCategorySummary struct {
 	RunningApplicationPolicy RunningApplicationPolicy `json:"running_application_policy"`
 	// PlannedAction is the catalog-owned deletion action for executable
 	// categories. Non-executable summaries omit it (empty).
-	PlannedAction DeletionAction `json:"planned_action,omitempty"`
+	PlannedAction PlannedAction `json:"planned_action,omitempty"`
+	// SelectionPolicy is the catalog-owned selection metadata (empty = standard,
+	// or exact-selection-only). It governs aggregate/group/Select All inclusion.
+	SelectionPolicy CategorySelectionPolicy `json:"selection_policy,omitempty"`
 }
 
 // CleanupCategoryCatalog is an immutable metadata catalog. Constructing one
@@ -103,13 +154,14 @@ func NewCleanupCategoryCatalog(definitions []CleanupCategoryDefinition) (Cleanup
 	for _, definition := range definitions {
 		definition.Identifier = strings.ToLower(strings.TrimSpace(definition.Identifier))
 		definition.Label = strings.TrimSpace(definition.Label)
-		definition.PlannedAction = DeletionAction(strings.TrimSpace(string(definition.PlannedAction)))
+		definition.PlannedAction = PlannedAction(strings.TrimSpace(string(definition.PlannedAction)))
+		definition.SelectionPolicy = CategorySelectionPolicy(strings.TrimSpace(string(definition.SelectionPolicy)))
 		if definition.Identifier == "" || definition.Label == "" || definition.ReportCategory == "" ||
 			definition.Eligibility == "" || definition.RunningApplicationPolicy == "" {
 			return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has incomplete metadata", definition.Identifier)
 		}
 		if !validReportCategory(definition.ReportCategory) || !validCategoryEligibility(definition.Eligibility) ||
-			!validRunningApplicationPolicy(definition.RunningApplicationPolicy) {
+			!validRunningApplicationPolicy(definition.RunningApplicationPolicy) || !validCategorySelectionPolicy(definition.SelectionPolicy) {
 			return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
 		}
 		if isExecutableCategoryEligibility(definition.Eligibility) {
@@ -118,13 +170,25 @@ func NewCleanupCategoryCatalog(definitions []CleanupCategoryDefinition) (Cleanup
 			if definition.PlannedAction == "" {
 				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has incomplete metadata", definition.Identifier)
 			}
-			if !validDeletionAction(definition.PlannedAction) {
+			if !validPlannedAction(definition.PlannedAction) {
 				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
 			}
-		} else if definition.PlannedAction != "" {
-			// Permission-boundary and other non-executable entries remain actionless
-			// and cannot enter execution.
-			return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
+			// Exact-selection-only is an opt-in concept: a default category is
+			// always selected, so it cannot also be exact-selection-only.
+			if definition.SelectionPolicy == CategorySelectionPolicyExactOnly &&
+				definition.Eligibility != CategoryEligibilityOptIn {
+				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
+			}
+		} else {
+			if definition.PlannedAction != "" {
+				// Permission-boundary and other non-executable entries remain actionless
+				// and cannot enter execution.
+				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
+			}
+			// Selection policy is meaningless for non-executable entries.
+			if definition.SelectionPolicy != CategorySelectionPolicyStandard {
+				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
+			}
 		}
 		if _, exists := catalog.lookup[definition.Identifier]; exists {
 			return CleanupCategoryCatalog{}, fmt.Errorf("duplicate cleanup category identifier or alias %q", definition.Identifier)
@@ -188,9 +252,9 @@ func isExecutableCategoryEligibility(eligibility CategoryEligibility) bool {
 	}
 }
 
-func validDeletionAction(action DeletionAction) bool {
+func validPlannedAction(action PlannedAction) bool {
 	switch action {
-	case DeletionActionMoveToRecycleBin, DeletionActionDeletePermanently:
+	case PlannedActionMoveToRecycleBin, PlannedActionDeletePermanently, PlannedActionInvokeWindowsServicing:
 		return true
 	default:
 		return false
@@ -199,29 +263,43 @@ func validDeletionAction(action DeletionAction) bool {
 
 // InitiallySelectedCategory reports whether the Clean TUI should start with this
 // path-free category summary selected. Selection is derived only from shared
-// eligibility and planned action: executable defaults and every category whose
-// planned action is delete_permanently start selected; non-default Recycle Bin
-// opt-ins start unselected. Permission-boundary and other non-executable rows
-// never start selected. Callers must not hard-code permanent-category lists.
+// eligibility, planned action, and selection policy: executable defaults and
+// every category whose planned action is delete_permanently start selected;
+// non-default Recycle Bin opt-ins start unselected; exact-selection-only
+// categories never start selected regardless of action. Permission-boundary and
+// other non-executable rows never start selected. Callers must not hard-code
+// permanent-category lists.
 func InitiallySelectedCategory(summary CleanupCategorySummary) bool {
+	if summary.SelectionPolicy == CategorySelectionPolicyExactOnly {
+		return false
+	}
 	switch summary.Eligibility {
 	case CategoryEligibilityDefault:
 		return true
 	case CategoryEligibilityOptIn:
-		return summary.PlannedAction == DeletionActionDeletePermanently
+		return summary.PlannedAction == PlannedActionDeletePermanently
 	default:
 		return false
 	}
 }
 
-// DeletionActionLabel returns the path-free display label for a planned or
-// actual deletion action. Unknown values are returned unchanged.
-func DeletionActionLabel(action DeletionAction) string {
+// ExactSelectionOnlyCategory reports whether a category may be selected only by
+// its exact identifier. Such categories are excluded from the `all` token, every
+// selection group token, and TUI Select All, and never start selected.
+func ExactSelectionOnlyCategory(summary CleanupCategorySummary) bool {
+	return summary.SelectionPolicy == CategorySelectionPolicyExactOnly
+}
+
+// PlannedActionLabel returns the path-free display label for a planned or
+// actual Clean action. Unknown values are returned unchanged.
+func PlannedActionLabel(action PlannedAction) string {
 	switch action {
-	case DeletionActionMoveToRecycleBin:
+	case PlannedActionMoveToRecycleBin:
 		return "Recycle Bin"
-	case DeletionActionDeletePermanently:
+	case PlannedActionDeletePermanently:
 		return "Permanent deletion"
+	case PlannedActionInvokeWindowsServicing:
+		return "Windows servicing"
 	default:
 		return string(action)
 	}
@@ -251,6 +329,7 @@ func summaryFromDefinition(definition CleanupCategoryDefinition) CleanupCategory
 		Eligibility:              definition.Eligibility,
 		RunningApplicationPolicy: definition.RunningApplicationPolicy,
 		PlannedAction:            definition.PlannedAction,
+		SelectionPolicy:          definition.SelectionPolicy,
 	}
 }
 
@@ -392,10 +471,10 @@ type existenceRootSpec struct {
 }
 
 type categoryCatalogEntry struct {
-	definition          CleanupCategoryDefinition
-	resolverKind        categoryResolverKind
-	resolver            categoryResolver
-	previewSafetyNote   categorySafetyNoteResolver
+	definition        CleanupCategoryDefinition
+	resolverKind      categoryResolverKind
+	resolver          categoryResolver
+	previewSafetyNote categorySafetyNoteResolver
 	// cliAgentProduct marks an independently registered product-scoped CLI-agent
 	// category for the `cli-agents` selection group. The group token expands
 	// these entries only; it owns no resolver, candidates, or deletion action.
@@ -558,17 +637,17 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// 30 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
 	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
 	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
-	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
-	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin)),
-	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "CrashDumps"),
-	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryWindowsErrorReporting, "Windows Error Reporting", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin), "Microsoft", "Windows", "WER"),
+	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin)),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin)),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin), "CrashDumps"),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryWindowsErrorReporting, "Windows Error Reporting", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin), "Microsoft", "Windows", "WER"),
 	// Explorer thumbnail/icon DBs: exact thumbcache_*.db / iconcache_*.db under
 	// Local\Microsoft\Windows\Explorer only. Parent Explorer, ETL logs,
 	// RecommendationsFilterList.json, nested decoys, and legacy IconCache.db
 	// outside Explorer are never candidates. Missing matches ⇒ empty (no
 	// whole-root fallback). Evidence: docs/research/explorer-thumbnail-and-inet-cache-allowlists.md (#235/#239).
 	existenceOpportunityRootsEntry(
-		categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin),
+		categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin),
 		existenceRootSpec{
 			base:                existenceRootLocalAppData,
 			segments:            []string{"Microsoft", "Windows", "Explorer"},
@@ -580,17 +659,17 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Virtualized, Office Content.*, and thumbnails are never candidates.
 	// Evidence: docs/research/explorer-thumbnail-and-inet-cache-allowlists.md (#235/#239).
 	existenceOpportunityRootsEntry(
-		categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionMoveToRecycleBin),
+		categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin),
 		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"Microsoft", "Windows", "INetCache", "IE"}},
 		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"Microsoft", "Windows", "INetCache", "Low", "IE"}},
 	),
-	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), "D3DSCache"),
-	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently), "NVIDIA", "DXCache"),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently), "D3DSCache"),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently), "NVIDIA", "DXCache"),
 	// AMD GPU/shader caches: exact allowlisted children under Local AMD (+ optional
 	// LocalLow AMD\DxCache). Parent AMD and non-allowlisted siblings are never candidates.
 	// Evidence: docs/research/amd-intel-gpu-shader-caches.md (#234/#238).
 	withPreviewSafetyNote(existenceOpportunityRootsEntry(
-		categoryDefinition(OpportunityCategoryAMDGPUShaderCaches, "AMD GPU shader caches", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently),
+		categoryDefinition(OpportunityCategoryAMDGPUShaderCaches, "AMD GPU shader caches", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently),
 		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"AMD", "DxCache"}},
 		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"AMD", "DxcCache"}},
 		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"AMD", "Dx9Cache"}},
@@ -601,10 +680,10 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Intel GPU shader cache: exact LocalLow Intel\ShaderCache only. Local Intel
 	// tree and ProgramData copies are never executable discovery roots.
 	withPreviewSafetyNote(existenceOpportunityRootsEntry(
-		categoryDefinition(OpportunityCategoryIntelGPUShaderCache, "Intel GPU shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, DeletionActionDeletePermanently),
+		categoryDefinition(OpportunityCategoryIntelGPUShaderCache, "Intel GPU shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently),
 		existenceRootSpec{base: existenceRootLocalAppDataLow, segments: []string{"Intel", "ShaderCache"}},
 	), staticPreviewSafetyNote(gpuShaderCacheOptInImpactNotice)),
-	withPreviewSafetyNote(browserCacheCategoryEntry(categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, DeletionActionDeletePermanently)), staticPreviewSafetyNote(browserCacheOptInImpactNotice)),
+	withPreviewSafetyNote(browserCacheCategoryEntry(categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, PlannedActionDeletePermanently)), staticPreviewSafetyNote(browserCacheOptInImpactNotice)),
 	withPreviewSafetyNote(applicationCacheCategoryEntry(
 		categoryDefinition(
 			OpportunityCategoryVSCodeCache,
@@ -612,7 +691,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
-			DeletionActionDeletePermanently,
+			PlannedActionDeletePermanently,
 		),
 		applicationCachePolicyVSCode,
 		ApplicationVisualStudioCode,
@@ -624,7 +703,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
-			DeletionActionDeletePermanently,
+			PlannedActionDeletePermanently,
 		),
 		applicationCachePolicyCursor,
 		ApplicationCursor,
@@ -638,7 +717,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
-			DeletionActionDeletePermanently,
+			PlannedActionDeletePermanently,
 		),
 		applicationCachePolicyVSCodeInsiders,
 		ApplicationVisualStudioCodeInsiders,
@@ -650,7 +729,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
-			DeletionActionDeletePermanently,
+			PlannedActionDeletePermanently,
 		),
 		applicationCachePolicyVSCodium,
 		ApplicationVSCodium,
@@ -662,7 +741,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
-			DeletionActionDeletePermanently,
+			PlannedActionDeletePermanently,
 		),
 		applicationCachePolicyWindsurf,
 		ApplicationWindsurf,
@@ -677,7 +756,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
-			DeletionActionDeletePermanently,
+			PlannedActionDeletePermanently,
 		),
 		applicationCachePolicyTrae,
 		ApplicationTrae,
@@ -685,26 +764,26 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Package and build caches: proven regenerable roots; env/default
 	// resolvers, gates, and impact notices unchanged.
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryNPM, "npm cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, PlannedActionDeletePermanently),
 		resolveNPMCachePaths,
 		[]string{"npm"},
 	),
 	// pnpm content-addressable store: shared-runtime (Node hosts pnpm). Whole
 	// store root only; never project node_modules or virtual stores.
 	withPreviewSafetyNote(developerCacheEntry(
-		categoryDefinition(DevCacheCategoryPNPM, "pnpm store", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryPNPM, "pnpm store", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, PlannedActionDeletePermanently),
 		resolvePNPMCachePaths,
 		[]string{"pnpm"},
 	), staticPreviewSafetyNote(pnpmCacheOptInImpactNotice)),
 	// yarn global cache: shared-runtime (Node hosts yarn). Classic Windows
 	// Yarn\Cache root or YARN_CACHE_FOLDER; never project .yarn/cache.
 	withPreviewSafetyNote(developerCacheEntry(
-		categoryDefinition(DevCacheCategoryYarn, "yarn cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryYarn, "yarn cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, PlannedActionDeletePermanently),
 		resolveYarnCachePaths,
 		[]string{"yarn"},
 	), staticPreviewSafetyNote(yarnCacheOptInImpactNotice)),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryGo, "Go build cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryGo, "Go build cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
 		resolveGoCachePaths,
 		[]string{"go"},
 		ApplicationGo,
@@ -712,13 +791,13 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Go module download cache: separate from go-cache (GOCACHE / go-build).
 	// Distinctive-process idle gate shares ApplicationGo with the build cache.
 	withPreviewSafetyNote(developerCacheEntry(
-		categoryDefinition(DevCacheCategoryGoModCache, "Go module cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryGoModCache, "Go module cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
 		resolveGoModCachePaths,
 		[]string{"go"},
 		ApplicationGo,
 	), staticPreviewSafetyNote(goModCacheOptInImpactNotice)),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryPip, "pip cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryPip, "pip cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, PlannedActionDeletePermanently),
 		resolvePipCachePaths,
 		[]string{"pip"},
 	),
@@ -726,36 +805,36 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// CARGO_HOME (registry/cache, registry/src only). Distinctive-process idle
 	// gate (cargo.exe). Permanent; re-fetch impact disclosed.
 	withPreviewSafetyNote(developerCacheEntry(
-		categoryDefinition(DevCacheCategoryCargo, "Cargo cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryCargo, "Cargo cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
 		resolveCargoCachePaths,
 		nil,
 		ApplicationCargo,
 	), staticPreviewSafetyNote(cargoCacheOptInImpactNotice)),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryNuGet, "NuGet cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryNuGet, "NuGet cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
 		resolveNuGetCachePaths,
 		[]string{"dotnet"},
 		ApplicationDotNet, ApplicationNuGet,
 	),
 	withPreviewSafetyNote(developerCacheEntry(
-		categoryDefinition(DevCacheCategoryNuGetGlobalPackages, "NuGet global packages", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryNuGetGlobalPackages, "NuGet global packages", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
 		resolveNuGetGlobalPackagesPaths,
 		[]string{"dotnet"},
 		ApplicationDotNet, ApplicationNuGet,
 	), staticPreviewSafetyNote(nugetGlobalPackagesOptInImpactNotice)),
 	developerCacheEntry(
-		categoryDefinition(DevCacheCategoryCorepack, "Corepack cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryCorepack, "Corepack cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, PlannedActionDeletePermanently),
 		resolveCorepackOptInCachePaths,
 		[]string{"corepack"},
 	),
 	withPreviewSafetyNote(developerCacheEntry(
-		categoryDefinition(DevCacheCategoryUV, "uv cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryUV, "uv cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
 		resolveUVCachePaths,
 		[]string{"uv"},
 		ApplicationUV,
 	), staticPreviewSafetyNote(uvCacheOptInImpactNotice)),
 	withPreviewSafetyNote(developerCacheEntry(
-		categoryDefinition(DevCacheCategoryBun, "Bun cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryBun, "Bun cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
 		resolveBunCachePaths,
 		[]string{"bun"},
 		ApplicationBun,
@@ -764,7 +843,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// env/default root. Shared-runtime policy: do not attribute node/chrome/etc.
 	// as Playwright-owned. Permanent deletion; no Review suggestion probe.
 	withPreviewSafetyNote(developerCacheEntryWithChildren(
-		categoryDefinition(DevCacheCategoryPlaywright, "Playwright browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryPlaywright, "Playwright browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, PlannedActionDeletePermanently),
 		resolvePlaywrightBrowserPaths,
 		discoverPlaywrightBrowserChildren,
 		nil,
@@ -773,7 +852,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// not attributable). Structured children under env/default root only; root
 	// and product parents are never candidates (ADR 0011). Permanent deletion.
 	withPreviewSafetyNote(developerCacheEntryWithChildren(
-		categoryDefinition(DevCacheCategoryPuppeteerBrowsers, "Puppeteer browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryPuppeteerBrowsers, "Puppeteer browsers", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, PlannedActionDeletePermanently),
 		resolvePuppeteerCachePaths,
 		discoverPuppeteerBrowserChildren,
 		nil,
@@ -782,7 +861,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// (Node/Electron hosts are not attributable). Permanent deletion; no
 	// Review suggestion probe and no invented Electron cleanup command.
 	withPreviewSafetyNote(developerCacheEntry(
-		categoryDefinition(DevCacheCategoryElectron, "Electron cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryElectron, "Electron cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime, PlannedActionDeletePermanently),
 		resolveElectronCachePaths,
 		nil,
 	), staticPreviewSafetyNote(electronCacheOptInImpactNotice)),
@@ -791,7 +870,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// process policy; each product identity gates independently via
 	// DevCacheRootScope.Application. Permanent deletion; no Review probe.
 	withPreviewSafetyNote(developerCacheEntryWithProductScopedChildren(
-		categoryDefinition(DevCacheCategoryJetBrainsIDECaches, "JetBrains IDE caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryJetBrainsIDECaches, "JetBrains IDE caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
 		resolveJetBrainsIDECacheRootScopes,
 		discoverJetBrainsIDECacheChildren,
 		nil,
@@ -808,7 +887,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// idle on devenv.exe; independent of VS Code/Cursor. Permanent deletion;
 	// no Review probe, no ProgramData/settings/solutions.
 	withPreviewSafetyNote(developerCacheEntryWithProductScopedChildren(
-		categoryDefinition(DevCacheCategoryVisualStudioCaches, "Visual Studio caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, DeletionActionDeletePermanently),
+		categoryDefinition(DevCacheCategoryVisualStudioCaches, "Visual Studio caches", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
 		resolveVisualStudioCacheRootScopes,
 		discoverVisualStudioCacheChildren,
 		nil,
@@ -825,7 +904,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryDeveloperTools,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyDistinctiveProcessIdle,
-			DeletionActionDeletePermanently,
+			PlannedActionDeletePermanently,
 		),
 	), staticPreviewSafetyNote(grokBuildUpdateResidueOptInImpactNotice)),
 	// Obsidian: non-editor Electron note-taking app under the Applications report
@@ -844,7 +923,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			ReportCategoryApplications,
 			CategoryEligibilityOptIn,
 			RunningApplicationPolicyApplicationIdleBeforeAfter,
-			DeletionActionDeletePermanently,
+			PlannedActionDeletePermanently,
 		),
 		applicationCachePolicyObsidian,
 		ApplicationObsidian,
@@ -853,7 +932,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	nonExecutableCategoryEntry(categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable, "")),
 }
 
-func categoryDefinition(identifier, label string, reportCategory ReportCategory, eligibility CategoryEligibility, runningPolicy RunningApplicationPolicy, plannedAction DeletionAction) CleanupCategoryDefinition {
+func categoryDefinition(identifier, label string, reportCategory ReportCategory, eligibility CategoryEligibility, runningPolicy RunningApplicationPolicy, plannedAction PlannedAction) CleanupCategoryDefinition {
 	return CleanupCategoryDefinition{
 		Identifier:               identifier,
 		Label:                    label,
@@ -906,7 +985,7 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 				if entry.definition.RunningApplicationPolicy != RunningApplicationPolicyDistinctiveProcessIdle {
 					return fmt.Errorf("grok residue category %q must use distinctive-process idle policy", id)
 				}
-				if entry.definition.PlannedAction != DeletionActionDeletePermanently {
+				if entry.definition.PlannedAction != PlannedActionDeletePermanently {
 					return fmt.Errorf("grok residue category %q must declare delete_permanently", id)
 				}
 				if len(entry.runningApplications) != 1 || entry.runningApplications[0] != ApplicationGrokBuild {
@@ -1056,6 +1135,27 @@ func selectableCategoryIDs() []string {
 	return identifiers
 }
 
+// aggregateSelectableCategoryIDs returns opt-in categories the `all` token may
+// enable. Exact-selection-only categories are excluded: they remain valid exact
+// `--opt-in` names but are never expanded by `all` or any group token.
+func aggregateSelectableCategoryIDs() []string {
+	return aggregateSelectableCategoryIDsFrom(canonicalCategoryEntries)
+}
+
+func aggregateSelectableCategoryIDsFrom(entries []categoryCatalogEntry) []string {
+	var identifiers []string
+	for _, entry := range entries {
+		if entry.definition.Eligibility != CategoryEligibilityOptIn {
+			continue
+		}
+		if entry.definition.SelectionPolicy == CategorySelectionPolicyExactOnly {
+			continue
+		}
+		identifiers = append(identifiers, entry.definition.Identifier)
+	}
+	return identifiers
+}
+
 func opportunityCategoryIDs(includeGated bool) []string {
 	var identifiers []string
 	for _, entry := range canonicalCategoryEntries {
@@ -1092,9 +1192,16 @@ func developerCacheCategoryIDs() []string {
 // CLI-agent product categories are intentionally excluded (updater residue is
 // not a cache).
 func developerToolsOptInCategoryIDs() []string {
+	return developerToolsOptInCategoryIDsFrom(canonicalCategoryEntries)
+}
+
+func developerToolsOptInCategoryIDsFrom(entries []categoryCatalogEntry) []string {
 	var identifiers []string
-	for _, entry := range canonicalCategoryEntries {
+	for _, entry := range entries {
 		if entry.definition.Eligibility != CategoryEligibilityOptIn {
+			continue
+		}
+		if entry.definition.SelectionPolicy == CategorySelectionPolicyExactOnly {
 			continue
 		}
 		if entry.definition.ReportCategory != ReportCategoryDeveloperTools {
@@ -1116,9 +1223,16 @@ func developerToolsOptInCategoryIDs() []string {
 // owns no resolver, candidates, or deletion action and parallels cli-agents.
 // Editor application-cache categories stay under Developer tools / dev-caches.
 func applicationCachesOptInCategoryIDs() []string {
+	return applicationCachesOptInCategoryIDsFrom(canonicalCategoryEntries)
+}
+
+func applicationCachesOptInCategoryIDsFrom(entries []categoryCatalogEntry) []string {
 	var identifiers []string
-	for _, entry := range canonicalCategoryEntries {
+	for _, entry := range entries {
 		if entry.definition.Eligibility != CategoryEligibilityOptIn {
+			continue
+		}
+		if entry.definition.SelectionPolicy == CategorySelectionPolicyExactOnly {
 			continue
 		}
 		if entry.definition.ReportCategory != ReportCategoryApplications {
@@ -1135,8 +1249,15 @@ func applicationCachesOptInCategoryIDs() []string {
 // categories for the `cli-agents` selection group in deterministic catalog
 // order. The token owns no resolver, candidates, or deletion action.
 func cliAgentCategoryIDs() []string {
+	return cliAgentCategoryIDsFrom(canonicalCategoryEntries)
+}
+
+func cliAgentCategoryIDsFrom(entries []categoryCatalogEntry) []string {
 	var identifiers []string
-	for _, entry := range canonicalCategoryEntries {
+	for _, entry := range entries {
+		if entry.definition.SelectionPolicy == CategorySelectionPolicyExactOnly {
+			continue
+		}
 		if entry.cliAgentProduct {
 			identifiers = append(identifiers, entry.definition.Identifier)
 		}

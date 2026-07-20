@@ -77,7 +77,7 @@ func TestCargoCache_MultiRootDryRunSurfacesOnlyAllowlisted(t *testing.T) {
 		if c.Category != clean.DevCacheCategoryCargo {
 			t.Fatalf("category = %q, want cargo-cache", c.Category)
 		}
-		if c.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if c.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned_action = %q, want delete_permanently", c.PlannedAction)
 		}
 		if c.Bytes == 0 {
@@ -227,7 +227,7 @@ func TestCargoCache_ExecuteRequiresPermanentAuthorization(t *testing.T) {
 			if s.Rule != clean.DevCacheCategoryCargo {
 				t.Fatalf("skip rule = %q", s.Rule)
 			}
-			if s.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			if s.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("planned action = %q", s.PlannedAction)
 			}
 		}

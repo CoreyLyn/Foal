@@ -72,7 +72,7 @@ func TestExecuteMovesEligibleCandidatesThroughRecycleBin(t *testing.T) {
 	if result.Deleted[0].Path != candidate || result.Deleted[0].Bytes != 5 || result.Deleted[0].Rule != "test_default_rule" {
 		t.Fatalf("deleted item = %#v, want path/size/rule", result.Deleted[0])
 	}
-	if result.Deleted[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if result.Deleted[0].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("deleted action = %q, want move_to_recycle_bin", result.Deleted[0].Action)
 	}
 	if len(result.Skipped) != 0 {
@@ -127,7 +127,7 @@ func TestExecuteUsesCatalogPlannedActionForDefaultCategoryWithoutPermanentActiva
 	if len(result.Deleted) != 1 {
 		t.Fatalf("deleted = %#v, want one deleted item", result.Deleted)
 	}
-	if result.Deleted[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if result.Deleted[0].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("actual action = %q", result.Deleted[0].Action)
 	}
 	if result.Totals.PermanentlyDeletedBytes != 0 || result.Totals.RecycleBinMovedBytes != 5 {
@@ -141,7 +141,7 @@ func TestExecuteUsesCatalogPlannedActionForDefaultCategoryWithoutPermanentActiva
 		recorder.sessions[0].Aggregate.AffectedBytes != 5 {
 		t.Fatalf("history aggregate = %#v", recorder.sessions[0].Aggregate)
 	}
-	if len(recorder.items) != 1 || recorder.items[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if len(recorder.items) != 1 || recorder.items[0].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("history item = %#v", recorder.items)
 	}
 }
@@ -1183,10 +1183,10 @@ func TestDryRunOptInCategoriesShowOptInCandidatesNotOpportunities(t *testing.T) 
 			if result.OptInCandidates[0].Category != tc.category {
 				t.Fatalf("opt-in candidate category mismatch for %q, got %q want %q", tc.category, result.OptInCandidates[0].Category, tc.category)
 			}
-			wantAction := string(clean.DeletionActionMoveToRecycleBin)
+			wantAction := string(clean.PlannedActionMoveToRecycleBin)
 			switch tc.category {
 			case clean.OpportunityCategoryD3DShaderCache, clean.OpportunityCategoryNVIDIADXCache:
-				wantAction = string(clean.DeletionActionDeletePermanently)
+				wantAction = string(clean.PlannedActionDeletePermanently)
 			}
 			if result.OptInCandidates[0].PlannedAction != wantAction {
 				t.Fatalf("planned_action for %q = %q, want %q", tc.category, result.OptInCandidates[0].PlannedAction, wantAction)
@@ -1828,7 +1828,7 @@ func TestExecuteOptInBrowserCacheCleansWhenBrowserIdle(t *testing.T) {
 	if result.Totals.PermanentlyDeletedBytes == 0 {
 		t.Fatalf("permanently_deleted_bytes = 0")
 	}
-	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 }
@@ -2062,7 +2062,7 @@ func TestExecuteOptInGoCacheCleansWhenGoIdle(t *testing.T) {
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("expected OptInDeletedCount 1 when Go is idle, got %d", result.Totals.OptInDeletedCount)
 	}
-	if result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("action = %q", result.Deleted[0].Action)
 	}
 }
@@ -2161,7 +2161,7 @@ func TestExecuteOptInGoModCacheCleansWhenGoIdle(t *testing.T) {
 	if result.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("expected OptInDeletedCount 1, got %d", result.Totals.OptInDeletedCount)
 	}
-	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	if result.Deleted[0].Rule != clean.DevCacheCategoryGoModCache {
@@ -3258,7 +3258,7 @@ func TestPNPMAndYarnCacheOptInDryRunAndExecuteEndToEnd(t *testing.T) {
 				if candidate.Bytes != wantBytes {
 					t.Fatalf("bytes = %d, want %d", candidate.Bytes, wantBytes)
 				}
-				if candidate.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+				if candidate.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 					t.Fatalf("planned_action = %q, want delete_permanently", candidate.PlannedAction)
 				}
 				if result.Totals.OptInReclaimableBytes != wantBytes {

@@ -209,7 +209,7 @@ func TestJetBrainsIDECaches_EditionPrefixesDiscoverCachesAndIndex(t *testing.T) 
 		if c.Category != clean.DevCacheCategoryJetBrainsIDECaches {
 			t.Fatalf("category = %q", c.Category)
 		}
-		if c.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+		if c.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned action = %q, want delete_permanently", c.PlannedAction)
 		}
 		base := filepath.Base(c.Path)
@@ -599,7 +599,7 @@ func TestJetBrainsIDECaches_ExecuteFreshResolveAndHistory(t *testing.T) {
 	if execResult.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("opt-in deleted = %d", execResult.Totals.OptInDeletedCount)
 	}
-	if len(execResult.Deleted) != 1 || execResult.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if len(execResult.Deleted) != 1 || execResult.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("deleted = %#v, want delete_permanently", execResult.Deleted)
 	}
 	found := false
@@ -609,7 +609,7 @@ func TestJetBrainsIDECaches_ExecuteFreshResolveAndHistory(t *testing.T) {
 			if item.Rule != clean.DevCacheCategoryJetBrainsIDECaches {
 				t.Fatalf("history rule = %q", item.Rule)
 			}
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 		}

@@ -2481,7 +2481,7 @@ func TestCleanAllowPermanentFlagWiresAuthorization(t *testing.T) {
 				Path:   `C:\Users\corey\AppData\Local\D3DSCache`,
 				Bytes:  64,
 				Rule:   clean.OpportunityCategoryD3DShaderCache,
-				Action: string(clean.DeletionActionDeletePermanently),
+				Action: string(clean.PlannedActionDeletePermanently),
 			}},
 			Totals: clean.Totals{
 				DeletedCount:            1,
@@ -2524,7 +2524,7 @@ func TestCleanExecuteWithoutAllowPermanentDoesNotAuthorize(t *testing.T) {
 				Path:          `C:\Users\corey\AppData\Local\D3DSCache`,
 				Bytes:         64,
 				Rule:          clean.OpportunityCategoryD3DShaderCache,
-				PlannedAction: string(clean.DeletionActionDeletePermanently),
+				PlannedAction: string(clean.PlannedActionDeletePermanently),
 				Reason: clean.StructuredIssue{
 					Code:        "permanent_deletion_not_authorized",
 					Message:     "permanent deletion is not authorized for this run; planned action is unchanged",
@@ -2560,7 +2560,7 @@ func TestCleanDryRunDoesNotRequireAllowPermanent(t *testing.T) {
 				Path:          `C:\Users\corey\AppData\Local\D3DSCache`,
 				Bytes:         64,
 				Category:      clean.OpportunityCategoryD3DShaderCache,
-				PlannedAction: string(clean.DeletionActionDeletePermanently),
+				PlannedAction: string(clean.PlannedActionDeletePermanently),
 			}},
 		}
 	}
@@ -2594,8 +2594,8 @@ func TestCleanHumanExecuteSummaryDistinguishesPermanentBytes(t *testing.T) {
 			Status: "ok",
 			Mode:   "execute",
 			Deleted: []clean.DeletedItem{
-				{Path: `C:\Temp\a`, Bytes: 4, Rule: clean.DefaultCategoryFoalOwnedTempSandboxes, Action: string(clean.DeletionActionMoveToRecycleBin)},
-				{Path: `C:\Users\corey\AppData\Local\D3DSCache`, Bytes: 8, Rule: clean.OpportunityCategoryD3DShaderCache, Action: string(clean.DeletionActionDeletePermanently)},
+				{Path: `C:\Temp\a`, Bytes: 4, Rule: clean.DefaultCategoryFoalOwnedTempSandboxes, Action: string(clean.PlannedActionMoveToRecycleBin)},
+				{Path: `C:\Users\corey\AppData\Local\D3DSCache`, Bytes: 8, Rule: clean.OpportunityCategoryD3DShaderCache, Action: string(clean.PlannedActionDeletePermanently)},
 			},
 			Totals: clean.Totals{
 				DeletedCount:            2,

@@ -33,6 +33,10 @@ type SessionRecord struct {
 	EndedAt   time.Time         `json:"ended_at"`
 	Mode      string            `json:"mode"`
 	Aggregate AggregateOutcomes `json:"aggregate_outcomes"`
+	// ServicingOperations holds path-free, byte-free Windows servicing records
+	// stored separately from file items. Omitted when empty so existing
+	// deletion-only history is byte-for-byte unchanged.
+	ServicingOperations []ServicingRecord `json:"servicing_operations,omitempty"`
 }
 
 type AggregateOutcomes struct {
@@ -51,6 +55,26 @@ type AggregateOutcomes struct {
 	RecycleBinMovedBytes    int64 `json:"recycle_bin_moved_bytes"`
 	PermanentlyDeletedBytes int64 `json:"permanently_deleted_bytes"`
 	AffectedBytes           int64 `json:"affected_bytes"`
+	// ServicingOperationCount counts Windows servicing operations. Count only:
+	// servicing never contributes bytes. Omitted when zero so older records are
+	// unchanged.
+	ServicingOperationCount int `json:"servicing_operation_count,omitempty"`
+}
+
+// ServicingRecord is a path-free, byte-free Windows servicing operation stored
+// on a session separately from file ItemRecords (ADR 0029). It carries no path,
+// raw tool output, package identifier, or byte estimate.
+type ServicingRecord struct {
+	Category            string `json:"category"`
+	PlannedAction       string `json:"planned_action"`
+	Capability          string `json:"capability"`
+	ReclaimablePackages int    `json:"reclaimable_packages"`
+	CleanupRecommended  bool   `json:"cleanup_recommended"`
+	Outcome             string `json:"outcome"`
+	CancelRequested     bool   `json:"cancel_requested"`
+	Reason              string `json:"reason,omitempty"`
+	ExitCode            *int   `json:"exit_code,omitempty"`
+	RestartRequired     bool   `json:"restart_required"`
 }
 
 type ItemRecord struct {
@@ -91,6 +115,9 @@ type SessionResult struct {
 	Mode      string            `json:"mode"`
 	Aggregate AggregateOutcomes `json:"aggregate_outcomes"`
 	Items     []ItemRecord      `json:"items"`
+	// ServicingOperations mirrors the session's path-free servicing records,
+	// stored separately from Items. Omitted when empty.
+	ServicingOperations []ServicingRecord `json:"servicing_operations,omitempty"`
 }
 
 type QueryIssue struct {
@@ -228,13 +255,14 @@ func readHistorySessionFile(ctx context.Context, path string) (SessionResult, er
 		return SessionResult{}, fmt.Errorf("history session record is missing")
 	}
 	return SessionResult{
-		ID:        session.ID,
-		Command:   session.Command,
-		StartedAt: session.StartedAt,
-		EndedAt:   session.EndedAt,
-		Mode:      session.Mode,
-		Aggregate: session.Aggregate,
-		Items:     items,
+		ID:                  session.ID,
+		Command:             session.Command,
+		StartedAt:           session.StartedAt,
+		EndedAt:             session.EndedAt,
+		Mode:                session.Mode,
+		Aggregate:           session.Aggregate,
+		Items:               items,
+		ServicingOperations: session.ServicingOperations,
 	}, nil
 }
 

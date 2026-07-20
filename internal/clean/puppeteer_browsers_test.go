@@ -359,7 +359,7 @@ func TestPuppeteerBrowsers_ExecuteFreshDiscoveryAndNotRoot(t *testing.T) {
 	if execResult.Totals.OptInDeletedCount != 1 {
 		t.Fatalf("opt-in deleted = %d", execResult.Totals.OptInDeletedCount)
 	}
-	if len(execResult.Deleted) != 1 || execResult.Deleted[0].Action != string(clean.DeletionActionDeletePermanently) {
+	if len(execResult.Deleted) != 1 || execResult.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("deleted = %#v, want delete_permanently", execResult.Deleted)
 	}
 	// History records opted-in path through normal item outcomes when recorder present;

@@ -45,7 +45,7 @@ func TestEagerPreviewQueueFromExtendsWithCatalogEntry(t *testing.T) {
 		ReportCategory:           clean.ReportCategoryDeveloperTools,
 		Eligibility:              clean.CategoryEligibilityOptIn,
 		RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
-		PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+		PlannedAction:            clean.PlannedActionMoveToRecycleBin,
 	}
 	definitions := append(append([]clean.CleanupCategoryDefinition{}, base...), extra)
 	catalog, err := clean.NewCleanupCategoryCatalog(definitions)
@@ -74,7 +74,7 @@ func TestEagerPreviewQueueExcludesPermissionBoundaryAndReviewOnly(t *testing.T) 
 			ReportCategory:           clean.ReportCategoryUserEssentials,
 			Eligibility:              clean.CategoryEligibilityDefault,
 			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
-			PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+			PlannedAction:            clean.PlannedActionMoveToRecycleBin,
 		},
 		{
 			Identifier:               "opt_in_one",
@@ -82,7 +82,7 @@ func TestEagerPreviewQueueExcludesPermissionBoundaryAndReviewOnly(t *testing.T) 
 			ReportCategory:           clean.ReportCategorySystem,
 			Eligibility:              clean.CategoryEligibilityOptIn,
 			RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
-			PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+			PlannedAction:            clean.PlannedActionMoveToRecycleBin,
 		},
 		{
 			Identifier:               "admin_notice",

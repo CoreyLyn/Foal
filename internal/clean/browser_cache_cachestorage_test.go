@@ -164,7 +164,7 @@ func TestOptInBrowserCacheYieldsCacheStorageCandidate(t *testing.T) {
 	if result.OptInCandidates[0].Path != cacheStorage {
 		t.Fatalf("candidate path = %q, want %q", result.OptInCandidates[0].Path, cacheStorage)
 	}
-	if result.OptInCandidates[0].PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if result.OptInCandidates[0].PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned_action = %q", result.OptInCandidates[0].PlannedAction)
 	}
 

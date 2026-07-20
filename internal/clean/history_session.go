@@ -32,7 +32,9 @@ func recordHistorySession(ctx context.Context, opts Options, result Result, star
 			RecycleBinMovedBytes:     result.Totals.RecycleBinMovedBytes,
 			PermanentlyDeletedBytes:  result.Totals.PermanentlyDeletedBytes,
 			AffectedBytes:            result.Totals.AffectedBytes,
+			ServicingOperationCount:  result.Totals.ServicingOperationCount,
 		},
+		ServicingOperations: servicingHistoryRecords(result.ServicingOperations),
 	}
 	// Cancellation stops remaining cleanup work, but must not erase the outcomes
 	// already produced. Persist those outcomes without extending cancellation to
@@ -124,7 +126,7 @@ func historyItems(sessionID string, result Result) []history.ItemRecord {
 		bytes := failed.Bytes
 		action := failed.Action
 		if action == "" {
-			action = string(DeletionActionDeletePermanently)
+			action = string(PlannedActionDeletePermanently)
 		}
 		planned := failed.PlannedAction
 		if planned == "" {
@@ -178,4 +180,33 @@ func historyIssue(issue StructuredIssue) *history.Issue {
 		Message:     issue.Message,
 		Recoverable: issue.Recoverable,
 	}
+}
+
+// servicingHistoryRecords projects path-free servicing operations into history
+// records stored separately from file items. It copies only stable fields: no
+// path, raw tool output, package identifier, or byte estimate is introduced.
+func servicingHistoryRecords(operations []ServicingOperation) []history.ServicingRecord {
+	if len(operations) == 0 {
+		return nil
+	}
+	records := make([]history.ServicingRecord, 0, len(operations))
+	for _, op := range operations {
+		record := history.ServicingRecord{
+			Category:            op.Category,
+			PlannedAction:       string(op.PlannedAction),
+			Capability:          string(op.Capability),
+			ReclaimablePackages: op.ReclaimablePackages,
+			CleanupRecommended:  op.CleanupRecommended,
+			Outcome:             string(op.Outcome),
+			CancelRequested:     op.CancelRequested,
+			Reason:              op.Reason,
+			RestartRequired:     op.RestartRequired,
+		}
+		if op.ExitCode != nil {
+			exit := *op.ExitCode
+			record.ExitCode = &exit
+		}
+		records = append(records, record)
+	}
+	return records
 }

@@ -146,7 +146,7 @@ func TestCompileExactCategoryPlanRejectsAliasWhenPresent(t *testing.T) {
 		Eligibility:              clean.CategoryEligibilityOptIn,
 		Aliases:                  []string{"demo-alias"},
 		RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
-		PlannedAction:            clean.DeletionActionMoveToRecycleBin,
+		PlannedAction:            clean.PlannedActionMoveToRecycleBin,
 	}})
 	if err != nil {
 		t.Fatal(err)

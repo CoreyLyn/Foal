@@ -122,7 +122,7 @@ func TestRuntimesJetBrainsDryRunReportsPermanentWithoutAuthorization(t *testing.
 				if c.Category != tc.category {
 					t.Fatalf("category = %q", c.Category)
 				}
-				if c.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+				if c.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 					t.Fatalf("planned_action = %q, want delete_permanently", c.PlannedAction)
 				}
 				if c.Path == path {
@@ -167,13 +167,13 @@ func TestRuntimesJetBrainsExecuteWithoutAllowPermanentSkips(t *testing.T) {
 	permanent := &recordingPermanentRemover{}
 	recorder := &recordingHistoryRecorder{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		AllowPermanentDeletion: false,
-		OptIn:                  []string{clean.DevCacheCategoryPlaywright},
-		RecycleBinAdapter:      recycle,
-		PermanentRemover:       permanent,
-		HistoryRecorder:        recorder,
-		DevCachePathResolver:   func(string) []string { return []string{browsersRoot} },
-		DiscoverOpportunities:  noOpportunities,
+		AllowPermanentDeletion:    false,
+		OptIn:                     []string{clean.DevCacheCategoryPlaywright},
+		RecycleBinAdapter:         recycle,
+		PermanentRemover:          permanent,
+		HistoryRecorder:           recorder,
+		DevCachePathResolver:      func(string) []string { return []string{browsersRoot} },
+		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{{
 			ID:             clean.DefaultCategoryFoalOwnedTempSandboxes,
@@ -188,7 +188,7 @@ func TestRuntimesJetBrainsExecuteWithoutAllowPermanentSkips(t *testing.T) {
 	if len(permanent.paths) != 0 {
 		t.Fatalf("permanent remover called without auth: %v", permanent.paths)
 	}
-	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if len(result.Deleted) != 1 || result.Deleted[0].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
 	if len(result.Skipped) != 1 {
@@ -198,7 +198,7 @@ func TestRuntimesJetBrainsExecuteWithoutAllowPermanentSkips(t *testing.T) {
 	if skipped.Reason.Code != "permanent_deletion_not_authorized" {
 		t.Fatalf("skip code = %q", skipped.Reason.Code)
 	}
-	if skipped.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+	if skipped.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("planned action changed: %q", skipped.PlannedAction)
 	}
 	if skipped.Rule != clean.DevCacheCategoryPlaywright {
@@ -214,7 +214,7 @@ func TestRuntimesJetBrainsExecuteWithoutAllowPermanentSkips(t *testing.T) {
 	for _, item := range recorder.items {
 		if item.Result == "skipped" && item.SkippedReason != nil && item.SkippedReason.Code == "permanent_deletion_not_authorized" {
 			foundAuthSkip = true
-			if item.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+			if item.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history planned action = %q", item.PlannedAction)
 			}
 			if item.Rule != clean.DevCacheCategoryPlaywright {
@@ -241,13 +241,13 @@ func TestRuntimesJetBrainsExecuteWithAllowPermanentDispatchesPermanentRemover(t 
 	collab := &orderedCollaborators{}
 	recorder := &recordingHistoryRecorder{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		AllowPermanentDeletion: true,
-		OptIn:                  []string{clean.DevCacheCategoryElectron},
-		RecycleBinAdapter:      collab,
-		PermanentRemover:       collab,
-		HistoryRecorder:        recorder,
-		DevCachePathResolver:   func(string) []string { return []string{electronRoot} },
-		DiscoverOpportunities:  noOpportunities,
+		AllowPermanentDeletion:    true,
+		OptIn:                     []string{clean.DevCacheCategoryElectron},
+		RecycleBinAdapter:         collab,
+		PermanentRemover:          collab,
+		HistoryRecorder:           recorder,
+		DevCachePathResolver:      func(string) []string { return []string{electronRoot} },
+		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
 		Rules: []clean.Rule{{
 			ID:             clean.DefaultCategoryFoalOwnedTempSandboxes,
@@ -270,11 +270,11 @@ func TestRuntimesJetBrainsExecuteWithAllowPermanentDispatchesPermanentRemover(t 
 	for _, item := range result.Deleted {
 		byRule[item.Rule] = item
 	}
-	if byRule[clean.DefaultCategoryFoalOwnedTempSandboxes].Action != string(clean.DeletionActionMoveToRecycleBin) {
+	if byRule[clean.DefaultCategoryFoalOwnedTempSandboxes].Action != string(clean.PlannedActionMoveToRecycleBin) {
 		t.Fatalf("recycle deleted = %#v", byRule[clean.DefaultCategoryFoalOwnedTempSandboxes])
 	}
 	electronDeleted, ok := byRule[clean.DevCacheCategoryElectron]
-	if !ok || electronDeleted.Action != string(clean.DeletionActionDeletePermanently) {
+	if !ok || electronDeleted.Action != string(clean.PlannedActionDeletePermanently) {
 		t.Fatalf("electron deleted = %#v", byRule[clean.DevCacheCategoryElectron])
 	}
 	if result.Totals.RecycleBinMovedBytes != 2 {
@@ -294,7 +294,7 @@ func TestRuntimesJetBrainsExecuteWithAllowPermanentDispatchesPermanentRemover(t 
 	for _, item := range recorder.items {
 		if item.Rule == clean.DevCacheCategoryElectron && item.Result == "deleted" {
 			foundPermanentHistory = true
-			if item.Action != string(clean.DeletionActionDeletePermanently) {
+			if item.Action != string(clean.PlannedActionDeletePermanently) {
 				t.Fatalf("history action = %q", item.Action)
 			}
 		}
@@ -372,7 +372,7 @@ func TestRuntimesJetBrainsTUIInitiallySelectsPermanentCategories(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s missing from catalog", id)
 		}
-		if summary.PlannedAction != clean.DeletionActionDeletePermanently {
+		if summary.PlannedAction != clean.PlannedActionDeletePermanently {
 			t.Fatalf("%s planned_action = %q", id, summary.PlannedAction)
 		}
 		if !clean.InitiallySelectedCategory(summary) {
