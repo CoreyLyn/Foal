@@ -303,6 +303,6 @@ func previewOnlyExecution() ExecutionPolicy {
 	return ExecutionPolicy{
 		Allowed: false,
 		Actions: []string{},
-		Reason:  "uninstall is preview-only; Foal does not execute uninstallers, stop processes, or delete leftovers",
+		Reason:  "preview is read-only; use --execute --select <name> to run official uninstallers for selected apps",
 	}
 }
