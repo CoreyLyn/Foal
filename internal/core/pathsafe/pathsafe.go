@@ -207,6 +207,41 @@ func isVolumeRootPath(cleaned string) bool {
 }
 
 func (v Validator) ValidateDeletePath(path string) (Reason, bool) {
+	return v.validateMutationPath(path, false /* portableMode */)
+}
+
+// ValidatePortableRemovalPath reports whether path is acceptable as a portable
+// install location to be permanently removed by Uninstall execution. It is the
+// one Foal mutation path that may legitimately target a per-app directory under
+// Program Files or AppData (e.g. C:\Program Files\MyApp), because those are
+// plausible portable install roots. The built-in protected system roots check
+// in ValidateDeletePath would reject all Program Files descendants, which is
+// correct for Clean/Purge but wrong for portable removal.
+//
+// The portable root policy still rejects volume roots (C:\), the Windows system
+// tree (root and descendants), the Program Files roots themselves (exact only,
+// descendants allowed), the current user's profile root (exact only), and the
+// AppData roots themselves (exact only, descendants allowed). User-defined
+// Protection rules apply deny-only as on every other mutation path. Reparse
+// points and multi-hardlink files are rejected. Callers must still verify the
+// path is a directory before removal.
+//
+// This mirrors the "trusted install location" policy from the Uninstall
+// execution spec: be conservative, reject dangerous roots, and when in doubt
+// skip with a stable reason rather than permanently deleting a dangerous root.
+func (v Validator) ValidatePortableRemovalPath(path string) (Reason, bool) {
+	return v.validateMutationPath(path, true /* portableMode */)
+}
+
+// validateMutationPath is the shared validation core for ValidateDeletePath and
+// ValidatePortableRemovalPath. The two differ only in the system-root policy:
+// the standard mode rejects all descendants of built-in protected system roots
+// (Windows, Program Files, Program Files (x86)) as protected_path, while
+// portable mode applies a portable-specific dangerous_root policy that rejects
+// roots and genuinely dangerous trees but allows per-app descendants under
+// Program Files and AppData. All other checks (format, user Protection rules,
+// Lstat, reparse, hardlink) are identical.
+func (v Validator) validateMutationPath(path string, portableMode bool) (Reason, bool) {
 	if strings.TrimSpace(path) == "" {
 		return reject("empty_path", "delete path cannot be empty")
 	}
@@ -230,9 +265,15 @@ func (v Validator) ValidateDeletePath(path string) (Reason, bool) {
 		}
 	}
 
-	for _, protected := range builtInProtectedSystemRoots {
-		if cleaned == protected || strings.HasPrefix(cleaned, protected+`\`) {
-			return reject("protected_path", "protected system paths cannot be cleaned by Foal")
+	if portableMode {
+		if reason, ok := validatePortableRootPolicy(cleaned); !ok {
+			return reason, false
+		}
+	} else {
+		for _, protected := range builtInProtectedSystemRoots {
+			if cleaned == protected || strings.HasPrefix(cleaned, protected+`\`) {
+				return reject("protected_path", "protected system paths cannot be cleaned by Foal")
+			}
 		}
 	}
 
@@ -270,6 +311,68 @@ func (v Validator) ValidateDeletePath(path string) (Reason, bool) {
 	}
 
 	return Reason{}, true
+}
+
+// validatePortableRootPolicy is the portable-removal-specific system root
+// policy. It rejects volume roots, the Windows system tree (root and
+// descendants), the Program Files roots themselves (exact only; per-app
+// descendants remain eligible), the current user's profile root (exact only),
+// and the AppData roots themselves (exact only; per-app descendants remain
+// eligible). It returns a dangerous_root reason so callers record a stable
+// skip code consistent with Purge's dangerous_root vocabulary.
+func validatePortableRootPolicy(cleaned string) (Reason, bool) {
+	if isVolumeRootPath(cleaned) {
+		return reject("dangerous_root", "volume roots cannot be permanently removed as portable install locations")
+	}
+	// The Windows system tree is always dangerous: reject root and descendants.
+	if isSameOrDescendant(cleaned, `c:\windows`) {
+		return reject("dangerous_root", "the Windows system tree cannot be permanently removed")
+	}
+	// Program Files roots are rejected as exact roots only; per-app descendants
+	// (e.g. C:\Program Files\MyApp) are plausible portable install locations.
+	if cleaned == `c:\program files` || cleaned == `c:\program files (x86)` {
+		return reject("dangerous_root", "Program Files root cannot be permanently removed; only per-app install directories are eligible")
+	}
+	// User profile root: reject the root itself, allow descendants.
+	if isCurrentUserProfileRoot(cleaned) {
+		return reject("dangerous_root", "user profile root cannot be permanently removed")
+	}
+	// AppData roots: reject the roots themselves, allow per-app descendants.
+	for _, root := range currentUserAppDataRoots() {
+		if cleaned == root {
+			return reject("dangerous_root", "AppData root cannot be permanently removed; only per-app install directories are eligible")
+		}
+	}
+	return Reason{}, true
+}
+
+// currentUserAppDataRoots returns the current user's standard AppData roots
+// (LOCALAPPDATA and APPDATA), normalized for comparison. Used by the portable
+// removal root policy to reject the AppData roots themselves while allowing
+// per-app descendants. Returns an empty slice when the environment variables
+// are unset (e.g. on non-Windows or service accounts), in which case no AppData
+// root match is possible and descendants are evaluated by the remaining checks.
+func currentUserAppDataRoots() []string {
+	var roots []string
+	seen := make(map[string]struct{}, 2)
+	add := func(raw string) {
+		raw = strings.TrimSpace(stripLongPathPrefix(raw))
+		if raw == "" {
+			return
+		}
+		normalized := strings.ToLower(filepath.Clean(raw))
+		if normalized == "" || !filepath.IsAbs(normalized) {
+			return
+		}
+		if _, exists := seen[normalized]; exists {
+			return
+		}
+		seen[normalized] = struct{}{}
+		roots = append(roots, normalized)
+	}
+	add(os.Getenv("LOCALAPPDATA"))
+	add(os.Getenv("APPDATA"))
+	return roots
 }
 
 func normalizeLocalPath(path string) (string, string) {

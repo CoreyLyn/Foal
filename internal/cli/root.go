@@ -226,6 +226,7 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 		executeOptions := uninstall.ExecuteOptions{
 			Selection:          append([]string(nil), invocation.selection...),
 			AllowStopProcesses: invocation.allowStopProcesses,
+			AllowPermanent:     invocation.allowPermanent,
 			Validator:          protectionConfig.Validator,
 			HistoryRecorder:    recorder,
 			CommandParameters: history.CommandParameters{
@@ -540,6 +541,7 @@ type purgeInvocation struct {
 type uninstallInvocation struct {
 	execute            bool
 	allowStopProcesses bool
+	allowPermanent     bool
 	selection          []string
 }
 
@@ -547,6 +549,7 @@ func validateUninstallArgs(args []string) (uninstallInvocation, error) {
 	var invocation uninstallInvocation
 	execute := false
 	allowStopProcesses := false
+	allowPermanent := false
 	dryRun := false
 	var selection []string
 	for i := 0; i < len(args); i++ {
@@ -565,6 +568,14 @@ func validateUninstallArgs(args []string) (uninstallInvocation, error) {
 			// app is running and this flag is absent, Execute skips the app
 			// with a stable reason instead of killing it.
 			allowStopProcesses = true
+		case "--allow-permanent":
+			// Per-run authorization for portable directory removal (permanent
+			// deletion of the install tree). Separate from --execute: both are
+			// required for portable removal. Without it, portable-class apps
+			// are skipped and nothing is permanently deleted. Mirrors
+			// Purge/Clean --allow-permanent semantics. Dry-run accepts the
+			// flag without authorizing mutation.
+			allowPermanent = true
 		case "--select":
 			if i+1 >= len(args) {
 				return invocation, fmt.Errorf("--select requires an application display name (use foal uninstall --json to list applications)")
@@ -596,6 +607,7 @@ func validateUninstallArgs(args []string) (uninstallInvocation, error) {
 	return uninstallInvocation{
 		execute:            execute,
 		allowStopProcesses: allowStopProcesses,
+		allowPermanent:     allowPermanent,
 		selection:          selection,
 	}, nil
 }
@@ -743,6 +755,11 @@ func helpText() string {
 	builder.WriteString("                       --execute alone never kills a process. Running apps without this flag are\n")
 	builder.WriteString("                       skipped with a stable reason. Leftover deletion uses the Recycle Bin and runs only\n")
 	builder.WriteString("                       after the uninstaller reports success; a failed or canceled uninstaller deletes nothing.\n")
+	builder.WriteString("  --allow-permanent    Per-run authorization for portable directory removal (with --execute).\n")
+	builder.WriteString("                       Apps without an uninstall command but with a trusted install location are\n")
+	builder.WriteString("                       skipped without this flag; nothing is permanently deleted. Portable removal\n")
+	builder.WriteString("                       is ordinary filesystem removal (not the Recycle Bin, not secure erasure) and is\n")
+	builder.WriteString("                       never a silent fallback for a failed official uninstaller.\n")
 	builder.WriteString("\nExamples:\n")
 	builder.WriteString("  foal status --json\n")
 	builder.WriteString("  foal clean --dry-run\n")

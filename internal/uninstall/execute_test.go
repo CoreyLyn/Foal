@@ -130,6 +130,23 @@ func (f *fakeRecycleBinAdapter) MoveToRecycleBin(path string) error {
 	return nil
 }
 
+// fakePermanentRemover records every Remove call and never actually deletes
+// anything. Tests inject this so no real filesystem permanent deletion is ever
+// invoked and no real files are deleted. An optional err is returned for every
+// call when set (to exercise the portable_removal_failed path).
+type fakePermanentRemover struct {
+	calls []string
+	err   error
+}
+
+func (f *fakePermanentRemover) Remove(_ context.Context, path string) error {
+	f.calls = append(f.calls, path)
+	if f.err != nil {
+		return f.err
+	}
+	return nil
+}
+
 // appOwnedLeftover builds LeftoverEvidence with the signals required for
 // app_owned classification (app_name_match + under_user_profile). The path
 // must be a real directory on disk for pathsafe.Validator.ValidateDeletePath
@@ -384,28 +401,463 @@ func TestExecuteSkipsHardExclusion(t *testing.T) {
 	}
 }
 
-func TestExecuteSkipsPortableRemovalAsScopeLimit(t *testing.T) {
+// TestExecuteSkipsPortableRemovalWhenPermanentNotAuthorized verifies the
+// authorization split: without --allow-permanent, a portable-class app is
+// skipped with a stable reason and nothing is permanently deleted. The
+// permanent remover is never called. This is the core safety guarantee:
+// --execute alone never authorizes permanent deletion.
+func TestExecuteSkipsPortableRemovalWhenPermanentNotAuthorized(t *testing.T) {
+	installDir := mkdirTempLeftover(t, "PortableApp")
 	stubDiscovery(t, []ApplicationEvidence{{
 		Name:            "Portable App",
-		InstallLocation: `C:\Apps\PortableApp`,
+		InstallLocation: installDir,
 		Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
 	}})
-	runner := &fakeUninstallerRunner{}
+	remover := &fakePermanentRemover{}
 
 	result := Execute(context.Background(), ExecuteOptions{
-		Selection:         []string{"Portable App"},
-		UninstallerRunner: runner,
+		Selection:        []string{"Portable App"},
+		PermanentRemover: remover,
+		Validator:        pathsafe.NewValidator(nil),
+		AllowPermanent:   false, // --execute alone, no --allow-permanent
 	})
 
-	if len(runner.calls) != 0 {
-		t.Fatalf("runner calls = %d, want 0 (portable removal is out of scope)", len(runner.calls))
+	if len(remover.calls) != 0 {
+		t.Fatalf("permanent remover calls = %d, want 0 (nothing permanently deleted without --allow-permanent)", len(remover.calls))
 	}
 	app := result.Applications[0]
 	if app.Result != ResultSkipped {
 		t.Fatalf("result = %q, want %q", app.Result, ResultSkipped)
 	}
-	if app.SkippedReason != SkipPortableRemovalNotSupported {
-		t.Fatalf("skipped reason = %q, want %q", app.SkippedReason, SkipPortableRemovalNotSupported)
+	if app.SkippedReason != SkipPortableRemovalNotAuthorized {
+		t.Fatalf("skipped reason = %q, want %q", app.SkippedReason, SkipPortableRemovalNotAuthorized)
+	}
+	if app.PortableRemovalPath != installDir {
+		t.Fatalf("portable removal path = %q, want %q", app.PortableRemovalPath, installDir)
+	}
+	// The real directory must still exist (nothing was deleted).
+	if info, err := os.Stat(installDir); err != nil || !info.IsDir() {
+		t.Fatalf("install dir %q was deleted (must survive without --allow-permanent)", installDir)
+	}
+}
+
+// TestExecutePortableRemovalWhenAuthorized verifies that a portable-class app
+// is permanently deleted when --allow-permanent is present. The injected fake
+// remover records the call without deleting, so the real temp directory
+// survives for assertion. The outcome records Action=portable_removal and
+// Result=uninstalled.
+func TestExecutePortableRemovalWhenAuthorized(t *testing.T) {
+	installDir := mkdirTempLeftover(t, "PortableApp-Authorized")
+	stubDiscovery(t, []ApplicationEvidence{{
+		Name:            "Portable App",
+		InstallLocation: installDir,
+		Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
+	}})
+	remover := &fakePermanentRemover{}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:        []string{"Portable App"},
+		PermanentRemover: remover,
+		Validator:        pathsafe.NewValidator(nil),
+		AllowPermanent:   true,
+	})
+
+	if len(remover.calls) != 1 || remover.calls[0] != installDir {
+		t.Fatalf("permanent remover calls = %#v, want [%q]", remover.calls, installDir)
+	}
+	app := result.Applications[0]
+	if app.Result != ResultUninstalled {
+		t.Fatalf("result = %q, want %q", app.Result, ResultUninstalled)
+	}
+	if app.Action != ActionPortableRemoval {
+		t.Fatalf("action = %q, want %q", app.Action, ActionPortableRemoval)
+	}
+	if app.PlannedClass != PlannedClassPortableDirectoryRemoval {
+		t.Fatalf("planned class = %q, want %q", app.PlannedClass, PlannedClassPortableDirectoryRemoval)
+	}
+	if app.PortableRemovalPath != installDir {
+		t.Fatalf("portable removal path = %q, want %q", app.PortableRemovalPath, installDir)
+	}
+	if result.Totals.UninstalledCount != 1 {
+		t.Fatalf("uninstalled count = %d, want 1", result.Totals.UninstalledCount)
+	}
+	// The execution policy must advertise portable removal as authorized.
+	foundPortable := false
+	for _, action := range result.Execution.Actions {
+		if action == ActionPortableRemoval {
+			foundPortable = true
+			break
+		}
+	}
+	if !foundPortable {
+		t.Fatalf("execution actions = %#v, want %q present (authorized)", result.Execution.Actions, ActionPortableRemoval)
+	}
+	// The fake remover does not delete; the real directory must still exist.
+	if info, err := os.Stat(installDir); err != nil || !info.IsDir() {
+		t.Fatalf("install dir %q was deleted by the real remover (must survive when fake is injected)", installDir)
+	}
+}
+
+// TestExecutePortableRemovalAuthorizationSplitInExecutionActions verifies that
+// the execution policy actions list includes portable_removal only when
+// --allow-permanent is present, and excludes it otherwise. This makes the
+// authorization split visible in the JSON contract.
+func TestExecutePortableRemovalAuthorizationSplitInExecutionActions(t *testing.T) {
+	stubDiscovery(t, []ApplicationEvidence{{
+		Name:            "Portable App",
+		InstallLocation: mkdirTempLeftover(t, "PortableApp-Policy"),
+		Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
+	}})
+
+	// Without --allow-permanent: portable_removal must NOT be in actions.
+	resultNoAuth := Execute(context.Background(), ExecuteOptions{
+		Selection:        []string{"Portable App"},
+		PermanentRemover: &fakePermanentRemover{},
+		Validator:        pathsafe.NewValidator(nil),
+		AllowPermanent:   false,
+	})
+	for _, action := range resultNoAuth.Execution.Actions {
+		if action == ActionPortableRemoval {
+			t.Fatalf("execution actions without --allow-permanent = %#v, must not include %q", resultNoAuth.Execution.Actions, ActionPortableRemoval)
+		}
+	}
+
+	// With --allow-permanent: portable_removal must be in actions.
+	resultAuth := Execute(context.Background(), ExecuteOptions{
+		Selection:        []string{"Portable App"},
+		PermanentRemover: &fakePermanentRemover{},
+		Validator:        pathsafe.NewValidator(nil),
+		AllowPermanent:   true,
+	})
+	found := false
+	for _, action := range resultAuth.Execution.Actions {
+		if action == ActionPortableRemoval {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("execution actions with --allow-permanent = %#v, want %q present", resultAuth.Execution.Actions, ActionPortableRemoval)
+	}
+}
+
+// TestExecuteFailedOfficialUninstallerDoesNotFallBackToPortableRemoval
+// verifies the no-fallback guarantee: an app classified as official_uninstaller
+// (has an uninstall command) that ALSO has an install location must NEVER have
+// its install tree permanently deleted when the uninstaller fails. Portable
+// removal is only for apps classified as portable (no uninstall command), never
+// a recovery path for a failed official uninstaller.
+func TestExecuteFailedOfficialUninstallerDoesNotFallBackToPortableRemoval(t *testing.T) {
+	installDir := mkdirTempLeftover(t, "InstallTree-DoNotDelete")
+	stubDiscovery(t, []ApplicationEvidence{{
+		Name:                        "Official App With Install Location",
+		QuietUninstallCommand:       `MsiExec.exe /X{FB} /qn`,
+		InteractiveUninstallCommand: `MsiExec.exe /X{FB}`,
+		InstallLocation:             installDir,
+		Sources:                     []string{"windows_registry_uninstall_keys:HKLM64"},
+	}})
+	runner := &fakeUninstallerRunner{
+		results: []UninstallerRunResult{
+			{ExitCode: 1603}, // quiet fails
+			{ExitCode: 1603}, // interactive also fails
+		},
+	}
+	remover := &fakePermanentRemover{}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:         []string{"Official App With Install Location"},
+		UninstallerRunner: runner,
+		PermanentRemover:  remover,
+		Validator:         pathsafe.NewValidator(nil),
+		AllowPermanent:    true, // Even WITH permanent authorization, no fallback.
+	})
+
+	app := result.Applications[0]
+	if app.Result != ResultFailed {
+		t.Fatalf("result = %q, want %q (uninstaller failed)", app.Result, ResultFailed)
+	}
+	if app.Action != ActionOfficialUninstaller {
+		t.Fatalf("action = %q, want %q (official uninstaller was attempted, not portable removal)", app.Action, ActionOfficialUninstaller)
+	}
+	// The permanent remover must NEVER be called: a failed official
+	// uninstaller must not fall back to portable install-tree deletion.
+	if len(remover.calls) != 0 {
+		t.Fatalf("permanent remover calls = %#v, want 0 (no fallback to portable removal on failed uninstaller)", remover.calls)
+	}
+	// The real install directory must still exist.
+	if info, err := os.Stat(installDir); err != nil || !info.IsDir() {
+		t.Fatalf("install dir %q was deleted (must survive: no fallback)", installDir)
+	}
+}
+
+// TestExecutePortableRemovalProtectionSuppressesTarget verifies that a
+// portable install location protected by a user-defined Protection rule is
+// skipped, never force-deleted. The deny-only validator removes the protected
+// target from deletion; an unprotected sibling app is still removed.
+func TestExecutePortableRemovalProtectionSuppressesTarget(t *testing.T) {
+	protectedDir := mkdirTempLeftover(t, "ProtectedPortable")
+	freeDir := mkdirTempLeftover(t, "FreePortable")
+	stubDiscovery(t, []ApplicationEvidence{
+		{
+			Name:            "Protected Portable App",
+			InstallLocation: protectedDir,
+			Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
+		},
+		{
+			Name:            "Free Portable App",
+			InstallLocation: freeDir,
+			Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
+		},
+	})
+	remover := &fakePermanentRemover{}
+	validator := pathsafe.NewValidator([]string{protectedDir})
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:        []string{"Protected Portable App", "Free Portable App"},
+		PermanentRemover: remover,
+		Validator:        validator,
+		AllowPermanent:   true,
+	})
+
+	// stableSelection sorts alphabetically: "Free Portable App" before "Protected Portable App"
+	if len(result.Applications) != 2 {
+		t.Fatalf("applications = %d, want 2", len(result.Applications))
+	}
+	freeApp := result.Applications[0]
+	protectedApp := result.Applications[1]
+	if freeApp.Name != "Free Portable App" || protectedApp.Name != "Protected Portable App" {
+		t.Fatalf("order = %q, %q; want Free first then Protected", freeApp.Name, protectedApp.Name)
+	}
+	// The free app must be removed; the protected app must be skipped.
+	if freeApp.Result != ResultUninstalled || freeApp.Action != ActionPortableRemoval {
+		t.Fatalf("free app = %#v, want uninstalled/portable_removal", freeApp)
+	}
+	if protectedApp.Result != ResultSkipped {
+		t.Fatalf("protected app result = %q, want %q", protectedApp.Result, ResultSkipped)
+	}
+	if protectedApp.SkippedReason != SkipLeftoverProtected {
+		t.Fatalf("protected app skipped reason = %q, want %q", protectedApp.SkippedReason, SkipLeftoverProtected)
+	}
+	// Only the free directory reaches the remover; the protected one does not.
+	if len(remover.calls) != 1 || remover.calls[0] != freeDir {
+		t.Fatalf("remover calls = %#v, want only [%q] (protected path must not reach the remover)", remover.calls, freeDir)
+	}
+	// Both real directories must still exist (fake remover does not delete).
+	for _, dir := range []string{protectedDir, freeDir} {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("dir %q was deleted by the real remover (must survive)", dir)
+		}
+	}
+}
+
+// TestExecutePortableRemovalRejectsDangerousRoot verifies that a portable
+// install location that is a dangerous root (volume root, Windows tree,
+// Program Files root) is skipped with dangerous_root and never reaches the
+// permanent remover. Foal never permanently deletes a dangerous root.
+func TestExecutePortableRemovalRejectsDangerousRoot(t *testing.T) {
+	dangerousPaths := []struct {
+		name string
+		path string
+	}{
+		{"volume root", `C:\`},
+		{"windows root", `C:\Windows`},
+		{"program files root", `C:\Program Files`},
+	}
+	for _, tt := range dangerousPaths {
+		t.Run(tt.name, func(t *testing.T) {
+			stubDiscovery(t, []ApplicationEvidence{{
+				Name:            "Dangerous Portable App",
+				InstallLocation: tt.path,
+				Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
+			}})
+			remover := &fakePermanentRemover{}
+
+			result := Execute(context.Background(), ExecuteOptions{
+				Selection:        []string{"Dangerous Portable App"},
+				PermanentRemover: remover,
+				Validator:        pathsafe.NewValidator(nil),
+				AllowPermanent:   true,
+			})
+
+			app := result.Applications[0]
+			if app.Result != ResultSkipped {
+				t.Fatalf("result = %q, want %q (dangerous root must be skipped)", app.Result, ResultSkipped)
+			}
+			if app.SkippedReason != SkipPortableRemovalDangerousRoot {
+				t.Fatalf("skipped reason = %q, want %q", app.SkippedReason, SkipPortableRemovalDangerousRoot)
+			}
+			if len(remover.calls) != 0 {
+				t.Fatalf("permanent remover calls = %#v, want 0 (dangerous root must not reach remover)", remover.calls)
+			}
+		})
+	}
+}
+
+// TestExecutePortableRemovalRecordsHistory verifies that history records the
+// portable removal as a permanent action with the install location path,
+// PlannedAction=portable_removal, and the actual Action/Result. This
+// distinguishes portable removal (permanent deletion) from Recycle Bin leftover
+// deletion and from official uninstaller invocation.
+func TestExecutePortableRemovalRecordsHistory(t *testing.T) {
+	installDir := mkdirTempLeftover(t, "HistoryPortable")
+	stubDiscovery(t, []ApplicationEvidence{{
+		Name:            "History Portable App",
+		InstallLocation: installDir,
+		Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
+	}})
+	remover := &fakePermanentRemover{}
+	recorder := &fakeHistoryRecorder{}
+
+	Execute(context.Background(), ExecuteOptions{
+		Selection:        []string{"History Portable App"},
+		PermanentRemover: remover,
+		Validator:        pathsafe.NewValidator(nil),
+		AllowPermanent:   true,
+		HistoryRecorder:  recorder,
+	})
+
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("history sessions = %d, want 1", len(recorder.sessions))
+	}
+	items := recorder.sessions[0].Items
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1 (one portable removal app)", len(items))
+	}
+	item := items[0]
+	if item.Path != installDir {
+		t.Fatalf("item path = %q, want %q (install location)", item.Path, installDir)
+	}
+	if item.Rule != PlannedClassPortableDirectoryRemoval {
+		t.Fatalf("item rule = %q, want %q", item.Rule, PlannedClassPortableDirectoryRemoval)
+	}
+	if item.PlannedAction != ActionPortableRemoval {
+		t.Fatalf("item planned action = %q, want %q", item.PlannedAction, ActionPortableRemoval)
+	}
+	if item.Action != ActionPortableRemoval {
+		t.Fatalf("item action = %q, want %q", item.Action, ActionPortableRemoval)
+	}
+	if item.Result != ResultUninstalled {
+		t.Fatalf("item result = %q, want %q", item.Result, ResultUninstalled)
+	}
+}
+
+// TestExecutePortableRemovalRecordsHistoryWhenNotAuthorized verifies that
+// history records the skip reason when portable removal is not authorized.
+// PlannedAction is still portable_removal (what was planned), while Action is
+// skipped and the skip reason is recorded.
+func TestExecutePortableRemovalRecordsHistoryWhenNotAuthorized(t *testing.T) {
+	installDir := mkdirTempLeftover(t, "HistoryPortable-Skip")
+	stubDiscovery(t, []ApplicationEvidence{{
+		Name:            "History Portable Skip App",
+		InstallLocation: installDir,
+		Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
+	}})
+	remover := &fakePermanentRemover{}
+	recorder := &fakeHistoryRecorder{}
+
+	Execute(context.Background(), ExecuteOptions{
+		Selection:        []string{"History Portable Skip App"},
+		PermanentRemover: remover,
+		Validator:        pathsafe.NewValidator(nil),
+		AllowPermanent:   false,
+		HistoryRecorder:  recorder,
+	})
+
+	if len(recorder.sessions) != 1 {
+		t.Fatalf("history sessions = %d, want 1", len(recorder.sessions))
+	}
+	items := recorder.sessions[0].Items
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1", len(items))
+	}
+	item := items[0]
+	if item.PlannedAction != ActionPortableRemoval {
+		t.Fatalf("item planned action = %q, want %q (planned was portable removal)", item.PlannedAction, ActionPortableRemoval)
+	}
+	if item.Action != ActionSkipped {
+		t.Fatalf("item action = %q, want %q (skipped because not authorized)", item.Action, ActionSkipped)
+	}
+	if item.Result != ResultSkipped {
+		t.Fatalf("item result = %q, want %q", item.Result, ResultSkipped)
+	}
+	if item.SkippedReason == nil || item.SkippedReason.Code != SkipPortableRemovalNotAuthorized {
+		t.Fatalf("item skipped reason = %#v, want %q", item.SkippedReason, SkipPortableRemovalNotAuthorized)
+	}
+}
+
+// TestExecutePortableRemovalSkipsRunningAppWhenStopNotAuthorized verifies that
+// a running portable app is skipped when process stopping is not authorized,
+// even when --allow-permanent is present. Foal does not remove a locked install
+// tree without explicit process-stop authorization.
+func TestExecutePortableRemovalSkipsRunningAppWhenStopNotAuthorized(t *testing.T) {
+	installDir := mkdirTempLeftover(t, "RunningPortable")
+	stubDiscovery(t, []ApplicationEvidence{{
+		Name:            "Running Portable App",
+		InstallLocation: installDir,
+		Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
+	}})
+	remover := &fakePermanentRemover{}
+	detector := fakeProcessDetector{
+		states: map[string]ProcessState{
+			"Running Portable App": {State: ProcessStateRunning, Message: "portable.exe"},
+		},
+	}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:        []string{"Running Portable App"},
+		PermanentRemover: remover,
+		ProcessDetector:  detector,
+		Validator:        pathsafe.NewValidator(nil),
+		AllowPermanent:   true,
+		// AllowStopProcesses intentionally false.
+	})
+
+	if len(remover.calls) != 0 {
+		t.Fatalf("permanent remover calls = %d, want 0 (running app must not be removed without stop auth)", len(remover.calls))
+	}
+	app := result.Applications[0]
+	if app.Result != ResultSkipped {
+		t.Fatalf("result = %q, want %q", app.Result, ResultSkipped)
+	}
+	if app.SkippedReason != SkipProcessRunningStopNotAuthorized {
+		t.Fatalf("skipped reason = %q, want %q", app.SkippedReason, SkipProcessRunningStopNotAuthorized)
+	}
+}
+
+// TestExecutePortableRemovalFailedRecordsPartialRisk verifies that a failed
+// permanent removal is recorded as failed with the stable
+// portable_removal_failed reason. Mutation may have begun before the error, so
+// the outcome warns about partial deletion.
+func TestExecutePortableRemovalFailedRecordsPartialRisk(t *testing.T) {
+	installDir := mkdirTempLeftover(t, "FailedPortable")
+	stubDiscovery(t, []ApplicationEvidence{{
+		Name:            "Failed Portable App",
+		InstallLocation: installDir,
+		Sources:         []string{"windows_registry_uninstall_keys:HKCU"},
+	}})
+	remover := &fakePermanentRemover{err: errors.New("permission denied")}
+
+	result := Execute(context.Background(), ExecuteOptions{
+		Selection:        []string{"Failed Portable App"},
+		PermanentRemover: remover,
+		Validator:        pathsafe.NewValidator(nil),
+		AllowPermanent:   true,
+	})
+
+	app := result.Applications[0]
+	if app.Result != ResultFailed {
+		t.Fatalf("result = %q, want %q", app.Result, ResultFailed)
+	}
+	if app.Action != ActionPortableRemoval {
+		t.Fatalf("action = %q, want %q (attempted portable removal)", app.Action, ActionPortableRemoval)
+	}
+	if app.SkippedReason != ReasonPortableRemovalFailed {
+		t.Fatalf("skipped reason = %q, want %q", app.SkippedReason, ReasonPortableRemovalFailed)
+	}
+	if !strings.Contains(app.Detail, "mutation may have begun") {
+		t.Fatalf("detail = %q, want partial-risk warning (mutation may have begun)", app.Detail)
+	}
+	if result.Totals.FailedCount != 1 || result.Totals.UninstalledCount != 0 {
+		t.Fatalf("totals = %#v, want 1 failed 0 uninstalled", result.Totals)
 	}
 }
 

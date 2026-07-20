@@ -305,6 +305,7 @@ func TestHelpDocumentsUninstallExecuteAndStopProcesses(t *testing.T) {
 		"--execute",
 		"--select",
 		"--allow-stop-processes",
+		"--allow-permanent",
 		"Leftover deletion uses the Recycle Bin",
 	} {
 		if !strings.Contains(out, want) {
@@ -350,5 +351,58 @@ func TestUninstallExecuteDoesNotWireElevationPortByDefault(t *testing.T) {
 	}
 	if captured.ElevationPort != nil {
 		t.Fatal("ElevationPort = non-nil, want nil (CLI must not wire a real UAC port)")
+	}
+}
+
+// TestUninstallExecuteWiresAllowPermanentFlag verifies the CLI wires
+// --allow-permanent into ExecuteOptions.AllowPermanent so portable directory
+// removal authorization reaches Execute. This is the authorization-split
+// contract: --allow-permanent is separate from --execute.
+func TestUninstallExecuteWiresAllowPermanentFlag(t *testing.T) {
+	disableHistoryRecording(t)
+	original := executeUninstall
+	var captured uninstall.ExecuteOptions
+	executeUninstall = func(_ context.Context, opts uninstall.ExecuteOptions) uninstall.ExecuteResult {
+		captured = opts
+		return uninstall.ExecuteResult{
+			Status: uninstall.StatusExecuteOK,
+			Mode:   uninstall.ModeExecute,
+		}
+	}
+	t.Cleanup(func() { executeUninstall = original })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"uninstall", "--execute", "--allow-permanent", "--select", "App", "--json"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d stderr=%q", code, stderr.String())
+	}
+	if !captured.AllowPermanent {
+		t.Fatal("AllowPermanent = false, want true (wired from --allow-permanent)")
+	}
+}
+
+// TestUninstallExecuteDoesNotSetAllowPermanentByDefault verifies that without
+// --allow-permanent, ExecuteOptions.AllowPermanent is false. Portable-class
+// apps are skipped and nothing is permanently deleted.
+func TestUninstallExecuteDoesNotSetAllowPermanentByDefault(t *testing.T) {
+	disableHistoryRecording(t)
+	original := executeUninstall
+	var captured uninstall.ExecuteOptions
+	executeUninstall = func(_ context.Context, opts uninstall.ExecuteOptions) uninstall.ExecuteResult {
+		captured = opts
+		return uninstall.ExecuteResult{
+			Status: uninstall.StatusExecuteOK,
+			Mode:   uninstall.ModeExecute,
+		}
+	}
+	t.Cleanup(func() { executeUninstall = original })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"uninstall", "--execute", "--select", "App", "--json"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("exit = %d stderr=%q", code, stderr.String())
+	}
+	if captured.AllowPermanent {
+		t.Fatal("AllowPermanent = true, want false (default off; separate authorization from --execute)")
 	}
 }
