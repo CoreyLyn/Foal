@@ -9,7 +9,6 @@ import (
 
 	"github.com/CoreyLyn/Foal/internal/history"
 	"github.com/CoreyLyn/Foal/internal/status"
-	"github.com/CoreyLyn/Foal/internal/uninstall"
 )
 
 func openViewer(t *testing.T, downs int) (rootModel, tea.Cmd) {
@@ -36,55 +35,6 @@ func loadViewer(t *testing.T, downs int) rootModel {
 	}
 	next, _ := model.Update(loaded)
 	return next.(rootModel)
-}
-
-func TestUninstallViewerRendersPreviewOnlyReport(t *testing.T) {
-	original := reviewUninstall
-	reviewUninstall = func() uninstall.Result {
-		return uninstall.Result{
-			Status: "preview",
-			Applications: []uninstall.Application{{
-				Name:       "Registry App",
-				Version:    "2.4.6",
-				Publisher:  "Registry Publisher",
-				Evidence:   []string{"windows_registry_uninstall_keys:HKLM64"},
-				Confidence: "medium",
-				Ownership:  "unknown",
-			}},
-			Execution: uninstall.ExecutionPolicy{
-				Allowed: false,
-				Actions: []string{},
-				Reason:  "uninstall is preview-only; Foal does not execute uninstallers, stop processes, or delete leftovers",
-			},
-		}
-	}
-	t.Cleanup(func() { reviewUninstall = original })
-
-	model, cmd := openViewer(t, 1)
-	if !strings.Contains(model.content(), "Loading uninstall view...") {
-		t.Fatalf("uninstall view should show a loading state first:\n%s", model.content())
-	}
-	loaded := cmd().(viewerLoadedMsg)
-	next, _ := model.Update(loaded)
-	model = next.(rootModel)
-
-	content := model.content()
-	for _, want := range []string{
-		"Uninstall preview TUI",
-		"Preview-only review; nothing is executed or deleted",
-		"Registry App",
-		"uninstall is preview-only; Foal does not execute uninstallers, stop processes, or delete leftovers",
-		"This view is read-only; no actions are executed.",
-	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("content missing %q:\n%s", want, content)
-		}
-	}
-	for _, forbidden := range []string{"Run uninstaller", "Stop process", "Delete leftover", "Execution complete"} {
-		if strings.Contains(content, forbidden) {
-			t.Fatalf("content contains destructive wording %q:\n%s", forbidden, content)
-		}
-	}
 }
 
 func TestStatusViewerRendersSnapshot(t *testing.T) {

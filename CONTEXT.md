@@ -302,7 +302,7 @@ The no-argument `foal` behavior in an interactive terminal, launching the Foal m
 _Avoid_: blocking non-TTY scripts, replacing help semantics everywhere, implicit command execution
 
 **Main menu command entries**:
-Top-level Foal main menu items that expose the command map, where Clean opens its interactive preview and confirmed-action flow, Uninstall opens review and (when execution is enabled) multi-select confirmed uninstall through shared Uninstall execution, and Status, History, and Analyze remain read-only views (Analyze via Command viewer over the Analyze human report / read model). Until Uninstall execution ships, Uninstall stays a read-only viewer over the preview result.
+Top-level Foal main menu items that expose the command map, where Clean opens its interactive preview and confirmed-action flow, Uninstall opens multi-select confirmed uninstall through shared Uninstall execution, and Status, History, and Analyze remain read-only views (Analyze via Command viewer over the Analyze human report / read model). The Uninstall TUI is an adapter only: it collects multi-select app names, one confirmation that discloses official vs portable plans, confirmed leftover scope, process-stop opt-in, permanent authorization, and admin-need grouping, then calls the same shared Uninstall Execute path as the CLI; it owns no uninstaller launch, path safety, Protection, elevation, or deletion logic.
 _Avoid_: pretending every command has a completed TUI, implicit execution, hiding unavailable capability, Analyze as a cleanup or purge surface
 
 **Command viewer**:
