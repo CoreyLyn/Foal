@@ -290,11 +290,11 @@ A shared representation of clean preview sections, candidates, skipped-by-defaul
 _Avoid_: CLI string builder as model, TUI-owned cleanup model
 
 **TUI review surface**:
-The interactive Foal interface for browsing existing command read models, comparing preview sections, navigating review evidence, and, for Clean only, orchestrating an explicitly confirmed action through the shared Clean execution path without owning cleanup or path-safety decisions.
-_Avoid_: TUI-owned cleanup engine, replacement command path, implicit execution, uninstall execution
+The interactive Foal interface for browsing existing command read models, comparing preview sections, navigating review evidence, and, for Clean and Uninstall, orchestrating an explicitly confirmed action through the shared command execution path without owning cleanup, uninstall, or path-safety decisions.
+_Avoid_: TUI-owned cleanup engine, TUI-owned uninstaller runner, replacement command path, implicit execution
 
 **Foal main menu**:
-The top-level interactive TUI entry that appears when a user explicitly starts Foal's interactive mode, offering command navigation for clean, uninstall, analyze, status, and future read-only views while preserving each command's existing CLI and JSON contract.
+The top-level interactive TUI entry that appears when a user explicitly starts Foal's interactive mode, offering command navigation for clean, uninstall, analyze, status, and related views while preserving each command's existing CLI and JSON contract.
 _Avoid_: default execution hub, hidden command behavior change, feature-parity clone menu
 
 **Interactive default entry**:
@@ -302,7 +302,7 @@ The no-argument `foal` behavior in an interactive terminal, launching the Foal m
 _Avoid_: blocking non-TTY scripts, replacing help semantics everywhere, implicit command execution
 
 **Main menu command entries**:
-Top-level Foal main menu items that expose the implemented command map, where Clean opens its interactive preview and confirmed-action flow, and Uninstall, Status, History, and Analyze open read-only TUI views (Analyze via Command viewer over the Analyze human report / read model). Future extensions may remain placeholders until designed.
+Top-level Foal main menu items that expose the command map, where Clean opens its interactive preview and confirmed-action flow, Uninstall opens review and (when execution is enabled) multi-select confirmed uninstall through shared Uninstall execution, and Status, History, and Analyze remain read-only views (Analyze via Command viewer over the Analyze human report / read model). Until Uninstall execution ships, Uninstall stays a read-only viewer over the preview result.
 _Avoid_: pretending every command has a completed TUI, implicit execution, hiding unavailable capability, Analyze as a cleanup or purge surface
 
 **Command viewer**:
@@ -378,17 +378,41 @@ A four-stage TUI interaction boundary (eager category-first preview → exact se
 _Avoid_: TUI-owned execution engine, implicit cleanup, browsing-as-operation history noise, non-Clean execution, deferred retry documented as current
 
 **Uninstall preview report**:
-A human-readable presentation surface rendered directly over the uninstall preview read model, mirroring the Mole-inspired report style while keeping uninstall preview-only and read-only.
-_Avoid_: uninstall execution plan, uninstall manifest, leftover deletion list
+A human-readable presentation surface rendered directly over the uninstall preview read model, mirroring the Mole-inspired report style for dry-run and review before any mutation.
+_Avoid_: silent execution log, Mole for Windows parity claim
 
 **Possible leftovers**:
-Filesystem paths Foal confidently associates with one discovered, still-installed application (app-owned, high confidence) that would likely remain after an uninstall, surfaced for read-only review only. Lower-confidence findings are split off into shared-state concerns or unknown state rather than reported here.
-_Avoid_: deletion candidate, orphan residue of an already-removed application, implying the application is already gone
+Filesystem paths Foal confidently associates with one discovered, still-installed application (app-owned, high confidence) that would likely remain after an uninstall. They are the only leftover class that may enter a Confirmed leftover path set under Uninstall execution; shared-state and unknown findings stay out.
+_Avoid_: orphan residue of an already-removed application, automatic deep-scan leftovers, implying the application is already gone
 
 **Orphaned residue**:
-Filesystem paths that look like application data but are not tied to any currently discovered installed application, surfaced as low-confidence read-only review clues unless a future explicit rule proves stronger ownership.
-_Avoid_: possible leftovers, deletion candidate, app-owned footprint, safe-to-clean residue
+Filesystem paths that look like application data but are not tied to any currently discovered installed application, surfaced as low-confidence read-only review clues and owned by Clean-side or review surfaces—not by Uninstall execution.
+_Avoid_: possible leftovers, uninstall execution target, app-owned footprint, safe-to-clean residue
 
 **Not-inspected state**:
 A report state asserting that Foal did not examine a discovery category at all, kept distinct from an inspected-but-empty result so the report never implies an examination that did not happen.
 _Avoid_: none found, no leftovers, empty result
+
+**Uninstall execution**:
+The confirmed mutation path for selected still-installed applications: invoke each app's Official uninstaller when available (or Portable directory removal when eligible), optionally stop processes only with explicit authorization, then remove only revalidated members of the Confirmed leftover path set under Protection rules and History recording.
+_Avoid_: preview-only forever, Clean category, orphan bulk delete, TUI-owned uninstaller engine
+
+**Official uninstaller invocation**:
+Running a registry-advertised uninstall command for a traditional desktop application, preferring a quiet uninstall string when present and falling back to the interactive uninstaller when quiet fails or is absent.
+_Avoid_: deleting Program Files as the primary uninstall mechanism, package-manager uninstall as the first-slice default
+
+**Portable directory removal**:
+An exceptional uninstall path used only when no uninstall command exists and a trusted install location is known, requiring explicit permanent-deletion authorization and never used as a silent fallback after a failed official uninstaller in the first execution slice.
+_Avoid_: force removal of broken apps, InstallLocation guess without evidence, Recycle Bin for whole install trees by default
+
+**Confirmed leftover path set**:
+The frozen upper bound of high-confidence Possible leftover paths disclosed at Uninstall confirmation; after a successful Official uninstaller (or eligible Portable directory removal), Foal may delete only a revalidated subset of that set and must never add paths that were not confirmed.
+_Avoid_: post-uninstall deep rescan expansion, orphaned residue inclusion, registry leftover purge
+
+**Uninstall hard exclusion**:
+An application Foal never offers for Uninstall execution (including Foal itself and a small fixed denylist), distinct from discovery filters that hide system components from the install list.
+_Avoid_: user Protection path, optional skip, soft warning only
+
+**Uninstall elevation exception**:
+The product rule that Uninstall execution may request Windows administrator consent (UAC) when a selected app needs it, while Clean, Purge, and other commands remain non-elevating and report permission failures as skips.
+_Avoid_: automatic elevation for Clean, silent privilege escalation, product-wide elevation default
