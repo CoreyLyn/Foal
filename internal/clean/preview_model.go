@@ -36,9 +36,9 @@ type PreviewReadModel struct {
 // Clean TUI. Candidate paths remain in the existing preview collections and
 // are never part of selection state.
 type PreviewOptInCategory struct {
-	Identifier       string
-	Label            string
-	ReportCategory   ReportCategory
+	Identifier     string
+	Label          string
+	ReportCategory ReportCategory
 	// PlannedAction is the catalog-owned deletion action for this opt-in category.
 	PlannedAction    DeletionAction
 	Selected         bool
@@ -117,6 +117,7 @@ const previewReportSectionEntryLimit = 10
 
 const ReviewSuggestionSafetyNote = "Clearing a tool cache while the tool is installing or building can disrupt that operation. Confirm the tool is idle first."
 const administratorOnlyCacheBoundaryNotice = "Permission boundary: administrator-only caches such as SoftwareDistribution and Delivery Optimization are excluded from Opportunity discovery. Foal will not request elevation automatically."
+
 // uvCacheOptInImpactNotice is shown when uv-cache is an Opt-in candidate. uv
 // rebuilds disposable tool environments and re-downloads dependencies after a
 // cache reclaim; Foal must not present this as zero-impact cleanup. Upstream
@@ -798,25 +799,7 @@ func browserReportLines(model PreviewReadModel, opts PreviewReportCategoryOption
 }
 
 func developerToolReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions) []string {
-	var lines []string
-	devOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
-		return categoryReportGroup(normalizedOpportunityCategory(opportunity.Category)) == ReportCategoryDeveloperTools
-	})
-	if len(devOpportunities) > 0 {
-		lines = append(lines, fmt.Sprintf("  Skipped by default: %d developer-tool opportunity item(s)", len(devOpportunities)+omitted))
-		lines = append(lines, opportunityLines(devOpportunities, opts)...)
-		if omitted > 0 {
-			lines = append(lines, omittedLine(omitted, model.DetailedListPath))
-		}
-	}
-	if opts.IncludeIncompleteInspections {
-		for _, incomplete := range model.IncompleteOpportunityInspections {
-			if categoryReportGroup(normalizedOpportunityCategory(incomplete.Category)) != ReportCategoryDeveloperTools {
-				continue
-			}
-			lines = append(lines, incompleteInspectionLine(incomplete, opts))
-		}
-	}
+	lines := categorizedOpportunityReportLines(model, opts, ReportCategoryDeveloperTools, "developer-tool")
 	if len(model.ReviewSuggestions) == 0 {
 		return lines
 	}
@@ -848,20 +831,29 @@ func developerToolReportLines(model PreviewReadModel, opts PreviewReportCategory
 // application caches such as obsidian_cache). It mirrors developerToolReportLines
 // without Review suggestions: Applications categories have no tool-query probe.
 func applicationReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions) []string {
+	return categorizedOpportunityReportLines(model, opts, ReportCategoryApplications, "application")
+}
+
+func categorizedOpportunityReportLines(
+	model PreviewReadModel,
+	opts PreviewReportCategoryOptions,
+	reportCategory ReportCategory,
+	opportunityKind string,
+) []string {
 	var lines []string
-	appOpportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
-		return categoryReportGroup(normalizedOpportunityCategory(opportunity.Category)) == ReportCategoryApplications
+	opportunities, omitted := categorizedOpportunities(model.Opportunities, opts.EntryLimit, func(opportunity Opportunity) bool {
+		return categoryReportGroup(normalizedOpportunityCategory(opportunity.Category)) == reportCategory
 	})
-	if len(appOpportunities) > 0 {
-		lines = append(lines, fmt.Sprintf("  Skipped by default: %d application opportunity item(s)", len(appOpportunities)+omitted))
-		lines = append(lines, opportunityLines(appOpportunities, opts)...)
+	if len(opportunities) > 0 {
+		lines = append(lines, fmt.Sprintf("  Skipped by default: %d %s opportunity item(s)", len(opportunities)+omitted, opportunityKind))
+		lines = append(lines, opportunityLines(opportunities, opts)...)
 		if omitted > 0 {
 			lines = append(lines, omittedLine(omitted, model.DetailedListPath))
 		}
 	}
 	if opts.IncludeIncompleteInspections {
 		for _, incomplete := range model.IncompleteOpportunityInspections {
-			if categoryReportGroup(normalizedOpportunityCategory(incomplete.Category)) != ReportCategoryApplications {
+			if categoryReportGroup(normalizedOpportunityCategory(incomplete.Category)) != reportCategory {
 				continue
 			}
 			lines = append(lines, incompleteInspectionLine(incomplete, opts))

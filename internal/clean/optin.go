@@ -353,15 +353,21 @@ func resolveApplicationCacheCategory(ctx context.Context, opts Options, category
 	if !ok {
 		return
 	}
-	if roaming := applicationCacheRoamingAppDataDir(opts.ApplicationCacheDiscoveryOptions); roaming != "" {
-		userDataRoot := applicationCacheUserDataRoot(roaming, policy)
-		if opts.Validator.IsUserProtected(userDataRoot) {
-			core.SuppressedProtectionPaths = append(
-				core.SuppressedProtectionPaths,
-				applicationCacheProtectedRulePaths(userDataRoot, opts.Validator)...,
-			)
-			return
-		}
+	preflight := preflightApplicationCacheRoot(
+		opts.ApplicationCacheDiscoveryOptions,
+		policy,
+		opts.Validator,
+		applicationCacheStat(opts.ApplicationCacheDiscoveryOptions),
+	)
+	if preflight.absent {
+		return
+	}
+	if len(preflight.suppressedProtectionPaths) > 0 {
+		core.SuppressedProtectionPaths = append(
+			core.SuppressedProtectionPaths,
+			preflight.suppressedProtectionPaths...,
+		)
+		return
 	}
 
 	gate := runningGate{detect: opts.DetectRunningApplications}

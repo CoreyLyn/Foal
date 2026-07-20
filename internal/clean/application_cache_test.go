@@ -1822,6 +1822,50 @@ func TestDryRunObsidianMissingRootIsSilentAbsence(t *testing.T) {
 	}
 }
 
+func TestDryRunMissingApplicationCacheRootDoesNotProjectRunningStateOrDiagnostic(t *testing.T) {
+	tests := []struct {
+		name              string
+		application       string
+		state             clean.RunningApplicationStatus
+		roamingAppDataDir string
+	}{
+		{name: "running Trae", application: clean.ApplicationTrae, state: clean.RunningApplicationStateRunning},
+		{name: "unknown Trae", application: clean.ApplicationTrae, state: clean.RunningApplicationStateUnknown},
+		{name: "running Obsidian", application: clean.ApplicationObsidian, state: clean.RunningApplicationStateRunning},
+		{name: "unknown Obsidian", application: clean.ApplicationObsidian, state: clean.RunningApplicationStateUnknown},
+		{name: "blank Roaming AppData", application: clean.ApplicationObsidian, state: clean.RunningApplicationStateRunning, roamingAppDataDir: "   "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			roamingAppDataDir := tt.roamingAppDataDir
+			if roamingAppDataDir == "" {
+				roamingAppDataDir = t.TempDir()
+			}
+			result := clean.DryRun(context.Background(), clean.Options{
+				ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{RoamingAppDataDir: roamingAppDataDir},
+				DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+					return []clean.RunningApplicationState{{
+						Application: tt.application,
+						State:       tt.state,
+						Message:     "snapshot failed",
+					}}
+				},
+				DiscoverOpportunities:     noUserTempOpportunities,
+				DiscoverReviewSuggestions: noReviewSuggestions,
+				Rules:                     []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+			})
+
+			if len(result.RunningApplications) != 0 {
+				t.Fatalf("running applications = %#v, want silent absence", result.RunningApplications)
+			}
+			if len(result.Errors) != 0 {
+				t.Fatalf("errors = %#v, want silent absence", result.Errors)
+			}
+		})
+	}
+}
+
 func TestDryRunObsidianRunningSkipsWithoutMeasuring(t *testing.T) {
 	roaming := t.TempDir()
 	writeObsidianRoot(t, roaming, map[string]string{"Cache": "cache", "CachedData": "data"})
@@ -1993,6 +2037,115 @@ func TestExecuteOptInObsidianCacheCleansWhenIdle(t *testing.T) {
 	}
 	if !seenHistory {
 		t.Fatalf("history items = %#v, want Obsidian paths", recorder.items)
+	}
+}
+
+func TestExecuteNewApplicationCacheCategoriesRecordPermanentFailureAndCancellation(t *testing.T) {
+	categories := []struct {
+		name        string
+		category    string
+		application string
+		createRoot  func(*testing.T, string) string
+	}{
+		{
+			name:        "Trae",
+			category:    clean.OpportunityCategoryTraeCache,
+			application: clean.ApplicationTrae,
+			createRoot: func(t *testing.T, roaming string) string {
+				return writeTraeRoot(t, roaming, map[string]string{"Cache": "cache-data"})
+			},
+		},
+		{
+			name:        "Obsidian",
+			category:    clean.OpportunityCategoryObsidianCache,
+			application: clean.ApplicationObsidian,
+			createRoot: func(t *testing.T, roaming string) string {
+				return writeObsidianRoot(t, roaming, map[string]string{"Cache": "cache-data"})
+			},
+		},
+	}
+
+	for _, category := range categories {
+		category := category
+		for _, outcome := range []string{"failure", "cancellation"} {
+			outcome := outcome
+			t.Run(category.name+"/"+outcome, func(t *testing.T) {
+				roaming := t.TempDir()
+				cachePath := filepath.Join(category.createRoot(t, roaming), "Cache")
+				recycle := &recordingRecycleBinAdapter{}
+				recorder := &recordingHistoryRecorder{}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				removeCalls := 0
+				remover := permanentRemoverFunc(func(context.Context, string) error {
+					removeCalls++
+					if outcome == "cancellation" {
+						cancel()
+						return context.Canceled
+					}
+					return os.ErrPermission
+				})
+
+				result := executeCleanWithSafeCapacity(ctx, clean.Options{
+					Rules:                  []clean.Rule{{ID: "disabled", DefaultEnabled: false}},
+					RecycleBinAdapter:      recycle,
+					PermanentRemover:       remover,
+					AllowPermanentDeletion: true,
+					HistoryRecorder:        recorder,
+					OptIn:                  []string{category.category},
+					ApplicationCacheDiscoveryOptions: clean.ApplicationCacheDiscoveryOptions{
+						RoamingAppDataDir: roaming,
+					},
+					DetectRunningApplications: func(context.Context) []clean.RunningApplicationState {
+						return []clean.RunningApplicationState{{
+							Application: category.application,
+							State:       clean.RunningApplicationStateIdle,
+						}}
+					},
+				})
+
+				if removeCalls != 1 {
+					t.Fatalf("permanent remover calls = %d, want 1", removeCalls)
+				}
+				if len(recycle.paths) != 0 {
+					t.Fatalf("permanent outcome fell back to Recycle Bin: %v", recycle.paths)
+				}
+				if result.Totals.PermanentlyDeletedBytes != 0 || result.Totals.RecycleBinMovedBytes != 0 || result.Totals.AffectedBytes != 0 {
+					t.Fatalf("unsuccessful permanent outcome contributed action bytes: %#v", result.Totals)
+				}
+				if _, err := os.Lstat(cachePath); err != nil {
+					t.Fatalf("unsuccessful permanent outcome removed cache path: %v", err)
+				}
+
+				if len(recorder.sessions) != 1 || len(recorder.items) != 1 {
+					t.Fatalf("history = sessions %#v items %#v, want one item", recorder.sessions, recorder.items)
+				}
+				historyItem := recorder.items[0]
+				if historyItem.Path != cachePath || historyItem.Rule != category.category || historyItem.PlannedAction != string(clean.DeletionActionDeletePermanently) {
+					t.Fatalf("history identity/action = %#v", historyItem)
+				}
+
+				if outcome == "failure" {
+					if len(result.Failed) != 1 || result.Failed[0].Reason.Code != "permanent_delete_failed" {
+						t.Fatalf("failed = %#v", result.Failed)
+					}
+					if result.Failed[0].Rule != category.category || result.Failed[0].Action != string(clean.DeletionActionDeletePermanently) {
+						t.Fatalf("failed identity/action = %#v", result.Failed[0])
+					}
+					if historyItem.Result != "failed" || historyItem.Action != string(clean.DeletionActionDeletePermanently) || historyItem.Error == nil || historyItem.Error.Code != "permanent_delete_failed" {
+						t.Fatalf("failed history item = %#v", historyItem)
+					}
+					return
+				}
+
+				if len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "context_canceled" || result.Skipped[0].Rule != category.category {
+					t.Fatalf("canceled skips = %#v", result.Skipped)
+				}
+				if historyItem.Result != "skipped" || historyItem.SkippedReason == nil || historyItem.SkippedReason.Code != "context_canceled" {
+					t.Fatalf("canceled history item = %#v", historyItem)
+				}
+			})
+		}
 	}
 }
 

@@ -58,6 +58,9 @@ type ApplicationCacheDiscoveryOptions struct {
 	// RoamingAppDataDir overrides %APPDATA% for tests. Empty uses the process
 	// environment; blank/missing yields silent absence of all roots.
 	RoamingAppDataDir string
+	// stat stays inside the existing Application cache discovery seam so package
+	// tests can keep root preflight deterministic without touching the real fs.
+	stat func(string) (os.FileInfo, error)
 }
 
 // applicationCachePolicy is the private fixed-allowlist policy for one idle
@@ -162,7 +165,7 @@ func discoverApplicationCaches(
 	validator pathsafe.Validator,
 ) applicationCacheDiscoveryResult {
 	return discoverApplicationCachesWithDeps(ctx, policyID, opts, validator, applicationCacheDiscoveryDependencies{
-		stat:    os.Lstat,
+		stat:    applicationCacheStat(opts),
 		walkDir: filepath.WalkDir,
 	})
 }
@@ -193,28 +196,20 @@ func discoverApplicationCachesWithDeps(
 		deps.walkDir = filepath.WalkDir
 	}
 
-	roaming := opts.RoamingAppDataDir
-	if roaming == "" {
-		roaming = os.Getenv("APPDATA")
-	}
-	if strings.TrimSpace(roaming) == "" {
+	preflight := preflightApplicationCacheRoot(opts, policy, validator, deps.stat)
+	if preflight.absent {
 		return applicationCacheDiscoveryResult{}
 	}
-
-	userDataRoot := applicationCacheUserDataRoot(roaming, policy)
-	// Only the user-data base itself suppresses every root. A rule on one
-	// allowlisted child is handled per root so siblings stay independent.
-	if validator.IsUserProtected(userDataRoot) {
+	if len(preflight.suppressedProtectionPaths) > 0 {
 		return applicationCacheDiscoveryResult{
-			suppressedProtectionPaths: applicationCacheProtectedRulePaths(userDataRoot, validator),
+			suppressedProtectionPaths: preflight.suppressedProtectionPaths,
 		}
 	}
-	if _, err := deps.stat(userDataRoot); errors.Is(err, fs.ErrNotExist) {
-		return applicationCacheDiscoveryResult{}
-	} else if err != nil {
-		incomplete := incompleteInspection(policy.category, userDataRoot, classifyError(err), err.Error())
+	if preflight.err != nil {
+		incomplete := incompleteInspection(policy.category, preflight.userDataRoot, classifyError(preflight.err), preflight.err.Error())
 		return applicationCacheDiscoveryResult{incompletes: []IncompleteOpportunityInspection{incomplete}}
 	}
+	userDataRoot := preflight.userDataRoot
 
 	result := applicationCacheDiscoveryResult{
 		opportunities: []Opportunity{},
@@ -278,6 +273,42 @@ func applicationCacheUserDataRoot(roamingAppDataDir string, policy applicationCa
 	return filepath.Join(parts...)
 }
 
+type applicationCacheRootPreflight struct {
+	userDataRoot              string
+	absent                    bool
+	suppressedProtectionPaths []string
+	err                       error
+}
+
+func preflightApplicationCacheRoot(
+	opts ApplicationCacheDiscoveryOptions,
+	policy applicationCachePolicy,
+	validator pathsafe.Validator,
+	stat func(string) (os.FileInfo, error),
+) applicationCacheRootPreflight {
+	roaming := applicationCacheRoamingAppDataDir(opts)
+	if roaming == "" {
+		return applicationCacheRootPreflight{absent: true}
+	}
+	userDataRoot := applicationCacheUserDataRoot(roaming, policy)
+	// Only the user-data base itself suppresses every root. A rule on one
+	// allowlisted child is handled per root so siblings stay independent.
+	if validator.IsUserProtected(userDataRoot) {
+		return applicationCacheRootPreflight{
+			userDataRoot:              userDataRoot,
+			suppressedProtectionPaths: applicationCacheProtectedRulePaths(userDataRoot, validator),
+		}
+	}
+	if stat == nil {
+		stat = os.Lstat
+	}
+	_, err := stat(userDataRoot)
+	if errors.Is(err, fs.ErrNotExist) {
+		return applicationCacheRootPreflight{userDataRoot: userDataRoot, absent: true}
+	}
+	return applicationCacheRootPreflight{userDataRoot: userDataRoot, err: err}
+}
+
 func applicationCacheProtectedRulePaths(target string, validator pathsafe.Validator) []string {
 	root := filepath.Clean(target)
 	var paths []string
@@ -307,9 +338,16 @@ func applicationCachePolicyForCategory(category string) (string, applicationCach
 
 func applicationCacheRoamingAppDataDir(opts ApplicationCacheDiscoveryOptions) string {
 	if opts.RoamingAppDataDir != "" {
-		return opts.RoamingAppDataDir
+		return strings.TrimSpace(opts.RoamingAppDataDir)
 	}
-	return os.Getenv("APPDATA")
+	return strings.TrimSpace(os.Getenv("APPDATA"))
+}
+
+func applicationCacheStat(opts ApplicationCacheDiscoveryOptions) func(string) (os.FileInfo, error) {
+	if opts.stat != nil {
+		return opts.stat
+	}
+	return os.Lstat
 }
 
 // isCachedExtensionVSIXsPath reports whether path is exactly an allowlisted

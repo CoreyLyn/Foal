@@ -188,7 +188,10 @@ func TestDiscoverApplicationCachesBlankAppDataSilent(t *testing.T) {
 	result := discoverApplicationCaches(context.Background(), applicationCachePolicyVSCode, ApplicationCacheDiscoveryOptions{
 		RoamingAppDataDir: "   ",
 	}, pathsafe.Validator{})
-	// Whitespace-only still joins; empty string after trim is silent. Force empty.
+	if len(result.opportunities) != 0 || len(result.incompletes) != 0 {
+		t.Fatalf("blank Roaming AppData should be silent: %#v", result)
+	}
+
 	result = discoverApplicationCaches(context.Background(), applicationCachePolicyVSCode, ApplicationCacheDiscoveryOptions{
 		RoamingAppDataDir: "",
 	}, pathsafe.Validator{})
@@ -373,16 +376,16 @@ func TestGateApplicationCacheIndependentEditorApplications(t *testing.T) {
 
 func TestResolveOptInCandidatesInjectedApplicationCacheDiscovery(t *testing.T) {
 	root := t.TempDir()
-	cachePath := filepath.Join(root, "Cache")
-	if err := os.MkdirAll(cachePath, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(cachePath, "x.bin"), []byte("1234"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	cachePath := filepath.Join(root, "Code", "Cache")
 	discoveryCalls := 0
 	opts := Options{
 		OptIn: []string{OpportunityCategoryVSCodeCache},
+		ApplicationCacheDiscoveryOptions: ApplicationCacheDiscoveryOptions{
+			RoamingAppDataDir: root,
+			stat: func(string) (os.FileInfo, error) {
+				return appCacheFakeInfo{name: "Code", mode: os.ModeDir, mod: time.Now()}, nil
+			},
+		},
 		DetectRunningApplications: func(context.Context) []RunningApplicationState {
 			return []RunningApplicationState{{Application: ApplicationVisualStudioCode, State: RunningApplicationStateIdle}}
 		},
