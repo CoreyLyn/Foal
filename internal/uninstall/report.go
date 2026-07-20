@@ -68,6 +68,11 @@ func renderApplications(builder *strings.Builder, label string, applications []A
 		builder.WriteString("\n")
 		writeField(builder, "version", app.Version)
 		writeField(builder, "publisher", app.Publisher)
+		writeField(builder, "plan", plannedClassLabel(app.PlannedClass))
+		writeField(builder, "plan reason", app.PlannedReason)
+		writeField(builder, "install location", app.InstallLocation)
+		writeField(builder, "quiet uninstall command", app.QuietUninstallCommand)
+		writeField(builder, "interactive uninstall command", app.InteractiveUninstallCommand)
 		writeListField(builder, "evidence", app.Evidence)
 		writeField(builder, "skipped reason", app.SkippedReason)
 	}
@@ -259,4 +264,22 @@ func writeOmittedLine(builder *strings.Builder, count int) {
 		return
 	}
 	builder.WriteString(fmt.Sprintf("  %d omitted. See foal uninstall --json.\n", omitted))
+}
+
+// plannedClassLabel maps a stable planned_class JSON value to the domain term
+// used in CONTEXT.md and ADRs 0026-0028 for the human preview report. An empty
+// class (e.g. a test stub that bypasses ReviewEvidence) renders no field.
+func plannedClassLabel(class string) string {
+	switch class {
+	case PlannedClassOfficialUninstaller:
+		return "Official uninstaller invocation"
+	case PlannedClassPortableDirectoryRemoval:
+		return "Portable directory removal"
+	case PlannedClassNotExecutable:
+		return "Not executable"
+	case PlannedClassHardExclusion:
+		return "Uninstall hard exclusion"
+	default:
+		return ""
+	}
 }

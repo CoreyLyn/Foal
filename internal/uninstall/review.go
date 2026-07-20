@@ -9,10 +9,13 @@ type Evidence struct {
 }
 
 type ApplicationEvidence struct {
-	Name      string
-	Version   string
-	Publisher string
-	Sources   []string
+	Name                        string
+	Version                     string
+	Publisher                   string
+	QuietUninstallCommand       string
+	InteractiveUninstallCommand string
+	InstallLocation             string
+	Sources                     []string
 }
 
 type LeftoverEvidence struct {
@@ -40,13 +43,18 @@ type Result struct {
 }
 
 type Application struct {
-	Name          string   `json:"name"`
-	Version       string   `json:"version,omitempty"`
-	Publisher     string   `json:"publisher,omitempty"`
-	Evidence      []string `json:"evidence"`
-	Confidence    string   `json:"confidence"`
-	Ownership     string   `json:"ownership"`
-	SkippedReason string   `json:"skipped_reason,omitempty"`
+	Name                        string   `json:"name"`
+	Version                     string   `json:"version,omitempty"`
+	Publisher                   string   `json:"publisher,omitempty"`
+	QuietUninstallCommand       string   `json:"quiet_uninstall_command,omitempty"`
+	InteractiveUninstallCommand string   `json:"interactive_uninstall_command,omitempty"`
+	InstallLocation             string   `json:"install_location,omitempty"`
+	PlannedClass                string   `json:"planned_class"`
+	PlannedReason               string   `json:"planned_reason,omitempty"`
+	Evidence                    []string `json:"evidence"`
+	Confidence                  string   `json:"confidence"`
+	Ownership                   string   `json:"ownership"`
+	SkippedReason               string   `json:"skipped_reason,omitempty"`
 }
 
 type EvidenceSource struct {
@@ -160,14 +168,28 @@ func ReviewEvidence(evidence Evidence) Result {
 
 	for _, appEvidence := range evidence.Applications {
 		confidence := applicationConfidence(appEvidence)
-		result.Applications = append(result.Applications, Application{
-			Name:       appEvidence.Name,
-			Version:    appEvidence.Version,
-			Publisher:  appEvidence.Publisher,
-			Evidence:   append([]string{}, appEvidence.Sources...),
-			Confidence: confidence,
-			Ownership:  ownershipForConfidence(confidence),
-		})
+		plannedClass, plannedReason := classifyApplicationPlan(appEvidence)
+		app := Application{
+			Name:          appEvidence.Name,
+			Version:       appEvidence.Version,
+			Publisher:     appEvidence.Publisher,
+			PlannedClass:  plannedClass,
+			PlannedReason: plannedReason,
+			Evidence:      append([]string{}, appEvidence.Sources...),
+			Confidence:    confidence,
+			Ownership:     ownershipForConfidence(confidence),
+		}
+		// Surface uninstall command and install location evidence only for
+		// apps Foal would consider executing. Hard exclusions remain listed
+		// (so the user sees Foal recognized them) but their executable
+		// evidence is suppressed so they are not presented as executable
+		// targets.
+		if plannedClass != PlannedClassHardExclusion {
+			app.QuietUninstallCommand = appEvidence.QuietUninstallCommand
+			app.InteractiveUninstallCommand = appEvidence.InteractiveUninstallCommand
+			app.InstallLocation = appEvidence.InstallLocation
+		}
+		result.Applications = append(result.Applications, app)
 	}
 
 	for _, leftover := range evidence.Leftovers {

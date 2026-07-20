@@ -924,6 +924,76 @@ func TestUninstallJSONReportsRegistryDiscoveredApplications(t *testing.T) {
 	}
 }
 
+func TestUninstallJSONSurfacesPlannedClassAndUninstallEvidence(t *testing.T) {
+	original := reviewUninstall
+	reviewUninstall = func() uninstall.Result {
+		return uninstall.Result{
+			Status: "preview",
+			Applications: []uninstall.Application{{
+				Name:                        "Installer App",
+				QuietUninstallCommand:       `MsiExec.exe /X{A} /qn`,
+				InteractiveUninstallCommand: `MsiExec.exe /X{A}`,
+				InstallLocation:             `C:\Program Files\InstallerApp`,
+				PlannedClass:                uninstall.PlannedClassOfficialUninstaller,
+				PlannedReason:               "registry-advertised uninstall command is available",
+				Evidence:                    []string{"windows_registry_uninstall_keys:HKLM64"},
+				Confidence:                  "medium",
+				Ownership:                   "unknown",
+			}, {
+				Name:          "Foal",
+				PlannedClass:  uninstall.PlannedClassHardExclusion,
+				PlannedReason: "Foal never offers this application for Uninstall execution",
+				Evidence:      []string{"windows_registry_uninstall_keys:HKLM64"},
+				Confidence:    "medium",
+				Ownership:     "unknown",
+			}},
+			EvidenceSources: []uninstall.EvidenceSource{{Source: "windows_registry_uninstall_keys:HKLM64", Status: "reported"}},
+			Execution:       uninstall.ExecutionPolicy{Allowed: false, Actions: []string{}, Reason: "uninstall is preview-only"},
+		}
+	}
+	t.Cleanup(func() { reviewUninstall = original })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"uninstall", "--json"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	apps := result["applications"].([]interface{})
+	if len(apps) != 2 {
+		t.Fatalf("applications = %d, want 2", len(apps))
+	}
+	installer := apps[0].(map[string]interface{})
+	if installer["planned_class"] != "official_uninstaller" {
+		t.Fatalf("installer planned_class = %v, want official_uninstaller", installer["planned_class"])
+	}
+	if installer["quiet_uninstall_command"] != `MsiExec.exe /X{A} /qn` {
+		t.Fatalf("installer quiet_uninstall_command = %v, want the command string", installer["quiet_uninstall_command"])
+	}
+	if installer["interactive_uninstall_command"] != `MsiExec.exe /X{A}` {
+		t.Fatalf("installer interactive_uninstall_command = %v, want the command string", installer["interactive_uninstall_command"])
+	}
+	if installer["install_location"] != `C:\Program Files\InstallerApp` {
+		t.Fatalf("installer install_location = %v, want the path", installer["install_location"])
+	}
+	foal := apps[1].(map[string]interface{})
+	if foal["planned_class"] != "hard_exclusion" {
+		t.Fatalf("Foal planned_class = %v, want hard_exclusion (not presented as executable)", foal["planned_class"])
+	}
+	// Hard exclusion must not surface uninstall command strings as executable
+	// targets even when the registry provided them.
+	if _, present := foal["quiet_uninstall_command"]; present {
+		t.Fatalf("Foal JSON exposes quiet_uninstall_command = %#v, want omitted for hard exclusion", foal["quiet_uninstall_command"])
+	}
+	execution := result["execution"].(map[string]interface{})
+	if execution["allowed"] != false {
+		t.Fatalf("execution.allowed = %v, want false (preview-only)", execution["allowed"])
+	}
+	if actions := execution["actions"].([]interface{}); len(actions) != 0 {
+		t.Fatalf("execution.actions = %#v, want empty (preview-only)", actions)
+	}
+}
+
 func TestUninstallJSONReviewSectionsUsePreviewTerminology(t *testing.T) {
 	original := reviewUninstall
 	reviewUninstall = func() uninstall.Result {
