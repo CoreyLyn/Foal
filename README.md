@@ -1,171 +1,179 @@
 # Foal
 
-Foal is a safe, preview-first cleanup CLI for Windows.
+[![CI](https://github.com/CoreyLyn/Foal/actions/workflows/ci.yml/badge.svg)](https://github.com/CoreyLyn/Foal/actions/workflows/ci.yml)
+[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 
-It is designed for Windows developers and power users who want cleanup, uninstall review, disk analysis, and system snapshots without handing a tool permission to make unexplained destructive changes.
+Foal is a safe, preview-first cleanup CLI for Windows developers and power users.
 
-## Design Principles
+It finds reclaimable space, explains the planned action, and makes destructive work explicit. Foal also provides project-artifact cleanup, disk analysis, system snapshots, operation history, and read-only uninstall review.
 
-- Preview first: cleanup candidates should be inspectable before execution.
-- Rule-driven mixed actions: each cleanup category uses Recycle Bin or permanent deletion as declared by the catalog, never as a fallback.
-- Conservative defaults: default cleanup rules should be easy to explain and low-disagreement.
-- Windows-native safety: protected paths, reparse points, permissions, package managers, and installer ecosystems are first-class design concerns.
-- JSON contracts first: human output can be friendly, but stable JSON output is the automation and TUI contract.
-- No automatic elevation: permission failures should be visible skipped items, not a reason to silently escalate.
+> [!IMPORTANT]
+> Foal is pre-release software. Preview the result before execution and review permanent-deletion selections carefully.
 
-### Permanent deletion
+## Why Foal?
 
-Permanent deletion is an explicit planned action, not a Recycle Bin fallback.
+- **Preview first** — inspect candidates and their planned actions before changing files.
+- **Conservative by default** — broader categories require an explicit CLI opt-in or a disclosed TUI confirmation.
+- **Windows-aware safety** — protected paths, reparse points, permissions, running applications, and Recycle Bin capacity are first-class checks.
+- **No silent elevation** — inaccessible items are reported as skipped; Foal never elevates itself.
+- **Automation-friendly** — JSON is the stable contract shared by the CLI and TUI.
 
-| Planned action | Categories |
-| --- | --- |
-| `delete_permanently` (30) | `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`, `browser_cache`, `vscode_cache`, `cursor_cache`, `vscode_insiders_cache`, `vscodium_cache`, `windsurf_cache`, `trae_cache`, package/build caches (`npm-cache`, `pnpm-cache`, `yarn-cache`, `go-cache`, `go-modcache`, `pip-cache`, `cargo-cache`, `nuget-cache`, `nuget-global-packages`, `corepack-cache`, `uv-cache`, `bun-cache`), `playwright-browsers`, `puppeteer-browsers`, `electron-cache`, `jetbrains-ide-caches`, `visual-studio-caches`, `grok-build-update-residue`, `obsidian_cache` |
-| `move_to_recycle_bin` (6) | `foal_owned_temp_sandboxes` (default), `user_temp`, `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache` |
+Foal is inspired by tools such as Mole, but follows its own Windows-specific safety model rather than pursuing feature parity.
 
-- Dry-run reports the true planned action without authorization.
-- CLI execute requires per-run `--allow-permanent` in addition to `--execute` (and the matching `--opt-in` when using CLI additive opt-in). Without it, permanent candidates are skipped with `permanent_deletion_not_authorized` while Recycle Bin work continues.
-- The Clean TUI starts the default plus all permanent-action categories selected when safely measured (31 rows), leaves the five Recycle Bin opt-ins unselected, discloses permanent deletion in one confirmation, and passes equivalent authorization to shared Clean.
-- Permanent deletion is ordinary filesystem removal only: no secure erasure, shred, free-space wipe, or forensic non-recoverability claim.
+## Install
 
-See [Clean deletion policy](docs/plan/clean-deletion-policy.md) and [ADR 0018](docs/adr/0018-permanent-deletion-is-an-explicit-planned-action.md).
+Download the Windows amd64 or arm64 ZIP from [GitHub Releases](https://github.com/CoreyLyn/Foal/releases), extract `foal.exe`, and place it on your `PATH`.
 
-## Build
+Release archives include SHA-256 checksums and GitHub provenance attestations. Current binaries are not Authenticode-signed; Windows may show an unrecognized-app warning. ARM64 builds remain preview builds until native ARM64 smoke testing is available.
 
-Requires Go 1.25+ on Windows:
+To build from source, install Go 1.25 or later on Windows:
 
 ```powershell
+git clone https://github.com/CoreyLyn/Foal.git
+cd Foal
 go build -o foal.exe ./cmd/foal
-.\foal.exe --help
+.\foal.exe --version
 ```
 
-Versioned releases inject tag and commit via the release pipeline; local builds report `dev`.
+## Quick start
 
-## Implemented Command Shape
+Preview conservative cleanup candidates without deleting anything:
 
 ```powershell
-foal --help
-foal version --json
-foal analyze --json .
-foal clean --dry-run --json
+foal clean --dry-run
+```
+
+Open the interactive TUI:
+
+```powershell
+foal
+```
+
+Run the default cleanup after reviewing the preview:
+
+```powershell
 foal clean --execute
-foal clean --execute --opt-in d3d_shader_cache --allow-permanent
-foal clean --execute --opt-in playwright-browsers --allow-permanent
-foal purge .\my-project
-foal purge --json .\proj-a .\proj-b
-foal purge --execute --allow-permanent .\my-project
+```
+
+Permanent-action categories need explicit per-run authorization:
+
+```powershell
+foal clean --execute --opt-in browser_cache --allow-permanent
+```
+
+For scripts, request structured output:
+
+```powershell
+foal clean --dry-run --json
 foal status --json
 foal history --json
-foal uninstall --json
 ```
 
-`foal version`, `foal --version`, and their `--json` forms report the version, source commit, Go runtime, and target platform without reading or changing user state.
+## Commands
 
-### Clean
+| Command | Behavior |
+| --- | --- |
+| `foal` | Opens the interactive TUI in a terminal. |
+| `foal clean` | Previews or executes catalog-based cleanup. Requires `--dry-run` or `--execute`. |
+| `foal purge <root...>` | Previews or permanently removes allowlisted rebuildable project artifacts under explicit roots. |
+| `foal analyze <path>` | Reports directory totals and top children without changing files. |
+| `foal status` | Reports a read-only Windows and Foal state snapshot. |
+| `foal history` | Reads prior Clean and Purge operation records. |
+| `foal uninstall` | Reviews installed applications and possible residue; never runs uninstallers or deletes leftovers. |
+| `foal version` | Reports version, commit, Go runtime, and target platform. |
 
-`foal clean` requires either `--dry-run` or `--execute`.
+Run `foal --help` for the complete shipped flag surface.
 
-**Dry-run** previews default candidates and reports skipped-by-default Opportunity categories:
+## Cleanup model
 
-- Idle user-temp entries as `user_temp`
-- Existence-observed current-user paths: `crash_dumps`, `windows_error_reporting`, exact-allowlist `explorer_thumbnail_cache` (`thumbcache_*.db` / `iconcache_*.db`) and `inet_cache` (`INetCache\IE`, `INetCache\Low\IE`), `d3d_shader_cache`, `nvidia_dx_cache`, `amd_gpu_shader_caches`, `intel_gpu_shader_cache`
-- Chrome/Edge/Firefox `browser_cache` when the browser is idle before and after complete profile cache inspection
-- Application cache categories when the owning application is idle before and after exact allowlisted root inspection under standard Roaming AppData: VS Code (`vscode_cache` / `Code`), Cursor (`cursor_cache` / `Cursor`), VS Code Insiders (`vscode_insiders_cache` / `Code - Insiders`), VSCodium (`vscodium_cache` / `VSCodium`), Windsurf (`windsurf_cache` / `Windsurf`), and Trae (`trae_cache` / `Trae`) are VS Code-family editors sharing one allowlist under the Developer tools report category; Obsidian (`obsidian_cache` / `obsidian`) is a non-editor Electron app under the Applications report category with a plain-Electron allowlist (`Cache`, `Code Cache`, `GPUCache`, `DawnCache`, `DawnGraphiteCache`, `DawnWebGPUCache`) that excludes `CachedData` and `CachedExtensionVSIXs`
+Every executable Clean category declares exactly one action:
 
-Observed opportunity bytes stay separate from `Potential space`. The Recycle Bin is permanently excluded from opportunity discovery. Developer-tool caches remain Review suggestions by default, or become Opt-in candidates via `--opt-in <name>`, `--opt-in dev-caches`, `--opt-in all`, or Clean TUI selection. Non-editor Application cache categories (currently `obsidian_cache`) are selected via exact name, `--opt-in app-caches`, `--opt-in all`, or Clean TUI selection - never via `dev-caches`; the `app-caches` token expands Applications report-category application caches only. Product-scoped CLI-agent residue categories (currently `grok-build-update-residue`) are selected via exact name, `--opt-in cli-agents`, `--opt-in all`, or Clean TUI selection — never via `dev-caches`. The `cli-agents` token expands independently registered CLI-agent categories only; it is not a mega-category and does not imply all CLI-agent data is cache or safe to delete. Administrator-only caches (SoftwareDistribution, Delivery Optimization) are permission-boundary notices only.
+- `move_to_recycle_bin` for recoverable cleanup.
+- `delete_permanently` for narrowly proven regenerable or re-downloadable content.
 
-**Clean does not discover or delete project artifacts** (`node_modules`, `target`, `dist`, and similar rebuildable project directories) by default or via ordinary Clean `--opt-in` catalog rows. Dry-run may show a presentation-only Review clue pointing at `foal analyze` / `foal purge`. Use [`foal purge`](#purge) for explicit-root project artifact preview and deletion.
+Permanent deletion is never a fallback when a Recycle Bin operation fails. The CLI requires both `--execute` and `--allow-permanent` for permanent work; without authorization, those candidates are skipped while eligible Recycle Bin work can continue. The TUI presents the same actions in one strengthened confirmation.
 
-**Execute** does not run opportunity discovery or browser/application detection by default. It confirms cleanup for freshly scanned, validated default candidates plus any explicitly opted-in categories, using each category's catalog planned action. Permanent categories require `--allow-permanent`. When opting in:
+Foal resolves candidates again, reloads protection rules, runs applicable safety gates, and validates every path immediately before mutation. Recycle Bin work runs before permanent work. Local failures do not silently broaden the cleanup scope.
 
-- `browser_cache` / Application caches: running-application idle-before-and-after gates run fresh
-- Developer caches: paths resolve only from environment variables and default paths (no tool probing at execute)
-- Recycle Bin capacity pre-checks apply only to Recycle Bin work
+Available opt-in groups:
 
-Structured developer-cache highlights:
+| Group | Includes |
+| --- | --- |
+| `dev-caches` | Supported package-manager, build-tool, browser-runtime, IDE, and editor caches. |
+| `app-caches` | Supported non-editor application caches, currently Obsidian. |
+| `cli-agents` | Independently approved product-scoped CLI-agent residue, currently Grok Build updater backups. |
+| `all` | Every executable opt-in category; still subject to safety gates and permanent authorization. |
 
-- `playwright-browsers`: complete versioned installations under the global Playwright root; `PLAYWRIGHT_BROWSERS_PATH=0` yields no candidate; MCP profiles excluded
-- `puppeteer-browsers`: allowlisted product/platform-version installations under `PUPPETEER_CACHE_DIR` or `~\.cache\puppeteer`
-- `electron-cache`: whole root from non-blank `electron_config_cache` or `%LOCALAPPDATA%\electron\Cache`
-- `jetbrains-ide-caches`: exact `caches`/`index` (and Rider `resharper-host`) under supported IntelliJ-platform product-version roots; Local History excluded; independent product idle gates
-- `visual-studio-caches`: exact `ComponentModelCache` under current-user 14.0+ instance hives and shared `Roslyn` under `%LOCALAPPDATA%\Microsoft\VisualStudio`; devenv idle gate; Settings/Extensions/ProgramData excluded
+Use an exact category name when you want the narrowest scope:
 
-CLI-agent residue (not a `dev-caches` member; use exact name, `cli-agents`, or `all`):
+```powershell
+foal clean --dry-run --opt-in vscode_cache
+foal clean --execute --opt-in vscode_cache --allow-permanent
+```
 
-- `grok-build-update-residue`: exact lowercase updater backups under `$GROK_HOME\bin` (`grok.exe.old`, `agent.exe.old`, and anchored `*.exe.old.<pid>-<seq>.old`); Grok idle before and after; recent `downloads\grok-*` witnesses fail closed and are never candidates; default CLI Clean performs no Grok probing. Claude Code, Codex CLI, Antigravity CLI, and Gemini CLI remain research-only and are not catalog categories.
+The authoritative category list, action matrix, impact notes, and exclusions live in the [Clean deletion policy](docs/plan/clean-deletion-policy.md).
 
-Prefer non-destructive examples such as `foal clean --dry-run --json` in docs and verification.
+## Project artifact purge
 
-### Purge
+`purge` is separate from Clean. It only scans roots you provide and previews by default:
 
-`foal purge` is an independent **Project artifact purge** command. It is not a Clean catalog category and never runs as part of `foal clean`.
+```powershell
+foal purge .\my-project
+foal purge --json .\project-a .\project-b
+```
 
-- **Explicit roots only.** One or more user-supplied project/workspace roots are required (for example `foal purge .\my-project`). Foal never invents defaults, never loads implicit multi-root config (no Mole-style `purge_paths`), and rejects dangerous roots such as volume roots and Windows/Program Files paths before scanning.
-- **Preview first.** Default mode is dry-run (optional explicit `--dry-run`). It recursively discovers allowlisted rebuildable directories under the supplied root(s) and reports kind, path, relative path, measured bytes, and planned permanent deletion without mutating.
-- **v1 allowlist** (exact final path component; same high-confidence set as analyze labels): `node_modules`, `target`, `dist`, `build`, `.build`, `.next`, `__pycache__`. Names such as `bin`, `obj`, or `node_modules_backup` are not matched.
-- **Execute.** `foal purge --execute --allow-permanent <root> [root...]` re-discovers under the same roots, then permanently deletes matching artifacts. Without `--allow-permanent`, execute skips every candidate with `permanent_deletion_not_authorized` and deletes nothing. Permanent deletion is ordinary filesystem removal only (not secure erasure). Removing project artifacts requires reinstalling dependencies and rebuilding afterward.
-- **Safety.** User Protection rules apply (deny-only). Fresh path-safety validation runs before each deletion. No elevation, process stopping, installer purge, or secure-erase claims.
+The v1 allowlist matches exact directory names: `node_modules`, `target`, `dist`, `build`, `.build`, `.next`, and `__pycache__`. Volume roots and Windows system paths are rejected.
 
-See `foal --help` (Purge options) for the shipped flag surface. Prefer `foal purge --json .\my-project` for preview automation.
+Execution re-discovers matches and permanently removes them only with per-run authorization:
 
-### Other commands
+```powershell
+foal purge --execute --allow-permanent .\my-project
+```
 
-- `foal analyze --json <path>`: read-only directory insight with totals, top children, skipped entries, and elapsed time. When a **top child** name matches the project-artifact allowlist, it is labeled `project_artifact_clue` only (no deep nested scan, no deletion)
-- `foal status --json`: read-only snapshot with disk capacity, OS runtime, Foal command state, elapsed time, and structured `skipped` / `errors`
-- `foal history --json`: operation history sessions or structured history errors (including purge sessions)
-- `foal uninstall --json`: preview-only registry applications, footprint leftovers, orphaned residue, shared-state concerns, and empty execution actions
+Deleted dependencies or build output may need to be downloaded or rebuilt. Purge never performs secure erasure, elevation, process stopping, installer cleanup, or implicit root discovery.
 
-### Protection Rules
+## Protection rules
 
-Foal loads optional user-defined Protection rules from `%APPDATA%\Foal\protection.txt`. Set `FOAL_PROTECTION_FILE` to select a different file. Each non-empty, non-comment line is one absolute local path; comments begin with `#`. UNC paths, relative paths, and paths containing 8.3 short-name segments are invalid.
+Create `%APPDATA%\Foal\protection.txt` to exclude paths from Clean and Purge. Use one absolute local path per line; `#` begins a comment. A rule protects that exact path and its full subtree.
 
-A valid entry protects that path and its entire subtree using normalized, case-insensitive, path-component-aware matching. Protection rules are deny-only: they can suppress Clean candidates, path-backed review-only discoveries, and purge candidates, but can never add or authorize cleanup. Protected path-backed discoveries are removed before totals, JSON, human output, the Clean TUI, detailed candidate lists, and history projection. Suggestions without a resolved cache path are not inferred from command text.
+```text
+# Keep local development data
+D:\Work\ImportantProject
+C:\Users\me\AppData\Local\Example\Cache
+```
 
-Invalid lines are skipped with structured Protection diagnostics. A missing default file means no user-defined rules; a selected override that cannot be loaded, or a selected file with invalid UTF-8, fails Clean or purge closed before scanning or execution.
+Set `FOAL_PROTECTION_FILE` to use a different file. Rules are deny-only: they can remove candidates, but never add or authorize cleanup. Invalid lines are skipped and reported; an unreadable selected file or invalid UTF-8 fails closed. UNC paths, relative paths, and 8.3 short-name paths are rejected.
 
-### Interactive TUI
+## Safety boundaries
 
-Running `foal` with no arguments in an interactive terminal opens a TUI: a main menu, category-first Clean preview with confirmed shared Clean execution, and read-only viewers for uninstall, status, and history.
+Foal deliberately does not:
 
-Entering Clean starts a catalog-derived eager scan of every canonical default and opt-in cleanup category and shows path-free rows while scanning continues.
+- empty the Recycle Bin;
+- automatically elevate or stop applications;
+- treat browser history, cookies, credentials, sessions, or user-authored data as cache;
+- claim secure erasure or guaranteed physical-space recovery;
+- execute uninstallers or remove application leftovers;
+- perform system optimization actions.
 
-- Defaults start selected but may be cleared
-- Permanent-action categories start selected when measurable
-- Other opt-ins start unselected
-- `space` toggles the focused row; `a` selects every currently selectable category; `x` clears all
-- Selection never restarts the scan and never writes history or detailed lists
-- Non-executable Review suggestions stay on CLI/JSON dry-run only; the TUI does not run external tool-query probes solely for those suggestions
-- `Enter` opens confirmation only after every scannable category is terminal and the selection is non-empty
-- Confirmation groups Permanent deletion and Recycle Bin work; a second `Enter` freezes the exact selected categories plus permanent authorization and runs shared Clean (fresh resolution, Protection, gates, Recycle Bin capacity for Recycle Bin work only, Recycle Bin first then permanent)
-- Progress is observation-only; the result page projects outcomes from the authoritative Result
-- Optional TUI History provenance records `surface=tui`, `selection_mode=exact`, and selected category identifiers
-- Cancellation after confirmation does not roll back completed work
-- No retry or rescan control in the first category-first slice; leave and re-enter Clean to start a new scan
+Administrator-only cleanup remains a read-only permission-boundary notice. `optimize` is reserved for future read-only health checks and recommendations.
 
-Scripts, pipes, and `--json` callers are unaffected.
+## Platform and releases
 
-## Scope
+- Compatibility baseline: Windows 10 or Windows Server 2016 and later.
+- Primary target: Windows 11 x64.
+- Release artifacts: portable amd64 and arm64 ZIP archives containing `foal.exe`.
+- Release flow: tag-driven draft releases, manually smoke-tested before publishing.
 
-Foal is inspired by tools like Mole, but it is not "Mole for Windows". The roadmap is ordered by Windows risk and Foal's safety model rather than feature parity. Shipped purge does **not** claim Mole parity (no installer purge, no implicit `purge_paths` config).
+See the [release process](docs/plan/release-process.md) and [Windows support research](docs/research/windows-support.md) for verification details.
 
-- `clean`: conservative preview-first rules; mixed-action execution after explicit `--execute`. Permanent categories are the full permanent matrix above (CLI `--allow-permanent`, TUI confirmation). The six Recycle Bin categories stay Recycle Bin. Clean never discovers or deletes project artifacts by default or via ordinary catalog opt-in rows.
-- `purge`: independent explicit-root Project artifact purge; preview by default; permanent deletion only with `--execute --allow-permanent`. Not a Clean category.
-- `uninstall`: preview-only application review. Foal does not execute uninstallers, stop processes, or delete leftovers.
-- `analyze`: read-only, JSON-first directory insight (top-child project-artifact labels only; no nested project scan, no deletion).
-- `status`: read-only system snapshot.
-- `history`: JSON-first record of prior Foal operations (including purge).
-- `optimize`: future read-only health checks and recommendations; not current implementation scope.
+## Development
 
-The TUI is a review and navigation surface over shared read models. Its primary Clean view is category-first. It does not duplicate deletion, uninstall, or path-safety logic.
+```powershell
+go test ./...
+go build -o foal.exe ./cmd/foal
+```
 
-## Releases
-
-Foal uses Semantic Version tags to create draft GitHub releases. The initial release channel provides portable Windows amd64 and arm64 ZIP archives containing `foal.exe`, plus SHA-256 checksums and GitHub provenance attestations. A maintainer smoke-tests each draft before publishing it; there are no automatic nightly releases.
-
-See [Release process](docs/plan/release-process.md) for release gates, artifact contents, and the staged Scoop/WinGet plan.
-
-## Platform compatibility
-
-Foal's compatibility baseline is Windows 10 or later, or Windows Server 2016 or later. Windows 11 x64 is the primary desktop target. ARM64 archives are preview builds until native ARM64 smoke testing is available. The current hosted CI executes only on Windows Server 2025 x64; see the [Windows support research](docs/research/windows-support.md) for the distinction between compatibility and verified support.
+Safety invariants and JSON contracts take priority over human-output snapshots. Product and architecture decisions are documented under [`docs/`](docs/).
 
 ## License
 
