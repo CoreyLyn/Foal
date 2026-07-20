@@ -38,7 +38,7 @@ var commands = []commandSpec{
 	{name: "purge", description: "Preview or permanently delete rebuildable project artifacts under explicit root(s)."},
 	{name: "status", description: "Report a read-only system and Foal state snapshot."},
 	{name: "history", description: "Show previous Foal operation records."},
-	{name: "uninstall", description: "Preview application uninstall evidence without executing uninstallers."},
+	{name: "uninstall", description: "Preview installed applications; --execute runs official uninstallers for selected apps."},
 }
 
 var (
@@ -59,6 +59,7 @@ var (
 	}
 	newHistoryDir    = history.DefaultDir
 	reviewUninstall  = uninstall.Review
+	executeUninstall = uninstall.Execute
 	currentBuildInfo = buildinfo.Current
 )
 
@@ -198,12 +199,53 @@ func RunInvocation(invocation Invocation, stdout, stderr io.Writer) int {
 	}
 
 	if command == "uninstall" {
-		result := uninstall.WithReviewSections(reviewUninstall())
-		if opts.json {
-			return writeJSON(stdout, envelope{Command: command, Result: result})
+		invocation, err := validateUninstallArgs(positional[1:])
+		if err != nil {
+			return writeError(stderr, opts.json, command, args, jsonError{
+				Code:        "invalid_uninstall_invocation",
+				Message:     err.Error(),
+				Recoverable: true,
+				Command:     command,
+				Args:        args,
+			})
+		}
+		if !invocation.execute {
+			// Default remains preview-only: no uninstaller is run, no process
+			// is stopped, no leftover is deleted. The preview contract is
+			// unchanged from pre-execute behavior.
+			result := uninstall.WithReviewSections(reviewUninstall())
+			if opts.json {
+				return writeJSON(stdout, envelope{Command: command, Result: result})
+			}
+			_, _ = fmt.Fprint(stdout, uninstall.RenderPreviewReport(result))
+			return exitOK
 		}
 
-		_, _ = fmt.Fprint(stdout, uninstall.RenderPreviewReport(result))
+		recorder, _ := newHistoryRecorder()
+		executeOptions := uninstall.ExecuteOptions{
+			Selection:          append([]string(nil), invocation.selection...),
+			AllowStopProcesses: invocation.allowStopProcesses,
+			HistoryRecorder:    recorder,
+			CommandParameters: history.CommandParameters{
+				Command: "uninstall",
+				Args:    append([]string(nil), args...),
+			},
+		}
+		result := executeUninstall(context.Background(), executeOptions)
+		if opts.json {
+			code := writeJSON(stdout, envelope{Command: command, Result: result})
+			if code != exitOK {
+				return code
+			}
+			if result.Status == uninstall.StatusExecuteError {
+				return exitUsage
+			}
+			return exitOK
+		}
+		_, _ = fmt.Fprint(stdout, uninstall.RenderExecuteReport(result))
+		if result.Status == uninstall.StatusExecuteError {
+			return exitUsage
+		}
 		return exitOK
 	}
 
@@ -486,6 +528,69 @@ type purgeInvocation struct {
 	allowPermanent bool
 }
 
+type uninstallInvocation struct {
+	execute            bool
+	allowStopProcesses bool
+	selection          []string
+}
+
+func validateUninstallArgs(args []string) (uninstallInvocation, error) {
+	var invocation uninstallInvocation
+	execute := false
+	allowStopProcesses := false
+	dryRun := false
+	var selection []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--dry-run":
+			dryRun = true
+		case "--execute":
+			// --execute is the mandatory mutation authorization. Without it
+			// behavior stays preview-only: no uninstaller is run, no process
+			// is stopped, no leftover is deleted.
+			execute = true
+		case "--allow-stop-processes":
+			// Separate per-run authorization for process stopping. Default is
+			// off; --execute alone never stops or kills a process. When an
+			// app is running and this flag is absent, Execute skips the app
+			// with a stable reason instead of killing it.
+			allowStopProcesses = true
+		case "--select":
+			if i+1 >= len(args) {
+				return invocation, fmt.Errorf("--select requires an application display name (use foal uninstall --json to list applications)")
+			}
+			i++
+			selection = append(selection, args[i])
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return invocation, fmt.Errorf("unknown uninstall option: %s", arg)
+			}
+			// Allow a bare positional name as a shorthand for --select <name>
+			// so `foal uninstall --execute "Example App"` works. This never
+			// authorizes more than the explicit --select form.
+			selection = append(selection, arg)
+		}
+	}
+	if dryRun && execute {
+		return invocation, fmt.Errorf("uninstall accepts either --dry-run or --execute, not both")
+	}
+	if allowStopProcesses && !execute && !dryRun {
+		// Flag alone with no mode defaults to preview (non-mutating); allow
+		// without error so users can compose flags without surprise.
+	}
+	if allowStopProcesses && !execute {
+		// --allow-stop-processes without --execute does not authorize
+		// mutation; preview stays preview. Accept the flag without error so
+		// the user can compose it with --dry-run for planning.
+	}
+	return uninstallInvocation{
+		execute:            execute,
+		allowStopProcesses: allowStopProcesses,
+		selection:          selection,
+	}, nil
+}
+
 func validatePurgeArgs(args []string) (purgeInvocation, error) {
 	var invocation purgeInvocation
 	var roots []string
@@ -619,6 +724,15 @@ func helpText() string {
 	builder.WriteString("                       Permanent deletion is ordinary filesystem removal (not secure erasure).\n")
 	builder.WriteString("                       Removing project artifacts requires reinstall/rebuild afterward.\n")
 	builder.WriteString("                       v1 allowlist: node_modules, target, dist, build, .build, .next, __pycache__.\n")
+	builder.WriteString("\nUninstall options:\n")
+	builder.WriteString("  (no flags)           Preview installed applications and possible residue (default; no mutation).\n")
+	builder.WriteString("  --execute            Required for mutation. Runs official uninstallers for selected apps.\n")
+	builder.WriteString("                       Prefers quiet uninstall, then falls back to interactive.\n")
+	builder.WriteString("  --select <name>      Select one application by display name (repeatable).\n")
+	builder.WriteString("                       A bare name is accepted as shorthand: foal uninstall --execute \"Example App\".\n")
+	builder.WriteString("  --allow-stop-processes  Separate per-run authorization for process stopping. Default is off;\n")
+	builder.WriteString("                       --execute alone never kills a process. Running apps without this flag are\n")
+	builder.WriteString("                       skipped with a stable reason. Leftover deletion is not performed in this slice.\n")
 	builder.WriteString("\nExamples:\n")
 	builder.WriteString("  foal status --json\n")
 	builder.WriteString("  foal clean --dry-run\n")
@@ -628,6 +742,8 @@ func helpText() string {
 	builder.WriteString("  foal purge .\\my-project\n")
 	builder.WriteString("  foal purge --json .\\proj-a .\\proj-b\n")
 	builder.WriteString("  foal purge --execute --allow-permanent .\\my-project\n")
+	builder.WriteString("  foal uninstall --json\n")
+	builder.WriteString("  foal uninstall --execute --select \"Example App\"\n")
 	builder.WriteString("  foal.exe analyze\n")
 	return builder.String()
 }

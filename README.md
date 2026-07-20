@@ -79,7 +79,7 @@ foal history --json
 | `foal analyze <path>` | Reports directory totals and top children without changing files. |
 | `foal status` | Reports a read-only Windows and Foal state snapshot. |
 | `foal history` | Reads prior Clean and Purge operation records. |
-| `foal uninstall` | Reviews installed applications and possible residue; never runs uninstallers or deletes leftovers. |
+| `foal uninstall` | Previews installed applications; `--execute --select <name>` runs official uninstallers for selected apps. |
 | `foal version` | Reports version, commit, Go runtime, and target platform. |
 
 Run `foal --help` for the complete shipped flag surface.
@@ -149,10 +149,10 @@ Set `FOAL_PROTECTION_FILE` to use a different file. Rules are deny-only: they ca
 Foal deliberately does not:
 
 - empty the Recycle Bin;
-- automatically elevate or stop applications;
+- automatically elevate or stop applications (Uninstall may request UAC per ADR 0028; process stopping requires a separate `--allow-stop-processes` flag and is off by default);
 - treat browser history, cookies, credentials, sessions, or user-authored data as cache;
 - claim secure erasure or guaranteed physical-space recovery;
-- execute uninstallers or remove application leftovers;
+- delete application leftovers as part of uninstall in this slice (leftover deletion ships separately; a failed or canceled uninstaller never deletes leftovers);
 - perform system optimization actions.
 
 Administrator-only cleanup remains a read-only permission-boundary notice. `optimize` is reserved for future read-only health checks and recommendations.
