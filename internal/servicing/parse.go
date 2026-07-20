@@ -123,3 +123,82 @@ func classifyComponentStoreAnalysis(exitCode int, stdout string) clean.Servicing
 		ExitCode:            &code,
 	}
 }
+
+// classifyCleanupExit maps a DISM StartComponentCleanup exit code to a stable
+// mutation outcome and restart-required flag (ADR 0029). /NoRestart means Foal
+// never reboots; it only records the requirement:
+//
+//   - 0    → completed without restart required.
+//   - 3010 → completed with restart required.
+//   - 3017 → failed with restart required.
+//   - any other non-zero → failed without an inferred restart requirement.
+func classifyCleanupExit(exitCode int) (clean.ServicingOutcome, string, bool) {
+	switch exitCode {
+	case 0:
+		return clean.ServicingOutcomeCompleted, "", false
+	case 3010:
+		return clean.ServicingOutcomeCompleted, "", true
+	case 3017:
+		return clean.ServicingOutcomeFailed, clean.ServicingReasonCleanupFailed, true
+	default:
+		return clean.ServicingOutcomeFailed, clean.ServicingReasonCleanupFailed, false
+	}
+}
+
+// projectAnalysisForExecute maps a fresh execution analysis onto the composite
+// execute result and reports whether StartComponentCleanup may proceed. Cleanup
+// proceeds only when analysis is ready (DISM exit 0, positive reclaimable
+// packages, and a Yes recommendation); every other analysis outcome is projected
+// unchanged as the composite outcome so ambiguous or failed analysis fails
+// before mutation.
+func projectAnalysisForExecute(analysis clean.ServicingAnalysisResult) (proceed bool, res clean.ServicingExecuteResult) {
+	switch analysis.Outcome {
+	case clean.ServicingOutcomeReady:
+		return true, clean.ServicingExecuteResult{}
+	case clean.ServicingOutcomeNoWork:
+		return false, clean.ServicingExecuteResult{
+			Outcome:             clean.ServicingOutcomeNoWork,
+			ReclaimablePackages: analysis.ReclaimablePackages,
+			CleanupRecommended:  analysis.CleanupRecommended,
+			ExitCode:            analysis.ExitCode,
+		}
+	case clean.ServicingOutcomeSkipped:
+		return false, clean.ServicingExecuteResult{
+			Outcome:  clean.ServicingOutcomeSkipped,
+			Reason:   analysis.Reason,
+			ExitCode: analysis.ExitCode,
+		}
+	case clean.ServicingOutcomeCanceled:
+		return false, clean.ServicingExecuteResult{
+			Outcome: clean.ServicingOutcomeCanceled,
+			Reason:  clean.ServicingReasonContextCanceled,
+		}
+	case clean.ServicingOutcomeFailed:
+		return false, clean.ServicingExecuteResult{
+			Outcome:  clean.ServicingOutcomeFailed,
+			Reason:   analysis.Reason,
+			ExitCode: analysis.ExitCode,
+		}
+	default:
+		return false, clean.ServicingExecuteResult{
+			Outcome: clean.ServicingOutcomeFailed,
+			Reason:  clean.ServicingReasonHelperFailed,
+		}
+	}
+}
+
+// cleanupResultFromExit builds the composite execute result for a cleanup run
+// that actually reached exit, carrying the fresh-analysis package evidence and
+// the cleanup exit-code outcome/restart mapping.
+func cleanupResultFromExit(analysis clean.ServicingAnalysisResult, cleanupExit int) clean.ServicingExecuteResult {
+	outcome, reason, restart := classifyCleanupExit(cleanupExit)
+	code := cleanupExit
+	return clean.ServicingExecuteResult{
+		Outcome:             outcome,
+		Reason:              reason,
+		ReclaimablePackages: analysis.ReclaimablePackages,
+		CleanupRecommended:  analysis.CleanupRecommended,
+		ExitCode:            &code,
+		RestartRequired:     restart,
+	}
+}

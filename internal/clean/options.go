@@ -118,7 +118,11 @@ const (
 	ExecutionPhaseRecycleBinSafety     ExecutionPhase = "aggregate_recycle_bin_safety_checks"
 	ExecutionPhaseRecycleBinOperations ExecutionPhase = "recycle_bin_operations"
 	ExecutionPhasePermanentOperations  ExecutionPhase = "permanent_deletion_operations"
-	ExecutionPhaseComplete             ExecutionPhase = "completion"
+	// ExecutionPhaseServicingOperations is the final mutation phase: Windows
+	// component-store servicing runs after Recycle Bin and Permanent deletion
+	// work, and no later action begins once servicing starts (ADR 0029).
+	ExecutionPhaseServicingOperations ExecutionPhase = "windows_servicing_operations"
+	ExecutionPhaseComplete            ExecutionPhase = "completion"
 )
 
 // ExecutionProgress is deliberately absent from Result and its JSON contract.
@@ -207,6 +211,12 @@ type Options struct {
 	// execute confirmation. When false, permanent candidates are skipped with
 	// permanent_deletion_not_authorized and Recycle Bin work continues.
 	AllowPermanentDeletion bool
+	// AllowServicing is explicit per-run authorization for Windows servicing
+	// mutation (ADR 0029). It is independent of AllowPermanentDeletion and never
+	// implied by it. When false, a selected servicing category is skipped with
+	// windows_servicing_not_authorized and never opens UAC. It authorizes
+	// mutation only together with Execute; a dry-run ignores it.
+	AllowServicing bool
 	// CategoryPlannedActions injects planned actions by category ID for tests.
 	// Production leaves it nil so the catalog remains the sole source of truth.
 	// Used to exercise permanent deletion without activating production rules.

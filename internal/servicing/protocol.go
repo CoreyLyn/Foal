@@ -29,14 +29,18 @@ const nonceBytes = 32
 
 // wireCapability is the fixed built-in capability enum carried in a request. It
 // is the ONLY instruction the helper accepts: no executable, path, command
-// line, or DISM argument is ever transmitted. This slice defines exactly one
-// capability (read-only analysis).
+// line, or DISM argument is ever transmitted. Exactly two capabilities exist:
+// read-only analysis and the composite execute (fresh analysis + guard +
+// StartComponentCleanup). There is no standalone start-cleanup capability.
 type wireCapability uint8
 
-const wireCapabilityAnalyzeComponentStore wireCapability = 1
+const (
+	wireCapabilityAnalyzeComponentStore        wireCapability = 1
+	wireCapabilityExecuteComponentStoreCleanup wireCapability = 2
+)
 
 func validWireCapability(c wireCapability) bool {
-	return c == wireCapabilityAnalyzeComponentStore
+	return c == wireCapabilityAnalyzeComponentStore || c == wireCapabilityExecuteComponentStoreCleanup
 }
 
 // pipeRequest is the one and only request the coordinator sends to the helper.
@@ -50,8 +54,9 @@ type pipeRequest struct {
 
 // pipeResponse is the structured servicing result the helper returns. It is
 // path-free and byte-free: only the parsed English analysis fields, a stable
-// Foal-owned outcome and reason, and an optional DISM exit code. It never
-// carries raw DISM output, OS error text, or a package identifier.
+// Foal-owned outcome and reason, an optional DISM exit code, and the mutation
+// restart-required/cancellation-request state. It never carries raw DISM
+// output, OS error text, or a package identifier.
 type pipeResponse struct {
 	Version             uint32 `json:"version"`
 	Outcome             string `json:"outcome"`
@@ -60,6 +65,10 @@ type pipeResponse struct {
 	CleanupRecommended  bool   `json:"cleanup_recommended"`
 	HasExitCode         bool   `json:"has_exit_code"`
 	ExitCode            int    `json:"exit_code,omitempty"`
+	// RestartRequired and CancelRequested are meaningful for the composite
+	// execute capability. Analysis leaves them false.
+	RestartRequired bool `json:"restart_required,omitempty"`
+	CancelRequested bool `json:"cancel_requested,omitempty"`
 }
 
 // newNonce returns a fresh random one-time nonce as a hex string.
