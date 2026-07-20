@@ -634,7 +634,9 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 30 delete_permanently + 6 move_to_recycle_bin + 1 actionless permission boundary.
+	// 30 delete_permanently + 7 move_to_recycle_bin + 1 actionless permission boundary.
+	// The 7th Recycle Bin category is the exact-selection-only, Not-proven
+	// nvidia_installer_cache (registered in the System group below).
 	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
 	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin)),
@@ -683,6 +685,24 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		categoryDefinition(OpportunityCategoryIntelGPUShaderCache, "Intel GPU shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently),
 		existenceRootSpec{base: existenceRootLocalAppDataLow, segments: []string{"Intel", "ShaderCache"}},
 	), staticPreviewSafetyNote(gpuShaderCacheOptInImpactNotice)),
+	// NVIDIA installer cache: exact-selection-only, Not-proven move_to_recycle_bin
+	// opt-in for strictly validated completed legacy display-driver download tasks
+	// under the fixed C:\ProgramData\NVIDIA Corporation\Downloader root. Dedicated
+	// resolver (not developer-cache / not application-cache): the all, dev-caches,
+	// app-caches, and cli-agents tokens and TUI Select All never select it. Permanent
+	// deletion is never eligible. Evidence: docs/research/nvidia-installer-downloader-cache.md.
+	withPreviewSafetyNote(nvidiaInstallerCacheCategoryEntry(
+		CleanupCategoryDefinition{
+			Identifier:               CategoryNVIDIAInstallerCache,
+			Label:                    "NVIDIA installer cache",
+			ReportCategory:           ReportCategorySystem,
+			Eligibility:              CategoryEligibilityOptIn,
+			Aliases:                  []string{},
+			RunningApplicationPolicy: RunningApplicationPolicyDistinctiveProcessIdle,
+			PlannedAction:            PlannedActionMoveToRecycleBin,
+			SelectionPolicy:          CategorySelectionPolicyExactOnly,
+		},
+	), staticPreviewSafetyNote(nvidiaInstallerCacheOptInImpactNotice)),
 	withPreviewSafetyNote(browserCacheCategoryEntry(categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, PlannedActionDeletePermanently)), staticPreviewSafetyNote(browserCacheOptInImpactNotice)),
 	withPreviewSafetyNote(applicationCacheCategoryEntry(
 		categoryDefinition(
@@ -977,9 +997,23 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 			}
 		case categoryResolverExistenceOpportunity, categoryResolverBrowserCache,
 			categoryResolverApplicationCache, categoryResolverDeveloperCache,
-			categoryResolverGrokBuildUpdateResidue:
+			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache:
 			if entry.definition.Eligibility != CategoryEligibilityOptIn {
 				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
+			}
+			if entry.resolverKind == categoryResolverNVIDIAInstallerCache {
+				// NVIDIA installer cache is a Not-proven, exact-selection-only Recycle
+				// Bin category. Permanent deletion is never eligible, and aggregate/
+				// group tokens must never select it.
+				if entry.definition.PlannedAction != PlannedActionMoveToRecycleBin {
+					return fmt.Errorf("nvidia installer cache category %q must declare move_to_recycle_bin", id)
+				}
+				if entry.definition.SelectionPolicy != CategorySelectionPolicyExactOnly {
+					return fmt.Errorf("nvidia installer cache category %q must be exact-selection-only", id)
+				}
+				if entry.cliAgentProduct {
+					return fmt.Errorf("nvidia installer cache category %q must not be a cli-agent product", id)
+				}
 			}
 			if entry.resolverKind == categoryResolverGrokBuildUpdateResidue {
 				if entry.definition.RunningApplicationPolicy != RunningApplicationPolicyDistinctiveProcessIdle {

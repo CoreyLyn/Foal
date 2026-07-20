@@ -14,6 +14,7 @@ func TestBuiltInOpportunityCatalogContainsOnlyApprovedV1Categories(t *testing.T)
 	var got []string
 	for _, summary := range CanonicalCleanupCategoryCatalog().Summaries() {
 		if summary.Eligibility == CategoryEligibilityOptIn &&
+			summary.SelectionPolicy != CategorySelectionPolicyExactOnly &&
 			summary.ReportCategory != ReportCategoryBrowsers &&
 			summary.ReportCategory != ReportCategoryDeveloperTools &&
 			summary.ReportCategory != ReportCategoryApplications {

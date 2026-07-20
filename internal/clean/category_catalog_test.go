@@ -25,6 +25,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"nvidia_dx_cache",
 		"amd_gpu_shader_caches",
 		"intel_gpu_shader_cache",
+		"nvidia_installer_cache",
 		"browser_cache",
 		"vscode_cache",
 		"cursor_cache",
@@ -221,6 +222,7 @@ func lockedRecycleBinCategoryIDs() []string {
 		clean.OpportunityCategoryWindowsErrorReporting,
 		clean.OpportunityCategoryExplorerThumbnailCache,
 		clean.OpportunityCategoryINetCache,
+		clean.CategoryNVIDIAInstallerCache,
 	}
 }
 
@@ -241,8 +243,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	if len(wantPermanent) != 30 {
 		t.Fatalf("locked permanent matrix length = %d, want 30", len(wantPermanent))
 	}
-	if len(wantRecycleBin) != 6 {
-		t.Fatalf("locked Recycle Bin matrix length = %d, want 6", len(wantRecycleBin))
+	if len(wantRecycleBin) != 7 {
+		t.Fatalf("locked Recycle Bin matrix length = %d, want 7", len(wantRecycleBin))
 	}
 
 	var permanent, recycleBin, executable []string
@@ -267,8 +269,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	if len(executable) != 36 {
-		t.Fatalf("executable categories = %d (%v), want 36", len(executable), executable)
+	if len(executable) != 37 {
+		t.Fatalf("executable categories = %d (%v), want 37", len(executable), executable)
 	}
 	if !reflect.DeepEqual(permanent, wantPermanent) {
 		t.Fatalf("permanent matrix = %#v, want %#v", permanent, wantPermanent)
@@ -323,10 +325,10 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	// Eager queue is all 36 executable rows; permission boundary is never scanned.
+	// Eager queue is all 37 executable rows; permission boundary is never scanned.
 	queue := clean.EagerPreviewQueue()
-	if len(queue) != 36 {
-		t.Fatalf("EagerPreviewQueue length = %d, want 36 executable categories", len(queue))
+	if len(queue) != 37 {
+		t.Fatalf("EagerPreviewQueue length = %d, want 37 executable categories", len(queue))
 	}
 	for _, summary := range queue {
 		if summary.Identifier == "administrator_only_caches" {

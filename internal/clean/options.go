@@ -236,6 +236,11 @@ type Options struct {
 	// grok-build-update-residue category. Production leaves the zero value.
 	// Tests must use isolated roots and never read the real user .grok profile.
 	GrokBuildResidueDiscoveryOptions GrokBuildResidueDiscoveryOptions
+	// NVIDIAInstallerCacheDiscoveryOptions injects the fixed-root override, clock,
+	// and platform detection seams for the nvidia_installer_cache category.
+	// Production leaves the zero value so the fixed ProgramData root and the
+	// platform process/service, signature, and forensic detectors are used.
+	NVIDIAInstallerCacheDiscoveryOptions NVIDIAInstallerCacheDiscoveryOptions
 }
 
 type Rule struct {

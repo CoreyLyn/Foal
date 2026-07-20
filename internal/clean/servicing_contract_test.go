@@ -110,12 +110,15 @@ func TestCatalogFailsClosedOnPlannedActionAndSelectionPolicy(t *testing.T) {
 
 // TestProductionCatalogRegistersNoServicingCategory guards the #305 boundary:
 // this enabling refactor must not register any production servicing category.
+// The only production exact-selection-only category so far is the #309
+// nvidia_installer_cache Recycle Bin category; servicing remains unregistered.
 func TestProductionCatalogRegistersNoServicingCategory(t *testing.T) {
 	for _, summary := range clean.CanonicalCleanupCategoryCatalog().Summaries() {
 		if summary.PlannedAction == clean.PlannedActionInvokeWindowsServicing {
 			t.Fatalf("production catalog unexpectedly registers servicing category %q", summary.Identifier)
 		}
-		if summary.SelectionPolicy == clean.CategorySelectionPolicyExactOnly {
+		if summary.SelectionPolicy == clean.CategorySelectionPolicyExactOnly &&
+			summary.Identifier != clean.CategoryNVIDIAInstallerCache {
 			t.Fatalf("production catalog unexpectedly registers exact-selection-only category %q", summary.Identifier)
 		}
 	}
