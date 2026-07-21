@@ -283,3 +283,69 @@ func TestServicingExecuteRunsAfterRecycleBinAndPermanent(t *testing.T) {
 		t.Fatalf("servicing count = %d, want 1", result.Totals.ServicingOperationCount)
 	}
 }
+
+// deletionWatchingServicingGateway snapshots the count of deletion collaborator
+// calls observed at the instant servicing begins, so a test can prove that no
+// filesystem deletion is dispatched after the servicing action starts.
+type deletionWatchingServicingGateway struct {
+	collab            *orderedCollaborators
+	result            clean.ServicingExecuteResult
+	deletionsAtLaunch int
+}
+
+func (g *deletionWatchingServicingGateway) AnalyzeComponentStore(context.Context, clean.ServicingAnalysisRequest) clean.ServicingAnalysisResult {
+	return clean.ServicingAnalysisResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonHelperFailed}
+}
+
+func (g *deletionWatchingServicingGateway) ExecuteComponentStoreCleanup(context.Context, clean.ServicingExecuteRequest) clean.ServicingExecuteResult {
+	for _, call := range g.collab.calls {
+		if call.kind == "recycle" || call.kind == "permanent" {
+			g.deletionsAtLaunch++
+		}
+	}
+	g.collab.calls = append(g.collab.calls, orderedCall{kind: "servicing"})
+	return g.result
+}
+
+// TestServicingExecuteNoDeletionAfterServicingBegins proves the acceptance
+// invariant that once the Windows servicing action starts, no later Recycle Bin
+// or Permanent deletion is dispatched: the deletion count captured when
+// servicing launches equals the total deletion count after Execute returns.
+func TestServicingExecuteNoDeletionAfterServicingBegins(t *testing.T) {
+	root := t.TempDir()
+	recyclePath := writeTestFile(t, root, "recycle.tmp", "rbin")
+	permanentPath := writeTestFile(t, root, "permanent.tmp", "perm")
+	collab := &orderedCollaborators{}
+	exit0 := 0
+	gateway := &deletionWatchingServicingGateway{
+		collab: collab,
+		result: clean.ServicingExecuteResult{
+			Outcome:             clean.ServicingOutcomeCompleted,
+			ReclaimablePackages: 2,
+			CleanupRecommended:  true,
+			ExitCode:            &exit0,
+		},
+	}
+	opts := mixedActionOpts(t, root, recyclePath, permanentPath, true)
+	opts.OptIn = []string{clean.CategoryWinSxSComponentStore}
+	opts.AllowServicing = true
+	opts.RecycleBinAdapter = collab
+	opts.PermanentRemover = collab
+	opts.ServicingGateway = gateway
+
+	clean.Execute(context.Background(), opts)
+
+	totalDeletions := 0
+	for _, call := range collab.calls {
+		if call.kind == "recycle" || call.kind == "permanent" {
+			totalDeletions++
+		}
+	}
+	if gateway.deletionsAtLaunch != totalDeletions {
+		t.Fatalf("deletions after servicing began: launch=%d total=%d (no deletion may run after servicing starts)",
+			gateway.deletionsAtLaunch, totalDeletions)
+	}
+	if totalDeletions != 2 {
+		t.Fatalf("expected both deletions before servicing, got %d", totalDeletions)
+	}
+}

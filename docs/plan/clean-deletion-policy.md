@@ -1,6 +1,6 @@
 # Plan: Clean deletion policy
 
-This is the implemented Clean deletion policy. Shared Clean assigns each executable category an explicit planned action, executes mixed actions with per-run permanent authorization, and records split actual-action totals. ADR 0018 records the decision and this document is the canonical category matrix.
+This is the implemented Clean deletion policy. Shared Clean assigns each executable category an explicit planned action, executes mixed actions with per-run permanent authorization, and records split actual-action totals. ADR 0018 records the two deletion actions and ADR 0029 adds the `invoke_windows_servicing` action; this document is the canonical category matrix.
 
 ## Core policy
 
@@ -60,6 +60,7 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 
 - Dry-run reports the true planned action without requiring authorization.
 - CLI execution requires `--allow-permanent` in addition to `--execute` for permanent actions. Without it, permanent candidates are skipped with `permanent_deletion_not_authorized`; authorized Recycle Bin work continues.
+- CLI Windows servicing mutation requires `--execute`, exact selection of `winsxs_component_store`, and the dedicated per-run `--allow-servicing` (independent of `--allow-permanent`, never implied by it). Missing `--allow-servicing` skips the category with `windows_servicing_not_authorized` and never opens UAC; an exact dry-run opt-in may still request UAC for read-only analysis only. `nvidia_installer_cache` needs no permanent or servicing authorization: `--execute` plus its exact opt-in moves the verified package to the Recycle Bin.
 - The TUI starts with the 31 eligible rows described above selected when safely measurable (1 default + 30 permanent). Its one confirmation view separates Permanent deletion and Recycle Bin summaries, including category count, candidate count, measured bytes, per-category action, irreversible warning, and category-specific impact notices.
 - The one TUI confirmation authorizes both disclosed action groups. Fresh execution may change candidate counts and bytes, but it must not introduce an action type that was not disclosed.
 
@@ -83,7 +84,8 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 ## Explicit exclusions
 
 - No secure erasure, automatic elevation, process stopping, Recycle Bin fallback, rollback promise, or user-defined executable rules.
-- No permanent deletion for the six Recycle Bin categories above until a separate eligibility decision and tests replace the current policy.
+- No permanent deletion for the seven Recycle Bin categories above (`foal_owned_temp_sandboxes`, `user_temp`, `crash_dumps`, `windows_error_reporting`, `explorer_thumbnail_cache`, `inet_cache`, and `nvidia_installer_cache`) until a separate eligibility decision and tests replace the current policy. `nvidia_installer_cache` is `Not proven`, so `--allow-permanent` never promotes it and a Recycle Bin capacity failure never falls back to permanent deletion.
+- `winsxs_component_store` never deletes files beneath `WinSxS`, never estimates reclaimable bytes, and never elevates the whole run: it delegates to the Windows servicing stack through a capability-limited elevated helper and requires the dedicated per-run `--allow-servicing` authorization (independent of `--allow-permanent`).
 
 ## Rule addition checklist
 
