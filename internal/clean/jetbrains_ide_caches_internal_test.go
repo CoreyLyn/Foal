@@ -124,6 +124,8 @@ func TestJetBrainsCatalogProcessMappings(t *testing.T) {
 		for _, exe := range tc.executables {
 			states := detectSupportedApplications(context.Background(), func(context.Context) processSnapshot {
 				return processSnapshot{Names: []string{exe}}
+			}, func(context.Context) serviceSnapshot {
+				return serviceSnapshot{}
 			})
 			for _, state := range states {
 				if state.Application == tc.application {

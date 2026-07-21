@@ -336,10 +336,13 @@ func summaryFromDefinition(definition CleanupCategoryDefinition) CleanupCategory
 // supportedApplicationDefinition is the private process-detection definition
 // for one logical application. Multiple executable names may represent the
 // same application so future tools do not need a new detection switch.
+// A logical application may also declare Windows service names; any declared
+// service not in the stopped state means the application is running.
 type supportedApplicationDefinition struct {
 	id          string
 	displayName string
 	executables []string
+	services    []string
 }
 
 // developerApplicationDefinitions is the controlled registry of developer-tool
