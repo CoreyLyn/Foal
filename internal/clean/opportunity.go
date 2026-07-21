@@ -31,6 +31,7 @@ const (
 	OpportunityCategoryWindsurfCache          = "windsurf_cache"
 	OpportunityCategoryTraeCache              = "trae_cache"
 	OpportunityCategoryObsidianCache          = "obsidian_cache"
+	OpportunityCategoryVRChatCache            = "vrchat_cache"
 	OpportunityStatus                         = "skipped_by_default"
 	OpportunityReason                         = "requires_explicit_opt_in"
 	UserTempOpportunityStatus                 = OpportunityStatus

@@ -2324,10 +2324,12 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.DevCacheCategoryVisualStudioCaches,
 	}
 	// Catalog order: opportunities + developer caches + CLI-agent residue +
-	// Applications application cache (obsidian_cache is registered after grok).
+	// Applications application caches (obsidian_cache then vrchat_cache, both
+	// registered after grok).
 	want := append(append([]string{}, expectedOpportunities...), expectedDevCaches...)
 	want = append(want, clean.CategoryGrokBuildUpdateResidue)
 	want = append(want, clean.OpportunityCategoryObsidianCache)
+	want = append(want, clean.OpportunityCategoryVRChatCache)
 	if len(capturedOpts.OptIn) != len(want) {
 		t.Fatalf("opts.OptIn has %d categories, want %d: %#v", len(capturedOpts.OptIn), len(want), capturedOpts.OptIn)
 	}
