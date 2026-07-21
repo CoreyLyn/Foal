@@ -184,6 +184,64 @@ func TestDiscoverApplicationCachesObsidianPlainElectronAllowlistOnly(t *testing.
 	}
 }
 
+func TestDiscoverApplicationCachesVRChatSingleRootAllowlistUnderLocalLow(t *testing.T) {
+	// VRChat is a non-editor social VR app on the LocalLow base with a two-segment
+	// application directory (VRChat\VRChat) and a single-root allowlist: only
+	// Cache-WindowsPlayer (downloaded avatar/world content). Settings, logs,
+	// cookies, and unknown siblings are never candidates.
+	localLow := t.TempDir()
+	vrchatRoot := filepath.Join(localLow, "VRChat", "VRChat")
+	dirs := []string{"Cache-WindowsPlayer", "cookies", "Unity", "VRChat_Data", "logs", "amplitude"}
+	for _, name := range dirs {
+		if err := os.MkdirAll(filepath.Join(vrchatRoot, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(vrchatRoot, name, "f.bin"), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A stray log file directly under the application directory is not a root.
+	if err := os.WriteFile(filepath.Join(vrchatRoot, "output_log.txt"), []byte("log"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A sibling application directory under LocalLow must not leak into VRChat discovery.
+	if err := os.MkdirAll(filepath.Join(localLow, "OtherApp", "Cache-WindowsPlayer"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	result := discoverApplicationCaches(context.Background(), applicationCachePolicyVRChat, ApplicationCacheDiscoveryOptions{
+		LocalLowAppDataDir: localLow,
+	}, pathsafe.Validator{})
+	if len(result.opportunities) != 1 {
+		t.Fatalf("opportunities = %#v, want exactly one (Cache-WindowsPlayer)", result.opportunities)
+	}
+	opportunity := result.opportunities[0]
+	if opportunity.Category != OpportunityCategoryVRChatCache {
+		t.Fatalf("category = %q, want vrchat_cache", opportunity.Category)
+	}
+	if filepath.Base(opportunity.Path) != "Cache-WindowsPlayer" {
+		t.Fatalf("root = %q, want Cache-WindowsPlayer", filepath.Base(opportunity.Path))
+	}
+	if !strings.HasPrefix(opportunity.Path, vrchatRoot) {
+		t.Fatalf("path %q not under VRChat application directory %q", opportunity.Path, vrchatRoot)
+	}
+}
+
+func TestDiscoverApplicationCachesVRChatMissingRootSilentAbsence(t *testing.T) {
+	// The VRChat application directory exists but the allowlisted Cache-WindowsPlayer
+	// root is absent: silent absence, never an incomplete or a candidate.
+	localLow := t.TempDir()
+	vrchatRoot := filepath.Join(localLow, "VRChat", "VRChat")
+	if err := os.MkdirAll(filepath.Join(vrchatRoot, "cookies"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	result := discoverApplicationCaches(context.Background(), applicationCachePolicyVRChat, ApplicationCacheDiscoveryOptions{
+		LocalLowAppDataDir: localLow,
+	}, pathsafe.Validator{})
+	if len(result.opportunities) != 0 || len(result.incompletes) != 0 {
+		t.Fatalf("missing Cache-WindowsPlayer root should be silent: %#v", result)
+	}
+}
+
 func TestDiscoverApplicationCachesBlankAppDataSilent(t *testing.T) {
 	result := discoverApplicationCaches(context.Background(), applicationCachePolicyVSCode, ApplicationCacheDiscoveryOptions{
 		RoamingAppDataDir: "   ",

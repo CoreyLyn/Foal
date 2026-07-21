@@ -19,6 +19,7 @@ const (
 	applicationCachePolicyWindsurf       = "windsurf"
 	applicationCachePolicyTrae           = "trae"
 	applicationCachePolicyObsidian       = "obsidian"
+	applicationCachePolicyVRChat         = "vrchat"
 	// CachedExtensionVSIXsRootName is the exact allowlisted relative root that
 	// stores downloaded VSIX packages (not installed extensions).
 	CachedExtensionVSIXsRootName = "CachedExtensionVSIXs"
@@ -155,6 +156,18 @@ var applicationCachePolicies = map[string]applicationCachePolicy{
 		base:         applicationCacheBaseRoaming,
 		appDataPath:  []string{"obsidian"},
 		relativeRoots: append([]string(nil), obsidianCacheAllowlistedRelativeRoots...),
+	},
+	// VRChat: non-editor social VR app; %LOCALAPPDATA%\Low\VRChat\VRChat holds
+	// downloaded avatar/world content. VRChat.exe is the Windows launcher.
+	// Carries its own single-root allowlist (only Cache-WindowsPlayer) so
+	// settings, logs, and unknown siblings are never candidates. Independent
+	// idle gate; never cross-authorizes other applications.
+	applicationCachePolicyVRChat: {
+		category:     OpportunityCategoryVRChatCache,
+		application:  ApplicationVRChat,
+		base:         applicationCacheBaseLocalLow,
+		appDataPath:  []string{"VRChat", "VRChat"},
+		relativeRoots: []string{"Cache-WindowsPlayer"},
 	},
 }
 
