@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"os/exec"
+	"syscall"
 )
 
 // defaultUninstallerRunner runs a registry uninstall command string via
@@ -24,7 +25,10 @@ func (defaultUninstallerRunner) Run(ctx context.Context, command string) (Uninst
 	if command == "" {
 		return UninstallerRunResult{}, errEmptyUninstallCommand
 	}
-	cmd := exec.CommandContext(ctx, "cmd", "/c", command)
+	cmd := exec.CommandContext(ctx, "cmd")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine: `cmd /c "` + command + `"`,
+	}
 	var stdout, stderr bytes.Buffer
 	// Cap captured output so a chatty uninstaller cannot exhaust memory. The
 	// caller truncates again when building the detail string.
