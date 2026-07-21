@@ -24,6 +24,17 @@ After comparing Foal's Clean matrix to Windows built-in tools (Disk Cleanup, Sto
 | Windows.old, Windows Update Cleanup, Delivery Optimization, system `%WINDIR%\Temp` as executable Clean | Not executable | Require elevation; surface only as existing permission-boundary notices, not fake opportunities with byte totals |
 | Default or Clean-matrix deep scan of `node_modules` / `target` / … | Not via ordinary Clean | Use shipped `foal purge` with explicit root(s); not a Clean catalog row |
 
+## Do not — 2026-07 additions (single-machine disk-audit follow-up)
+
+| Gap | Decision | Why |
+| --- | --- | --- |
+| JianyingPro (CapCut CN) `User Data\Cache\bytebench` | No category | Single-machine observation, no vendor cache contract; nested in a mixed-state cache root that may hold project-linked media proxies (cache-like name ≠ disposability) |
+| DevEco Studio `tmp\patch-update` update jars | No category | IntelliJ-platform fork outside the `jetbrains-ide-caches` catalog (same exclusion class as Android Studio); no updater naming contract comparable to Grok residue (ADR 0022) |
+| DySDKController `sdklog` / dy_service `p2pLog` unbounded logs | No category | Logs are diagnostic state (never Regenerable), closed-source writers with no rotation contract; log bloat is `foal analyze` insight, not Clean's job |
+| GoogleUpdater `crx_cache` | No category | Lives under `Program Files (x86)` (pathsafe-rejected tree) and is the differential-update baseline — an active working set the updater GCs itself, not dead cache |
+
+Machine-wide `C:\ProgramData` caches are no longer a blanket exclusion: see ADR 0030 for the Machine-wide cache category controls and its first two categories.
+
 ## Considered options
 
 - **Allow elevation so Foal can match Disk Cleanup system volume** — rejected: new execution model, UAC, and test surface outweigh category work; system tools already cover those paths.
