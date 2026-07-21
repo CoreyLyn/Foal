@@ -2667,6 +2667,39 @@ func TestCleanHumanExecuteSummaryDistinguishesPermanentBytes(t *testing.T) {
 	}
 }
 
+// TestRenderCleanExecuteHumanSummaryServicingObservation proves a positive
+// post-mutation observation renders the approximate free-space and Mixed impact
+// lines, while a measured-zero observation renders neither.
+func TestRenderCleanExecuteHumanSummaryServicingObservation(t *testing.T) {
+	observed := int64(1500)
+	result := clean.Result{
+		Mode:   "execute",
+		Totals: clean.Totals{AffectedBytes: 12},
+		ServicingOperations: []clean.ServicingOperation{{
+			Category:          clean.CategoryWinSxSComponentStore,
+			Capability:        clean.ServicingCapabilityExecuteComponentStoreCleanup,
+			Outcome:           clean.ServicingOutcomeCompleted,
+			ObservedFreeBytes: &observed,
+		}},
+	}
+	out := renderCleanExecuteHumanSummary(result)
+	for _, want := range []string{"observed free-space increase ≈", "Mixed cleanup impact ≈"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("summary missing %q:\n%s", want, out)
+		}
+	}
+	// The Affected total must stay deletion-only (12), never fold in the observation.
+	if !strings.Contains(out, "Affected: 12 bytes") {
+		t.Fatalf("Affected total must exclude the observation:\n%s", out)
+	}
+
+	zero := int64(0)
+	result.ServicingOperations[0].ObservedFreeBytes = &zero
+	if out := renderCleanExecuteHumanSummary(result); strings.Contains(out, "observed free-space increase") || strings.Contains(out, "Mixed cleanup impact") {
+		t.Fatalf("measured-zero observation must show nothing:\n%s", out)
+	}
+}
+
 func TestHelpDocumentsAllowPermanent(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"--help"}, &stdout, &stderr)

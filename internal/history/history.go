@@ -61,9 +61,11 @@ type AggregateOutcomes struct {
 	ServicingOperationCount int `json:"servicing_operation_count,omitempty"`
 }
 
-// ServicingRecord is a path-free, byte-free Windows servicing operation stored
-// on a session separately from file ItemRecords (ADR 0029). It carries no path,
-// raw tool output, package identifier, or byte estimate.
+// ServicingRecord is a path-free Windows servicing operation stored on a session
+// separately from file ItemRecords (ADR 0029). It carries no path, raw tool
+// output, or package identifier. Its only byte value is the optional
+// post-mutation free-space observation, an approximate external disk reading
+// around a completed exit-0 cleanup that never enters any deletion byte total.
 type ServicingRecord struct {
 	Category            string `json:"category"`
 	PlannedAction       string `json:"planned_action"`
@@ -75,6 +77,10 @@ type ServicingRecord struct {
 	Reason              string `json:"reason,omitempty"`
 	ExitCode            *int   `json:"exit_code,omitempty"`
 	RestartRequired     bool   `json:"restart_required"`
+	// ObservedFreeBytes is the optional approximate free-space increase measured
+	// around a completed exit-0 StartComponentCleanup. Nil when not measured;
+	// omitempty keeps older records byte-identical.
+	ObservedFreeBytes *int64 `json:"observed_free_bytes,omitempty"`
 }
 
 type ItemRecord struct {

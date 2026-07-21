@@ -6,8 +6,9 @@
 //
 // The package never returns or persists raw DISM output, OS error text, package
 // identifiers, a WinSxS path, or a reclaimable-byte estimate. External surfaces
-// receive only the parsed English analysis fields and Foal-owned stable
-// messages through clean.ServicingAnalysisResult.
+// receive only the parsed English analysis fields, Foal-owned stable messages,
+// and — after a completed exit-0 cleanup — an optional approximate free-space
+// observation, never a reclaimable estimate.
 package servicing
 
 import (
@@ -189,11 +190,15 @@ func projectAnalysisForExecute(analysis clean.ServicingAnalysisResult) (proceed 
 
 // cleanupResultFromExit builds the composite execute result for a cleanup run
 // that actually reached exit, carrying the fresh-analysis package evidence and
-// the cleanup exit-code outcome/restart mapping.
-func cleanupResultFromExit(analysis clean.ServicingAnalysisResult, cleanupExit int) clean.ServicingExecuteResult {
+// the cleanup exit-code outcome/restart mapping. observedDelta is the measured
+// non-negative Windows-volume free-space increase around StartComponentCleanup,
+// or nil when unmeasured; it is attached only on an exit-0 completion, because a
+// restart-required (3010) success reclaims after reboot and any other exit is
+// not a completion whose immediate delta means anything.
+func cleanupResultFromExit(analysis clean.ServicingAnalysisResult, cleanupExit int, observedDelta *int64) clean.ServicingExecuteResult {
 	outcome, reason, restart := classifyCleanupExit(cleanupExit)
 	code := cleanupExit
-	return clean.ServicingExecuteResult{
+	res := clean.ServicingExecuteResult{
 		Outcome:             outcome,
 		Reason:              reason,
 		ReclaimablePackages: analysis.ReclaimablePackages,
@@ -201,4 +206,8 @@ func cleanupResultFromExit(analysis clean.ServicingAnalysisResult, cleanupExit i
 		ExitCode:            &code,
 		RestartRequired:     restart,
 	}
+	if cleanupExit == 0 && observedDelta != nil {
+		res.ObservedFreeBytes = observedDelta
+	}
+	return res
 }

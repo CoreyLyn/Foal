@@ -341,6 +341,15 @@ func renderHistoryReport(result history.QueryResult) string {
 		builder.WriteString(fmt.Sprintf("    started: %s | ended: %s\n",
 			session.StartedAt.Format("2006-01-02 15:04:05 MST"),
 			session.EndedAt.Format("2006-01-02 15:04:05 MST")))
+		// Surface the approximate post-mutation free-space observation when one was
+		// recorded (positive only; measured-zero and absent stay hidden). It is an
+		// external disk reading, never a reclaimable or deletion total.
+		for _, op := range session.ServicingOperations {
+			if op.ObservedFreeBytes != nil && *op.ObservedFreeBytes > 0 {
+				builder.WriteString(fmt.Sprintf("    component store · observed free-space increase ≈ %s (approximate)\n",
+					cleanFormatBytes(*op.ObservedFreeBytes)))
+			}
+		}
 	}
 	builder.WriteString(fmt.Sprintf("\nErrors (%d)\n", len(result.Errors)))
 	if len(result.Errors) == 0 {

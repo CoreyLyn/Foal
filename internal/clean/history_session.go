@@ -183,8 +183,9 @@ func historyIssue(issue StructuredIssue) *history.Issue {
 }
 
 // servicingHistoryRecords projects path-free servicing operations into history
-// records stored separately from file items. It copies only stable fields: no
-// path, raw tool output, package identifier, or byte estimate is introduced.
+// records stored separately from file items. It copies only stable fields plus
+// the optional post-mutation free-space observation: no path, raw tool output,
+// package identifier, or reclaimable byte estimate is introduced.
 func servicingHistoryRecords(operations []ServicingOperation) []history.ServicingRecord {
 	if len(operations) == 0 {
 		return nil
@@ -205,6 +206,10 @@ func servicingHistoryRecords(operations []ServicingOperation) []history.Servicin
 		if op.ExitCode != nil {
 			exit := *op.ExitCode
 			record.ExitCode = &exit
+		}
+		if op.ObservedFreeBytes != nil {
+			observed := *op.ObservedFreeBytes
+			record.ObservedFreeBytes = &observed
 		}
 		records = append(records, record)
 	}

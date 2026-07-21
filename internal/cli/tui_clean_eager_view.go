@@ -418,7 +418,7 @@ func eagerServicingRowLabel(row eagerCategoryRow) string {
 	case clean.ServicingRowAnalyzing:
 		return row.Label + " · analyzing…"
 	case clean.ServicingRowReady:
-		return fmt.Sprintf("%s · ready · %d reclaimable package(s)", row.Label, row.ServicingReclaimablePackages)
+		return fmt.Sprintf("%s · ready · %d reclaimable package(s) · size unknown", row.Label, row.ServicingReclaimablePackages)
 	case clean.ServicingRowNoWork:
 		return row.Label + " · no cleanup needed"
 	case clean.ServicingRowSkipped:

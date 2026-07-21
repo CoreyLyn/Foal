@@ -50,7 +50,8 @@ type ServicingExecuteRequest struct {
 // execute_component_store_cleanup invocation. The gateway performs a fresh
 // analysis, enforces the guard, and starts cleanup only when a positive
 // reclaimable-package count is explicitly recommended; the result reports what
-// actually happened. It is path-free and byte-free.
+// actually happened. It is path-free; its only byte value is the optional
+// post-mutation free-space observation.
 type ServicingExecuteResult struct {
 	// Outcome is a stable mutation outcome: completed, no_work, skipped, failed,
 	// or pre-mutation canceled. A ready outcome is never valid here.
@@ -71,6 +72,11 @@ type ServicingExecuteResult struct {
 	// It never replaces the actual completed or failed outcome; a pre-mutation
 	// cancellation instead uses Outcome canceled with CancelRequested false.
 	CancelRequested bool
+	// ObservedFreeBytes is the approximate non-negative free-space increase on the
+	// Windows volume measured around a completed exit-0 StartComponentCleanup. It
+	// is nil unless the mutation completed with exit 0 and the delta was
+	// non-negative; a restart-required (3010) success or any failure leaves it nil.
+	ObservedFreeBytes *int64
 }
 
 // ServicingGateway is the high-level seam for Windows component-store servicing.
@@ -229,6 +235,9 @@ func applyServicingExecuteResult(op ServicingOperation, res ServicingExecuteResu
 		op.Outcome = ServicingOutcomeCompleted
 		op.ReclaimablePackages = res.ReclaimablePackages
 		op.CleanupRecommended = res.CleanupRecommended
+		// Attach the post-mutation observation only on completion; the gateway
+		// result already restricts it to an exit-0 non-negative delta.
+		op.ObservedFreeBytes = res.ObservedFreeBytes
 	case ServicingOutcomeNoWork:
 		op.Outcome = ServicingOutcomeNoWork
 		op.ReclaimablePackages = res.ReclaimablePackages

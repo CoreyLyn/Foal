@@ -121,6 +121,42 @@ func TestAggregateAndGroupSelectionExcludeExactOnly(t *testing.T) {
 	}
 }
 
+// TestServicingObservationProjectsAndStaysOutOfTotals proves the post-mutation
+// free-space observation projects into History and the aggregate helper, yet
+// never becomes a byte total; measured-zero and absent observations contribute
+// nothing to the presentation aggregate.
+func TestServicingObservationProjectsAndStaysOutOfTotals(t *testing.T) {
+	positive := int64(2048)
+	zero := int64(0)
+	ops := []ServicingOperation{
+		{Category: "winsxs_component_store", Capability: ServicingCapabilityExecuteComponentStoreCleanup, Outcome: ServicingOutcomeCompleted, ObservedFreeBytes: &positive},
+		{Category: "winsxs_component_store", Capability: ServicingCapabilityExecuteComponentStoreCleanup, Outcome: ServicingOutcomeCompleted, ObservedFreeBytes: &zero},
+		{Category: "winsxs_component_store", Capability: ServicingCapabilityExecuteComponentStoreCleanup, Outcome: ServicingOutcomeCompleted},
+	}
+
+	records := servicingHistoryRecords(ops)
+	if records[0].ObservedFreeBytes == nil || *records[0].ObservedFreeBytes != 2048 {
+		t.Fatalf("positive observation not projected to history: %#v", records[0].ObservedFreeBytes)
+	}
+	if records[1].ObservedFreeBytes == nil || *records[1].ObservedFreeBytes != 0 {
+		t.Fatalf("measured zero must project distinct from nil: %#v", records[1].ObservedFreeBytes)
+	}
+	if records[2].ObservedFreeBytes != nil {
+		t.Fatalf("absent observation must stay nil: %#v", records[2].ObservedFreeBytes)
+	}
+
+	total, present := ServicingObservedFreeBytes(ops)
+	if !present || total != 2048 {
+		t.Fatalf("aggregate = (%d, %v), want (2048, true): zero and nil must contribute nothing", total, present)
+	}
+
+	got := totals(Result{Mode: "execute", ServicingOperations: ops})
+	if got.AffectedBytes != 0 || got.RecycleBinMovedBytes != 0 || got.PermanentlyDeletedBytes != 0 ||
+		got.CandidateBytes != 0 || got.OptInAffectedBytes != 0 {
+		t.Fatalf("observation leaked into byte totals: %#v", got)
+	}
+}
+
 func exactOnlyEntry(id string, report ReportCategory, kind categoryResolverKind, cliAgent bool) categoryCatalogEntry {
 	def := categoryDefinition(id, id, report, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionInvokeWindowsServicing)
 	def.SelectionPolicy = CategorySelectionPolicyExactOnly

@@ -730,6 +730,16 @@ func renderCleanExecuteHumanSummary(result clean.Result) string {
 		builder.WriteString(line)
 		builder.WriteString("\n")
 	}
+	// Post-mutation free-space observation is an approximate external reading,
+	// shown below Affected and kept out of the Affected total. A measured-zero or
+	// absent observation shows nothing. When present, a Mixed cleanup impact line
+	// sums Affected plus the observation, explicitly labeled approximate.
+	if observed, present := clean.ServicingObservedFreeBytes(result.ServicingOperations); present {
+		builder.WriteString(fmt.Sprintf("%s: observed free-space increase ≈ %s (approximate; not counted in Affected).\n",
+			"Windows component store", cleanFormatBytes(observed)))
+		builder.WriteString(fmt.Sprintf("Mixed cleanup impact ≈ %s (approximate: Affected plus observed servicing free-space).\n",
+			cleanFormatBytes(result.Totals.AffectedBytes+observed)))
+	}
 	return builder.String()
 }
 

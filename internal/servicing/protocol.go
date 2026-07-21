@@ -53,10 +53,13 @@ type pipeRequest struct {
 }
 
 // pipeResponse is the structured servicing result the helper returns. It is
-// path-free and byte-free: only the parsed English analysis fields, a stable
-// Foal-owned outcome and reason, an optional DISM exit code, and the mutation
-// restart-required/cancellation-request state. It never carries raw DISM
-// output, OS error text, or a package identifier.
+// path-free: only the parsed English analysis fields, a stable Foal-owned
+// outcome and reason, an optional DISM exit code, the mutation
+// restart-required/cancellation-request state, and an optional post-mutation
+// free-space observation. It never carries raw DISM output, OS error text, or a
+// package identifier. The observation is the single permitted byte value: an
+// approximate external disk reading around a completed exit-0 cleanup, never a
+// reclaimable estimate.
 type pipeResponse struct {
 	Version             uint32 `json:"version"`
 	Outcome             string `json:"outcome"`
@@ -69,6 +72,10 @@ type pipeResponse struct {
 	// execute capability. Analysis leaves them false.
 	RestartRequired bool `json:"restart_required,omitempty"`
 	CancelRequested bool `json:"cancel_requested,omitempty"`
+	// HasObservedFreeBytes distinguishes a measured value (including zero) from
+	// "not measured"; ObservedFreeBytes carries the non-negative delta when set.
+	HasObservedFreeBytes bool  `json:"has_observed_free_bytes,omitempty"`
+	ObservedFreeBytes    int64 `json:"observed_free_bytes,omitempty"`
 }
 
 // newNonce returns a fresh random one-time nonce as a hex string.

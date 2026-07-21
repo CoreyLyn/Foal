@@ -1698,6 +1698,15 @@ func (m eagerCleanModel) resultFooterStyleLines() []tuiStyleLine {
 	for _, note := range eagerResultServicingNotes(m.executionResult) {
 		lines = append(lines, plainStyleLine(note))
 	}
+	// Post-mutation free-space observation: an approximate external reading shown
+	// below Affected, de-emphasized (plain, ≈ prefix) so it never reads as a
+	// precise deletion total. A measured-zero or absent observation shows nothing.
+	if observed, present := clean.ServicingObservedFreeBytes(m.executionResult.ServicingOperations); present {
+		lines = append(lines,
+			plainStyleLine(fmt.Sprintf("Windows component store: observed free-space increase ≈ %s (approximate; not in Affected)", cleanFormatBytes(observed))),
+			plainStyleLine(fmt.Sprintf("Mixed cleanup impact ≈ %s (approximate: Affected plus observed servicing free-space)", cleanFormatBytes(affected+observed))),
+		)
+	}
 	lines = append(lines, plainStyleLine(""), plainStyleLine("Enter/Esc/b: menu · q: quit"))
 	return lines
 }

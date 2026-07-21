@@ -85,6 +85,54 @@ func TestFileRecorderRoundTripsServicingOperationsSeparateFromItems(t *testing.T
 	}
 }
 
+// TestFileRecorderRoundTripsServicingObservation verifies the optional
+// post-mutation free-space observation persists and round-trips, preserving a
+// measured zero as distinct from an absent (nil) observation.
+func TestFileRecorderRoundTripsServicingObservation(t *testing.T) {
+	dir := t.TempDir()
+	recorder := history.NewFileRecorder(dir)
+	exit0 := 0
+	positive := int64(1500)
+	zero := int64(0)
+	servicing := []history.ServicingRecord{
+		{Category: "winsxs_component_store", PlannedAction: "invoke_windows_servicing", Capability: "execute_component_store_cleanup", Outcome: "completed", ExitCode: &exit0, ObservedFreeBytes: &positive},
+		{Category: "winsxs_component_store", PlannedAction: "invoke_windows_servicing", Capability: "execute_component_store_cleanup", Outcome: "completed", ExitCode: &exit0, ObservedFreeBytes: &zero},
+		{Category: "winsxs_component_store", PlannedAction: "invoke_windows_servicing", Capability: "execute_component_store_cleanup", Outcome: "completed", ExitCode: &exit0},
+	}
+	session := history.SessionRecord{
+		ID:                  "clean-execute-observation",
+		Command:             history.CommandParameters{Command: "clean", Args: []string{"clean", "--execute"}},
+		Mode:                "execute",
+		StartedAt:           time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC),
+		EndedAt:             time.Date(2026, 7, 20, 10, 0, 5, 0, time.UTC),
+		Aggregate:           history.AggregateOutcomes{ServicingOperationCount: len(servicing)},
+		ServicingOperations: servicing,
+	}
+	if err := recorder.Record(context.Background(), session, nil); err != nil {
+		t.Fatalf("Record returned error: %v", err)
+	}
+
+	got := history.NewFileQuery(dir).Recent(context.Background()).Sessions[0].ServicingOperations
+	if got[0].ObservedFreeBytes == nil || *got[0].ObservedFreeBytes != 1500 {
+		t.Fatalf("positive observation lost: %#v", got[0].ObservedFreeBytes)
+	}
+	if got[1].ObservedFreeBytes == nil || *got[1].ObservedFreeBytes != 0 {
+		t.Fatalf("measured zero must round-trip distinct from nil: %#v", got[1].ObservedFreeBytes)
+	}
+	if got[2].ObservedFreeBytes != nil {
+		t.Fatalf("absent observation must stay nil: %#v", got[2].ObservedFreeBytes)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "clean-execute-observation.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := string(raw)
+	if !strings.Contains(blob, `"observed_free_bytes":1500`) || !strings.Contains(blob, `"observed_free_bytes":0`) {
+		t.Fatalf("encoded observation missing: %s", blob)
+	}
+}
+
 // TestQueryReadsHistoryWithoutServicingUnchanged confirms older deletion-only
 // sessions decode with an empty servicing list and zero count.
 func TestQueryReadsHistoryWithoutServicingUnchanged(t *testing.T) {

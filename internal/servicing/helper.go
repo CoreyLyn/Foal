@@ -106,6 +106,10 @@ func responseFromExecute(res clean.ServicingExecuteResult) pipeResponse {
 		resp.HasExitCode = true
 		resp.ExitCode = *res.ExitCode
 	}
+	if res.ObservedFreeBytes != nil {
+		resp.HasObservedFreeBytes = true
+		resp.ObservedFreeBytes = *res.ObservedFreeBytes
+	}
 	return resp
 }
 
@@ -141,6 +145,10 @@ func executeResultFromResponse(resp pipeResponse) clean.ServicingExecuteResult {
 	if resp.HasExitCode {
 		code := resp.ExitCode
 		res.ExitCode = &code
+	}
+	if resp.HasObservedFreeBytes {
+		observed := resp.ObservedFreeBytes
+		res.ObservedFreeBytes = &observed
 	}
 	return res
 }

@@ -1,11 +1,15 @@
 package clean
 
 // Windows servicing contract (ADR 0029). This file defines the action-neutral,
-// path-free, byte-free servicing operation record shared by Result and History.
-// It carries no filesystem path, raw DISM output, package identifier, or guessed
-// byte estimate. Actual Windows servicing invocation is intentionally out of
-// scope for this contract: no production category registers
-// invoke_windows_servicing yet, and this package never launches DISM here.
+// path-free servicing operation record shared by Result and History. It carries
+// no filesystem path, raw DISM output, package identifier, or guessed byte
+// estimate. The single permitted byte value is an optional post-mutation
+// free-space observation measured only around a completed exit-0
+// StartComponentCleanup; it is an approximate external disk reading, never a
+// reclaimable estimate, and never enters any deletion byte total. Actual Windows
+// servicing invocation is intentionally out of scope for this contract: no
+// production category registers invoke_windows_servicing yet, and this package
+// never launches DISM here.
 
 // ServicingCapability is the fixed built-in helper capability a servicing
 // operation used. There is no standalone start-cleanup capability: the composite
@@ -47,14 +51,15 @@ const (
 	ServicingReasonUnsupportedPlatform   = "unsupported_platform"
 )
 
-// ServicingOperation is the path-free, byte-free record of one Windows servicing
+// ServicingOperation is the path-free record of one Windows servicing
 // operation. It never enters file candidates, deleted/failed/skipped file items,
 // detailed path lists, or path History, and never contributes candidate,
 // affected, Recycle Bin, or Permanent deletion bytes. It carries only parsed
 // analysis evidence (a reclaimable package count and cleanup recommendation),
 // the outcome, cancellation-request state, an optional stable reason, an
-// optional DISM exit code (present only when DISM actually ran), and the
-// restart-required state derived from DISM exit semantics.
+// optional DISM exit code (present only when DISM actually ran), the
+// restart-required state derived from DISM exit semantics, and an optional
+// post-mutation free-space observation.
 type ServicingOperation struct {
 	Category            string              `json:"category"`
 	PlannedAction       PlannedAction       `json:"planned_action"`
@@ -68,6 +73,14 @@ type ServicingOperation struct {
 	// skips and pre-launch failures leave it nil.
 	ExitCode        *int `json:"exit_code,omitempty"`
 	RestartRequired bool `json:"restart_required"`
+	// ObservedFreeBytes is the approximate non-negative free-space increase on the
+	// Windows volume measured only around a completed exit-0 StartComponentCleanup
+	// (after minus before). It is nil when not measured — non-completed outcomes,
+	// a restart-required (3010) success whose reclaim happens after reboot, or a
+	// negative delta. A measured zero is a legitimate value distinct from nil. It
+	// is an external observation, never a reclaimable estimate, and never enters
+	// affected, Recycle Bin, or Permanent deletion byte totals.
+	ObservedFreeBytes *int64 `json:"observed_free_bytes,omitempty"`
 }
 
 // ValidServicingOutcome reports whether outcome is a stable servicing outcome.

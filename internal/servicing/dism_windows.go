@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -118,11 +120,54 @@ func runComponentStoreCleanup() clean.ServicingExecuteResult {
 	if !proceed {
 		return projected
 	}
+	// Sample Windows-volume free space immediately around StartComponentCleanup
+	// only, so the observation excludes the preceding fresh analysis and every
+	// earlier Clean action group (ADR 0029). A read failure simply yields no
+	// observation.
+	beforeFree, beforeOK := volumeFreeBytes()
 	exitCode, _, ok := runSystemDISM(startComponentCleanupArgs)
 	if !ok {
 		return failExecuteResult(clean.ServicingReasonToolUnavailable)
 	}
-	return cleanupResultFromExit(analysis, exitCode)
+	afterFree, afterOK := volumeFreeBytes()
+	var observed *int64
+	if beforeOK && afterOK && afterFree >= beforeFree {
+		delta := int64(afterFree - beforeFree)
+		observed = &delta
+	}
+	return cleanupResultFromExit(analysis, exitCode, observed)
+}
+
+// getDiskFreeSpaceEx is resolved from kernel32 directly, mirroring
+// internal/status; the x/sys wrapper is not relied on so this stays available
+// across sys versions.
+var getDiskFreeSpaceEx = syscall.NewLazyDLL("kernel32.dll").NewProc("GetDiskFreeSpaceExW")
+
+// volumeFreeBytes returns the total free bytes on the volume that hosts the
+// Windows system directory. ok is false when the volume free space could not be
+// read at all, in which case the caller attaches no free-space observation. It
+// is used only to observe disk change around a completed cleanup; it never
+// gates or authorizes the mutation.
+func volumeFreeBytes() (freeBytes uint64, ok bool) {
+	dir, err := systemDirectory()
+	if err != nil {
+		return 0, false
+	}
+	pathPtr, err := syscall.UTF16PtrFromString(dir)
+	if err != nil {
+		return 0, false
+	}
+	var availableToCaller, totalBytes, totalFree uint64
+	ret, _, _ := getDiskFreeSpaceEx.Call(
+		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(unsafe.Pointer(&availableToCaller)),
+		uintptr(unsafe.Pointer(&totalBytes)),
+		uintptr(unsafe.Pointer(&totalFree)),
+	)
+	if ret == 0 {
+		return 0, false
+	}
+	return totalFree, true
 }
 
 // runSystemDISM resolves the system DISM, re-validates its ordinary non-reparse

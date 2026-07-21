@@ -475,6 +475,73 @@ func TestServicingResultFailure(t *testing.T) {
 	}
 }
 
+// TestServicingReadyRowDisclosesSizeUnknown proves the selection ready row
+// carries the weak "size unknown" disclosure without inventing a byte figure.
+func TestServicingReadyRowDisclosesSizeUnknown(t *testing.T) {
+	model := newServicingWorkflowModel(t)
+	runServicingAnalysis(t, model, clean.ServicingOperation{
+		Outcome:             clean.ServicingOutcomeReady,
+		ReclaimablePackages: 7,
+		CleanupRecommended:  true,
+	})
+	content := model.content()
+	if !strings.Contains(content, "reclaimable package(s) · size unknown") {
+		t.Fatalf("ready row must disclose size unknown without a byte figure:\n%s", content)
+	}
+}
+
+// TestServicingResultObservationShownWhenPositive proves a positive post-mutation
+// observation renders an approximate free-space line plus a Mixed cleanup impact
+// line on the result page.
+func TestServicingResultObservationShownWhenPositive(t *testing.T) {
+	observed := int64(1500)
+	content := servicingResultContent(t, clean.ServicingOperation{
+		Category:          clean.CategoryWinSxSComponentStore,
+		PlannedAction:     clean.PlannedActionInvokeWindowsServicing,
+		Capability:        clean.ServicingCapabilityExecuteComponentStoreCleanup,
+		Outcome:           clean.ServicingOutcomeCompleted,
+		ObservedFreeBytes: &observed,
+	})
+	if !strings.Contains(content, "observed free-space increase ≈") {
+		t.Fatalf("positive observation must be shown:\n%s", content)
+	}
+	if !strings.Contains(content, "Mixed cleanup impact ≈") {
+		t.Fatalf("mixed cleanup impact must be shown when observation present:\n%s", content)
+	}
+}
+
+// TestServicingResultObservationHiddenWhenZeroOrAbsent proves a measured-zero or
+// absent observation shows nothing (presentation treats zero as no observation).
+func TestServicingResultObservationHiddenWhenZeroOrAbsent(t *testing.T) {
+	zero := int64(0)
+	cases := map[string]clean.ServicingOperation{
+		"measured zero": {Category: clean.CategoryWinSxSComponentStore, PlannedAction: clean.PlannedActionInvokeWindowsServicing, Capability: clean.ServicingCapabilityExecuteComponentStoreCleanup, Outcome: clean.ServicingOutcomeCompleted, ObservedFreeBytes: &zero},
+		"absent":        {Category: clean.CategoryWinSxSComponentStore, PlannedAction: clean.PlannedActionInvokeWindowsServicing, Capability: clean.ServicingCapabilityExecuteComponentStoreCleanup, Outcome: clean.ServicingOutcomeCompleted},
+	}
+	for name, op := range cases {
+		t.Run(name, func(t *testing.T) {
+			content := servicingResultContent(t, op)
+			if strings.Contains(content, "observed free-space increase") || strings.Contains(content, "Mixed cleanup impact") {
+				t.Fatalf("zero/absent observation must show nothing:\n%s", content)
+			}
+		})
+	}
+}
+
+// TestServicingObservationLinesNotMagnitudeEligible proves the approximate
+// observation and Mixed impact lines opt out of danger-aware magnitude emphasis.
+func TestServicingObservationLinesNotMagnitudeEligible(t *testing.T) {
+	lines := []string{
+		"Windows component store: observed free-space increase ≈ 1.5 KB (approximate; not in Affected)",
+		"Mixed cleanup impact ≈ 1.5 KB (approximate: Affected plus observed servicing free-space)",
+	}
+	for _, line := range lines {
+		if isMagnitudeEligibleLine(line) {
+			t.Fatalf("approximate observation line must not be magnitude-eligible: %q", line)
+		}
+	}
+}
+
 // servicingResultContent drives a ready+selected servicing row through the
 // confirm/execute/result flow with an injected Result carrying the given
 // servicing operation, then returns the rendered result-page content.
