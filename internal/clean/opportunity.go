@@ -20,6 +20,7 @@ const (
 	OpportunityCategoryINetCache              = "inet_cache"
 	OpportunityCategoryD3DShaderCache         = "d3d_shader_cache"
 	OpportunityCategoryNVIDIADXCache          = "nvidia_dx_cache"
+	OpportunityCategoryNVIDIAGLCache          = "nvidia_gl_cache"
 	OpportunityCategoryAMDGPUShaderCaches     = "amd_gpu_shader_caches"
 	OpportunityCategoryIntelGPUShaderCache    = "intel_gpu_shader_cache"
 	OpportunityCategoryBrowserCache           = "browser_cache"

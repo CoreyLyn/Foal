@@ -1002,6 +1002,7 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 		clean.OpportunityCategoryINetCache,
 		clean.OpportunityCategoryD3DShaderCache,
 		clean.OpportunityCategoryNVIDIADXCache,
+			clean.OpportunityCategoryNVIDIAGLCache,
 		clean.OpportunityCategoryAMDGPUShaderCaches,
 		clean.OpportunityCategoryIntelGPUShaderCache,
 		clean.OpportunityCategoryBrowserCache,
@@ -1120,9 +1121,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// 18 opportunity + nvidia_installer_cache + winsxs_component_store servicing + 17 dev caches + grok-build-update-residue + "dev-caches" + "app-caches" + "cli-agents" + "all" = 42
-	if len(valid) != 42 {
-		t.Fatalf("expected 42 valid names, got %d: %v", len(valid), valid)
+	// 19 opportunity + nvidia_installer_cache + lghub-cache + winsxs_component_store servicing + 17 dev caches + grok-build-update-residue + "dev-caches" + "app-caches" + "cli-agents" + "all" = 44
+	if len(valid) != 44 {
+		t.Fatalf("expected 44 valid names, got %d: %v", len(valid), valid)
 	}
 }
 

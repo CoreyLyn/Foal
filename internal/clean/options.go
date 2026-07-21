@@ -269,6 +269,12 @@ type Options struct {
 	// Production leaves the zero value so the fixed ProgramData root and the
 	// platform process/service, signature, and forensic detectors are used.
 	NVIDIAInstallerCacheDiscoveryOptions NVIDIAInstallerCacheDiscoveryOptions
+	// LGHUBCacheDiscoveryOptions injects the fixed-root override and platform
+	// detection seams for the lghub-cache category. Production leaves the zero
+	// value so the fixed ProgramData root and the platform process/service
+	// detectors are used. Tests must use isolated roots and never read the real
+	// LGHUB cache tree.
+	LGHUBCacheDiscoveryOptions LGHUBCacheDiscoveryOptions
 }
 
 type Rule struct {

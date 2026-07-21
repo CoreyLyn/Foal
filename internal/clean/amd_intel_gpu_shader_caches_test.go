@@ -571,4 +571,262 @@ func TestSeparateVendorCategoriesNoMegaCategory(t *testing.T) {
 	if _, ok := catalog.Summary(clean.OpportunityCategoryIntelGPUShaderCache); !ok {
 		t.Fatal("intel_gpu_shader_cache required")
 	}
+	if _, ok := catalog.Summary(clean.OpportunityCategoryNVIDIADXCache); !ok {
+		t.Fatal("nvidia_dx_cache required")
+	}
+	if _, ok := catalog.Summary(clean.OpportunityCategoryNVIDIAGLCache); !ok {
+		t.Fatal("nvidia_gl_cache required")
+	}
+}
+
+func TestNVIDIAGLCache_CatalogPermanentAndInitiallySelected(t *testing.T) {
+	summary, ok := clean.CanonicalCleanupCategoryCatalog().Summary(clean.OpportunityCategoryNVIDIAGLCache)
+	if !ok {
+		t.Fatal("nvidia_gl_cache missing from catalog")
+	}
+	if summary.ReportCategory != clean.ReportCategorySystem {
+		t.Fatalf("report = %q", summary.ReportCategory)
+	}
+	if summary.Eligibility != clean.CategoryEligibilityOptIn {
+		t.Fatalf("eligibility = %q", summary.Eligibility)
+	}
+	if summary.RunningApplicationPolicy != clean.RunningApplicationPolicyNotApplicable {
+		t.Fatalf("running policy = %q", summary.RunningApplicationPolicy)
+	}
+	if summary.PlannedAction != clean.PlannedActionDeletePermanently {
+		t.Fatalf("planned_action = %q, want delete_permanently", summary.PlannedAction)
+	}
+	if !clean.InitiallySelectedCategory(summary) {
+		t.Fatal("permanent nvidia_gl_cache must start selected when measurable")
+	}
+
+	for _, token := range []string{clean.OpportunityCategoryNVIDIAGLCache, "all"} {
+		enabled, invalid, _ := clean.NormalizedOptInSet([]string{token})
+		if len(invalid) != 0 {
+			t.Fatalf("%s invalid = %#v", token, invalid)
+		}
+		if !enabled[clean.OpportunityCategoryNVIDIAGLCache] {
+			t.Fatalf("%s did not enable nvidia_gl_cache", token)
+		}
+	}
+	// Separate NVIDIA categories: opting into NVIDIA GL alone must not enable NVIDIA DX.
+	enabled, _, _ := clean.NormalizedOptInSet([]string{clean.OpportunityCategoryNVIDIAGLCache})
+	if enabled[clean.OpportunityCategoryNVIDIADXCache] {
+		t.Fatal("nvidia_gl_cache opt-in must not enable nvidia_dx_cache")
+	}
+}
+
+func TestNVIDIAGLCache_DiscoverGLCacheOnly(t *testing.T) {
+	localAppData := t.TempDir()
+	// Create GLCache directory
+	glCache := filepath.Join(localAppData, "NVIDIA", "GLCache")
+	if err := os.MkdirAll(glCache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(glCache, "example.bin"), []byte("glcache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Create DXCache directory (should not be discovered for nvidia_gl_cache)
+	dxCache := filepath.Join(localAppData, "NVIDIA", "DXCache")
+	if err := os.MkdirAll(dxCache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dxCache, "example.bin"), []byte("dxcache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := clean.DiscoverOpportunities(context.Background(), clean.OpportunityDiscoveryOptions{
+		TempDir:           t.TempDir(),
+		LocalAppDataDir:   localAppData,
+		LocalAppDataLowDir: t.TempDir(),
+		Categories:        []string{clean.OpportunityCategoryNVIDIAGLCache},
+	})
+
+	if len(result.Incomplete) != 0 {
+		t.Fatalf("incomplete = %#v", result.Incomplete)
+	}
+	if len(result.Opportunities) != 1 {
+		t.Fatalf("opportunities = %#v, want only GLCache", result.Opportunities)
+	}
+	if result.Opportunities[0].Category != clean.OpportunityCategoryNVIDIAGLCache {
+		t.Fatalf("category = %q", result.Opportunities[0].Category)
+	}
+	if result.Opportunities[0].Path != glCache {
+		t.Fatalf("path = %q, want %q", result.Opportunities[0].Path, glCache)
+	}
+	if result.Opportunities[0].Bytes <= 0 {
+		t.Fatalf("bytes = %d for %q", result.Opportunities[0].Bytes, result.Opportunities[0].Path)
+	}
+}
+
+func TestNVIDIAGLCache_MissingRootSilentAbsence(t *testing.T) {
+	result := clean.DiscoverOpportunities(context.Background(), clean.OpportunityDiscoveryOptions{
+		TempDir:           t.TempDir(),
+		LocalAppDataDir:   t.TempDir(),
+		LocalAppDataLowDir: t.TempDir(),
+		Categories:        []string{clean.OpportunityCategoryNVIDIAGLCache},
+	})
+	if len(result.Opportunities) != 0 || len(result.Incomplete) != 0 {
+		t.Fatalf("result = %#v, want silent absence", result)
+	}
+}
+
+func TestNVIDIAGLCache_DryRunReportsPermanentWithoutAuthorization(t *testing.T) {
+	localAppData := t.TempDir()
+	glCache := filepath.Join(localAppData, "NVIDIA", "GLCache")
+	if err := os.MkdirAll(glCache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(glCache, "example.bin"), []byte("glcache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		AllowPermanentDeletion: false,
+		OptIn:                  []string{clean.OpportunityCategoryNVIDIAGLCache},
+		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
+			TempDir:           t.TempDir(),
+			LocalAppDataDir:   localAppData,
+			LocalAppDataLowDir: t.TempDir(),
+		},
+		// Avoid host package-manager tool probes and default sandbox noise.
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+	})
+	if len(result.OptInCandidates) != 1 {
+		t.Fatalf("candidates = %#v", result.OptInCandidates)
+	}
+	c := result.OptInCandidates[0]
+	if c.Category != clean.OpportunityCategoryNVIDIAGLCache || c.Path != glCache {
+		t.Fatalf("candidate = %#v", c)
+	}
+	if c.PlannedAction != string(clean.PlannedActionDeletePermanently) {
+		t.Fatalf("planned_action = %q", c.PlannedAction)
+	}
+	if len(result.Deleted) != 0 {
+		t.Fatalf("dry-run deleted = %#v", result.Deleted)
+	}
+	if _, err := os.Lstat(glCache); err != nil {
+		t.Fatalf("dry-run must leave root: %v", err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(encoded)
+	if !strings.Contains(body, `"planned_action":"delete_permanently"`) {
+		t.Fatalf("JSON missing permanent planned_action: %s", body)
+	}
+	if strings.Contains(strings.ToLower(body), "secure erase") {
+		t.Fatalf("must not claim secure erase: %s", body)
+	}
+}
+
+func TestNVIDIAGLCache_ExecuteRequiresAllowPermanent(t *testing.T) {
+	localAppData := t.TempDir()
+	glCache := filepath.Join(localAppData, "NVIDIA", "GLCache")
+	if err := os.MkdirAll(glCache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(glCache, "example.bin"), []byte("glcache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	recyclePath := writeTestFile(t, t.TempDir(), "foal-owned.tmp", "rb12")
+
+	permanent := &recordingPermanentRemover{}
+	recycle := &recordingRecycleBinAdapter{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion: false,
+		OptIn:                  []string{clean.OpportunityCategoryNVIDIAGLCache},
+		RecycleBinAdapter:      recycle,
+		PermanentRemover:       permanent,
+		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
+			LocalAppDataDir:   localAppData,
+			LocalAppDataLowDir: t.TempDir(),
+		},
+		Rules: []clean.Rule{{
+			ID:             clean.DefaultCategoryFoalOwnedTempSandboxes,
+			DefaultEnabled: true,
+			CandidatePaths: []string{recyclePath},
+		}},
+	})
+	if len(permanent.paths) != 0 {
+		t.Fatalf("permanent remover without auth: %v", permanent.paths)
+	}
+	if len(recycle.paths) != 1 || recycle.paths[0] != recyclePath {
+		t.Fatalf("recycle paths = %v", recycle.paths)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason.Code != "permanent_deletion_not_authorized" {
+		t.Fatalf("skipped = %#v", result.Skipped)
+	}
+	if result.Skipped[0].Rule != clean.OpportunityCategoryNVIDIAGLCache {
+		t.Fatalf("skip rule = %q", result.Skipped[0].Rule)
+	}
+	if _, err := os.Lstat(glCache); err != nil {
+		t.Fatalf("unauthorized path must remain: %v", err)
+	}
+}
+
+func TestNVIDIAGLCache_ExecuteWithAllowPermanentDeletesRoot(t *testing.T) {
+	localAppData := t.TempDir()
+	glCache := filepath.Join(localAppData, "NVIDIA", "GLCache")
+	if err := os.MkdirAll(glCache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(glCache, "example.bin"), []byte("glcache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	permanent := &recordingPermanentRemover{}
+	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
+		OptIn:                  []string{clean.OpportunityCategoryNVIDIAGLCache},
+		PermanentRemover:       permanent,
+		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
+			LocalAppDataDir:   localAppData,
+			LocalAppDataLowDir: t.TempDir(),
+		},
+		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+	})
+	if len(permanent.paths) != 1 || permanent.paths[0] != glCache {
+		t.Fatalf("permanent paths = %v, want %v", permanent.paths, glCache)
+	}
+	if len(result.Deleted) != 1 {
+		t.Fatalf("deleted = %#v", result.Deleted)
+	}
+	if result.Deleted[0].Rule != clean.OpportunityCategoryNVIDIAGLCache {
+		t.Fatalf("deleted rule = %q", result.Deleted[0].Rule)
+	}
+	if result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
+		t.Fatalf("action = %q", result.Deleted[0].Action)
+	}
+	if result.Totals.PermanentlyDeletedBytes <= 0 {
+		t.Fatalf("permanently_deleted_bytes = 0")
+	}
+}
+
+func TestNVIDIAGLCache_ProtectionSuppressesCandidate(t *testing.T) {
+	localAppData := t.TempDir()
+	glCache := filepath.Join(localAppData, "NVIDIA", "GLCache")
+	if err := os.MkdirAll(glCache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(glCache, "example.bin"), []byte("glcache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := clean.DryRun(context.Background(), clean.Options{
+		OptIn:     []string{clean.OpportunityCategoryNVIDIAGLCache},
+		Validator: pathsafe.NewValidator([]string{glCache}),
+		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
+			TempDir:           t.TempDir(),
+			LocalAppDataDir:   localAppData,
+			LocalAppDataLowDir: t.TempDir(),
+		},
+		DiscoverReviewSuggestions: noReviewSuggestions,
+		Rules:                     []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
+	})
+	if len(result.OptInCandidates) != 0 {
+		t.Fatalf("candidates = %#v, want protection suppression", result.OptInCandidates)
+	}
 }

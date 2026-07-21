@@ -638,9 +638,9 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 31 delete_permanently + 7 move_to_recycle_bin + 1 actionless permission boundary.
-	// The 7th Recycle Bin category is the exact-selection-only, Not-proven
-	// nvidia_installer_cache (registered in the System group below).
+	// 32 delete_permanently + 8 move_to_recycle_bin + 1 actionless permission boundary.
+	// The 7th and 8th Recycle Bin categories are the exact-selection-only, Not-proven
+	// nvidia_installer_cache and lghub-cache (registered in the System group below).
 	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
 	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin)),
@@ -671,6 +671,10 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently), "D3DSCache"),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently), "NVIDIA", "DXCache"),
+	withPreviewSafetyNote(existenceOpportunityEntry(
+		categoryDefinition(OpportunityCategoryNVIDIAGLCache, "NVIDIA GL cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently),
+		"NVIDIA", "GLCache",
+	), staticPreviewSafetyNote(gpuShaderCacheOptInImpactNotice)),
 	// AMD GPU/shader caches: exact allowlisted children under Local AMD (+ optional
 	// LocalLow AMD\DxCache). Parent AMD and non-allowlisted siblings are never candidates.
 	// Evidence: docs/research/amd-intel-gpu-shader-caches.md (#234/#238).
@@ -707,6 +711,25 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			SelectionPolicy:          CategorySelectionPolicyExactOnly,
 		},
 	), staticPreviewSafetyNote(nvidiaInstallerCacheOptInImpactNotice)),
+		// LG HUB cache: exact-selection-only, Not-proven move_to_recycle_bin opt-in
+		// for content-addressed download blobs under the fixed C:\ProgramData\LGHUB\cache
+		// root. Candidates are exactly ordinary files named 64 lowercase hex characters
+		// directly under the root; unknown names, directories, reparse points, and the
+		// root itself are never candidates. Dedicated resolver (not developer-cache / not
+		// application-cache): the `all`, `dev-caches`, `app-caches`, and `cli-agents`
+		// tokens and TUI Select All never select it. Permanent deletion is never eligible.
+		withPreviewSafetyNote(lghubCacheCategoryEntry(
+			CleanupCategoryDefinition{
+				Identifier:               CategoryLGHUBCache,
+				Label:                    "LG HUB cache",
+				ReportCategory:           ReportCategorySystem,
+				Eligibility:              CategoryEligibilityOptIn,
+				Aliases:                  []string{},
+				RunningApplicationPolicy: RunningApplicationPolicyDistinctiveProcessIdle,
+				PlannedAction:            PlannedActionMoveToRecycleBin,
+				SelectionPolicy:          CategorySelectionPolicyExactOnly,
+			},
+		), staticPreviewSafetyNote(lghubCacheOptInImpactNotice)),
 	// Windows component store (WinSxS): exact-selection-only servicing category
 	// with planned action invoke_windows_servicing. It never yields a file
 	// candidate or byte estimate; read-only component-store analysis is delegated
@@ -1028,7 +1051,8 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 			}
 		case categoryResolverExistenceOpportunity, categoryResolverBrowserCache,
 			categoryResolverApplicationCache, categoryResolverDeveloperCache,
-			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache:
+			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache,
+			categoryResolverLGHUBCache:
 			if entry.definition.Eligibility != CategoryEligibilityOptIn {
 				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
 			}
