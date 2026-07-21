@@ -39,6 +39,17 @@ func Execute(ctx context.Context, candidates []Candidate, adapter Adapter) Resul
 }
 
 func ExecuteWithValidator(ctx context.Context, candidates []Candidate, adapter Adapter, validator pathsafe.Validator) Result {
+	return ExecuteWithHooks(ctx, candidates, adapter, validator, nil)
+}
+
+// ExecuteWithHooks moves candidates to the Recycle Bin with PathSafe validation
+// and an optional category-owned pre-mutation check immediately before each move.
+// Ordering per candidate: cancel check → PathSafe → PreMutation (if non-nil) →
+// MoveToRecycleBin. A pre-mutation rejection is a recoverable skip: the adapter
+// is not called and the move is never rerouted to permanent deletion. A nil
+// preMutation is a no-op (PathSafe-only composition), so existing callers keep
+// identical behavior.
+func ExecuteWithHooks(ctx context.Context, candidates []Candidate, adapter Adapter, validator pathsafe.Validator, preMutation PreMutationValidator) Result {
 	var result Result
 	for _, candidate := range candidates {
 		select {
@@ -62,6 +73,17 @@ func ExecuteWithValidator(ctx context.Context, candidates []Candidate, adapter A
 				Reason: reason,
 			})
 			continue
+		}
+
+		if preMutation != nil {
+			if reason, ok := preMutation(candidate); !ok {
+				result.Skipped = append(result.Skipped, SkippedItem{
+					Path:   candidate.Path,
+					Bytes:  candidate.Bytes,
+					Reason: reason,
+				})
+				continue
+			}
 		}
 
 		if err := adapter.MoveToRecycleBin(candidate.Path); err != nil {

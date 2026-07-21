@@ -122,26 +122,12 @@ func resolveExecuteCandidates(ctx context.Context, opts Options, categoryPlan Ca
 		if opts.Validator.IsUserProtected(c.Path) {
 			continue
 		}
-		// nvidia_installer_cache is preview/resolution only in this slice: Recycle
-		// Bin execution (fresh re-resolve, action-neutral immediate revalidation,
-		// Result/History) is delivered by #310. Until then, resolved candidates are
-		// fail-closed skipped rather than moved, so no mutation occurs here.
-		if c.Category == CategoryNVIDIAInstallerCache {
-			result.Skipped = append(result.Skipped, SkippedItem{
-				Path:          c.Path,
-				Bytes:         c.Bytes,
-				Rule:          c.Category,
-				PlannedAction: plannedActionForOpts(opts, c.Category),
-				Reason: issue(
-					nvidiaExecutionPendingCode,
-					"NVIDIA installer cache execution is not enabled in this build; the candidate was previewed but not moved",
-					true,
-					c.Path,
-					c.Category,
-				),
-			})
-			continue
-		}
+		// nvidia_installer_cache is a move_to_recycle_bin opt-in category. Its
+		// candidate flows through the shared Recycle Bin phase like any other opt-in:
+		// aggregate capacity preflight, then an action-neutral immediate category
+		// identity revalidation (composeRecycleBinPreMutation) repeats the NVIDIA
+		// proof right before the move. A capacity or revalidation failure is a
+		// fail-closed skip and never falls back to permanent deletion.
 		executionCandidates = append(executionCandidates, actionExecutionCandidate{
 			candidate:     delete.Candidate{Path: c.Path, Bytes: c.Bytes},
 			rule:          c.Category,
@@ -367,7 +353,8 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 			deleteCandidates = append(deleteCandidates, candidate.candidate)
 			byPath[candidate.candidate.Path] = candidate
 		}
-		deleteResult := delete.ExecuteWithValidator(ctx, deleteCandidates, adapter, opts.Validator)
+		preMutation := composeRecycleBinPreMutation(opts, byPath)
+		deleteResult := delete.ExecuteWithHooks(ctx, deleteCandidates, adapter, opts.Validator, preMutation)
 		for _, item := range deleteResult.Deleted {
 			candidate := byPath[item.Path]
 			result.Deleted = append(result.Deleted, DeletedItem{
@@ -562,6 +549,47 @@ func composePermanentPreMutation(opts Options, byPath map[string]actionExecution
 			Bytes:            candidate.Bytes,
 			Category:         meta.rule,
 			residueDiscovery: opts.GrokBuildResidueDiscoveryOptions,
+		})
+	}
+}
+
+// composeRecycleBinPreMutation builds the optional delete-layer hook that
+// dispatches to action-neutral category-owned identity validators immediately
+// before each Recycle Bin move. Returns nil when no candidate has a registered
+// validator so existing PathSafe-only categories keep the same shared adapter
+// path with no extra hook call. A rejection is a recoverable skip that keeps the
+// move_to_recycle_bin planned action and never reroutes to permanent deletion.
+func composeRecycleBinPreMutation(opts Options, byPath map[string]actionExecutionCandidate) delete.PreMutationValidator {
+	hasValidator := false
+	for _, candidate := range byPath {
+		if lookupCategoryIdentityValidator(opts, candidate.rule) != nil {
+			hasValidator = true
+			break
+		}
+	}
+	if !hasValidator {
+		return nil
+	}
+	return func(candidate delete.Candidate) (pathsafe.Reason, bool) {
+		meta, ok := byPath[candidate.Path]
+		if !ok {
+			// Unexpected path: fail closed without mutation.
+			return pathsafe.Reason{
+				Code:    "identity_mismatch",
+				Message: "recycle bin candidate context is unavailable for identity validation",
+			}, false
+		}
+		validator := lookupCategoryIdentityValidator(opts, meta.rule)
+		if validator == nil {
+			return pathsafe.Reason{}, true
+		}
+		return validator(CategoryIdentityCandidate{
+			Path:            candidate.Path,
+			Bytes:           candidate.Bytes,
+			Category:        meta.rule,
+			PlannedAction:   meta.plannedAction,
+			nvidiaDiscovery: opts.NVIDIAInstallerCacheDiscoveryOptions,
+			validator:       opts.Validator,
 		})
 	}
 }
