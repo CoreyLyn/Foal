@@ -186,7 +186,12 @@ func TestHelpDocumentsAllowServicing(t *testing.T) {
 		t.Fatalf("help returned %d", code)
 	}
 	out := stdout.String()
-	for _, want := range []string{"--allow-servicing", "--opt-in winsxs_component_store --allow-servicing"} {
+	for _, want := range []string{
+		"--allow-servicing",
+		"--opt-in winsxs_component_store --allow-servicing",
+		"--opt-in winsxs_component_store --opt-in nvidia_installer_cache",
+		"--execute --opt-in nvidia_installer_cache",
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("help missing %q", want)
 		}

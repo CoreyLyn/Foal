@@ -90,10 +90,11 @@ Every executable Clean category declares exactly one action:
 
 - `move_to_recycle_bin` for recoverable cleanup.
 - `delete_permanently` for narrowly proven regenerable or re-downloadable content.
+- `invoke_windows_servicing` for the Windows component store, which Foal never treats as deletion candidates (see below).
 
 Permanent deletion is never a fallback when a Recycle Bin operation fails. The CLI requires both `--execute` and `--allow-permanent` for permanent work; without authorization, those candidates are skipped while eligible Recycle Bin work can continue. The TUI presents the same actions in one strengthened confirmation.
 
-Foal resolves candidates again, reloads protection rules, runs applicable safety gates, and validates every path immediately before mutation. Recycle Bin work runs before permanent work. Local failures do not silently broaden the cleanup scope.
+Foal resolves candidates again, reloads protection rules, runs applicable safety gates, and validates every path immediately before mutation. Recycle Bin work runs first, permanent work next, and Windows servicing last. Local failures do not silently broaden the cleanup scope.
 
 Available opt-in groups:
 
@@ -102,7 +103,9 @@ Available opt-in groups:
 | `dev-caches` | Supported package-manager, build-tool, browser-runtime, IDE, and editor caches. |
 | `app-caches` | Supported non-editor application caches, currently Obsidian. |
 | `cli-agents` | Independently approved product-scoped CLI-agent residue, currently Grok Build updater backups. |
-| `all` | Every executable opt-in category; still subject to safety gates and permanent authorization. |
+| `all` | Every executable opt-in category, except the exact-selection-only `nvidia_installer_cache` and `winsxs_component_store`; still subject to safety gates and permanent authorization. |
+
+The exact-selection-only categories `nvidia_installer_cache` and `winsxs_component_store` are deliberately excluded from `all`, every group token, and TUI Select All. Name them exactly to include them.
 
 Use an exact category name when you want the narrowest scope:
 
@@ -129,6 +132,26 @@ foal clean --execute --opt-in winsxs_component_store --allow-servicing
 
 Missing `--allow-servicing` skips the category with `windows_servicing_not_authorized` and never opens UAC. When authorized, the elevated helper runs a fresh analysis and starts `DISM /Online /Cleanup-Image /StartComponentCleanup /English /NoRestart` in the same session, only when the reclaimable package count is positive and cleanup is recommended. Servicing is always the final action group, after Recycle Bin and permanent-delete work. Foal never runs `/ResetBase`, `/SPSuperseded`, `/Remove-Package`, or custom DISM arguments, never deletes `WinSxS` files itself, and never forces a reboot: exit `0` is completed, `3010` is completed with a restart required, `3017` is failed with a restart required, and any other non-zero exit is failed. Once cleanup starts, cancellation is recorded but DISM, the helper, and TrustedInstaller are never killed — Foal waits for the actual outcome.
 
+Off Windows there is no component store, so the category fails closed with `unsupported_platform` and never opens a prompt or touches the filesystem.
+
+### NVIDIA installer cache
+
+`nvidia_installer_cache` is an exact-selection-only category with the planned action `move_to_recycle_bin`. Foal discovers only strictly validated, completed legacy NVIDIA display-driver download-task directories under the fixed `C:\ProgramData\NVIDIA Corporation\Downloader` root. A candidate must have a bounded, unique `status.json` record (`status == 2`, `downloadType == 1`), a non-empty version/checksum/`fileLocation`, an HTTPS `download.nvidia.com` origin, a single ordinary payload file matching its checksum with a valid NVIDIA Authenticode signature, no reparse points/alternate streams/extra hard links/extra entries/recent writes/active references, and idle NVIDIA process/service state both before and after inspection. If any relevant NVIDIA application, container, helper, overlay, installer, or service is active — or its state is unknown — Foal skips the whole category. Frequent conservative skips are expected, and Clean never stops NVIDIA processes or services.
+
+```powershell
+foal clean --dry-run --opt-in nvidia_installer_cache
+foal clean --execute --opt-in nvidia_installer_cache
+```
+
+Execution moves the verified package to the Recycle Bin, so it stays locally recoverable. The category **does not require and never uses `--allow-permanent`**: NVIDIA's layout evidence is Not proven, so permanent deletion is deliberately ineligible and `--allow-permanent` can never promote it. A Recycle Bin capacity failure remains a skip and never falls back to permanent deletion. Removing the package means an offline install or rollback may require downloading the driver again; Foal does not promise rollback is unaffected. Off Windows, signature and forensic validation fail closed so no candidate is produced.
+
+Preview both new categories together with repeated `--opt-in` flags (each `--opt-in` still takes a single value):
+
+```powershell
+foal clean --dry-run --opt-in winsxs_component_store --opt-in nvidia_installer_cache
+```
+
+A mixed execution that also selects proven permanent-delete categories must include `--allow-permanent` independently of `--allow-servicing`.
 
 The authoritative category list, action matrix, impact notes, and exclusions live in the [Clean deletion policy](docs/plan/clean-deletion-policy.md).
 
