@@ -384,7 +384,7 @@ func TestPrimaryCleanConfirmationExecutionResultPathFree(t *testing.T) {
 	stubInstantEagerPreview(t)
 
 	originalExec := runExactCleanSelection
-	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, _ bool, reporter clean.ProgressReporter) clean.Result {
 		if len(selected) == 0 {
 			t.Fatal("empty selection")
 		}
