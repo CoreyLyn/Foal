@@ -475,7 +475,14 @@ func eagerServicingExecutionRowLabel(outcome clean.CategoryExecutionOutcome) str
 	case clean.CategoryExecutionSkipped:
 		return outcome.Label + " · skipped"
 	case clean.CategoryExecutionFailed:
-		return outcome.Label + " · failed"
+		line := outcome.Label + " · failed"
+		if outcome.ServicingReason != "" {
+			line += " · " + servicingReasonText(outcome.ServicingReason)
+		}
+		if hint := clean.ServicingCleanupExitHint(outcome.ServicingExitCode); hint != "" {
+			line += " · " + hint
+		}
+		return line
 	case clean.CategoryExecutionCanceled:
 		return outcome.Label + " · canceled"
 	default:

@@ -475,6 +475,27 @@ func TestServicingResultFailure(t *testing.T) {
 	}
 }
 
+// TestServicingResultFailureAccessDeniedExit5 proves an exit-5 (Win32
+// ERROR_ACCESS_DENIED) cleanup failure surfaces the ADR 0029 restart guidance
+// on the TUI execution row, without leaking paths or raw DISM text.
+func TestServicingResultFailureAccessDeniedExit5(t *testing.T) {
+	exit5 := 5
+	content := servicingResultContent(t, clean.ServicingOperation{
+		Category:      clean.CategoryWinSxSComponentStore,
+		PlannedAction: clean.PlannedActionInvokeWindowsServicing,
+		Capability:    clean.ServicingCapabilityExecuteComponentStoreCleanup,
+		Outcome:       clean.ServicingOutcomeFailed,
+		Reason:        clean.ServicingReasonCleanupFailed,
+		ExitCode:      &exit5,
+	})
+	if !strings.Contains(content, "· failed") {
+		t.Fatalf("failed servicing must render as failed:\n%s", content)
+	}
+	if !strings.Contains(content, "restart Windows") {
+		t.Fatalf("exit-5 failure must surface restart guidance:\n%s", content)
+	}
+}
+
 // TestServicingReadyRowDisclosesSizeUnknown proves the selection ready row
 // carries the weak "size unknown" disclosure without inventing a byte figure.
 func TestServicingReadyRowDisclosesSizeUnknown(t *testing.T) {

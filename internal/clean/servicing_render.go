@@ -41,6 +41,9 @@ func servicingOperationLine(op ServicingOperation) string {
 		return fmt.Sprintf("%s: skipped (%s).", servicingReportLabel, servicingReasonText(op.Reason))
 	case ServicingOutcomeFailed:
 		line := fmt.Sprintf("%s: failed (%s).", servicingReportLabel, servicingReasonText(op.Reason))
+		if hint := ServicingCleanupExitHint(op.ExitCode); hint != "" {
+			line += " " + hint
+		}
 		if op.RestartRequired {
 			line += " A restart is required."
 		}
@@ -82,5 +85,26 @@ func servicingReasonText(reason string) string {
 		return "Windows servicing is unavailable on this platform"
 	default:
 		return "servicing did not complete"
+	}
+}
+
+// ServicingCleanupExitHint returns optional path-free failure guidance for a
+// DISM StartComponentCleanup exit code, aligned with ADR 0029: lock,
+// pending-operation, or servicing-conflict failures map to the stable cleanup
+// failure reason, after which the user may finish Windows Update or restart and
+// preview again. It never copies DISM/CBS log content or paths. Empty when no
+// specific hint applies.
+func ServicingCleanupExitHint(exitCode *int) string {
+	if exitCode == nil {
+		return ""
+	}
+	switch *exitCode {
+	case 5:
+		// Win32 ERROR_ACCESS_DENIED: in the StartComponentCleanup context this is
+		// typically a transient CBS lock, a pending Windows Update operation, or
+		// background maintenance holding the component store.
+		return "This may be a transient lock or pending Windows Update operation; finish Windows Update or restart Windows and try again."
+	default:
+		return ""
 	}
 }
