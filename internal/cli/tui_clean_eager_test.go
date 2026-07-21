@@ -913,17 +913,18 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 			recycleBinOptIns++
 		}
 	}
-	// Complete rule matrix: 1 default + 32 permanent = 33; 7 Recycle Bin opt-ins
-	// unselected (the 6th and 7th are exact-selection-only nvidia_installer_cache and lghub-cache).
-	if defaults != 1 || permanentOptIns != 32 || recycleBinOptIns != 7 || wantSelected != 33 {
-		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/32/7/33",
+	// Complete rule matrix: 1 default + 32 permanent = 33; 8 Recycle Bin opt-ins
+	// unselected (the 6th, 7th, and 8th are exact-selection-only
+	// nvidia_installer_cache, lghub-cache, and thunder-update-download).
+	if defaults != 1 || permanentOptIns != 32 || recycleBinOptIns != 8 || wantSelected != 33 {
+		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/32/8/33",
 			defaults, permanentOptIns, recycleBinOptIns, wantSelected)
 	}
 	if model.selectedCount() != 33 {
 		t.Fatalf("selectedCount = %d, want 33 (default + all permanent when rows present)", model.selectedCount())
 	}
-	if len(model.rows) != 41 {
-		t.Fatalf("eager rows = %d, want 41 executable categories", len(model.rows))
+	if len(model.rows) != 42 {
+		t.Fatalf("eager rows = %d, want 42 executable categories", len(model.rows))
 	}
 	for _, id := range model.selectedCategoryIDs() {
 		if strings.Contains(id, `\`) || strings.Contains(id, "/") || strings.Contains(id, " ") {
