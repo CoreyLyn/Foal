@@ -723,6 +723,10 @@ func pathFreeReasonExplanation(code string) string {
 		return "no candidates found"
 	case "reparse_point":
 		return "reparse point excluded"
+	case clean.PreviewReasonNVIDIAActivity:
+		// Busy or undetermined NVIDIA process/service state; the whole
+		// nvidia_installer_cache category is skipped and cannot be selected.
+		return "NVIDIA activity detected or state unknown"
 	default:
 		if code == "" {
 			return "see category state"
