@@ -488,14 +488,23 @@ func TestRunEagerPreviewStreamsSequentialPathFreeObservations(t *testing.T) {
 		t.Fatalf("review suggestion probes = %d, want 0", reviewProbeCalls)
 	}
 
-	queue := clean.EagerPreviewQueue()
-	if len(scanningSeen) != len(queue) {
-		t.Fatalf("scanning events = %d, want %d", len(scanningSeen), len(queue))
+	// Windows servicing categories are never file-scanned by the eager preview
+	// (they use an explicit analysis action), so only non-servicing summaries
+	// produce scanning/terminal observations.
+	var scannable []clean.CleanupCategorySummary
+	for _, summary := range clean.EagerPreviewQueue() {
+		if clean.IsServicingSummary(summary) {
+			continue
+		}
+		scannable = append(scannable, summary)
 	}
-	if len(events) != len(queue)*2 {
-		t.Fatalf("events = %d, want 2 per queue entry (%d)", len(events), len(queue)*2)
+	if len(scanningSeen) != len(scannable) {
+		t.Fatalf("scanning events = %d, want %d", len(scanningSeen), len(scannable))
 	}
-	for i, summary := range queue {
+	if len(events) != len(scannable)*2 {
+		t.Fatalf("events = %d, want 2 per scannable entry (%d)", len(events), len(scannable)*2)
+	}
+	for i, summary := range scannable {
 		scan := events[i*2]
 		term := events[i*2+1]
 		if scan.Identifier != summary.Identifier || scan.State != clean.CategoryPreviewScanning {

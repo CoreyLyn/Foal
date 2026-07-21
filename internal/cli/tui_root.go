@@ -120,6 +120,12 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.clean.applyTick(msg)
+	case eagerServicingAnalyzedMsg:
+		if m.screen != screenCleanPreview {
+			return m, nil
+		}
+		m.clean.applyServicingAnalyzed(msg)
+		return m, nil
 	case eagerExactExecutionStartedMsg:
 		if m.screen != screenCleanPreview {
 			return m, nil

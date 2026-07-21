@@ -25,12 +25,20 @@ const (
 // --- Selection / confirmation math ---
 
 // eagerAllCategoriesTerminal reports whether every scannable category has a
-// terminal path-free outcome. Empty queues are not terminal.
+// terminal path-free outcome. Empty queues are not terminal. Windows servicing
+// rows are at rest unless an analysis is in flight (analyzing), so a servicing
+// row never blocks confirmation of other categories.
 func eagerAllCategoriesTerminal(rows []eagerCategoryRow) bool {
 	if len(rows) == 0 {
 		return false
 	}
 	for _, row := range rows {
+		if row.Servicing {
+			if !clean.ServicingRowTerminalForConfirmation(row.ServicingState) {
+				return false
+			}
+			continue
+		}
 		if !clean.IsTerminalPreviewState(row.State) {
 			return false
 		}
@@ -64,13 +72,17 @@ func eagerSelectedCategoryIDs(rows []eagerCategoryRow) []string {
 // eagerSelectionTotals returns selected category count, safely measured bytes
 // for complete/partial selected rows, and selected waiting/scanning pending
 // count. Unfinished, empty, skipped, incomplete, and failed work contributes
-// no bytes.
+// no bytes. Servicing rows contribute a category count only (no bytes, never
+// pending): servicing has no reclaimable-byte measurement.
 func eagerSelectionTotals(rows []eagerCategoryRow) (categories int, measuredBytes int64, pending int) {
 	for _, row := range rows {
 		if !row.Selected {
 			continue
 		}
 		categories++
+		if row.Servicing {
+			continue
+		}
 		switch row.State {
 		case clean.CategoryPreviewWaiting, clean.CategoryPreviewScanning:
 			pending++
@@ -81,9 +93,24 @@ func eagerSelectionTotals(rows []eagerCategoryRow) (categories int, measuredByte
 	return categories, measuredBytes, pending
 }
 
-// eagerRowSelectable reports whether Space may toggle the row.
+// eagerRowSelectable reports whether Space may toggle the row. Servicing rows
+// are selectable only when a fresh analysis has reported work (ready).
 func eagerRowSelectable(row eagerCategoryRow) bool {
+	if row.Servicing {
+		return clean.ServicingRowSelectable(row.ServicingState)
+	}
 	return clean.SelectablePreviewOutcome(row.State)
+}
+
+// eagerSelectionIncludesServicing reports whether the exact selection includes
+// any Windows servicing (invoke_windows_servicing) category.
+func eagerSelectionIncludesServicing(rows []eagerCategoryRow) bool {
+	for _, row := range rows {
+		if row.Selected && row.Servicing {
+			return true
+		}
+	}
+	return false
 }
 
 // eagerSelectionIncludesPermanent reports whether the exact selection discloses
@@ -98,11 +125,16 @@ func eagerSelectionIncludesPermanent(rows []eagerCategoryRow) bool {
 }
 
 // eagerConfirmationActionGroups splits the exact selection into Permanent
-// deletion and Recycle Bin work. Empty groups are omitted by callers.
-// Action is catalog-owned; unknown/missing actions present as Recycle Bin only.
-func eagerConfirmationActionGroups(rows []eagerCategoryRow) (permanent, recycle []eagerCategoryRow) {
+// deletion, Recycle Bin, and Windows servicing work. Empty groups are omitted by
+// callers. Action is catalog-owned; unknown/missing file actions present as
+// Recycle Bin, while servicing rows form their own group.
+func eagerConfirmationActionGroups(rows []eagerCategoryRow) (permanent, recycle, servicing []eagerCategoryRow) {
 	for _, row := range rows {
 		if !row.Selected {
+			continue
+		}
+		if row.Servicing {
+			servicing = append(servicing, row)
 			continue
 		}
 		switch row.PlannedAction {
@@ -112,7 +144,7 @@ func eagerConfirmationActionGroups(rows []eagerCategoryRow) (permanent, recycle 
 			recycle = append(recycle, row)
 		}
 	}
-	return permanent, recycle
+	return permanent, recycle, servicing
 }
 
 // confirmationGroupTotals aggregates category/candidate/byte counts for one
@@ -138,6 +170,41 @@ const (
 	confirmationRecycleRecoverabilityNote = "Recycle Bin items are moved, not permanently erased."
 )
 
+// Windows servicing confirmation disclosure copy (path-free, byte-free). Shown
+// only when the exact selection includes a servicing category (ADR 0029). Each
+// fragment is asserted by confirmation contract tests.
+const (
+	confirmationServicingAuthorizationLine = "Confirming grants this run's Windows servicing authorization (equivalent to --allow-servicing)."
+	confirmationServicingUACLine           = "Windows servicing requests administrator consent (UAC) after ordinary cleanup finishes."
+	confirmationServicingNoRestartLine     = "Foal runs component cleanup with /NoRestart and never reboots; a restart may still be required."
+	confirmationServicingNonInterruptLine  = "Once servicing starts it cannot be canceled; Windows finishes the transaction."
+	confirmationServicingBytesLine         = "Windows servicing reclaims components measured in packages, not bytes; size is unknown."
+)
+
+// confirmationServicingDisclosureLines are the ordered servicing disclosures for
+// the confirmation footer.
+func confirmationServicingDisclosureLines() []string {
+	return []string{
+		confirmationServicingAuthorizationLine,
+		confirmationServicingUACLine,
+		confirmationServicingNoRestartLine,
+		confirmationServicingNonInterruptLine,
+		confirmationServicingBytesLine,
+	}
+}
+
+// confirmationServicingSummaryLine is the compact servicing action-group total
+// used at the top of the confirmation body. Package count is disclosed; bytes
+// are never estimated.
+func confirmationServicingSummaryLine(rows []eagerCategoryRow) string {
+	cats := len(rows)
+	packages := 0
+	for _, row := range rows {
+		packages += row.ServicingReclaimablePackages
+	}
+	return fmt.Sprintf("Windows servicing · %d categories · %d reclaimable package(s) · size unknown", cats, packages)
+}
+
 // confirmationGroupSummaryLine is the compact action-group total used at the
 // top of the confirmation body (summary-first). Empty groups must not call this.
 func confirmationGroupSummaryLine(title string, rows []eagerCategoryRow) (line string, bytes int64) {
@@ -146,10 +213,11 @@ func confirmationGroupSummaryLine(title string, rows []eagerCategoryRow) (line s
 }
 
 // confirmationBodyEntriesFromGroups builds summary-first confirmation body lines:
-// high-level Permanent / Recycle totals first, then scrollable detail sections.
-// Empty action groups are omitted entirely. Presentation only.
-func confirmationBodyEntriesFromGroups(permanent, recycle []eagerCategoryRow) []eagerBodyLine {
-	lines := make([]eagerBodyLine, 0, len(permanent)+len(recycle)+8)
+// high-level Permanent / Recycle / Windows servicing totals first, then
+// scrollable detail sections. Empty action groups are omitted entirely.
+// Presentation only.
+func confirmationBodyEntriesFromGroups(permanent, recycle, servicing []eagerCategoryRow) []eagerBodyLine {
+	lines := make([]eagerBodyLine, 0, len(permanent)+len(recycle)+len(servicing)+10)
 	appendSummary := func(title string, rows []eagerCategoryRow) {
 		if len(rows) == 0 {
 			return
@@ -165,8 +233,16 @@ func confirmationBodyEntriesFromGroups(permanent, recycle []eagerCategoryRow) []
 	}
 	appendSummary("Permanent deletion", permanent)
 	appendSummary("Recycle Bin", recycle)
+	if len(servicing) > 0 {
+		// Servicing summary is byte-free: it discloses a package count only.
+		lines = append(lines, eagerBodyLine{
+			text:         confirmationServicingSummaryLine(servicing),
+			rowIndex:     -1,
+			outcomeIndex: -1,
+		})
+	}
 
-	if len(permanent) > 0 || len(recycle) > 0 {
+	if len(permanent) > 0 || len(recycle) > 0 || len(servicing) > 0 {
 		lines = append(lines, eagerBodyLine{text: "", rowIndex: -1, outcomeIndex: -1})
 	}
 
@@ -196,7 +272,31 @@ func confirmationBodyEntriesFromGroups(permanent, recycle []eagerCategoryRow) []
 	}
 	appendDetails("Permanent deletion", permanent)
 	appendDetails("Recycle Bin", recycle)
+	appendServicingDetails(&lines, servicing)
 	return lines
+}
+
+// appendServicingDetails renders the byte-free Windows servicing detail section.
+// Each row discloses its reclaimable-package count (never bytes), the planned
+// Windows servicing action, and the UAC / non-interruptible impact.
+func appendServicingDetails(lines *[]eagerBodyLine, servicing []eagerCategoryRow) {
+	if len(servicing) == 0 {
+		return
+	}
+	*lines = append(*lines, eagerBodyLine{text: "Windows servicing", rowIndex: -1, outcomeIndex: -1})
+	for _, row := range servicing {
+		*lines = append(*lines, eagerBodyLine{
+			text: fmt.Sprintf("  - %s · %d reclaimable package(s) · size unknown · %s",
+				row.Label, row.ServicingReclaimablePackages, clean.PlannedActionLabel(row.PlannedAction)),
+			rowIndex:     -1,
+			outcomeIndex: -1,
+		})
+		*lines = append(*lines, eagerBodyLine{
+			text:         "      Impact: administrator consent (UAC) required; cannot be canceled once started.",
+			rowIndex:     -1,
+			outcomeIndex: -1,
+		})
+	}
 }
 
 // confirmationExecuteHintLine is the Enter / back key hint on confirmation.
@@ -222,14 +322,19 @@ func eagerNoWorkState(rows []eagerCategoryRow, selectedCount int, unavailable, c
 	if unavailable || canceled {
 		return clean.EagerPreviewNoWorkNone
 	}
-	observations := make([]clean.CategoryPreviewObservation, len(rows))
-	for i, row := range rows {
-		observations[i] = clean.CategoryPreviewObservation{
+	observations := make([]clean.CategoryPreviewObservation, 0, len(rows))
+	for _, row := range rows {
+		// Servicing rows are not file-scanned and never contribute to no-work
+		// classification; they carry no CategoryPreviewState.
+		if row.Servicing {
+			continue
+		}
+		observations = append(observations, clean.CategoryPreviewObservation{
 			Identifier:     row.Identifier,
 			State:          row.State,
 			CandidateCount: row.CandidateCount,
 			Bytes:          row.Bytes,
-		}
+		})
 	}
 	return clean.ClassifyEagerPreviewNoWork(observations, selectedCount)
 }
@@ -279,6 +384,132 @@ func eagerPreviewRowMarker(state clean.CategoryPreviewState, spinnerFrame int) s
 		return "!"
 	default:
 		return "!"
+	}
+}
+
+// eagerServicingRowMarker maps a servicing row state to a single-glyph marker.
+// spinnerFrame animates only the analyzing state.
+func eagerServicingRowMarker(state clean.ServicingRowState, spinnerFrame int) string {
+	switch state {
+	case clean.ServicingRowAnalysisRequired:
+		return "?"
+	case clean.ServicingRowAnalyzing:
+		return eagerPreviewSpinnerFrames[spinnerFrame%len(eagerPreviewSpinnerFrames)]
+	case clean.ServicingRowReady:
+		return "✓"
+	case clean.ServicingRowNoWork:
+		return "–"
+	case clean.ServicingRowSkipped:
+		return "⊘"
+	case clean.ServicingRowFailed:
+		return "!"
+	default:
+		return "?"
+	}
+}
+
+// eagerServicingRowLabel formats one Windows servicing preview row without paths
+// or bytes. Ready discloses the reclaimable-package count; other states disclose
+// their lifecycle only.
+func eagerServicingRowLabel(row eagerCategoryRow) string {
+	switch row.ServicingState {
+	case clean.ServicingRowAnalysisRequired:
+		return row.Label + " · analysis required (press a)"
+	case clean.ServicingRowAnalyzing:
+		return row.Label + " · analyzing…"
+	case clean.ServicingRowReady:
+		return fmt.Sprintf("%s · ready · %d reclaimable package(s)", row.Label, row.ServicingReclaimablePackages)
+	case clean.ServicingRowNoWork:
+		return row.Label + " · no cleanup needed"
+	case clean.ServicingRowSkipped:
+		return row.Label + " · skipped"
+	case clean.ServicingRowFailed:
+		return row.Label + " · failed"
+	default:
+		return row.Label
+	}
+}
+
+// eagerServicingFocusedDetailBody is the path-free focused diagnostic for a
+// servicing row. Skipped and failed states surface their stable reason text.
+func eagerServicingFocusedDetailBody(row eagerCategoryRow) string {
+	switch row.ServicingState {
+	case clean.ServicingRowAnalysisRequired:
+		return "Analysis required · press a to analyze the component store (requests administrator consent)."
+	case clean.ServicingRowAnalyzing:
+		return "Analyzing… requesting administrator consent for read-only component-store analysis."
+	case clean.ServicingRowReady:
+		return fmt.Sprintf("Ready · %d reclaimable package(s) · cleanup recommended · press space to select.", row.ServicingReclaimablePackages)
+	case clean.ServicingRowNoWork:
+		return "No cleanup needed · component store reports nothing to reclaim."
+	case clean.ServicingRowSkipped:
+		body := "Skipped"
+		if row.ServicingReasonCode != "" {
+			body += " · " + servicingReasonText(row.ServicingReasonCode)
+		}
+		return body + " · press a to analyze again."
+	case clean.ServicingRowFailed:
+		body := "Failed"
+		if row.ServicingReasonCode != "" {
+			body += " · " + servicingReasonText(row.ServicingReasonCode)
+		}
+		return body + " · press a to analyze again."
+	default:
+		return "Unknown servicing state"
+	}
+}
+
+// eagerServicingExecutionRowLabel formats a servicing execution/result outcome
+// without a byte token. Servicing processes no file bytes; its lifecycle is
+// reported directly.
+func eagerServicingExecutionRowLabel(outcome clean.CategoryExecutionOutcome) string {
+	switch outcome.State {
+	case clean.CategoryExecutionWaiting:
+		return outcome.Label + " · waiting"
+	case clean.CategoryExecutionRechecking, clean.CategoryExecutionReady, clean.CategoryExecutionCleaning:
+		return outcome.Label + " · servicing…"
+	case clean.CategoryExecutionCleaned:
+		return outcome.Label + " · servicing completed"
+	case clean.CategoryExecutionEmpty:
+		return outcome.Label + " · no cleanup needed"
+	case clean.CategoryExecutionSkipped:
+		return outcome.Label + " · skipped"
+	case clean.CategoryExecutionFailed:
+		return outcome.Label + " · failed"
+	case clean.CategoryExecutionCanceled:
+		return outcome.Label + " · canceled"
+	default:
+		return outcome.Label
+	}
+}
+
+// servicingReasonText maps a stable servicing reason code to short path-free
+// presentation text. Unknown codes fall back to a generic message so raw or
+// invented text never reaches the user.
+func servicingReasonText(code string) string {
+	switch code {
+	case clean.ServicingReasonNotAuthorized:
+		return "servicing not authorized"
+	case clean.ServicingReasonElevationDenied:
+		return "administrator consent was declined"
+	case clean.ServicingReasonElevationFailed:
+		return "the elevated helper could not be started"
+	case clean.ServicingReasonToolUnavailable:
+		return "the Windows servicing tool was unavailable"
+	case clean.ServicingReasonHelperFailed:
+		return "the servicing helper failed"
+	case clean.ServicingReasonAnalysisFailed:
+		return "component-store analysis failed"
+	case clean.ServicingReasonAnalysisOutputInvalid:
+		return "analysis output could not be interpreted"
+	case clean.ServicingReasonCleanupFailed:
+		return "component cleanup failed"
+	case clean.ServicingReasonContextCanceled:
+		return "the analysis was canceled"
+	case clean.ServicingReasonUnsupportedPlatform:
+		return "Windows servicing is unavailable on this platform"
+	default:
+		return "analysis did not complete"
 	}
 }
 
@@ -570,9 +801,15 @@ func eagerPreviewHeaderLine(canceled, finished, allTerminal bool, activeIndex, c
 }
 
 // eagerFooterHints returns path-free preview footer hints for the current
-// terminal/selection state. Never authorizes cleanup.
-func eagerFooterHints(allTerminal bool, noWork clean.EagerPreviewNoWorkState, confirmationEnabled bool) string {
-	const base = "Hints: up/down browse · space toggle · a select all · x clear · b/Esc back · q quit"
+// terminal/selection state. When the focused row is an analyzable Windows
+// servicing row, the `a` hint reads "analyze" (the context-sensitive analysis
+// action) rather than "select all". Never authorizes cleanup.
+func eagerFooterHints(allTerminal bool, noWork clean.EagerPreviewNoWorkState, confirmationEnabled, focusedServicingAnalyzable bool) string {
+	aHint := "a select all"
+	if focusedServicingAnalyzable {
+		aHint = "a analyze"
+	}
+	base := "Hints: up/down browse · space toggle · " + aHint + " · x clear · b/Esc back · q quit"
 	if !allTerminal {
 		return base
 	}
@@ -585,7 +822,7 @@ func eagerFooterHints(allTerminal bool, noWork clean.EagerPreviewNoWorkState, co
 		return "No selectable cleanup found. Some categories were skipped or could not be measured.\n" + base
 	default:
 		if confirmationEnabled {
-			return "Hints: enter confirm · up/down browse · space toggle · a select all · x clear · b/Esc back · q quit"
+			return "Hints: enter confirm · up/down browse · space toggle · " + aHint + " · x clear · b/Esc back · q quit"
 		}
 		return base
 	}
@@ -607,6 +844,33 @@ func eagerUnavailableContent(code, message string) string {
 		"Hints: Enter/Esc/b menu · q quit",
 		"",
 	}, "\n")
+}
+
+// eagerResultServicingNotes returns path-free, byte-free result disclosures for
+// Windows servicing operations in the authoritative Result: a restart
+// requirement (DISM 3010/3017 semantics, preserved for the user's own decision)
+// and a post-start cancellation notice (cancellation requested after servicing
+// began never replaces the actual outcome). Order is stable; empty when no
+// servicing operation carries either flag.
+func eagerResultServicingNotes(result clean.Result) []string {
+	restart := false
+	postStartCancel := false
+	for _, op := range result.ServicingOperations {
+		if op.RestartRequired {
+			restart = true
+		}
+		if op.CancelRequested {
+			postStartCancel = true
+		}
+	}
+	var notes []string
+	if restart {
+		notes = append(notes, "A restart is required to finish Windows servicing; Foal never reboots for you.")
+	}
+	if postStartCancel {
+		notes = append(notes, "Cancellation was requested after servicing started; Windows finished the transaction and the actual outcome stands.")
+	}
+	return notes
 }
 
 // cleanFormatBytes formats measured/affected sizes for Clean TUI chrome.

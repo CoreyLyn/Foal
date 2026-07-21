@@ -105,7 +105,7 @@ func TestEagerConfirmationActionGroupsPure(t *testing.T) {
 		{Identifier: "off", Selected: false, PlannedAction: clean.PlannedActionDeletePermanently, CandidateCount: 9, Bytes: 9},
 		{Identifier: "unknown", Selected: true, PlannedAction: clean.PlannedAction(""), CandidateCount: 3, Bytes: 30},
 	}
-	permanent, recycle := eagerConfirmationActionGroups(rows)
+	permanent, recycle, _ := eagerConfirmationActionGroups(rows)
 	if len(permanent) != 1 || permanent[0].Identifier != "perm" {
 		t.Fatalf("permanent = %#v", permanent)
 	}
@@ -242,14 +242,14 @@ func TestEagerPermanentSelectionNoticePresence(t *testing.T) {
 }
 
 func TestEagerFooterHintsDoNotAuthorizeCleanup(t *testing.T) {
-	base := eagerFooterHints(false, clean.EagerPreviewNoWorkNone, false)
+	base := eagerFooterHints(false, clean.EagerPreviewNoWorkNone, false, false)
 	if !strings.Contains(base, "space toggle") {
 		t.Fatalf("in-scan hints missing browse chrome: %q", base)
 	}
 	if strings.Contains(base, "perm=") || strings.Contains(base, "bin=") {
 		t.Fatalf("hints must not document removed per-row markers: %q", base)
 	}
-	ready := eagerFooterHints(true, clean.EagerPreviewNoWorkNone, true)
+	ready := eagerFooterHints(true, clean.EagerPreviewNoWorkNone, true, false)
 	if !strings.Contains(ready, "enter confirm") {
 		t.Fatalf("ready hints missing enter: %q", ready)
 	}
@@ -393,17 +393,17 @@ func TestEagerPreviewHeaderAndFooterPure(t *testing.T) {
 		t.Fatalf("byte-derived percentage leaked: %q", scanning)
 	}
 
-	base := eagerFooterHints(false, clean.EagerPreviewNoWorkNone, false)
+	base := eagerFooterHints(false, clean.EagerPreviewNoWorkNone, false, false)
 	if !strings.Contains(base, "space toggle") || strings.Contains(base, "enter confirm") {
 		t.Fatalf("in-scan footer = %q", base)
 	}
 	if strings.Contains(base, "perm=") || strings.Contains(base, "bin=") {
 		t.Fatalf("in-scan footer must not carry removed marker legend: %q", base)
 	}
-	if got := eagerFooterHints(true, clean.EagerPreviewNoWorkNeedSelection, false); !strings.Contains(got, "Select at least one") {
+	if got := eagerFooterHints(true, clean.EagerPreviewNoWorkNeedSelection, false, false); !strings.Contains(got, "Select at least one") {
 		t.Fatalf("need selection footer = %q", got)
 	}
-	if got := eagerFooterHints(true, clean.EagerPreviewNoWorkNone, true); !strings.Contains(got, "enter confirm") {
+	if got := eagerFooterHints(true, clean.EagerPreviewNoWorkNone, true, false); !strings.Contains(got, "enter confirm") {
 		t.Fatalf("ready footer = %q", got)
 	}
 }
@@ -888,8 +888,8 @@ func TestConfirmationBodyEntriesSummaryFirst(t *testing.T) {
 			Bytes:         99,
 		},
 	}
-	permanent, recycle := eagerConfirmationActionGroups(rows)
-	entries := confirmationBodyEntriesFromGroups(permanent, recycle)
+	permanent, recycle, _ := eagerConfirmationActionGroups(rows)
+	entries := confirmationBodyEntriesFromGroups(permanent, recycle, nil)
 	if len(entries) == 0 {
 		t.Fatal("expected confirmation body entries")
 	}
@@ -936,7 +936,7 @@ func TestConfirmationBodyEntriesSummaryFirst(t *testing.T) {
 		t.Fatalf("unselected category leaked:\n%s", joined)
 	}
 	// Empty groups omitted: permanent-only body has no Recycle Bin lines.
-	permOnly := confirmationBodyEntriesFromGroups(permanent, nil)
+	permOnly := confirmationBodyEntriesFromGroups(permanent, nil, nil)
 	for _, e := range permOnly {
 		if strings.Contains(e.text, "Recycle Bin") {
 			t.Fatalf("empty recycle group must be omitted: %q", e.text)
@@ -975,7 +975,7 @@ func TestConfirmationPlainFrameByteAndWarningCopy(t *testing.T) {
 			Bytes:         99,
 		},
 	}
-	permanent, recycle := eagerConfirmationActionGroups(rows)
+	permanent, recycle, _ := eagerConfirmationActionGroups(rows)
 	if len(permanent) != 1 || len(recycle) != 1 {
 		t.Fatalf("groups permanent=%d recycle=%d", len(permanent), len(recycle))
 	}
@@ -983,7 +983,7 @@ func TestConfirmationPlainFrameByteAndWarningCopy(t *testing.T) {
 	_, _, rbytes := confirmationGroupTotals(recycle)
 
 	// Body: summary-first then details (same pure helper as production).
-	body := confirmationBodyEntriesFromGroups(permanent, recycle)
+	body := confirmationBodyEntriesFromGroups(permanent, recycle, nil)
 	bodyLines := make([]string, len(body))
 	for i, e := range body {
 		bodyLines[i] = e.text

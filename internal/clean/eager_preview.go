@@ -332,6 +332,14 @@ func RunEagerPreview(ctx context.Context, opts Options, emit func(CategoryPrevie
 			return err
 		}
 
+		// Windows servicing categories are never file-scanned: entering Clean
+		// must not analyze the component store or trigger UAC (ADR 0029). The TUI
+		// presents them with the servicing row state machine, and an explicit
+		// analysis action is required before they become selectable.
+		if IsServicingSummary(summary) {
+			continue
+		}
+
 		if emit != nil {
 			emit(CategoryPreviewObservation{
 				Identifier:     summary.Identifier,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/history"
+	"github.com/CoreyLyn/Foal/internal/servicing"
 )
 
 // nextEagerGeneration assigns unique Clean session generations so stale stream
@@ -84,6 +85,22 @@ type eagerCategoryRow struct {
 	ExcludedSiblingCount int
 	ReasonCode           string
 	SafetyNote           string
+
+	// Servicing marks an exact-selection-only Windows servicing category row.
+	// Servicing rows are never file-scanned by the eager preview; they use the
+	// servicing state machine below instead of the CategoryPreviewState in State,
+	// and become selectable only after an explicit analysis reports work.
+	Servicing bool
+	// ServicingState is the servicing row lifecycle (analysis_required, analyzing,
+	// ready, no_work, skipped, failed). Meaningful only when Servicing is true.
+	ServicingState clean.ServicingRowState
+	// ServicingReclaimablePackages is the parsed reclaimable-package count from a
+	// ready or no_work analysis. It is the only servicing quantity disclosed at
+	// confirmation; servicing never reports reclaimable bytes.
+	ServicingReclaimablePackages int
+	// ServicingReasonCode is the stable path-free reason for a skipped or failed
+	// analysis. Empty for analysis_required, analyzing, ready, and no_work.
+	ServicingReasonCode string
 }
 
 type eagerCategoryObservationMsg struct {
@@ -134,7 +151,7 @@ var buildEagerPreviewOptions = func() clean.Options {
 // selection disclosed permanent work, and reuses shared Clean Execute (fresh
 // resolution, protection, capacity, mixed actions). Tests replace it to assert
 // handoff without deletion. It never synthesizes CLI arguments.
-var runExactCleanSelection = func(ctx context.Context, selected []string, allowPermanent bool, reporter clean.ProgressReporter) clean.Result {
+var runExactCleanSelection = func(ctx context.Context, selected []string, allowPermanent, allowServicing bool, reporter clean.ProgressReporter) clean.Result {
 	plan, err := clean.CompileExactCategoryPlan(selected)
 	if err != nil {
 		return clean.Result{
@@ -150,13 +167,19 @@ var runExactCleanSelection = func(ctx context.Context, selected []string, allowP
 	config := loadProtectionConfiguration()
 	recorder, _ := newHistoryRecorder()
 	return executeClean(ctx, clean.Options{
-		Validator:                 config.Validator,
-		ProtectionDiagnostics:     config.Diagnostics,
-		ProtectionLoadError:       config.LoadError,
-		HistoryRecorder:           recorder,
-		CommandParameters:         exactTUICommandParameters(plan.Categories),
-		Plan:                      &plan,
-		AllowPermanentDeletion:    allowPermanent,
+		Validator:              config.Validator,
+		ProtectionDiagnostics:  config.Diagnostics,
+		ProtectionLoadError:    config.LoadError,
+		HistoryRecorder:        recorder,
+		CommandParameters:      exactTUICommandParameters(plan.Categories),
+		Plan:                   &plan,
+		AllowPermanentDeletion: allowPermanent,
+		// Per-run Windows servicing authorization equivalent to --allow-servicing,
+		// granted by the strengthened confirmation only when the frozen exact
+		// selection disclosed a servicing category. Independent of permanent
+		// authorization; execution performs a fresh composite analysis.
+		AllowServicing:            allowServicing,
+		ServicingGateway:          servicing.NewGateway(),
 		DetectRunningApplications: clean.DetectSupportedApplications,
 		ProgressReporter:          reporter,
 	})
@@ -173,7 +196,7 @@ func exactTUICommandParameters(categories []string) history.CommandParameters {
 	}
 }
 
-func executeExactCleanSelectionCmd(ctx context.Context, selected []string, allowPermanent bool) tea.Cmd {
+func executeExactCleanSelectionCmd(ctx context.Context, selected []string, allowPermanent, allowServicing bool) tea.Cmd {
 	selected = append([]string(nil), selected...)
 	return func() tea.Msg {
 		// Larger buffer: Slice C emits per-category boundaries in addition to
@@ -184,7 +207,7 @@ func executeExactCleanSelectionCmd(ctx context.Context, selected []string, allow
 		stream := &cleanExecutionStream{progress: progress, result: result}
 		go func() {
 			defer close(progress)
-			result <- runExactCleanSelection(ctx, selected, allowPermanent, func(event clean.ExecutionProgress) {
+			result <- runExactCleanSelection(ctx, selected, allowPermanent, allowServicing, func(event clean.ExecutionProgress) {
 				progress <- event
 			})
 			close(result)
@@ -257,6 +280,10 @@ type eagerCleanModel struct {
 	// frozenAllowPermanent is the per-run permanent authorization disclosed by
 	// the strengthened confirmation for the frozen exact selection.
 	frozenAllowPermanent bool
+	// frozenAllowServicing is the per-run Windows servicing authorization
+	// (equivalent to --allow-servicing) granted by confirmation when the frozen
+	// exact selection includes a servicing category.
+	frozenAllowServicing bool
 	executionStarted     bool
 	// executionStartedAt is wall-clock start of the confirmed execute path.
 	// Elapsed execution chrome uses this, never preview startedAt.
@@ -289,7 +316,7 @@ func newEagerCleanModelFromSummaries(queue []clean.CleanupCategorySummary, width
 func eagerRowsFromSummaries(queue []clean.CleanupCategorySummary) []eagerCategoryRow {
 	rows := make([]eagerCategoryRow, 0, len(queue))
 	for _, summary := range queue {
-		rows = append(rows, eagerCategoryRow{
+		row := eagerCategoryRow{
 			Identifier:      summary.Identifier,
 			Label:           summary.Label,
 			ReportCategory:  summary.ReportCategory,
@@ -300,7 +327,21 @@ func eagerRowsFromSummaries(queue []clean.CleanupCategorySummary) []eagerCategor
 			// ADR 0018 / deletion policy: derive initial selection from shared
 			// eligibility + planned action (no hard-coded permanent list).
 			Selected: clean.InitiallySelectedCategory(summary),
-		})
+		}
+		// Windows servicing categories (ADR 0029) start unselected as
+		// analysis_required and are never file-scanned. Entering Clean must not
+		// analyze the component store or trigger UAC; a distinct analysis action
+		// is required before the row can become selectable.
+		if clean.IsServicingSummary(summary) {
+			row.Servicing = true
+			row.ServicingState = clean.ServicingRowAnalysisRequired
+			row.Selected = false
+			// Servicing rows carry no file-scan CategoryPreviewState; the servicing
+			// state machine governs them. Leave State unset so scan-based selection,
+			// confirmation-gating, and no-work classification never misread them.
+			row.State = ""
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }
@@ -352,6 +393,7 @@ func (m *eagerCleanModel) start() tea.Cmd {
 	m.phase = eagerPhasePreview
 	m.frozenCategories = nil
 	m.frozenAllowPermanent = false
+	m.frozenAllowServicing = false
 	m.executionStarted = false
 	m.executionStartedAt = time.Time{}
 	m.executionResult = clean.Result{}
@@ -468,6 +510,11 @@ func (m *eagerCleanModel) applyObservation(msg eagerCategoryObservationMsg) {
 		return
 	}
 	row := &m.rows[index]
+	// Servicing rows are never file-scanned; ignore any stray observation so the
+	// servicing state machine remains the sole authority for these rows.
+	if row.Servicing {
+		return
+	}
 	row.State = msg.observation.State
 	row.CandidateCount = msg.observation.CandidateCount
 	row.Bytes = msg.observation.Bytes
@@ -488,6 +535,89 @@ func (m *eagerCleanModel) applyObservation(msg eagerCategoryObservationMsg) {
 		if clean.IsTerminalPreviewState(msg.observation.State) {
 			m.completed++
 		}
+	}
+}
+
+// runServicingAnalysisFn is the shared servicing-analysis seam for the Clean
+// TUI's explicit `a` action. Production delegates to shared Clean, which drives
+// the platform servicing gateway (isolated elevated helper + fixed DISM
+// capability); tests replace it with deterministic outcomes so contract tests
+// never launch UAC or DISM. The TUI owns no DISM invocation, elevation, helper
+// protocol, cancellation enforcement, or output parsing.
+var runServicingAnalysisFn = func(ctx context.Context, identifier string) clean.ServicingOperation {
+	return clean.AnalyzeServicingCategory(ctx, clean.Options{
+		ServicingGateway: servicing.NewGateway(),
+	}, identifier)
+}
+
+type eagerServicingAnalyzedMsg struct {
+	generation          uint64
+	identifier          string
+	state               clean.ServicingRowState
+	reclaimablePackages int
+	reason              string
+}
+
+// requestServicingAnalysisCmd runs one read-only component-store analysis for a
+// servicing row through the shared seam. It is dispatched only by an explicit
+// user analysis action; entering Clean never schedules it.
+func requestServicingAnalysisCmd(generation uint64, identifier string) tea.Cmd {
+	return func() tea.Msg {
+		op := runServicingAnalysisFn(context.Background(), identifier)
+		return eagerServicingAnalyzedMsg{
+			generation:          generation,
+			identifier:          identifier,
+			state:               clean.ServicingRowStateFromAnalysis(op),
+			reclaimablePackages: op.ReclaimablePackages,
+			reason:              op.Reason,
+		}
+	}
+}
+
+// requestFocusedServicingAnalysis starts an explicit analysis when the focused
+// row is a servicing row that is analyzable. It returns nil when the focus is
+// not a servicing row (so the caller falls back to Select All) or an analysis is
+// already in flight. The row moves to analyzing and drops any prior selection so
+// a stale ready result can never remain authorized across a re-analysis.
+func (m *eagerCleanModel) requestFocusedServicingAnalysis() tea.Cmd {
+	if m.unavailable != nil || len(m.rows) == 0 {
+		return nil
+	}
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return nil
+	}
+	row := &m.rows[m.cursor]
+	if !row.Servicing || !clean.ServicingRowAnalyzable(row.ServicingState) {
+		return nil
+	}
+	row.ServicingState = clean.ServicingRowAnalyzing
+	row.Selected = false
+	row.ServicingReclaimablePackages = 0
+	row.ServicingReasonCode = ""
+	return requestServicingAnalysisCmd(m.generation, row.Identifier)
+}
+
+// applyServicingAnalyzed records a completed servicing analysis on its row. A
+// ready result makes the row selectable but never auto-selects it; every other
+// outcome clears any selection. Stale results from a superseded generation are
+// ignored.
+func (m *eagerCleanModel) applyServicingAnalyzed(msg eagerServicingAnalyzedMsg) {
+	if msg.generation != m.generation || m.canceled || m.unavailable != nil {
+		return
+	}
+	index := m.rowIndex(msg.identifier)
+	if index < 0 {
+		return
+	}
+	row := &m.rows[index]
+	if !row.Servicing {
+		return
+	}
+	row.ServicingState = msg.state
+	row.ServicingReclaimablePackages = msg.reclaimablePackages
+	row.ServicingReasonCode = msg.reason
+	if !clean.ServicingRowSelectable(row.ServicingState) {
+		row.Selected = false
 	}
 }
 
@@ -769,6 +899,13 @@ func (m *eagerCleanModel) handleKey(key string) (eagerPreviewNav, tea.Cmd) {
 		// Toggle only; never returns a scan command.
 		m.toggleFocusedSelection()
 	case "a":
+		// Context-sensitive: on a servicing row the explicit `a` action requests
+		// component-store analysis (ADR 0029); elsewhere it selects all
+		// selectable non-servicing categories. Servicing rows are always excluded
+		// from Select All.
+		if cmd := m.requestFocusedServicingAnalysis(); cmd != nil {
+			return eagerPreviewNavNone, cmd
+		}
 		m.selectAllSelectable()
 	case "x":
 		m.clearSelection()
@@ -787,12 +924,14 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 		return eagerPreviewNavNone, nil
 	}
 	allowPermanent := m.selectionIncludesPermanent()
+	allowServicing := m.selectionIncludesServicing()
 	plan, err := clean.CompileExactCategoryPlan(ids)
 	if err != nil {
 		// Selection is catalog-derived; reject before any cleanup work.
 		m.executionStarted = true
 		m.frozenCategories = append([]string(nil), ids...)
 		m.frozenAllowPermanent = allowPermanent
+		m.frozenAllowServicing = allowServicing
 		m.executionResult = clean.Result{
 			Status: "error",
 			Mode:   "execute",
@@ -808,6 +947,7 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 	}
 	m.frozenCategories = append([]string(nil), plan.Categories...)
 	m.frozenAllowPermanent = allowPermanent
+	m.frozenAllowServicing = allowServicing
 	m.executionStarted = true
 	m.executionStartedAt = m.now()
 	m.cancellationRequested = false
@@ -826,9 +966,16 @@ func (m *eagerCleanModel) beginExactExecution() (eagerPreviewNav, tea.Cmd) {
 	// non-executing phase). Restart ticks with the execute handoff so the
 	// header spinner stays alive through long Fresh scanning / deletion.
 	return eagerPreviewNavNone, tea.Batch(
-		executeExactCleanSelectionCmd(ctx, m.frozenCategories, m.frozenAllowPermanent),
+		executeExactCleanSelectionCmd(ctx, m.frozenCategories, m.frozenAllowPermanent, m.frozenAllowServicing),
 		tickEagerPreviewCmd(m.generation, m.spinnerFrame),
 	)
+}
+
+// selectionIncludesServicing reports whether the current exact selection
+// includes any Windows servicing (invoke_windows_servicing) category. Used for
+// confirmation disclosure and the equivalent per-run servicing authorization.
+func (m eagerCleanModel) selectionIncludesServicing() bool {
+	return eagerSelectionIncludesServicing(m.rows)
 }
 
 // selectionIncludesPermanent reports whether the current exact selection
@@ -838,9 +985,10 @@ func (m eagerCleanModel) selectionIncludesPermanent() bool {
 	return eagerSelectionIncludesPermanent(m.rows)
 }
 
-// confirmationActionGroups splits the exact selection into Permanent deletion
-// and Recycle Bin work. Empty groups are omitted. Action is catalog-owned.
-func (m eagerCleanModel) confirmationActionGroups() (permanent, recycle []eagerCategoryRow) {
+// confirmationActionGroups splits the exact selection into Permanent deletion,
+// Recycle Bin, and Windows servicing work. Empty groups are omitted. Action is
+// catalog-owned.
+func (m eagerCleanModel) confirmationActionGroups() (permanent, recycle, servicing []eagerCategoryRow) {
 	return eagerConfirmationActionGroups(m.rows)
 }
 
@@ -1196,16 +1344,20 @@ func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
 	case eagerPhaseExecuting, eagerPhaseResult:
 		lines := make([]eagerBodyLine, 0, len(m.executionOutcomes))
 		for i, outcome := range m.executionOutcomes {
+			servicingRow := clean.IsServicingCategory(outcome.Identifier)
 			line := eagerBodyLine{
-				text:         fmt.Sprintf("  %s %s", m.executionRowMarker(outcome.State), m.executionRowLabel(outcome)),
+				text:         fmt.Sprintf("  %s %s", m.executionRowMarker(outcome.State), m.executionRowLabelFor(outcome, servicingRow)),
 				rowIndex:     -1,
 				outcomeIndex: i,
 			}
-			// Successful affected-style outcomes carry trusted affected bytes.
-			switch outcome.State {
-			case clean.CategoryExecutionCleaned, clean.CategoryExecutionPartial:
-				line.hasMagnitudeBytes = true
-				line.magnitudeBytes = outcome.AffectedBytes
+			// Servicing outcomes carry no bytes; only file-deletion outcomes get a
+			// trusted affected-byte magnitude token.
+			if !servicingRow {
+				switch outcome.State {
+				case clean.CategoryExecutionCleaned, clean.CategoryExecutionPartial:
+					line.hasMagnitudeBytes = true
+					line.magnitudeBytes = outcome.AffectedBytes
+				}
 			}
 			lines = append(lines, line)
 		}
@@ -1231,6 +1383,9 @@ func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
 			}
 			// Cursor (>) and checkbox ([x]/[ ]) stay independent of scan markers.
 			label := eagerPreviewRowLabelAligned(row, leftWidth, byteWidth)
+			if row.Servicing {
+				label = eagerServicingRowLabel(row)
+			}
 			line := eagerBodyLine{
 				text:         fmt.Sprintf("  %s %s %s %s", cursor, m.checkbox(row), m.rowMarker(row), label),
 				rowIndex:     i,
@@ -1463,6 +1618,8 @@ func sharedExecutionPhaseLabel(phase clean.ExecutionPhase) string {
 		return "Moving to Recycle Bin"
 	case clean.ExecutionPhasePermanentOperations:
 		return "Permanent deletion"
+	case clean.ExecutionPhaseServicingOperations:
+		return "Windows servicing"
 	case clean.ExecutionPhaseComplete:
 		return "Completion"
 	default:
@@ -1471,8 +1628,8 @@ func sharedExecutionPhaseLabel(phase clean.ExecutionPhase) string {
 }
 
 func (m eagerCleanModel) confirmationBodyEntries() []eagerBodyLine {
-	permanent, recycle := m.confirmationActionGroups()
-	return confirmationBodyEntriesFromGroups(permanent, recycle)
+	permanent, recycle, servicing := m.confirmationActionGroups()
+	return confirmationBodyEntriesFromGroups(permanent, recycle, servicing)
 }
 
 func (m eagerCleanModel) confirmationFooterLines() []string {
@@ -1482,6 +1639,7 @@ func (m eagerCleanModel) confirmationFooterLines() []string {
 func (m eagerCleanModel) confirmationFooterStyleLines() []tuiStyleLine {
 	n, measured, _ := m.selectionTotals()
 	includesPermanent := m.selectionIncludesPermanent()
+	_, recycle, servicing := m.confirmationActionGroups()
 	lines := []tuiStyleLine{
 		plainStyleLine(""),
 		magnitudeStyleLine(fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured)), measured),
@@ -1490,8 +1648,17 @@ func (m eagerCleanModel) confirmationFooterStyleLines() []tuiStyleLine {
 	if includesPermanent {
 		lines = append(lines, plainStyleLine(confirmationPermanentIrreversibleWarning))
 	}
-	if _, recycle := m.confirmationActionGroups(); len(recycle) > 0 {
+	if len(recycle) > 0 {
 		lines = append(lines, plainStyleLine(confirmationRecycleRecoverabilityNote))
+	}
+	// Windows servicing disclosure (ADR 0029): administrator consent after
+	// ordinary cleanup, /NoRestart, non-interruptible after mutation begins, and
+	// the equivalent per-run --allow-servicing authorization this confirmation
+	// grants. Only shown when the selection discloses a servicing category.
+	if len(servicing) > 0 {
+		for _, line := range confirmationServicingDisclosureLines() {
+			lines = append(lines, plainStyleLine(line))
+		}
 	}
 	// Fresh-rescan expectation + action-type safety, then execute hint.
 	lines = append(lines,
@@ -1526,6 +1693,11 @@ func (m eagerCleanModel) resultFooterStyleLines() []tuiStyleLine {
 	if clean.ResultHasPermanentPartialRisk(m.executionResult) {
 		lines = append(lines, plainStyleLine(clean.PermanentPartialRiskWarning))
 	}
+	// Windows servicing disclosures (restart required, post-start cancellation)
+	// are preserved from the authoritative Result without inventing bytes.
+	for _, note := range eagerResultServicingNotes(m.executionResult) {
+		lines = append(lines, plainStyleLine(note))
+	}
 	lines = append(lines, plainStyleLine(""), plainStyleLine("Enter/Esc/b: menu · q: quit"))
 	return lines
 }
@@ -1552,6 +1724,15 @@ func (m eagerCleanModel) executionRowMarker(state clean.CategoryExecutionState) 
 }
 
 func (m eagerCleanModel) executionRowLabel(outcome clean.CategoryExecutionOutcome) string {
+	return eagerExecutionRowLabel(outcome)
+}
+
+// executionRowLabelFor renders a servicing outcome without a byte token (a
+// servicing action processes no file bytes) and every other outcome normally.
+func (m eagerCleanModel) executionRowLabelFor(outcome clean.CategoryExecutionOutcome, servicingRow bool) string {
+	if servicingRow {
+		return eagerServicingExecutionRowLabel(outcome)
+	}
 	return eagerExecutionRowLabel(outcome)
 }
 
@@ -1584,9 +1765,22 @@ func (m eagerCleanModel) headerLine() string {
 		m.allCategoriesTerminal(),
 		m.activeIndex,
 		m.completed,
-		len(m.rows),
+		m.scannableRowCount(),
 		m.elapsedLabel(),
 	)
+}
+
+// scannableRowCount is the number of file-scanned preview rows. Windows
+// servicing rows are never file-scanned (they use an explicit analysis action),
+// so they are excluded from the scan progress denominator.
+func (m eagerCleanModel) scannableRowCount() int {
+	n := 0
+	for _, row := range m.rows {
+		if !row.Servicing {
+			n++
+		}
+	}
+	return n
 }
 
 func (m eagerCleanModel) elapsedLabel() string {
@@ -1605,10 +1799,16 @@ func (m eagerCleanModel) elapsedLabel() string {
 }
 
 func (m eagerCleanModel) rowMarker(row eagerCategoryRow) string {
+	if row.Servicing {
+		return eagerServicingRowMarker(row.ServicingState, m.spinnerFrame)
+	}
 	return eagerPreviewRowMarker(row.State, m.spinnerFrame)
 }
 
 func (m eagerCleanModel) rowLabel(row eagerCategoryRow) string {
+	if row.Servicing {
+		return eagerServicingRowLabel(row)
+	}
 	return eagerPreviewRowLabel(row)
 }
 
@@ -1629,9 +1829,16 @@ func (m eagerCleanModel) focusedDetailPanel() string {
 }
 
 func (m eagerCleanModel) focusedDetailBody(row eagerCategoryRow) string {
+	if row.Servicing {
+		return eagerServicingFocusedDetailBody(row)
+	}
 	return eagerFocusedDetailBody(row)
 }
 
 func (m eagerCleanModel) footerHints() string {
-	return eagerFooterHints(m.allCategoriesTerminal(), m.noWorkState(), m.confirmationEnabled())
+	analyzable := false
+	if row, ok := m.focusedRow(); ok && row.Servicing && clean.ServicingRowAnalyzable(row.ServicingState) {
+		analyzable = true
+	}
+	return eagerFooterHints(m.allCategoriesTerminal(), m.noWorkState(), m.confirmationEnabled(), analyzable)
 }
