@@ -243,12 +243,14 @@ func TestEagerCleanNVIDIAInstallerCacheConfirmationFreezesExactRecycleHandoff(t 
 
 	var gotSelected []string
 	var gotAllowPermanent bool
+	var gotAllowServicing bool
 	var calls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, allowServicing bool, _ clean.ProgressReporter) clean.Result {
 		calls++
 		gotSelected = append([]string(nil), selected...)
 		gotAllowPermanent = allowPermanent
+		gotAllowServicing = allowServicing
 		return clean.Result{
 			Status: "ok",
 			Mode:   "execute",
@@ -354,6 +356,9 @@ func TestEagerCleanNVIDIAInstallerCacheConfirmationFreezesExactRecycleHandoff(t 
 	if gotAllowPermanent {
 		t.Fatal("handoff must not pass permanent authorization for the NVIDIA category")
 	}
+	if gotAllowServicing {
+		t.Fatal("handoff must not pass servicing authorization for the NVIDIA category")
+	}
 	if len(gotSelected) != 1 || gotSelected[0] != id {
 		t.Fatalf("handoff selected = %v, want [%q]", gotSelected, id)
 	}
@@ -378,7 +383,7 @@ func TestEagerCleanNVIDIAInstallerCacheExecutionFailureFlowsToResult(t *testing.
 
 	var calls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ bool, _ clean.ProgressReporter) clean.Result {
 		calls++
 		return clean.Result{
 			Status: "error",
@@ -447,7 +452,7 @@ func TestEagerCleanNVIDIAInstallerCacheExecutionFailureFlowsToResult(t *testing.
 func TestEagerCleanNVIDIAInstallerCacheCancellation(t *testing.T) {
 	var calls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(context.Context, []string, bool, clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(context.Context, []string, bool, bool, clean.ProgressReporter) clean.Result {
 		calls++
 		return clean.Result{Status: "ok", Mode: "execute"}
 	}
