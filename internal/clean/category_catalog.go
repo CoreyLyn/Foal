@@ -396,6 +396,7 @@ var applicationCacheApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationWindsurf, displayName: "Windsurf", executables: []string{"Windsurf.exe"}},
 	{id: ApplicationTrae, displayName: "Trae", executables: []string{"Trae.exe"}},
 	{id: ApplicationObsidian, displayName: "Obsidian", executables: []string{"Obsidian.exe"}},
+	{id: ApplicationVRChat, displayName: "VRChat", executables: []string{"VRChat.exe"}},
 }
 
 // categoryCatalogEntry is the private canonical registration point. Every
@@ -637,7 +638,7 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 30 delete_permanently + 7 move_to_recycle_bin + 1 actionless permission boundary.
+	// 31 delete_permanently + 7 move_to_recycle_bin + 1 actionless permission boundary.
 	// The 7th Recycle Bin category is the exact-selection-only, Not-proven
 	// nvidia_installer_cache (registered in the System group below).
 	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
@@ -959,6 +960,24 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		),
 		applicationCachePolicyObsidian,
 		ApplicationObsidian,
+	), applicationCachePreviewSafetyNote),
+	// VRChat: non-editor social VR app under the Applications report category (not
+	// Developer tools). Carries its own single-root allowlist (only Cache-WindowsPlayer)
+	// under %LOCALAPPDATA%\Low\VRChat\VRChat. Settings, logs, and unknown siblings
+	// are never candidates. Independent idle gate; selecting VRChat never authorizes
+	// or suppresses other applications. Registered after Obsidian so the eager preview
+	// queue groups Applications after Developer tools, matching report rendering order.
+	withPreviewSafetyNote(applicationCacheCategoryEntry(
+		categoryDefinition(
+			OpportunityCategoryVRChatCache,
+			"VRChat cache",
+			ReportCategoryApplications,
+			CategoryEligibilityOptIn,
+			RunningApplicationPolicyApplicationIdleBeforeAfter,
+			PlannedActionDeletePermanently,
+		),
+		applicationCachePolicyVRChat,
+		ApplicationVRChat,
 	), applicationCachePreviewSafetyNote),
 	// Non-executable permission boundary: actionless and cannot enter execution.
 	nonExecutableCategoryEntry(categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable, "")),

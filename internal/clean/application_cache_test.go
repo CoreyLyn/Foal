@@ -2313,7 +2313,7 @@ func TestDryRunObsidianProtectionSuppressesRootBeforeTotals(t *testing.T) {
 
 // TestNormalizedOptInSetAppCaches asserts the app-caches group expands to
 // exactly the Applications report-category application cache categories
-// (obsidian_cache), never editor caches, dev caches, or CLI-agent categories;
+// (obsidian_cache and vrchat_cache), never editor caches, dev caches, or CLI-agent categories;
 // exact-name obsidian_cache works; cli-agents excludes both Obsidian and Trae.
 func TestNormalizedOptInSetAppCaches(t *testing.T) {
 	enabled, invalid, _ := clean.NormalizedOptInSet([]string{clean.ApplicationCacheCategoryGroup})
@@ -2323,8 +2323,11 @@ func TestNormalizedOptInSetAppCaches(t *testing.T) {
 	if !enabled[clean.OpportunityCategoryObsidianCache] {
 		t.Fatalf("app-caches must enable obsidian_cache: %#v", enabled)
 	}
-	if len(enabled) != 1 {
-		t.Fatalf("app-caches must expand to exactly obsidian_cache, got %d: %#v", len(enabled), enabled)
+	if !enabled[clean.OpportunityCategoryVRChatCache] {
+		t.Fatalf("app-caches must enable vrchat_cache: %#v", enabled)
+	}
+	if len(enabled) != 2 {
+		t.Fatalf("app-caches must expand to exactly obsidian_cache and vrchat_cache, got %d: %#v", len(enabled), enabled)
 	}
 	for _, editor := range []string{
 		clean.OpportunityCategoryVSCodeCache,
