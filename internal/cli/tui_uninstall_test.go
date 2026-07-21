@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -400,5 +401,150 @@ func TestUninstallTUIMenuDescriptionMentionsSharedExecute(t *testing.T) {
 	}
 	if !strings.Contains(content, "shared Uninstall execute") {
 		t.Fatalf("main menu Uninstall description missing shared execute wording:\n%s", content)
+	}
+}
+
+// longUninstallPreview returns enough apps that a short terminal must scroll.
+func longUninstallPreview(n int) uninstall.Result {
+	apps := make([]uninstall.Application, 0, n)
+	for i := 0; i < n; i++ {
+		apps = append(apps, uninstall.Application{
+			Name:         fmt.Sprintf("App %02d", i),
+			Version:      "1.0.0",
+			Publisher:    "Vendor",
+			PlannedClass: uninstall.PlannedClassOfficialUninstaller,
+			Evidence:     []string{"windows_registry_uninstall_keys:HKCU"},
+			Confidence:   "high",
+			Ownership:    "app_owned",
+		})
+	}
+	return uninstall.WithReviewSections(uninstall.Result{
+		Status:       "preview",
+		Applications: apps,
+		Execution: uninstall.ExecutionPolicy{
+			Allowed: false,
+			Actions: []string{},
+			Reason:  "preview-only until confirmed execute",
+		},
+	})
+}
+
+func loadLongUninstallTUI(t *testing.T, appCount, width, height int) rootModel {
+	t.Helper()
+	original := reviewUninstall
+	reviewUninstall = func() uninstall.Result { return longUninstallPreview(appCount) }
+	t.Cleanup(func() { reviewUninstall = original })
+
+	model := newRootModel()
+	next, _ := model.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	model = next.(rootModel)
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
+	if cmd == nil {
+		t.Fatal("opening Uninstall must return a preview load command")
+	}
+	loaded, ok := cmd().(uninstallPreviewLoadedMsg)
+	if !ok {
+		t.Fatalf("load command produced %T, want uninstallPreviewLoadedMsg", cmd())
+	}
+	next, _ = model.Update(loaded)
+	return next.(rootModel)
+}
+
+func TestUninstallTUIViewportPreviewFocusFollows(t *testing.T) {
+	// Short height: header + footer leave a few body lines, so deep rows need scroll.
+	model := loadLongUninstallTUI(t, 40, 80, 16)
+	if model.uninstall.viewportOffset != 0 {
+		t.Fatalf("preview starts at offset 0, got %d", model.uninstall.viewportOffset)
+	}
+
+	// Drive cursor near the end; viewport must follow so the focused row is visible.
+	for i := 0; i < 35; i++ {
+		model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	}
+	if model.uninstall.cursor != 35 {
+		t.Fatalf("cursor = %d, want 35", model.uninstall.cursor)
+	}
+	if model.uninstall.viewportOffset < 1 {
+		t.Fatalf("viewport must follow deep focus, got offset %d", model.uninstall.viewportOffset)
+	}
+
+	content := model.content()
+	if !strings.Contains(content, "App 35") {
+		t.Fatalf("focused row must be visible after scroll:\n%s", content)
+	}
+	// Early rows should be scrolled off when focus is deep.
+	if strings.Contains(content, "App 00") {
+		t.Fatalf("early rows should scroll off when focus is deep:\n%s", content)
+	}
+	// Fixed chrome stays present (footer not scrolled away).
+	if !strings.Contains(content, "Selected: 0") {
+		t.Fatalf("fixed footer totals must remain visible:\n%s", content)
+	}
+	if !strings.Contains(content, "Uninstall TUI") {
+		t.Fatalf("fixed header must remain visible:\n%s", content)
+	}
+	if strings.Contains(content, "scroll mode") {
+		t.Fatal("must not introduce a separate scroll mode")
+	}
+}
+
+func TestUninstallTUIViewportConfirmationScrollOnly(t *testing.T) {
+	// Select many apps so confirmation body exceeds a short terminal.
+	model := loadLongUninstallTUI(t, 20, 80, 16)
+	// Select first 12 apps for a tall confirmation disclosure.
+	for i := 0; i < 12; i++ {
+		model = updateRootKeys(t, model, tea.KeyPressMsg{Code: ' ', Text: " "})
+		if i < 11 {
+			model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+		}
+	}
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.uninstall.phase != uninstallPhaseConfirmation {
+		t.Fatalf("phase = %v, want confirmation", model.uninstall.phase)
+	}
+	if model.uninstall.viewportOffset != 0 {
+		t.Fatalf("confirmation starts at offset 0, got %d", model.uninstall.viewportOffset)
+	}
+
+	beforeSelection := model.uninstall.selectedAppNames()
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	if model.uninstall.viewportOffset < 1 {
+		t.Fatalf("confirmation down should increase viewport offset, got %d", model.uninstall.viewportOffset)
+	}
+	afterSelection := model.uninstall.selectedAppNames()
+	if len(beforeSelection) != len(afterSelection) {
+		t.Fatalf("confirmation scroll changed selection count: %v -> %v", beforeSelection, afterSelection)
+	}
+	for i := range beforeSelection {
+		if beforeSelection[i] != afterSelection[i] {
+			t.Fatalf("confirmation scroll changed selection: %v -> %v", beforeSelection, afterSelection)
+		}
+	}
+	// Authorization must not change while scrolling confirmation.
+	if model.uninstall.allowStopProcesses || model.uninstall.allowPermanent {
+		t.Fatal("confirmation scroll must not toggle authorizations")
+	}
+}
+
+func TestUninstallTUIViewportResizePreservesFocus(t *testing.T) {
+	model := loadLongUninstallTUI(t, 30, 80, 20)
+	for i := 0; i < 20; i++ {
+		model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	}
+	cursorBefore := model.uninstall.cursor
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+	model = next.(rootModel)
+	if model.uninstall.cursor != cursorBefore {
+		t.Fatalf("resize changed cursor %d -> %d", cursorBefore, model.uninstall.cursor)
+	}
+	if model.uninstall.viewportOffset < 0 {
+		t.Fatalf("bad offset %d", model.uninstall.viewportOffset)
+	}
+	content := model.content()
+	if !strings.Contains(content, fmt.Sprintf("App %02d", cursorBefore)) {
+		t.Fatalf("focused row must stay visible after resize:\n%s", content)
 	}
 }
