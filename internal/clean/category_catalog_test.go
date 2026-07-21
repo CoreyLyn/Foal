@@ -278,13 +278,13 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 
 	// ADR 0029 adds exactly one invoke_windows_servicing category
 	// (winsxs_component_store); #309 adds one move_to_recycle_bin category
-	// (nvidia_installer_cache); #325 adds lghub-cache (another move_to_recycle_bin).
-	// The permanent count is unchanged.
+	// (nvidia_installer_cache); #325 adds lghub-cache (another move_to_recycle_bin);
+	// #323 adds nvidia_gl_cache (delete_permanently).
 	if len(servicing) != 1 || servicing[0] != clean.CategoryWinSxSComponentStore {
 		t.Fatalf("servicing matrix = %#v, want [%q]", servicing, clean.CategoryWinSxSComponentStore)
 	}
-	if len(executable) != 39 {
-		t.Fatalf("executable categories = %d (%v), want 39 (38 deletion + 1 servicing)", len(executable), executable)
+	if len(executable) != 40 {
+		t.Fatalf("executable categories = %d (%v), want 40 (39 deletion + 1 servicing)", len(executable), executable)
 	}
 	if !reflect.DeepEqual(permanent, wantPermanent) {
 		t.Fatalf("permanent matrix = %#v, want %#v", permanent, wantPermanent)
