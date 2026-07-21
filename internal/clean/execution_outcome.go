@@ -67,6 +67,10 @@ func InProgressExecutionState(phase ExecutionPhase) CategoryExecutionState {
 		return CategoryExecutionReady
 	case ExecutionPhaseRecycleBinOperations, ExecutionPhasePermanentOperations, ExecutionPhaseComplete:
 		return CategoryExecutionCleaning
+	case ExecutionPhaseServicingOperations:
+		// Windows servicing is a mutating final action group; show it as active
+		// cleaning while the elevated helper runs (no byte-derived progress).
+		return CategoryExecutionCleaning
 	case ExecutionPhaseScanning:
 		return CategoryExecutionRechecking
 	default:
@@ -222,6 +226,13 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 	out := make([]CategoryExecutionOutcome, 0, len(selected))
 	catalog := CanonicalCleanupCategoryCatalog()
 	for _, id := range selected {
+		// Windows servicing categories carry no file items: their lifecycle comes
+		// from the path-free ServicingOperations, never Deleted/Failed/Skipped
+		// buckets, and they contribute no bytes.
+		if isServicingCategory(id) {
+			out = append(out, projectServicingExecutionOutcome(catalog, id, result))
+			continue
+		}
 		b := byID[id]
 		label := id
 		if summary, ok := catalog.Summary(id); ok {
@@ -252,6 +263,25 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		})
 	}
 	return out
+}
+
+// projectServicingExecutionOutcome maps the final Result's path-free servicing
+// operation for one servicing category onto a byte-free execution outcome. A
+// category with no recorded operation (for example a run that ended before the
+// final servicing phase) fails closed as skipped.
+func projectServicingExecutionOutcome(catalog CleanupCategoryCatalog, id string, result Result) CategoryExecutionOutcome {
+	label := id
+	if summary, ok := catalog.Summary(id); ok {
+		label = summary.Label
+	}
+	state := CategoryExecutionSkipped
+	for _, op := range result.ServicingOperations {
+		if op.Category == id {
+			state = ServicingExecutionState(op.Outcome)
+			break
+		}
+	}
+	return CategoryExecutionOutcome{Identifier: id, Label: label, State: state}
 }
 
 // CountTerminalExecutionOutcomes returns how many projected outcomes are terminal.

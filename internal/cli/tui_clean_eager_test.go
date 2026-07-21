@@ -89,6 +89,14 @@ func TestEagerCleanModelQueueIsCatalogDerived(t *testing.T) {
 		if row.Identifier != queue[i].Identifier {
 			t.Fatalf("row[%d] = %q, queue = %q", i, row.Identifier, queue[i].Identifier)
 		}
+		// Windows servicing rows start as analysis_required (never file-scanned),
+		// not the file-scan waiting state.
+		if clean.IsServicingSummary(queue[i]) {
+			if !row.Servicing || row.ServicingState != clean.ServicingRowAnalysisRequired {
+				t.Fatalf("servicing row[%d] = servicing:%v state:%q, want analysis_required", i, row.Servicing, row.ServicingState)
+			}
+			continue
+		}
 		if row.State != clean.CategoryPreviewWaiting {
 			t.Fatalf("initial state[%d] = %q, want waiting", i, row.State)
 		}
@@ -161,12 +169,23 @@ func TestEagerCleanModelStreamsOneCategoryAtATime(t *testing.T) {
 		t.Fatalf("active = %d state0 = %q", model.activeIndex, model.rows[0].State)
 	}
 	for i := 1; i < len(model.rows); i++ {
+		// Servicing rows are never file-scanned; they rest at analysis_required.
+		if model.rows[i].Servicing {
+			continue
+		}
 		if model.rows[i].State != clean.CategoryPreviewWaiting {
 			t.Fatalf("row %d state = %q, want waiting while first scans", i, model.rows[i].State)
 		}
 	}
 	content := model.content()
-	if !strings.Contains(content, fmt.Sprintf("Scanning 1/%d", len(queue))) {
+	// Header denominator counts only file-scanned rows (servicing rows excluded).
+	scannable := 0
+	for _, s := range queue {
+		if !clean.IsServicingSummary(s) {
+			scannable++
+		}
+	}
+	if !strings.Contains(content, fmt.Sprintf("Scanning 1/%d", scannable)) {
 		t.Fatalf("header:\n%s", content)
 	}
 	if !strings.Contains(content, "…") {
@@ -195,6 +214,9 @@ func TestEagerCleanModelStreamsOneCategoryAtATime(t *testing.T) {
 		t.Fatalf("after second start: active=%d s0=%q s1=%q", model.activeIndex, model.rows[0].State, model.rows[1].State)
 	}
 	for i := 2; i < len(model.rows); i++ {
+		if model.rows[i].Servicing {
+			continue
+		}
 		if model.rows[i].State != clean.CategoryPreviewWaiting {
 			t.Fatalf("row %d should still wait", i)
 		}
@@ -743,8 +765,10 @@ func TestEagerPreviewFinishedAfterFullQueue(t *testing.T) {
 			if model.canceled || !model.finished {
 				t.Fatalf("finished state = finished=%v canceled=%v", model.finished, model.canceled)
 			}
-			if model.completed != len(model.rows) {
-				t.Fatalf("completed = %d, rows = %d", model.completed, len(model.rows))
+			// Servicing rows are never file-scanned, so completed counts only the
+			// scannable (non-servicing) rows.
+			if model.completed != model.scannableRowCount() {
+				t.Fatalf("completed = %d, scannable = %d", model.completed, model.scannableRowCount())
 			}
 			content := model.content()
 			if !strings.Contains(content, "Scan complete") {
@@ -1493,7 +1517,7 @@ func TestEagerCleanEnterBlockedUntilTerminalAndNonEmpty(t *testing.T) {
 func TestEagerCleanFirstEnterOpensConfirmationWithoutExecutionOrHistory(t *testing.T) {
 	calls := 0
 	original := runExactCleanSelection
-	runExactCleanSelection = func(context.Context, []string, bool, clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(context.Context, []string, bool, bool, clean.ProgressReporter) clean.Result {
 		calls++
 		return clean.Result{Status: "ok", Mode: "execute"}
 	}
@@ -1641,7 +1665,7 @@ func TestEagerCleanSecondEnterInvokesExactExecutionOnce(t *testing.T) {
 	var gotIDs []string
 	calls := 0
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ bool, _ clean.ProgressReporter) clean.Result {
 		calls++
 		gotIDs = append([]string(nil), selected...)
 		return clean.Result{Status: "ok", Mode: "execute", Totals: clean.Totals{DeletedCount: 1, AffectedBytes: 9}}
@@ -1754,7 +1778,7 @@ func TestRunExactCleanSelectionUsesPlanAndTUIProvenance(t *testing.T) {
 	// Omit default; pass only crash_dumps and go-cache style opt-ins.
 	// Recycle-bin opt-ins only: permanent auth stays false.
 	selected := []string{clean.DevCacheCategoryGo, clean.OpportunityCategoryCrashDumps}
-	result := runExactCleanSelection(context.Background(), selected, false, nil)
+	result := runExactCleanSelection(context.Background(), selected, false, false, nil)
 	if result.Status != "ok" {
 		t.Fatalf("result = %#v", result)
 	}
@@ -1799,7 +1823,7 @@ func TestRunExactCleanSelectionUsesPlanAndTUIProvenance(t *testing.T) {
 	}
 
 	// Permanent authorization is passed directly, never via fabricated CLI args.
-	_ = runExactCleanSelection(context.Background(), selected, true, nil)
+	_ = runExactCleanSelection(context.Background(), selected, true, false, nil)
 	if !captured.AllowPermanentDeletion {
 		t.Fatal("allowPermanent handoff must set AllowPermanentDeletion")
 	}
@@ -1825,7 +1849,7 @@ func TestRunExactCleanSelectionRejectsInvalidIdentifiersBeforeCleanup(t *testing
 		{"not_a_category"},
 		{"administrator_only_caches"},
 	} {
-		result := runExactCleanSelection(context.Background(), ids, false, nil)
+		result := runExactCleanSelection(context.Background(), ids, false, false, nil)
 		if called {
 			t.Fatalf("execute called for invalid %#v", ids)
 		}
@@ -1838,7 +1862,7 @@ func TestRunExactCleanSelectionRejectsInvalidIdentifiersBeforeCleanup(t *testing
 func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) {
 	var cancelCalls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, _ bool, reporter clean.ProgressReporter) clean.Result {
 		if reporter != nil {
 			// Phase opener (no category) then category-scoped boundaries.
 			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning})
@@ -2234,7 +2258,7 @@ func TestEagerCleanExecutionTerminalOutcomesAndMixedPartial(t *testing.T) {
 	defaultID := clean.DefaultCategoryFoalOwnedTempSandboxes
 	optInID := clean.OpportunityCategoryCrashDumps
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ bool, _ clean.ProgressReporter) clean.Result {
 		return clean.Result{
 			Status: "ok",
 			Mode:   "execute",
@@ -2365,7 +2389,7 @@ func TestEagerCleanExecutionEmptyCleanedFailedCanceled(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			original := runExactCleanSelection
-			runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ clean.ProgressReporter) clean.Result {
+			runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ bool, _ clean.ProgressReporter) clean.Result {
 				// Re-attribute items to the frozen selected id.
 				result := tc.result
 				for i := range result.Deleted {
@@ -2419,7 +2443,7 @@ func TestEagerCleanExecutionEmptyCleanedFailedCanceled(t *testing.T) {
 func TestEagerCleanActiveExecutionCancelKeysAndRepeatedCtrlC(t *testing.T) {
 	cancelCh := make(chan struct{})
 	original := runExactCleanSelection
-	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, _ bool, reporter clean.ProgressReporter) clean.Result {
 		if reporter != nil {
 			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinOperations})
 		}
@@ -2603,7 +2627,7 @@ func TestEagerCleanResultKeysAndStartDiscardsStaleSession(t *testing.T) {
 func TestEagerCleanExecutionCannotAlterFrozenAuthorization(t *testing.T) {
 	var got []string
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ bool, _ clean.ProgressReporter) clean.Result {
 		got = append([]string(nil), selected...)
 		return clean.Result{Status: "ok", Mode: "execute"}
 	}
@@ -2720,14 +2744,18 @@ func TestEagerCleanViewportPreviewFocusFollowsIncludingDisabled(t *testing.T) {
 func TestEagerCleanViewportConfirmationAndResultScrollOnly(t *testing.T) {
 	model := newEagerCleanModel(80, 14)
 	markEagerQueueTerminal(&model, true)
-	// Select many complete categories so confirmation body is long.
+	// Select many complete categories so confirmation body is long. Skip the
+	// servicing row (it uses the servicing state machine, not file scan state).
+	selected := 0
 	for i := range model.rows {
-		if i < 12 {
-			model.rows[i].State = clean.CategoryPreviewComplete
-			model.rows[i].CandidateCount = 1
-			model.rows[i].Bytes = 2
-			model.rows[i].Selected = true
+		if model.rows[i].Servicing || selected >= 12 {
+			continue
 		}
+		model.rows[i].State = clean.CategoryPreviewComplete
+		model.rows[i].CandidateCount = 1
+		model.rows[i].Bytes = 2
+		model.rows[i].Selected = true
+		selected++
 	}
 	before := append([]string(nil), model.selectedCategoryIDs()...)
 	nav, _ := model.handleKey("enter")
@@ -2759,7 +2787,7 @@ func TestEagerCleanViewportConfirmationAndResultScrollOnly(t *testing.T) {
 
 	// Execute with a stub that returns mixed outcomes for a long result list.
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ bool, reporter clean.ProgressReporter) clean.Result {
 		if reporter != nil {
 			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning})
 		}
@@ -3227,7 +3255,7 @@ func TestEagerCleanConfirmationGroupsMixedActionsAndHandoff(t *testing.T) {
 	var gotAllow bool
 	var calls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ bool, _ clean.ProgressReporter) clean.Result {
 		calls++
 		gotSelected = append([]string(nil), selected...)
 		gotAllow = allowPermanent
@@ -3396,7 +3424,7 @@ func TestEagerCleanResultProjectsMixedOutcomesAndPartialRisk(t *testing.T) {
 	defaultID := clean.DefaultCategoryFoalOwnedTempSandboxes
 	permanentID := clean.DevCacheCategoryGo
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ bool, _ clean.ProgressReporter) clean.Result {
 		if !allowPermanent {
 			t.Fatal("mixed permanent selection must authorize permanent")
 		}
@@ -3523,7 +3551,7 @@ func TestEagerCleanProductionPermanentCategoriesInitialSelectionAndConfirmation(
 	var gotAllow bool
 	var calls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ bool, _ clean.ProgressReporter) clean.Result {
 		calls++
 		gotSelected = append([]string(nil), selected...)
 		gotAllow = allowPermanent
@@ -3730,7 +3758,7 @@ func TestEagerCleanGrokBuildUpdateResidueRowSelectionAndHandoff(t *testing.T) {
 	var gotAllowPermanent bool
 	var calls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, _ bool, _ clean.ProgressReporter) clean.Result {
 		calls++
 		gotSelected = append([]string(nil), selected...)
 		gotAllowPermanent = allowPermanent
@@ -3906,7 +3934,7 @@ func TestEagerCleanExecutionRestartsSpinnerTicksAndElapsed(t *testing.T) {
 	// Hold execution open so ticks matter while Fresh scanning is in progress.
 	release := make(chan struct{})
 	original := runExactCleanSelection
-	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, reporter clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(ctx context.Context, selected []string, _ bool, _ bool, reporter clean.ProgressReporter) clean.Result {
 		if reporter != nil {
 			reporter(clean.ExecutionProgress{Phase: clean.ExecutionPhaseScanning})
 		}
