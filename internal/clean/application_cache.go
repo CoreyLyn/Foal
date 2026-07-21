@@ -69,8 +69,9 @@ type ApplicationCacheDiscoveryOptions struct {
 	// environment; blank/missing yields silent absence of all roots for policies
 	// using the local base.
 	LocalAppDataDir string
-	// LocalLowAppDataDir overrides %LOCALAPPDATA%\Low for tests. Empty uses
-	// the process environment; blank/missing yields silent absence of all
+	// LocalLowAppDataDir overrides the LocalLow AppData known folder for tests.
+	// Empty uses the process known folder (FOLDERID_LocalAppDataLow, typically
+	// %USERPROFILE%\AppData\LocalLow); blank/missing yields silent absence of all
 	// roots for policies using the locallow base.
 	LocalLowAppDataDir string
 	// stat stays inside the existing Application cache discovery seam so package
@@ -157,8 +158,9 @@ var applicationCachePolicies = map[string]applicationCachePolicy{
 		appDataPath:  []string{"obsidian"},
 		relativeRoots: append([]string(nil), obsidianCacheAllowlistedRelativeRoots...),
 	},
-	// VRChat: non-editor social VR app; %LOCALAPPDATA%\Low\VRChat\VRChat holds
-	// downloaded avatar/world content. VRChat.exe is the Windows launcher.
+	// VRChat: non-editor social VR app; the LocalLow AppData known folder holds
+	// VRChat\VRChat with downloaded avatar/world content. VRChat.exe is the
+	// Windows launcher.
 	// Carries its own single-root allowlist (only Cache-WindowsPlayer) so
 	// settings, logs, and unknown siblings are never candidates. Independent
 	// idle gate; never cross-authorizes other applications.
@@ -314,11 +316,10 @@ func applicationCacheBaseDir(opts ApplicationCacheDiscoveryOptions, policy appli
 		if opts.LocalLowAppDataDir != "" {
 			return strings.TrimSpace(opts.LocalLowAppDataDir)
 		}
-		localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
-		if localAppData == "" {
-			return ""
-		}
-		return filepath.Join(localAppData, "Low")
+		// LocalLow is a distinct Windows known folder (FOLDERID_LocalAppDataLow,
+		// typically %USERPROFILE%\AppData\LocalLow), not %LOCALAPPDATA%\Low.
+		// Reuse the shared resolver so discovery matches the real folder.
+		return resolveLocalAppDataLowDir()
 	default: // applicationCacheBaseRoaming
 		if opts.RoamingAppDataDir != "" {
 			return strings.TrimSpace(opts.RoamingAppDataDir)
