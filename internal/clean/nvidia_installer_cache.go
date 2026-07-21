@@ -44,7 +44,7 @@ const nvidiaInstallerCacheOptInImpactNotice = "Opt-in NVIDIA installer cache cle
 // Stable NVIDIA skip/diagnostic reason codes. Codes never embed candidate paths
 // or raw operating-system messages.
 const (
-	nvidiaActivitySkipCode       = "nvidia_application_running"
+	nvidiaActivitySkipCode       = PreviewReasonNVIDIAActivity
 	nvidiaRootUnreadableCode     = "nvidia_downloader_unreadable"
 	nvidiaStatusUnreadableCode   = "nvidia_status_registry_unreadable"
 	nvidiaRevalidationFailedCode = "nvidia_installer_cache_revalidation_failed"

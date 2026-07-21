@@ -35,6 +35,11 @@ const (
 	PreviewReasonEmpty                  = "empty"
 	PreviewReasonProtectionConfigFailed = "protection_file_load_failed"
 	PreviewReasonProtectionInvalidUTF8  = "protection_file_invalid_utf8"
+	// PreviewReasonNVIDIAActivity is the stable skip reason surfaced when the
+	// nvidia_installer_cache category is skipped because NVIDIA process/service
+	// state is active or could not be determined. It equals nvidiaActivitySkipCode
+	// so preview projection and the resolver share one code.
+	PreviewReasonNVIDIAActivity = "nvidia_application_running"
 )
 
 // EagerPreviewUnavailable is a global pre-scan safety or configuration failure.
