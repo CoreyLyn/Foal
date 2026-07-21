@@ -644,8 +644,8 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
 	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin)),
-	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin)),
-	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin), "CrashDumps"),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently)),
+	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryCrashDumps, "Crash dumps", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently), "CrashDumps"),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryWindowsErrorReporting, "Windows Error Reporting", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin), "Microsoft", "Windows", "WER"),
 	// Explorer thumbnail/icon DBs: exact thumbcache_*.db / iconcache_*.db under
 	// Local\Microsoft\Windows\Explorer only. Parent Explorer, ETL logs,
@@ -653,7 +653,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// outside Explorer are never candidates. Missing matches ⇒ empty (no
 	// whole-root fallback). Evidence: docs/research/explorer-thumbnail-and-inet-cache-allowlists.md (#235/#239).
 	existenceOpportunityRootsEntry(
-		categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin),
+		categoryDefinition(OpportunityCategoryExplorerThumbnailCache, "Explorer thumbnail cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently),
 		existenceRootSpec{
 			base:                existenceRootLocalAppData,
 			segments:            []string{"Microsoft", "Windows", "Explorer"},
@@ -665,7 +665,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Virtualized, Office Content.*, and thumbnails are never candidates.
 	// Evidence: docs/research/explorer-thumbnail-and-inet-cache-allowlists.md (#235/#239).
 	existenceOpportunityRootsEntry(
-		categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin),
+		categoryDefinition(OpportunityCategoryINetCache, "INetCache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently),
 		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"Microsoft", "Windows", "INetCache", "IE"}},
 		existenceRootSpec{base: existenceRootLocalAppData, segments: []string{"Microsoft", "Windows", "INetCache", "Low", "IE"}},
 	),

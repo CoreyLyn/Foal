@@ -350,3 +350,121 @@ type permanentRemoverFunc func(context.Context, string) error
 func (f permanentRemoverFunc) Remove(ctx context.Context, path string) error {
 	return f(ctx, path)
 }
+
+// detailedRemoverFunc is a test fake implementing DetailedPermanentRemover. Its
+// DetailedRemove returns a canned PermanentRemoval so the
+// ExecutePermanentDetailed outcome mapping is exercised deterministically.
+type detailedRemoverFunc func(ctx context.Context, path string) delete.PermanentRemoval
+
+func (f detailedRemoverFunc) Remove(ctx context.Context, path string) error {
+	r := f(ctx, path)
+	if r.Outcome == delete.PermanentRemovalFullyDeleted {
+		return nil
+	}
+	return errors.New("detailed removal did not fully delete")
+}
+
+func (f detailedRemoverFunc) DetailedRemove(ctx context.Context, path string) delete.PermanentRemoval {
+	return f(ctx, path)
+}
+
+// TestExecutePermanentDetailedPartialOutcomeFromDetailedRemover verifies that a
+// detailed remover reporting a partial removal (some bytes deleted, some files
+// skipped) surfaces as PermanentOutcomePartial with reliable deleted-byte
+// accounting and a permanent_delete_partial reason.
+func TestExecutePermanentDetailedPartialOutcomeFromDetailedRemover(t *testing.T) {
+	dir := t.TempDir()
+	remover := detailedRemoverFunc(func(ctx context.Context, path string) delete.PermanentRemoval {
+		return delete.PermanentRemoval{
+			Outcome:      delete.PermanentRemovalPartial,
+			DeletedBytes: 6,
+			Skipped: []delete.SkippedFile{{
+				Path:   filepath.Join(path, "locked.nvph"),
+				Reason: pathsafe.Reason{Code: "file_in_use", Message: "being used by another process"},
+			}},
+		}
+	})
+	result := delete.ExecutePermanentDetailed(context.Background(),
+		[]delete.Candidate{{Path: dir, Bytes: 10}},
+		remover, pathsafe.Validator{}, nil)
+	if len(result.Items) != 1 || result.Items[0].Kind != delete.PermanentOutcomePartial {
+		t.Fatalf("result = %#v, want one partial item", result.Items)
+	}
+	item := result.Items[0]
+	if item.Bytes != 6 {
+		t.Fatalf("bytes = %d, want deleted-bytes (6)", item.Bytes)
+	}
+	if !item.PartialRisk {
+		t.Fatal("partial outcome must carry partial risk")
+	}
+	if item.Reason.Code != "permanent_delete_partial" {
+		t.Fatalf("reason code = %q, want permanent_delete_partial", item.Reason.Code)
+	}
+	if len(item.SkippedFiles) != 1 || item.SkippedFiles[0].Reason.Code != "file_in_use" {
+		t.Fatalf("skipped files = %#v", item.SkippedFiles)
+	}
+}
+
+// TestExecutePermanentDetailedFallsBackForLegacyRemover verifies that a remover
+// implementing only Remove (not DetailedPermanentRemover) falls back to the
+// legacy fail-fast ExecutePermanentWithHooks path, preserving existing fake
+// behavior. This keeps purge and existing test faves unaffected.
+func TestExecutePermanentDetailedFallsBackForLegacyRemover(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file.tmp")
+	if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	remover := permanentRemoverFunc(func(context.Context, string) error {
+		return errors.New("disk fault")
+	})
+	result := delete.ExecutePermanentDetailed(context.Background(),
+		[]delete.Candidate{{Path: path, Bytes: 4}},
+		remover, pathsafe.Validator{}, nil)
+	if len(result.Items) != 1 || result.Items[0].Kind != delete.PermanentOutcomeFailed {
+		t.Fatalf("result = %#v, want legacy failed fallback", result.Items)
+	}
+	item := result.Items[0]
+	if item.Reason.Code != "permanent_delete_failed" || !item.PartialRisk {
+		t.Fatalf("item = %#v, want legacy failed with partial risk", item)
+	}
+	if item.Bytes != 4 {
+		t.Fatalf("bytes = %d, want original measured bytes retained", item.Bytes)
+	}
+}
+
+// TestFilesystemPermanentRemoverDetailedRemoveSkipsLockedFile exercises the real
+// continue-on-error walker: a file held open with a non-sharing handle cannot be
+// removed, so DetailedRemove skips it, deletes the rest, and reports Partial
+// with accurate deleted-byte accounting. The tree remains because the skipped
+// child keeps it non-empty. (Windows-only; see permanent_windows_test.go.)
+
+// TestFilesystemPermanentRemoverDetailedRemoveFullyDeletesTree verifies the
+// continue-on-error walker still fully deletes an ordinary tree and reports
+// PermanentRemovalFullyDeleted with the sum of removed file sizes.
+func TestFilesystemPermanentRemoverDetailedRemoveFullyDeletesTree(t *testing.T) {
+	root := t.TempDir()
+	tree := filepath.Join(root, "glcache")
+	if err := os.MkdirAll(filepath.Join(tree, "nested"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "a.bin"), []byte("aaa"), 0600); err != nil { // 3
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "nested", "b.bin"), []byte("bb"), 0600); err != nil { // 2
+		t.Fatal(err)
+	}
+	removal := delete.FilesystemPermanentRemover{}.DetailedRemove(context.Background(), tree)
+	if removal.Outcome != delete.PermanentRemovalFullyDeleted {
+		t.Fatalf("outcome = %v, want fully deleted", removal.Outcome)
+	}
+	if removal.DeletedBytes != 5 {
+		t.Fatalf("deleted bytes = %d, want 5", removal.DeletedBytes)
+	}
+	if len(removal.Skipped) != 0 {
+		t.Fatalf("skipped = %#v, want none", removal.Skipped)
+	}
+	if _, err := os.Lstat(tree); !os.IsNotExist(err) {
+		t.Fatalf("tree should be removed: %v", err)
+	}
+}

@@ -11,7 +11,7 @@ import (
 	"github.com/CoreyLyn/Foal/internal/clean"
 )
 
-func TestExecuteSkipsVolumeWhenCandidatesCollectivelyExceedRemainingRecycleBinCapacity(t *testing.T) {
+func TestExecutePartiallyFillsVolumeWhenCandidatesCollectivelyExceedRemainingRecycleBinCapacity(t *testing.T) {
 	root := t.TempDir()
 	first := filepath.Join(root, "first.tmp")
 	second := filepath.Join(root, "second.tmp")
@@ -38,19 +38,20 @@ func TestExecuteSkipsVolumeWhenCandidatesCollectivelyExceedRemainingRecycleBinCa
 		},
 	})
 
-	if len(adapter.paths) != 0 {
-		t.Fatalf("adapter paths = %v, want none for unsafe volume", adapter.paths)
+	// Partial fill: two 4-byte candidates, 7 bytes remaining. The first fits
+	// (4 <= 7); the second overflows (4 > 3 remaining) and is skipped. Permanent
+	// deletion is never substituted for the overflow.
+	if len(adapter.paths) != 1 {
+		t.Fatalf("adapter paths = %v, want one fitted candidate", adapter.paths)
 	}
-	if len(result.Deleted) != 0 {
-		t.Fatalf("deleted = %#v, want none for unsafe volume", result.Deleted)
+	if len(result.Deleted) != 1 {
+		t.Fatalf("deleted = %#v, want the one candidate that fit", result.Deleted)
 	}
-	if len(result.Skipped) != 2 {
-		t.Fatalf("skipped = %#v, want both volume candidates", result.Skipped)
+	if len(result.Skipped) != 1 {
+		t.Fatalf("skipped = %#v, want the overflow candidate", result.Skipped)
 	}
-	for _, skipped := range result.Skipped {
-		if skipped.Reason.Code != "recycle_bin_capacity" {
-			t.Fatalf("skip reason = %q, want recycle_bin_capacity", skipped.Reason.Code)
-		}
+	if result.Skipped[0].Reason.Code != "recycle_bin_capacity" {
+		t.Fatalf("skip reason = %q, want recycle_bin_capacity", result.Skipped[0].Reason.Code)
 	}
 }
 
@@ -72,6 +73,9 @@ func TestExecuteAccountsForCurrentUsageAcrossDefaultAndOptInCandidates(t *testin
 			CandidatePaths: []string{defaultCandidate},
 		}},
 		OptIn:             []string{clean.OpportunityCategoryUserTemp},
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			clean.OpportunityCategoryUserTemp: clean.PlannedActionMoveToRecycleBin,
+		},
 		RecycleBinAdapter: adapter,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{{
@@ -89,16 +93,16 @@ func TestExecuteAccountsForCurrentUsageAcrossDefaultAndOptInCandidates(t *testin
 		},
 	})
 
-	if len(adapter.paths) != 0 || len(result.Deleted) != 0 {
-		t.Fatalf("adapter/deleted = %v/%#v, want no deletion when 8 selected bytes exceed 7 remaining", adapter.paths, result.Deleted)
+	// Partial fill: default (4B) + opt-in (4B), 7 bytes remaining. Default fits
+	// (resolve order wins the tie); opt-in overflows and is skipped.
+	if len(adapter.paths) != 1 || len(result.Deleted) != 1 {
+		t.Fatalf("adapter/deleted = %v/%#v, want one fitted candidate", adapter.paths, result.Deleted)
 	}
-	if len(result.Skipped) != 2 {
-		t.Fatalf("skipped = %#v, want default and opt-in candidates skipped together", result.Skipped)
+	if len(result.Skipped) != 1 {
+		t.Fatalf("skipped = %#v, want the overflow opt-in candidate", result.Skipped)
 	}
-	for _, skipped := range result.Skipped {
-		if skipped.Reason.Code != "recycle_bin_capacity" {
-			t.Fatalf("skip reason = %q, want recycle_bin_capacity", skipped.Reason.Code)
-		}
+	if result.Skipped[0].Reason.Code != "recycle_bin_capacity" {
+		t.Fatalf("skip reason = %q, want recycle_bin_capacity", result.Skipped[0].Reason.Code)
 	}
 }
 
@@ -222,6 +226,9 @@ func TestExecuteDeletesDefaultAndOptInCandidatesWhenAggregateCapacityIsSafe(t *t
 	result := clean.Execute(context.Background(), clean.Options{
 		Rules:             []clean.Rule{{ID: "test_default_rule", DefaultEnabled: true, CandidatePaths: []string{defaultCandidate}}},
 		OptIn:             []string{clean.OpportunityCategoryUserTemp},
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			clean.OpportunityCategoryUserTemp: clean.PlannedActionMoveToRecycleBin,
+		},
 		RecycleBinAdapter: adapter,
 		DiscoverUserTempOpportunities: func(context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{Opportunities: []clean.UserTempOpportunity{{

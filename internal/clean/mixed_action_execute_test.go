@@ -55,6 +55,25 @@ func (f permanentRemoverFunc) Remove(ctx context.Context, path string) error {
 	return f(ctx, path)
 }
 
+// detailedPermanentRemoverStub is a test fake implementing
+// delete.DetailedPermanentRemover so ExecutePermanentDetailed takes the
+// continue-on-error path and produces PermanentOutcomePartial from a canned
+// PermanentRemoval, exercising the clean-layer partial mapping deterministically.
+type detailedPermanentRemoverStub struct {
+	removal delete.PermanentRemoval
+}
+
+func (s *detailedPermanentRemoverStub) Remove(context.Context, string) error {
+	if s.removal.Outcome == delete.PermanentRemovalFullyDeleted {
+		return nil
+	}
+	return errors.New("detailed removal did not fully delete")
+}
+
+func (s *detailedPermanentRemoverStub) DetailedRemove(context.Context, string) delete.PermanentRemoval {
+	return s.removal
+}
+
 func writeTestFile(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -471,6 +490,89 @@ func TestExecutePermanentPartialFailureSiblingContinuationAndHistory(t *testing.
 	if len(outcomes) != 1 {
 		// non-catalog identifiers still get rows with empty label fallback
 		t.Fatalf("outcomes = %#v", outcomes)
+	}
+}
+
+func TestExecutePermanentPartialDeleteContinuesAndProjectsPartial(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "cache")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// 10 bytes total so the measured candidate bytes are deterministic; the
+	// detailed fake reports 6 bytes deleted and 1 locked file skipped.
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("aaaaa"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b"), []byte("bbbbb"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	remover := &detailedPermanentRemoverStub{removal: delete.PermanentRemoval{
+		Outcome:      delete.PermanentRemovalPartial,
+		DeletedBytes: 6,
+		Skipped: []delete.SkippedFile{{
+			Path:   filepath.Join(dir, "a"),
+			Reason: pathsafe.Reason{Code: "file_in_use", Message: "being used by another process"},
+		}},
+	}}
+	recorder := &recordingHistoryRecorder{}
+	result := clean.Execute(context.Background(), clean.Options{
+		AllowPermanentDeletion: true,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			testPermanentRule: clean.PlannedActionDeletePermanently,
+		},
+		Rules: []clean.Rule{
+			{ID: testPermanentRule, DefaultEnabled: true, CandidatePaths: []string{dir}},
+		},
+		PermanentRemover: remover,
+		HistoryRecorder:  recorder,
+		CommandParameters: history.CommandParameters{Command: "clean", Args: []string{"clean", "--execute"}},
+		RecycleBinCapacityProbe: func(string) (clean.RecycleBinVolumeConfig, error) {
+			return clean.RecycleBinVolumeConfig{Volume: "v", MaxCapacity: 1 << 60}, nil
+		},
+	})
+
+	if len(result.Deleted) != 1 || result.Deleted[0].Bytes != 6 {
+		t.Fatalf("deleted = %#v, want one item with 6 deleted bytes", result.Deleted)
+	}
+	if result.Deleted[0].Action != string(clean.PlannedActionDeletePermanently) {
+		t.Fatalf("deleted action = %q, want delete_permanently", result.Deleted[0].Action)
+	}
+	if len(result.Failed) != 1 {
+		t.Fatalf("failed = %#v, want one partial-remainder item", result.Failed)
+	}
+	failed := result.Failed[0]
+	if failed.Reason.Code != "permanent_delete_partial" {
+		t.Fatalf("failed code = %q, want permanent_delete_partial", failed.Reason.Code)
+	}
+	if failed.Bytes != 4 {
+		t.Fatalf("failed remainder bytes = %d, want 4 (10 measured - 6 deleted)", failed.Bytes)
+	}
+	if failed.Action != string(clean.PlannedActionDeletePermanently) || failed.PlannedAction != string(clean.PlannedActionDeletePermanently) {
+		t.Fatalf("failed actions = %#v", failed)
+	}
+	if !strings.Contains(failed.Reason.Message, "partially completed") {
+		t.Fatalf("missing partial summary: %q", failed.Reason.Message)
+	}
+	if result.Totals.PermanentlyDeletedBytes != 6 {
+		t.Fatalf("permanently_deleted_bytes = %d, want 6", result.Totals.PermanentlyDeletedBytes)
+	}
+	if result.Totals.RecycleBinMovedBytes != 0 {
+		t.Fatalf("recycle bin bytes = %d, want 0 (no fallback)", result.Totals.RecycleBinMovedBytes)
+	}
+	if result.Totals.AffectedBytes != 6 {
+		t.Fatalf("affected bytes = %d, want 6", result.Totals.AffectedBytes)
+	}
+
+	outcomes := clean.ProjectCategoryExecutionOutcomes([]string{testPermanentRule}, result)
+	if len(outcomes) != 1 || outcomes[0].State != clean.CategoryExecutionPartial {
+		t.Fatalf("outcomes = %#v, want one partial category", outcomes)
+	}
+	if outcomes[0].PermanentlyDeletedBytes != 6 || outcomes[0].DeletedCount != 1 || outcomes[0].SkippedCount != 1 {
+		t.Fatalf("outcome = %#v", outcomes[0])
+	}
+	if !clean.ResultHasPermanentPartialRisk(result) {
+		t.Fatal("expected permanent partial-risk warning (some content was permanently deleted)")
 	}
 }
 

@@ -929,6 +929,9 @@ func TestExecuteOptInUserTempMovesToRecycleBinAndRecordsHistory(t *testing.T) {
 		RecycleBinAdapter: adapter,
 		HistoryRecorder:   recorder,
 		OptIn:             []string{"user_temp"},
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			"user_temp": clean.PlannedActionMoveToRecycleBin,
+		},
 		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{
 				Opportunities: []clean.UserTempOpportunity{
@@ -1187,7 +1190,9 @@ func TestDryRunOptInCategoriesShowOptInCandidatesNotOpportunities(t *testing.T) 
 			}
 			wantAction := string(clean.PlannedActionMoveToRecycleBin)
 			switch tc.category {
-			case clean.OpportunityCategoryD3DShaderCache, clean.OpportunityCategoryNVIDIADXCache:
+			case clean.OpportunityCategoryCrashDumps, clean.OpportunityCategoryExplorerThumbnailCache,
+				clean.OpportunityCategoryINetCache, clean.OpportunityCategoryD3DShaderCache,
+				clean.OpportunityCategoryNVIDIADXCache:
 				wantAction = string(clean.PlannedActionDeletePermanently)
 			}
 			if result.OptInCandidates[0].PlannedAction != wantAction {
@@ -1344,6 +1349,9 @@ func TestExecuteOptInSkipsWhenRecycleBinDisabled(t *testing.T) {
 		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter:       adapter,
 		OptIn:                   []string{"user_temp"},
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			"user_temp": clean.PlannedActionMoveToRecycleBin,
+		},
 		RecycleBinCapacityProbe: fakeProbe,
 		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{
@@ -1414,6 +1422,9 @@ func TestExecuteOptInSkipsWhenItemExceedsRecycleBinCapacity(t *testing.T) {
 		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter:       adapter,
 		OptIn:                   []string{"user_temp"},
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			"user_temp": clean.PlannedActionMoveToRecycleBin,
+		},
 		RecycleBinCapacityProbe: fakeProbe,
 		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{
@@ -1481,6 +1492,9 @@ func TestExecuteOptInAllowsItemWhenWithinRecycleBinCapacity(t *testing.T) {
 		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter:       adapter,
 		OptIn:                   []string{"user_temp"},
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			"user_temp": clean.PlannedActionMoveToRecycleBin,
+		},
 		RecycleBinCapacityProbe: fakeProbe,
 		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{
@@ -1549,6 +1563,9 @@ func TestExecuteOptInSkipsWhenProbeFails(t *testing.T) {
 		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter:       adapter,
 		OptIn:                   []string{"user_temp"},
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			"user_temp": clean.PlannedActionMoveToRecycleBin,
+		},
 		RecycleBinCapacityProbe: fakeProbe,
 		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{
@@ -1608,6 +1625,9 @@ func TestExecuteOptInUsesSafeInjectedCapacityProbe(t *testing.T) {
 		Rules:             []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
 		RecycleBinAdapter: adapter,
 		OptIn:             []string{"user_temp"},
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			"user_temp": clean.PlannedActionMoveToRecycleBin,
+		},
 		DiscoverUserTempOpportunities: func(ctx context.Context) clean.UserTempDiscoveryResult {
 			return clean.UserTempDiscoveryResult{
 				Opportunities: []clean.UserTempOpportunity{
@@ -1666,6 +1686,9 @@ func TestExecuteOptInNonUserTempCategoryExecutes(t *testing.T) {
 		RecycleBinAdapter: adapter,
 		HistoryRecorder:   recorder,
 		OptIn:             []string{"crash_dumps"},
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			"crash_dumps": clean.PlannedActionMoveToRecycleBin,
+		},
 		DiscoverOpportunities: func(ctx context.Context) clean.OpportunityDiscoveryResult {
 			return clean.OpportunityDiscoveryResult{
 				Opportunities: []clean.Opportunity{
@@ -1865,6 +1888,9 @@ func TestExecuteOptInNonUserTempCategoryRespectsCapacityPreCheck(t *testing.T) {
 		}},
 		RecycleBinAdapter:       adapter,
 		OptIn:                   []string{"crash_dumps"},
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			"crash_dumps": clean.PlannedActionMoveToRecycleBin,
+		},
 		RecycleBinCapacityProbe: fakeProbe,
 		DiscoverOpportunities: func(ctx context.Context) clean.OpportunityDiscoveryResult {
 			return clean.OpportunityDiscoveryResult{

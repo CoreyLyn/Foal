@@ -428,14 +428,15 @@ func TestTraeCacheUnauthorizedSkipsPermanent(t *testing.T) {
 }
 
 func TestIssue220RecycleBinCategoriesUnchanged(t *testing.T) {
-	// #220 must not flip over-broad whole-root system categories or the default.
-	// Package/build permanent activation is owned by #221.
+	// #220 originally guarded over-broad whole-root system categories and the
+	// default from being flipped to permanent. ADR 0018 later moved
+	// user_temp, crash_dumps, explorer_thumbnail_cache, and inet_cache to
+	// permanent deletion (following industry conventions, with opt-in +
+	// authorization + disclosure gates). windows_error_reporting stays Recycle
+	// Bin (non-recreatable diagnostic evidence), and the default
+	// foal_owned_temp_sandboxes stays Recycle Bin.
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	for _, id := range []string{
-		clean.OpportunityCategoryExplorerThumbnailCache,
-		clean.OpportunityCategoryINetCache,
-		clean.OpportunityCategoryUserTemp,
-		clean.OpportunityCategoryCrashDumps,
 		clean.OpportunityCategoryWindowsErrorReporting,
 		clean.DefaultCategoryFoalOwnedTempSandboxes,
 	} {
@@ -445,6 +446,20 @@ func TestIssue220RecycleBinCategoriesUnchanged(t *testing.T) {
 		}
 		if summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
 			t.Fatalf("%s planned_action = %q, want recycle bin", id, summary.PlannedAction)
+		}
+	}
+	for _, id := range []string{
+		clean.OpportunityCategoryUserTemp,
+		clean.OpportunityCategoryCrashDumps,
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
+	} {
+		summary, ok := catalog.Summary(id)
+		if !ok {
+			t.Fatalf("%s missing", id)
+		}
+		if summary.PlannedAction != clean.PlannedActionDeletePermanently {
+			t.Fatalf("%s planned_action = %q, want delete_permanently", id, summary.PlannedAction)
 		}
 	}
 }

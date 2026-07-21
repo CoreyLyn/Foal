@@ -439,6 +439,7 @@ const (
 	recycleBinCapacityProbeFailedIssueCode  = "recycle_bin_capacity_probe_failed"
 	permanentDeletionNotAuthorizedIssueCode = "permanent_deletion_not_authorized"
 	permanentDeleteFailedIssueCode          = "permanent_delete_failed"
+	permanentDeletePartialIssueCode         = "permanent_delete_partial"
 	devToolRunningIssueCode                 = "dev_tool_running"
 )
 
