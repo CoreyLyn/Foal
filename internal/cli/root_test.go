@@ -2293,6 +2293,7 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.OpportunityCategoryINetCache,
 		clean.OpportunityCategoryD3DShaderCache,
 		clean.OpportunityCategoryNVIDIADXCache,
+		clean.OpportunityCategoryNVIDIAGLCache,
 		clean.OpportunityCategoryAMDGPUShaderCaches,
 		clean.OpportunityCategoryIntelGPUShaderCache,
 		clean.OpportunityCategoryBrowserCache,

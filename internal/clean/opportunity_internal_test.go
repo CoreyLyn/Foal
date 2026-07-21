@@ -30,6 +30,7 @@ func TestBuiltInOpportunityCatalogContainsOnlyApprovedV1Categories(t *testing.T)
 		OpportunityCategoryINetCache,
 		OpportunityCategoryD3DShaderCache,
 		OpportunityCategoryNVIDIADXCache,
+		OpportunityCategoryNVIDIAGLCache,
 		OpportunityCategoryAMDGPUShaderCaches,
 		OpportunityCategoryIntelGPUShaderCache,
 	}
@@ -69,6 +70,7 @@ func TestBuiltInOpportunityDiscoveryNeverInspectsExcludedRoots(t *testing.T) {
 		filepath.Join(localAppData, "Microsoft", "Windows", "INetCache", "Low", "IE"),
 		filepath.Join(localAppData, "D3DSCache"),
 		filepath.Join(localAppData, "NVIDIA", "DXCache"),
+		filepath.Join(localAppData, "NVIDIA", "GLCache"),
 		filepath.Join(localAppData, "AMD", "DxCache"),
 		filepath.Join(localAppData, "AMD", "DxcCache"),
 		filepath.Join(localAppData, "AMD", "Dx9Cache"),
@@ -133,6 +135,7 @@ func TestCategorizedDiscoveryContinuesAfterUserTempFailure(t *testing.T) {
 		},
 		OpportunityCategoryD3DShaderCache: {filepath.Join(localAppData, "D3DSCache")},
 		OpportunityCategoryNVIDIADXCache:  {filepath.Join(localAppData, "NVIDIA", "DXCache")},
+		OpportunityCategoryNVIDIAGLCache:  {filepath.Join(localAppData, "NVIDIA", "GLCache")},
 		OpportunityCategoryAMDGPUShaderCaches: {
 			filepath.Join(localAppData, "AMD", "DxCache"),
 			filepath.Join(localAppData, "AMD", "DxcCache"),
@@ -297,8 +300,9 @@ func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T)
 	localAppDataLow := `C:\Users\corey\AppData\LocalLow`
 	d3dRoot := filepath.Join(localAppData, "D3DSCache")
 	nvidiaRoot := filepath.Join(localAppData, "NVIDIA", "DXCache")
+	nvidiaGLRoot := filepath.Join(localAppData, "NVIDIA", "GLCache")
 	// Fixed existence candidates except D3D:
-	// CrashDumps + WER + IE + Low\IE + NVIDIA + AMD×6 + Intel = 12.
+	// CrashDumps + WER + IE + Low\IE + NVIDIA DX + NVIDIA GL + AMD×6 + Intel = 13.
 	// Explorer parent ReadDir is empty ⇒ no thumbnail candidates.
 	// D3D is incomplete (permission).
 	result := discoverOpportunities(context.Background(), OpportunityDiscoveryOptions{
@@ -318,10 +322,11 @@ func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T)
 		},
 	})
 
-	if len(result.Opportunities) != 12 {
-		t.Fatalf("opportunities = %#v, want unaffected fixed roots (12)", result.Opportunities)
+	if len(result.Opportunities) != 13 {
+		t.Fatalf("opportunities = %#v, want unaffected fixed roots (13)", result.Opportunities)
 	}
 	foundNVIDIA := false
+	foundNVIDIAGL := false
 	foundAMD := false
 	foundIntel := false
 	for _, opportunity := range result.Opportunities {
@@ -330,6 +335,9 @@ func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T)
 		}
 		if opportunity.Category == OpportunityCategoryNVIDIADXCache && opportunity.Path == nvidiaRoot {
 			foundNVIDIA = true
+		}
+		if opportunity.Category == OpportunityCategoryNVIDIAGLCache && opportunity.Path == nvidiaGLRoot {
+			foundNVIDIAGL = true
 		}
 		if opportunity.Category == OpportunityCategoryAMDGPUShaderCaches {
 			foundAMD = true
@@ -340,6 +348,9 @@ func TestCategorizedDiscoveryContinuesAfterOneFixedCategoryFailure(t *testing.T)
 	}
 	if !foundNVIDIA {
 		t.Fatalf("opportunities = %#v, want NVIDIA category after D3D failure", result.Opportunities)
+	}
+	if !foundNVIDIAGL {
+		t.Fatalf("opportunities = %#v, want NVIDIA GL category after D3D failure", result.Opportunities)
 	}
 	if !foundAMD || !foundIntel {
 		t.Fatalf("opportunities = %#v, want AMD and Intel after D3D failure", result.Opportunities)

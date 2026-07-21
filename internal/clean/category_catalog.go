@@ -670,6 +670,10 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryD3DShaderCache, "D3D shader cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently), "D3DSCache"),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryNVIDIADXCache, "NVIDIA DX cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently), "NVIDIA", "DXCache"),
+	withPreviewSafetyNote(existenceOpportunityEntry(
+		categoryDefinition(OpportunityCategoryNVIDIAGLCache, "NVIDIA GL cache", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently),
+		"NVIDIA", "GLCache",
+	), staticPreviewSafetyNote(gpuShaderCacheOptInImpactNotice)),
 	// AMD GPU/shader caches: exact allowlisted children under Local AMD (+ optional
 	// LocalLow AMD\DxCache). Parent AMD and non-allowlisted siblings are never candidates.
 	// Evidence: docs/research/amd-intel-gpu-shader-caches.md (#234/#238).
