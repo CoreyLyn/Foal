@@ -22,6 +22,13 @@ const (
 	// CachedExtensionVSIXsRootName is the exact allowlisted relative root that
 	// stores downloaded VSIX packages (not installed extensions).
 	CachedExtensionVSIXsRootName = "CachedExtensionVSIXs"
+
+	// applicationCacheBaseRoaming uses the current user's Roaming AppData directory.
+	applicationCacheBaseRoaming = "roaming"
+	// applicationCacheBaseLocal uses the current user's Local AppData directory.
+	applicationCacheBaseLocal = "local"
+	// applicationCacheBaseLocalLow uses the current user's LocalLow AppData directory.
+	applicationCacheBaseLocalLow = "locallow"
 )
 
 // applicationCacheAllowlistedRelativeRoots is the fixed v1 regenerating-cache
@@ -53,11 +60,18 @@ var obsidianCacheAllowlistedRelativeRoots = []string{
 }
 
 // ApplicationCacheDiscoveryOptions configures idle Application cache discovery.
-// Only the current user's standard Roaming AppData base is supported.
 type ApplicationCacheDiscoveryOptions struct {
 	// RoamingAppDataDir overrides %APPDATA% for tests. Empty uses the process
 	// environment; blank/missing yields silent absence of all roots.
 	RoamingAppDataDir string
+	// LocalAppDataDir overrides %LOCALAPPDATA% for tests. Empty uses the process
+	// environment; blank/missing yields silent absence of all roots for policies
+	// using the local base.
+	LocalAppDataDir string
+	// LocalLowAppDataDir overrides %LOCALAPPDATA%\Low for tests. Empty uses
+	// the process environment; blank/missing yields silent absence of all
+	// roots for policies using the locallow base.
+	LocalLowAppDataDir string
 	// stat stays inside the existing Application cache discovery seam so package
 	// tests can keep root preflight deterministic without touching the real fs.
 	stat func(string) (os.FileInfo, error)
@@ -68,7 +82,8 @@ type ApplicationCacheDiscoveryOptions struct {
 type applicationCachePolicy struct {
 	category           string
 	application        string
-	roamingAppDataPath []string
+	base               string // applicationCacheBaseRoaming, applicationCacheBaseLocal, or applicationCacheBaseLocalLow
+	appDataPath        []string
 	relativeRoots      []string
 }
 
@@ -77,49 +92,55 @@ type applicationCachePolicy struct {
 // relative-root allowlist — never a user-data tree scan.
 var applicationCachePolicies = map[string]applicationCachePolicy{
 	applicationCachePolicyVSCode: {
-		category:           OpportunityCategoryVSCodeCache,
-		application:        ApplicationVisualStudioCode,
-		roamingAppDataPath: []string{"Code"},
-		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+		category:     OpportunityCategoryVSCodeCache,
+		application:  ApplicationVisualStudioCode,
+		base:         applicationCacheBaseRoaming,
+		appDataPath:  []string{"Code"},
+		relativeRoots: append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
 	},
 	applicationCachePolicyCursor: {
-		category:           OpportunityCategoryCursorCache,
-		application:        ApplicationCursor,
-		roamingAppDataPath: []string{"Cursor"},
-		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+		category:     OpportunityCategoryCursorCache,
+		application:  ApplicationCursor,
+		base:         applicationCacheBaseRoaming,
+		appDataPath:  []string{"Cursor"},
+		relativeRoots: append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
 	},
 	// VS Code Insiders: side-by-side with Stable; isolated %APPDATA%\Code - Insiders
 	// (Microsoft FAQ: Insiders installs side by side with isolated settings).
 	applicationCachePolicyVSCodeInsiders: {
-		category:           OpportunityCategoryVSCodeInsidersCache,
-		application:        ApplicationVisualStudioCodeInsiders,
-		roamingAppDataPath: []string{"Code - Insiders"},
-		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+		category:     OpportunityCategoryVSCodeInsidersCache,
+		application:  ApplicationVisualStudioCodeInsiders,
+		base:         applicationCacheBaseRoaming,
+		appDataPath:  []string{"Code - Insiders"},
+		relativeRoots: append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
 	},
 	// VSCodium: open-source VS Code fork; BleachBit official cleaner confirms
 	// %AppData%\VSCodium and VSCodium.exe on Windows.
 	applicationCachePolicyVSCodium: {
-		category:           OpportunityCategoryVSCodiumCache,
-		application:        ApplicationVSCodium,
-		roamingAppDataPath: []string{"VSCodium"},
-		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+		category:     OpportunityCategoryVSCodiumCache,
+		application:  ApplicationVSCodium,
+		base:         applicationCacheBaseRoaming,
+		appDataPath:  []string{"VSCodium"},
+		relativeRoots: append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
 	},
 	// Windsurf: VS Code-based AI editor; BleachBit official cleaner confirms
 	// %AppData%\Windsurf and Windsurf.exe on Windows.
 	applicationCachePolicyWindsurf: {
-		category:           OpportunityCategoryWindsurfCache,
-		application:        ApplicationWindsurf,
-		roamingAppDataPath: []string{"Windsurf"},
-		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+		category:     OpportunityCategoryWindsurfCache,
+		application:  ApplicationWindsurf,
+		base:         applicationCacheBaseRoaming,
+		appDataPath:  []string{"Windsurf"},
+		relativeRoots: append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
 	},
 	// Trae: VS Code fork; %APPDATA%\Trae holds the standard VS Code-family
 	// regenerating-cache layout (including CachedExtensionVSIXs). Trae.exe is
 	// the Windows launcher. Independent of the other editors.
 	applicationCachePolicyTrae: {
-		category:           OpportunityCategoryTraeCache,
-		application:        ApplicationTrae,
-		roamingAppDataPath: []string{"Trae"},
-		relativeRoots:      append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
+		category:     OpportunityCategoryTraeCache,
+		application:  ApplicationTrae,
+		base:         applicationCacheBaseRoaming,
+		appDataPath:  []string{"Trae"},
+		relativeRoots: append([]string(nil), applicationCacheAllowlistedRelativeRoots...),
 	},
 	// Obsidian: non-editor Electron note-taking app; %APPDATA%\obsidian holds a
 	// plain-Electron regenerating-cache layout. Obsidian.exe is the Windows
@@ -129,10 +150,11 @@ var applicationCachePolicies = map[string]applicationCachePolicy{
 	// are never candidates. Independent idle gate; never cross-authorizes an
 	// editor or Trae.
 	applicationCachePolicyObsidian: {
-		category:           OpportunityCategoryObsidianCache,
-		application:        ApplicationObsidian,
-		roamingAppDataPath: []string{"obsidian"},
-		relativeRoots:      append([]string(nil), obsidianCacheAllowlistedRelativeRoots...),
+		category:     OpportunityCategoryObsidianCache,
+		application:  ApplicationObsidian,
+		base:         applicationCacheBaseRoaming,
+		appDataPath:  []string{"obsidian"},
+		relativeRoots: append([]string(nil), obsidianCacheAllowlistedRelativeRoots...),
 	},
 }
 
@@ -268,8 +290,32 @@ func discoverApplicationCachesWithDeps(
 	return result
 }
 
-func applicationCacheUserDataRoot(roamingAppDataDir string, policy applicationCachePolicy) string {
-	parts := append([]string{roamingAppDataDir}, policy.roamingAppDataPath...)
+func applicationCacheBaseDir(opts ApplicationCacheDiscoveryOptions, policy applicationCachePolicy) string {
+	switch policy.base {
+	case applicationCacheBaseLocal:
+		if opts.LocalAppDataDir != "" {
+			return strings.TrimSpace(opts.LocalAppDataDir)
+		}
+		return strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
+	case applicationCacheBaseLocalLow:
+		if opts.LocalLowAppDataDir != "" {
+			return strings.TrimSpace(opts.LocalLowAppDataDir)
+		}
+		localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
+		if localAppData == "" {
+			return ""
+		}
+		return filepath.Join(localAppData, "Low")
+	default: // applicationCacheBaseRoaming
+		if opts.RoamingAppDataDir != "" {
+			return strings.TrimSpace(opts.RoamingAppDataDir)
+		}
+		return strings.TrimSpace(os.Getenv("APPDATA"))
+	}
+}
+
+func applicationCacheUserDataRoot(baseDir string, policy applicationCachePolicy) string {
+	parts := append([]string{baseDir}, policy.appDataPath...)
 	return filepath.Join(parts...)
 }
 
@@ -286,11 +332,11 @@ func preflightApplicationCacheRoot(
 	validator pathsafe.Validator,
 	stat func(string) (os.FileInfo, error),
 ) applicationCacheRootPreflight {
-	roaming := applicationCacheRoamingAppDataDir(opts)
-	if roaming == "" {
+	baseDir := applicationCacheBaseDir(opts, policy)
+	if baseDir == "" {
 		return applicationCacheRootPreflight{absent: true}
 	}
-	userDataRoot := applicationCacheUserDataRoot(roaming, policy)
+	userDataRoot := applicationCacheUserDataRoot(baseDir, policy)
 	// Only the user-data base itself suppresses every root. A rule on one
 	// allowlisted child is handled per root so siblings stay independent.
 	if validator.IsUserProtected(userDataRoot) {
@@ -334,13 +380,6 @@ func applicationCachePolicyForCategory(category string) (string, applicationCach
 		return "", applicationCachePolicy{}, false
 	}
 	return entry.applicationCachePolicyID, policy, true
-}
-
-func applicationCacheRoamingAppDataDir(opts ApplicationCacheDiscoveryOptions) string {
-	if opts.RoamingAppDataDir != "" {
-		return strings.TrimSpace(opts.RoamingAppDataDir)
-	}
-	return strings.TrimSpace(os.Getenv("APPDATA"))
 }
 
 func applicationCacheStat(opts ApplicationCacheDiscoveryOptions) func(string) (os.FileInfo, error) {
