@@ -103,6 +103,46 @@ func TestViewerBackAndRefreshKeys(t *testing.T) {
 	}
 }
 
+func TestViewerEscapeReturnsToMenuLikeB(t *testing.T) {
+	original := statusCapture
+	statusCapture = func() status.Snapshot {
+		return status.Snapshot{Status: "ok"}
+	}
+	t.Cleanup(func() { statusCapture = original })
+
+	// Status viewer (downs=3): Esc returns to menu, does not quit.
+	model := loadViewer(t, 3)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = next.(rootModel)
+	if cmd != nil {
+		if msg := cmd(); msg == (tea.QuitMsg{}) {
+			t.Fatal("esc must return to the menu, not quit the TUI")
+		}
+	}
+	if model.screen != screenMenu {
+		t.Fatalf("esc screen = %v, want screenMenu", model.screen)
+	}
+	if !strings.Contains(model.content(), "Foal main menu") {
+		t.Fatalf("esc should return to the main menu:\n%s", model.content())
+	}
+
+	// Analyze viewer (downs=2): same Esc = back behavior.
+	model = loadViewer(t, 2)
+	if model.screen != screenViewer || model.viewer.command != "analyze" {
+		t.Fatalf("expected analyze viewer, screen=%v command=%q", model.screen, model.viewer.command)
+	}
+	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = next.(rootModel)
+	if cmd != nil {
+		if msg := cmd(); msg == (tea.QuitMsg{}) {
+			t.Fatal("esc on Analyze must return to the menu, not quit")
+		}
+	}
+	if model.screen != screenMenu {
+		t.Fatalf("Analyze esc screen = %v, want screenMenu", model.screen)
+	}
+}
+
 func TestRenderHistoryReportListsSessions(t *testing.T) {
 	report := renderHistoryReport(history.QueryResult{
 		Status: "ok",

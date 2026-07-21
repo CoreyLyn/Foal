@@ -185,9 +185,9 @@ func (m *viewerModel) handleKey(key string) tea.Cmd {
 		return loadViewerCmd(m.command)
 	default:
 		if m.command == "analyze" {
-			m.notice = "Unknown key. Use j/k, r, e (edit path), b, or q."
+			m.notice = "Unknown key. Use j/k, r, e (edit path), esc/b, or q."
 		} else {
-			m.notice = "Unknown key. Use j/k, r, b, or q."
+			m.notice = "Unknown key. Use j/k, r, esc/b, or q."
 		}
 	}
 	m.setSize(m.width, m.height)
@@ -204,7 +204,7 @@ func (m *viewerModel) handlePathEditKey(key string) tea.Cmd {
 		m.notice = "Rescanning..."
 		m.vp.GotoTop()
 		return loadAnalyzeViewerCmd(m.analyzePath)
-	case "esc":
+	case "esc", "escape":
 		// Exit edit mode without changing path
 		m.editingPath = false
 		m.notice = ""
@@ -240,10 +240,10 @@ func (m *viewerModel) handlePathEditKey(key string) tea.Cmd {
 	return nil
 }
 
-const viewerFooter = "\nHints: j/k scroll | r refresh | b back | q quit\n" +
+const viewerFooter = "\nHints: j/k scroll | r refresh | esc/b back | q quit\n" +
 	"This view is read-only; no actions are executed.\n"
 
-const analyzeViewerFooter = "\nHints: j/k scroll | r refresh | e edit path | b back | q quit\n" +
+const analyzeViewerFooter = "\nHints: j/k scroll | r refresh | e edit path | esc/b back | q quit\n" +
 	"This view is read-only; no cleanup or deletion actions are available.\n"
 
 func (m viewerModel) content() string {
