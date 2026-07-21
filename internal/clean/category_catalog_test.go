@@ -26,6 +26,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"amd_gpu_shader_caches",
 		"intel_gpu_shader_cache",
 		"nvidia_installer_cache",
+		"lghub-cache",
 		"winsxs_component_store",
 		"browser_cache",
 		"vscode_cache",
@@ -224,6 +225,7 @@ func lockedRecycleBinCategoryIDs() []string {
 		clean.OpportunityCategoryExplorerThumbnailCache,
 		clean.OpportunityCategoryINetCache,
 		clean.CategoryNVIDIAInstallerCache,
+		clean.CategoryLGHUBCache,
 	}
 }
 
@@ -244,8 +246,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	if len(wantPermanent) != 30 {
 		t.Fatalf("locked permanent matrix length = %d, want 30", len(wantPermanent))
 	}
-	if len(wantRecycleBin) != 7 {
-		t.Fatalf("locked Recycle Bin matrix length = %d, want 7", len(wantRecycleBin))
+	if len(wantRecycleBin) != 8 {
+		t.Fatalf("locked Recycle Bin matrix length = %d, want 8", len(wantRecycleBin))
 	}
 
 	var permanent, recycleBin, servicing, executable []string
@@ -274,12 +276,13 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 
 	// ADR 0029 adds exactly one invoke_windows_servicing category
 	// (winsxs_component_store); #309 adds one move_to_recycle_bin category
-	// (nvidia_installer_cache). The permanent count is unchanged.
+	// (nvidia_installer_cache); #325 adds lghub-cache (another move_to_recycle_bin).
+	// The permanent count is unchanged.
 	if len(servicing) != 1 || servicing[0] != clean.CategoryWinSxSComponentStore {
 		t.Fatalf("servicing matrix = %#v, want [%q]", servicing, clean.CategoryWinSxSComponentStore)
 	}
-	if len(executable) != 38 {
-		t.Fatalf("executable categories = %d (%v), want 38 (37 deletion + 1 servicing)", len(executable), executable)
+	if len(executable) != 39 {
+		t.Fatalf("executable categories = %d (%v), want 39 (38 deletion + 1 servicing)", len(executable), executable)
 	}
 	if !reflect.DeepEqual(permanent, wantPermanent) {
 		t.Fatalf("permanent matrix = %#v, want %#v", permanent, wantPermanent)
@@ -334,10 +337,10 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	// Eager queue is all 38 executable rows; permission boundary is never scanned.
+	// Eager queue is all 39 executable rows; permission boundary is never scanned.
 	queue := clean.EagerPreviewQueue()
-	if len(queue) != 38 {
-		t.Fatalf("EagerPreviewQueue length = %d, want 38 executable categories", len(queue))
+	if len(queue) != 39 {
+		t.Fatalf("EagerPreviewQueue length = %d, want 39 executable categories", len(queue))
 	}
 	for _, summary := range queue {
 		if summary.Identifier == "administrator_only_caches" {
