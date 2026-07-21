@@ -389,6 +389,9 @@ func TestExecuteExactPlanOmitsDefaultCandidates(t *testing.T) {
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 		Plan:              &plan,
 		RecycleBinAdapter: adapter,
+		CategoryPlannedActions: map[string]clean.PlannedAction{
+			clean.OpportunityCategoryCrashDumps: clean.PlannedActionMoveToRecycleBin,
+		},
 		Rules: []clean.Rule{{
 			ID:             clean.DefaultCategoryFoalOwnedTempSandboxes,
 			DefaultEnabled: true,

@@ -2,6 +2,7 @@ package clean
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -339,17 +340,34 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 			skipRecycleBinVolume(result, group.candidates, recycleBinDisabledIssueCode, "Recycle Bin is disabled for this volume; items would be permanently deleted")
 			finishVolumeCategories(group.candidates)
 			continue
-		case group.config.CurrentUsage > group.config.MaxCapacity || group.totalBytes > group.config.MaxCapacity-group.config.CurrentUsage:
+		case group.config.CurrentUsage > group.config.MaxCapacity:
+			// Recycle Bin already over capacity: nothing fits, skip the volume.
 			reportRecycleCategory(group.candidates)
-			skipRecycleBinVolume(result, group.candidates, recycleBinCapacityIssueCode, "Selected candidates exceed the remaining Recycle Bin capacity for this volume")
+			skipRecycleBinVolume(result, group.candidates, recycleBinCapacityIssueCode, "Recycle Bin is already over capacity for this volume")
 			finishVolumeCategories(group.candidates)
 			continue
 		}
 
-		reportRecycleCategory(group.candidates)
-		deleteCandidates := make([]delete.Candidate, 0, len(group.candidates))
-		byPath := make(map[string]actionExecutionCandidate, len(group.candidates))
-		for _, candidate := range group.candidates {
+		// Partial fill: move as many candidates as fit the remaining Recycle Bin
+		// capacity, preferring smaller candidates first to maximize the count moved,
+		// and skip only the overflow. Permanent deletion is never substituted for
+		// overflow (ADR 0018). Ties preserve resolve order (defaults before opt-ins)
+		// via stable sort, so which candidate fits is deterministic.
+		remaining := group.config.MaxCapacity - group.config.CurrentUsage
+		fit, overflow := partitionRecycleBinCandidatesByFit(group.candidates, remaining)
+		if len(overflow) > 0 {
+			reportRecycleCategory(overflow)
+			skipRecycleBinVolume(result, overflow, recycleBinCapacityIssueCode, "Selected candidate did not fit the remaining Recycle Bin capacity for this volume and was skipped")
+		}
+		if len(fit) == 0 {
+			finishVolumeCategories(group.candidates)
+			continue
+		}
+
+		reportRecycleCategory(fit)
+		deleteCandidates := make([]delete.Candidate, 0, len(fit))
+		byPath := make(map[string]actionExecutionCandidate, len(fit))
+		for _, candidate := range fit {
 			deleteCandidates = append(deleteCandidates, candidate.candidate)
 			byPath[candidate.candidate.Path] = candidate
 		}
@@ -379,6 +397,45 @@ func executeRecycleBinCandidateGroups(ctx context.Context, opts Options, adapter
 		}
 		finishVolumeCategories(group.candidates)
 	}
+}
+
+// partitionRecycleBinCandidatesByFit selects the candidates that fit within
+// remaining bytes of Recycle Bin capacity, preferring smaller candidates first
+// to maximize the count moved. Ties preserve resolve order (defaults before
+// opt-ins) via stable sort. Candidates with non-positive bytes always fit.
+// Returns (fit, overflow) each in original resolve order.
+func partitionRecycleBinCandidatesByFit(candidates []actionExecutionCandidate, remaining int64) (fit, overflow []actionExecutionCandidate) {
+	type indexed struct {
+		i    int
+		size int64
+	}
+	order := make([]indexed, len(candidates))
+	for i, c := range candidates {
+		size := c.candidate.Bytes
+		if size < 0 {
+			size = 0
+		}
+		order[i] = indexed{i: i, size: size}
+	}
+	sort.SliceStable(order, func(a, b int) bool { return order[a].size < order[b].size })
+	used := int64(0)
+	fits := make([]bool, len(candidates))
+	for _, e := range order {
+		if e.size > remaining-used {
+			fits[e.i] = false
+			continue
+		}
+		fits[e.i] = true
+		used += e.size
+	}
+	for i, c := range candidates {
+		if fits[i] {
+			fit = append(fit, c)
+		} else {
+			overflow = append(overflow, c)
+		}
+	}
+	return fit, overflow
 }
 
 // executePermanentCandidates runs authorized permanent removal only through the
@@ -440,7 +497,7 @@ func executePermanentCandidates(ctx context.Context, opts Options, candidates []
 		}
 
 		preMutation := composePermanentPreMutation(opts, byPath)
-		permanentResult := delete.ExecutePermanentWithHooks(ctx, deleteCandidates, remover, opts.Validator, preMutation)
+		permanentResult := delete.ExecutePermanentDetailed(ctx, deleteCandidates, remover, opts.Validator, preMutation)
 		for _, item := range permanentResult.Items {
 			candidate := byPath[item.Path]
 			switch item.Kind {
@@ -451,6 +508,33 @@ func executePermanentCandidates(ctx context.Context, opts Options, candidates []
 					Rule:    candidate.rule,
 					Action:  permanentAction,
 					IsOptIn: candidate.isOptIn,
+				})
+			case delete.PermanentOutcomePartial:
+				// Continue-on-error permanent removal deleted some files and
+				// skipped the rest (e.g. locked by another process). The deleted
+				// portion counts as successful permanent bytes; the remaining
+				// measured bytes are recorded as a failed portion so the category
+				// projects to partial and the partial-risk notice still applies.
+				if item.Bytes > 0 {
+					result.Deleted = append(result.Deleted, DeletedItem{
+						Path:    item.Path,
+						Bytes:   item.Bytes,
+						Rule:    candidate.rule,
+						Action:  permanentAction,
+						IsOptIn: candidate.isOptIn,
+					})
+				}
+				remainder := candidate.candidate.Bytes - item.Bytes
+				if remainder < 0 {
+					remainder = 0
+				}
+				result.Failed = append(result.Failed, FailedItem{
+					Path:          item.Path,
+					Bytes:         remainder,
+					Rule:          candidate.rule,
+					PlannedAction: permanentAction,
+					Action:        permanentAction,
+					Reason:        issue(permanentDeletePartialIssueCode, item.Reason.Message, true, item.Path, candidate.rule),
 				})
 			case delete.PermanentOutcomeFailed:
 				result.Failed = append(result.Failed, FailedItem{

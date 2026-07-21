@@ -913,15 +913,15 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 			recycleBinOptIns++
 		}
 	}
-	// Complete rule matrix: 1 default + 32 permanent = 33; 8 Recycle Bin opt-ins
-	// unselected (the 6th, 7th, and 8th are exact-selection-only
+	// Complete rule matrix: 1 default + 36 permanent = 37; 4 Recycle Bin opt-ins
+	// unselected (windows_error_reporting plus the exact-selection-only
 	// nvidia_installer_cache, lghub-cache, and thunder-update-download).
-	if defaults != 1 || permanentOptIns != 32 || recycleBinOptIns != 8 || wantSelected != 33 {
-		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/32/8/33",
+	if defaults != 1 || permanentOptIns != 36 || recycleBinOptIns != 4 || wantSelected != 37 {
+		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/36/4/37",
 			defaults, permanentOptIns, recycleBinOptIns, wantSelected)
 	}
-	if model.selectedCount() != 33 {
-		t.Fatalf("selectedCount = %d, want 33 (default + all permanent when rows present)", model.selectedCount())
+	if model.selectedCount() != 37 {
+		t.Fatalf("selectedCount = %d, want 37 (default + all permanent when rows present)", model.selectedCount())
 	}
 	if len(model.rows) != 42 {
 		t.Fatalf("eager rows = %d, want 42 executable categories", len(model.rows))
@@ -959,10 +959,12 @@ func TestEagerCleanModelSpaceTogglesSelectableDuringScan(t *testing.T) {
 	model := newEagerCleanModel(100, 40)
 	model.generation = 1
 	queue := clean.EagerPreviewQueue()
-	// Row 0 is default (selected, waiting); select an opt-in waiting row.
+	// Row 0 is default (selected, waiting); select an unselected opt-in waiting
+	// row (permanent opt-ins start selected, so pick the first unselected opt-in,
+	// e.g. windows_error_reporting).
 	optInIndex := -1
 	for i, row := range model.rows {
-		if row.Eligibility == clean.CategoryEligibilityOptIn {
+		if row.Eligibility == clean.CategoryEligibilityOptIn && !row.Selected {
 			optInIndex = i
 			break
 		}

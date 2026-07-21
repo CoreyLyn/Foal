@@ -110,7 +110,7 @@ func writeINetCacheAllowlistedRoots(t *testing.T, localAppData string) (ie, lowI
 	return ie, lowIE
 }
 
-func TestExplorerThumbnailCache_CatalogRecycleBinAndInitiallyUnselected(t *testing.T) {
+func TestExplorerThumbnailCache_CatalogPermanentAndInitiallySelected(t *testing.T) {
 	summary, ok := clean.CanonicalCleanupCategoryCatalog().Summary(clean.OpportunityCategoryExplorerThumbnailCache)
 	if !ok {
 		t.Fatal("explorer_thumbnail_cache missing from catalog")
@@ -118,11 +118,11 @@ func TestExplorerThumbnailCache_CatalogRecycleBinAndInitiallyUnselected(t *testi
 	if summary.Eligibility != clean.CategoryEligibilityOptIn {
 		t.Fatalf("eligibility = %q", summary.Eligibility)
 	}
-	if summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
-		t.Fatalf("planned_action = %q, want move_to_recycle_bin", summary.PlannedAction)
+	if summary.PlannedAction != clean.PlannedActionDeletePermanently {
+		t.Fatalf("planned_action = %q, want delete_permanently", summary.PlannedAction)
 	}
-	if clean.InitiallySelectedCategory(summary) {
-		t.Fatal("Recycle Bin explorer_thumbnail_cache must start unselected")
+	if !clean.InitiallySelectedCategory(summary) {
+		t.Fatal("permanent explorer_thumbnail_cache must start selected")
 	}
 	if summary.RunningApplicationPolicy != clean.RunningApplicationPolicyNotApplicable {
 		t.Fatalf("running policy = %q", summary.RunningApplicationPolicy)
@@ -133,16 +133,16 @@ func TestExplorerThumbnailCache_CatalogRecycleBinAndInitiallyUnselected(t *testi
 	}
 }
 
-func TestINetCache_CatalogRecycleBinAndInitiallyUnselected(t *testing.T) {
+func TestINetCache_CatalogPermanentAndInitiallySelected(t *testing.T) {
 	summary, ok := clean.CanonicalCleanupCategoryCatalog().Summary(clean.OpportunityCategoryINetCache)
 	if !ok {
 		t.Fatal("inet_cache missing from catalog")
 	}
-	if summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
-		t.Fatalf("planned_action = %q", summary.PlannedAction)
+	if summary.PlannedAction != clean.PlannedActionDeletePermanently {
+		t.Fatalf("planned_action = %q, want delete_permanently", summary.PlannedAction)
 	}
-	if clean.InitiallySelectedCategory(summary) {
-		t.Fatal("Recycle Bin inet_cache must start unselected")
+	if !clean.InitiallySelectedCategory(summary) {
+		t.Fatal("permanent inet_cache must start selected")
 	}
 	enabled, invalid, _ := clean.NormalizedOptInSet([]string{clean.OpportunityCategoryINetCache})
 	if len(invalid) != 0 || !enabled[clean.OpportunityCategoryINetCache] {
@@ -404,7 +404,7 @@ func TestExplorerThumbnailAndINetCache_OtherSystemCategoriesUnaffected(t *testin
 	}
 }
 
-func TestExplorerThumbnailCache_DryRunOptInRecycleBinAction(t *testing.T) {
+func TestExplorerThumbnailCache_DryRunOptInPermanentAction(t *testing.T) {
 	localAppData := t.TempDir()
 	_, allowlisted := writeExplorerThumbnailAllowlistedFiles(t, localAppData)
 
@@ -430,7 +430,7 @@ func TestExplorerThumbnailCache_DryRunOptInRecycleBinAction(t *testing.T) {
 		if c.Category != clean.OpportunityCategoryExplorerThumbnailCache {
 			t.Fatalf("category = %q", c.Category)
 		}
-		if c.PlannedAction != string(clean.PlannedActionMoveToRecycleBin) {
+		if c.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned_action = %q", c.PlannedAction)
 		}
 		if _, err := os.Lstat(c.Path); err != nil {
@@ -442,12 +442,12 @@ func TestExplorerThumbnailCache_DryRunOptInRecycleBinAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(encoded)
-	if !strings.Contains(body, `"planned_action":"move_to_recycle_bin"`) {
-		t.Fatalf("JSON missing recycle planned_action: %s", body)
+	if !strings.Contains(body, `"planned_action":"delete_permanently"`) {
+		t.Fatalf("JSON missing permanent planned_action: %s", body)
 	}
 }
 
-func TestINetCache_DryRunOptInRecycleBinAction(t *testing.T) {
+func TestINetCache_DryRunOptInPermanentAction(t *testing.T) {
 	localAppData := t.TempDir()
 	ie, lowIE := writeINetCacheAllowlistedRoots(t, localAppData)
 
@@ -470,7 +470,7 @@ func TestINetCache_DryRunOptInRecycleBinAction(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, c := range result.OptInCandidates {
-		if c.PlannedAction != string(clean.PlannedActionMoveToRecycleBin) {
+		if c.PlannedAction != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("planned_action = %q", c.PlannedAction)
 		}
 		seen[c.Path] = true
@@ -480,80 +480,81 @@ func TestINetCache_DryRunOptInRecycleBinAction(t *testing.T) {
 	}
 }
 
-func TestExplorerThumbnailCache_ExecuteMovesAllowlistedFilesToRecycleBin(t *testing.T) {
+func TestExplorerThumbnailCache_ExecutePermanentlyDeletesAllowlistedFiles(t *testing.T) {
 	localAppData := t.TempDir()
 	parent, allowlisted := writeExplorerThumbnailAllowlistedFiles(t, localAppData)
 	excluded := filepath.Join(parent, "ExplorerStartupLog.etl")
 
-	recycle := &recordingRecycleBinAdapter{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		OptIn:             []string{clean.OpportunityCategoryExplorerThumbnailCache},
-		RecycleBinAdapter: recycle,
+		OptIn:                  []string{clean.OpportunityCategoryExplorerThumbnailCache},
+		AllowPermanentDeletion: true,
 		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
 			TempDir:         t.TempDir(),
 			LocalAppDataDir: localAppData,
 		},
 		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
-	if len(recycle.paths) != len(allowlisted) {
-		t.Fatalf("recycle paths = %v, want %d allowlisted files", recycle.paths, len(allowlisted))
-	}
-	for _, p := range recycle.paths {
-		if p == parent || strings.Contains(p, "ExplorerStartupLog") {
-			t.Fatalf("non-allowlisted path moved: %q", p)
-		}
-	}
 	if len(result.Deleted) != len(allowlisted) {
-		t.Fatalf("deleted = %#v", result.Deleted)
+		t.Fatalf("deleted = %#v, want %d allowlisted files", result.Deleted, len(allowlisted))
 	}
 	for _, item := range result.Deleted {
-		if item.Action != string(clean.PlannedActionMoveToRecycleBin) {
+		if item.Action != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("action = %q", item.Action)
 		}
 		if item.Rule != clean.OpportunityCategoryExplorerThumbnailCache {
 			t.Fatalf("rule = %q", item.Rule)
 		}
 	}
+	for _, p := range allowlisted {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Fatalf("allowlisted file %q should be permanently deleted: %v", p, err)
+		}
+	}
 	if _, err := os.Lstat(excluded); err != nil {
 		t.Fatalf("excluded sibling must remain: %v", err)
 	}
+	if result.Totals.PermanentlyDeletedBytes <= 0 || result.Totals.RecycleBinMovedBytes != 0 {
+		t.Fatalf("totals = %#v", result.Totals)
+	}
 }
 
-func TestINetCache_ExecuteMovesAllowlistedRootsToRecycleBin(t *testing.T) {
+func TestINetCache_ExecutePermanentlyDeletesAllowlistedRoots(t *testing.T) {
 	localAppData := t.TempDir()
 	ie, lowIE := writeINetCacheAllowlistedRoots(t, localAppData)
 	suggested := filepath.Join(localAppData, "Microsoft", "Windows", "INetCache", "Low", "SuggestedSites.dat")
 
-	recycle := &recordingRecycleBinAdapter{}
 	result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
-		OptIn:             []string{clean.OpportunityCategoryINetCache},
-		RecycleBinAdapter: recycle,
+		OptIn:                  []string{clean.OpportunityCategoryINetCache},
+		AllowPermanentDeletion: true,
 		OpportunityDiscoveryOptions: clean.OpportunityDiscoveryOptions{
 			TempDir:         t.TempDir(),
 			LocalAppDataDir: localAppData,
 		},
 		Rules: []clean.Rule{{ID: clean.DefaultCategoryFoalOwnedTempSandboxes, DefaultEnabled: false}},
 	})
-	if len(recycle.paths) != 2 {
-		t.Fatalf("recycle paths = %v", recycle.paths)
-	}
-	seen := map[string]bool{}
-	for _, p := range recycle.paths {
-		seen[p] = true
-	}
-	if !seen[ie] || !seen[lowIE] {
-		t.Fatalf("recycle paths = %v, want IE and Low\\IE", recycle.paths)
-	}
 	if len(result.Deleted) != 2 {
 		t.Fatalf("deleted = %#v", result.Deleted)
 	}
+	seen := map[string]bool{}
 	for _, item := range result.Deleted {
-		if item.Action != string(clean.PlannedActionMoveToRecycleBin) {
+		if item.Action != string(clean.PlannedActionDeletePermanently) {
 			t.Fatalf("action = %q", item.Action)
+		}
+		seen[item.Path] = true
+	}
+	if !seen[ie] || !seen[lowIE] {
+		t.Fatalf("deleted paths = %#v, want IE and Low\\IE", seen)
+	}
+	for _, p := range []string{ie, lowIE} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Fatalf("%q should be permanently deleted: %v", p, err)
 		}
 	}
 	if _, err := os.Lstat(suggested); err != nil {
 		t.Fatalf("SuggestedSites must remain: %v", err)
+	}
+	if result.Totals.PermanentlyDeletedBytes <= 0 || result.Totals.RecycleBinMovedBytes != 0 {
+		t.Fatalf("totals = %#v", result.Totals)
 	}
 }
 

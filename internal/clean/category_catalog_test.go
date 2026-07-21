@@ -181,10 +181,14 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 	}
 }
 
-// lockedPermanentCategoryIDs is the complete production permanent matrix (31).
+// lockedPermanentCategoryIDs is the complete production permanent matrix (36).
 // Order matches catalog registration among permanent-action categories.
 func lockedPermanentCategoryIDs() []string {
 	return []string{
+		clean.OpportunityCategoryUserTemp,
+		clean.OpportunityCategoryCrashDumps,
+		clean.OpportunityCategoryExplorerThumbnailCache,
+		clean.OpportunityCategoryINetCache,
 		clean.OpportunityCategoryD3DShaderCache,
 		clean.OpportunityCategoryNVIDIADXCache,
 		clean.OpportunityCategoryNVIDIAGLCache,
@@ -220,15 +224,11 @@ func lockedPermanentCategoryIDs() []string {
 	}
 }
 
-// lockedRecycleBinCategoryIDs is the complete production Recycle Bin matrix (9).
+// lockedRecycleBinCategoryIDs is the complete production Recycle Bin matrix (5).
 func lockedRecycleBinCategoryIDs() []string {
 	return []string{
 		clean.DefaultCategoryFoalOwnedTempSandboxes,
-		clean.OpportunityCategoryUserTemp,
-		clean.OpportunityCategoryCrashDumps,
 		clean.OpportunityCategoryWindowsErrorReporting,
-		clean.OpportunityCategoryExplorerThumbnailCache,
-		clean.OpportunityCategoryINetCache,
 		clean.CategoryNVIDIAInstallerCache,
 		clean.CategoryLGHUBCache,
 		clean.CategoryThunderUpdateDownload,
@@ -244,16 +244,16 @@ func productionPermanentCategoryIDs() map[string]bool {
 }
 
 // TestCompleteDeletionRuleMatrixLocked is the end-state catalog contract for ADR 0018:
-// exactly 32 delete_permanently, 9 move_to_recycle_bin, and one actionless permission boundary.
+// exactly 36 delete_permanently, 5 move_to_recycle_bin, and one actionless permission boundary.
 func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	wantPermanent := lockedPermanentCategoryIDs()
 	wantRecycleBin := lockedRecycleBinCategoryIDs()
-	if len(wantPermanent) != 32 {
-		t.Fatalf("locked permanent matrix length = %d, want 32", len(wantPermanent))
+	if len(wantPermanent) != 36 {
+		t.Fatalf("locked permanent matrix length = %d, want 36", len(wantPermanent))
 	}
-	if len(wantRecycleBin) != 9 {
-		t.Fatalf("locked Recycle Bin matrix length = %d, want 9", len(wantRecycleBin))
+	if len(wantRecycleBin) != 5 {
+		t.Fatalf("locked Recycle Bin matrix length = %d, want 5", len(wantRecycleBin))
 	}
 
 	var permanent, recycleBin, servicing, executable []string
@@ -309,7 +309,7 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		t.Fatal("administrator_only_caches must never start selected")
 	}
 
-	// TUI initial selection when every executable row is present: default + 32 permanent = 33.
+	// TUI initial selection when every executable row is present: default + 36 permanent = 37.
 	selected := 0
 	for _, summary := range catalog.Summaries() {
 		if !clean.InitiallySelectedCategory(summary) {
@@ -322,15 +322,11 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 				summary.Identifier, summary.Eligibility, summary.PlannedAction)
 		}
 	}
-	if selected != 33 {
-		t.Fatalf("initially selected categories = %d, want 33 (default + 32 permanent)", selected)
+	if selected != 37 {
+		t.Fatalf("initially selected categories = %d, want 37 (default + 36 permanent)", selected)
 	}
 	for _, id := range []string{
-		clean.OpportunityCategoryUserTemp,
-		clean.OpportunityCategoryCrashDumps,
 		clean.OpportunityCategoryWindowsErrorReporting,
-		clean.OpportunityCategoryExplorerThumbnailCache,
-		clean.OpportunityCategoryINetCache,
 	} {
 		summary, ok := catalog.Summary(id)
 		if !ok {
@@ -440,8 +436,8 @@ func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
 			}
 		}
 	}
-	if len(permanent) != 32 || len(permanent) != len(want) {
-		t.Fatalf("production permanent categories = %v, want exactly 32", permanent)
+	if len(permanent) != 36 || len(permanent) != len(want) {
+		t.Fatalf("production permanent categories = %v, want exactly 36", permanent)
 	}
 	for _, id := range lockedRecycleBinCategoryIDs() {
 		summary, ok := catalog.Summary(id)

@@ -727,6 +727,16 @@ func pathFreeReasonExplanation(code string) string {
 		// Busy or undetermined NVIDIA process/service state; the whole
 		// nvidia_installer_cache category is skipped and cannot be selected.
 		return "NVIDIA activity detected or state unknown"
+	case "recycle_bin_capacity":
+		return "did not fit remaining Recycle Bin capacity"
+	case "recycle_bin_disabled":
+		return "Recycle Bin disabled for this volume"
+	case "recycle_bin_capacity_probe_failed":
+		return "Recycle Bin capacity state unknown"
+	case "permanent_delete_partial":
+		return "some locked files skipped; rest deleted"
+	case "permanent_delete_failed":
+		return "permanent deletion failed"
 	default:
 		if code == "" {
 			return "see category state"
