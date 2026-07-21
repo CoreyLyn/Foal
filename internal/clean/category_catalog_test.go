@@ -339,10 +339,10 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	// Eager queue is all 39 executable rows; permission boundary is never scanned.
+	// Eager queue is all 40 executable rows; permission boundary is never scanned.
 	queue := clean.EagerPreviewQueue()
-	if len(queue) != 39 {
-		t.Fatalf("EagerPreviewQueue length = %d, want 39 executable categories", len(queue))
+	if len(queue) != 40 {
+		t.Fatalf("EagerPreviewQueue length = %d, want 40 executable categories", len(queue))
 	}
 	for _, summary := range queue {
 		if summary.Identifier == "administrator_only_caches" {
