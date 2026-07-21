@@ -245,15 +245,16 @@ func (m rootModel) updateViewerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "ctrl+c":
 		return m, tea.Interrupt
-	case "q", "esc":
-		// If editing path, escape cancels edit; otherwise quit
+	case "q":
+		// Path edit treats q as a character; otherwise quit the TUI.
 		if m.viewer.editingPath {
 			cmd := m.viewer.handleKey(key)
 			return m, cmd
 		}
 		return m, tea.Quit
-	case "b":
-		// If editing path, b is just a character; otherwise go back
+	case "esc", "escape", "b":
+		// Path edit: esc cancels the edit; b is a path character.
+		// Otherwise return to the main menu (same as Clean/Uninstall).
 		if m.viewer.editingPath {
 			cmd := m.viewer.handleKey(key)
 			return m, cmd

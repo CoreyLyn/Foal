@@ -27,6 +27,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"amd_gpu_shader_caches",
 		"intel_gpu_shader_cache",
 		"nvidia_installer_cache",
+		"lghub-cache",
 		"winsxs_component_store",
 		"browser_cache",
 		"vscode_cache",
@@ -226,6 +227,7 @@ func lockedRecycleBinCategoryIDs() []string {
 		clean.OpportunityCategoryExplorerThumbnailCache,
 		clean.OpportunityCategoryINetCache,
 		clean.CategoryNVIDIAInstallerCache,
+		clean.CategoryLGHUBCache,
 	}
 }
 
@@ -238,7 +240,7 @@ func productionPermanentCategoryIDs() map[string]bool {
 }
 
 // TestCompleteDeletionRuleMatrixLocked is the end-state catalog contract for ADR 0018:
-// exactly 31 delete_permanently,7 move_to_recycle_bin, and one actionless permission boundary.
+// exactly 31 delete_permanently, 8 move_to_recycle_bin, and one actionless permission boundary.
 func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	wantPermanent := lockedPermanentCategoryIDs()
@@ -246,8 +248,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	if len(wantPermanent) != 31 {
 		t.Fatalf("locked permanent matrix length = %d, want 31", len(wantPermanent))
 	}
-	if len(wantRecycleBin) !=7 {
-		t.Fatalf("locked Recycle Bin matrix length = %d, want7", len(wantRecycleBin))
+	if len(wantRecycleBin) != 8 {
+		t.Fatalf("locked Recycle Bin matrix length = %d, want 8", len(wantRecycleBin))
 	}
 
 	var permanent, recycleBin, servicing, executable []string
@@ -276,7 +278,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 
 	// ADR 0029 adds exactly one invoke_windows_servicing category
 	// (winsxs_component_store); #309 adds one move_to_recycle_bin category
-	// (nvidia_installer_cache). The permanent count is unchanged.
+	// (nvidia_installer_cache); #325 adds lghub-cache (another move_to_recycle_bin).
+	// The permanent count is unchanged.
 	if len(servicing) != 1 || servicing[0] != clean.CategoryWinSxSComponentStore {
 		t.Fatalf("servicing matrix = %#v, want [%q]", servicing, clean.CategoryWinSxSComponentStore)
 	}

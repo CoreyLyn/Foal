@@ -3,14 +3,86 @@
 package servicing
 
 import (
+	"fmt"
 	"os"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 )
+
+// TestHelperLaunchParametersSurviveWindowsArgvParsing proves the elevated-helper
+// ShellExecute parameter string is quoted with Windows rules so CommandLineToArgvW
+// (and therefore os.Args in the helper) recovers the exact pipe name and nonce.
+// Go's %q must not be used: it doubles backslashes and corrupts \\.\pipe\ paths.
+func TestHelperLaunchParametersSurviveWindowsArgvParsing(t *testing.T) {
+	pipeName := `\\.\pipe\foal-servicing-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
+	nonce := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	params := helperLaunchParameters(pipeName, nonce)
+	cmdLine := fmt.Sprintf(`"C:\Program Files\Foal\foal.exe" %s`, params)
+
+	argv := commandLineToArgv(t, cmdLine)
+	if len(argv) != 5 {
+		t.Fatalf("argc = %d, want 5; argv=%q params=%q", len(argv), argv, params)
+	}
+	if argv[1] != HelperModeArgument {
+		t.Fatalf("mode = %q, want %q", argv[1], HelperModeArgument)
+	}
+	if argv[2] != pipeName {
+		t.Fatalf("pipe name = %q, want %q\nparams=%q", argv[2], pipeName, params)
+	}
+	if argv[3] != nonce {
+		t.Fatalf("nonce = %q, want %q", argv[3], nonce)
+	}
+	if argv[4] != fmt.Sprintf("%d", protocolVersion) {
+		t.Fatalf("version = %q, want %d", argv[4], protocolVersion)
+	}
+}
+
+// TestWindowsQuoteArgDoesNotDoubleBackslashes is the regression lock for the
+// %q bug that made AnalyzeComponentStore always fail after UAC consent.
+func TestWindowsQuoteArgDoesNotDoubleBackslashes(t *testing.T) {
+	pipe := `\\.\pipe\foal-servicing-abc`
+	got := windowsQuoteArg(pipe)
+	// Quoted form must keep a single backslash-pair prefix, not Go %q doubling.
+	want := `"` + pipe + `"`
+	if got != want {
+		t.Fatalf("windowsQuoteArg = %q, want %q", got, want)
+	}
+	// %q would produce this broken form — keep the contrast explicit.
+	broken := fmt.Sprintf("%q", pipe)
+	if got == broken {
+		t.Fatalf("windowsQuoteArg must not match Go %%q (%q)", broken)
+	}
+	argv := commandLineToArgv(t, "foal.exe "+got)
+	if len(argv) != 2 || argv[1] != pipe {
+		t.Fatalf("parsed = %q, want pipe %q", argv, pipe)
+	}
+}
+
+func commandLineToArgv(t *testing.T, cmdLine string) []string {
+	t.Helper()
+	p, err := syscall.UTF16PtrFromString(cmdLine)
+	if err != nil {
+		t.Fatalf("UTF16PtrFromString: %v", err)
+	}
+	var argc int32
+	argvPtr, err := syscall.CommandLineToArgv(p, &argc)
+	if err != nil {
+		t.Fatalf("CommandLineToArgv: %v", err)
+	}
+	defer syscall.LocalFree((syscall.Handle)(unsafe.Pointer(argvPtr)))
+	out := make([]string, 0, argc)
+	for i := int32(0); i < argc; i++ {
+		arg := (*[1 << 16]*uint16)(unsafe.Pointer(argvPtr))[i]
+		out = append(out, syscall.UTF16ToString((*[1 << 16]uint16)(unsafe.Pointer(arg))[:]))
+	}
+	return out
+}
 
 // TestNamedPipeRoundTripAuthenticatesAndExchanges drives the real Windows named
 // pipe end to end in one process: the coordinator creates the ACL-restricted

@@ -336,10 +336,13 @@ func summaryFromDefinition(definition CleanupCategoryDefinition) CleanupCategory
 // supportedApplicationDefinition is the private process-detection definition
 // for one logical application. Multiple executable names may represent the
 // same application so future tools do not need a new detection switch.
+// A logical application may also declare Windows service names; any declared
+// service not in the stopped state means the application is running.
 type supportedApplicationDefinition struct {
 	id          string
 	displayName string
 	executables []string
+	services    []string
 }
 
 // developerApplicationDefinitions is the controlled registry of developer-tool
@@ -707,6 +710,25 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			SelectionPolicy:          CategorySelectionPolicyExactOnly,
 		},
 	), staticPreviewSafetyNote(nvidiaInstallerCacheOptInImpactNotice)),
+		// LG HUB cache: exact-selection-only, Not-proven move_to_recycle_bin opt-in
+		// for content-addressed download blobs under the fixed C:\ProgramData\LGHUB\cache
+		// root. Candidates are exactly ordinary files named 64 lowercase hex characters
+		// directly under the root; unknown names, directories, reparse points, and the
+		// root itself are never candidates. Dedicated resolver (not developer-cache / not
+		// application-cache): the `all`, `dev-caches`, `app-caches`, and `cli-agents`
+		// tokens and TUI Select All never select it. Permanent deletion is never eligible.
+		withPreviewSafetyNote(lghubCacheCategoryEntry(
+			CleanupCategoryDefinition{
+				Identifier:               CategoryLGHUBCache,
+				Label:                    "LG HUB cache",
+				ReportCategory:           ReportCategorySystem,
+				Eligibility:              CategoryEligibilityOptIn,
+				Aliases:                  []string{},
+				RunningApplicationPolicy: RunningApplicationPolicyDistinctiveProcessIdle,
+				PlannedAction:            PlannedActionMoveToRecycleBin,
+				SelectionPolicy:          CategorySelectionPolicyExactOnly,
+			},
+		), staticPreviewSafetyNote(lghubCacheOptInImpactNotice)),
 	// Windows component store (WinSxS): exact-selection-only servicing category
 	// with planned action invoke_windows_servicing. It never yields a file
 	// candidate or byte estimate; read-only component-store analysis is delegated
@@ -1010,7 +1032,8 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 			}
 		case categoryResolverExistenceOpportunity, categoryResolverBrowserCache,
 			categoryResolverApplicationCache, categoryResolverDeveloperCache,
-			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache:
+			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache,
+			categoryResolverLGHUBCache:
 			if entry.definition.Eligibility != CategoryEligibilityOptIn {
 				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
 			}
@@ -1424,8 +1447,14 @@ func validateApplicationCacheRegistry(
 		if len(policy.relativeRoots) == 0 {
 			return fmt.Errorf("application-cache policy %q has an empty relative-root allowlist", entry.applicationCachePolicyID)
 		}
-		if len(policy.roamingAppDataPath) == 0 {
-			return fmt.Errorf("application-cache policy %q has an empty roaming AppData path", entry.applicationCachePolicyID)
+		if policy.base == "" {
+			return fmt.Errorf("application-cache policy %q has no AppData base declared", entry.applicationCachePolicyID)
+		}
+		if policy.base != "roaming" && policy.base != "local" && policy.base != "locallow" {
+			return fmt.Errorf("application-cache policy %q has invalid AppData base %q", entry.applicationCachePolicyID, policy.base)
+		}
+		if len(policy.appDataPath) == 0 {
+			return fmt.Errorf("application-cache policy %q has an empty AppData path", entry.applicationCachePolicyID)
 		}
 		seenRoots := make(map[string]bool, len(policy.relativeRoots))
 		for _, root := range policy.relativeRoots {

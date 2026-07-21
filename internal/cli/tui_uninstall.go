@@ -71,6 +71,12 @@ type uninstallModel struct {
 	height  int
 	now     func() time.Time
 
+	// viewportOffset is the first visible line of the scrollable body. Titles
+	// and key hints stay fixed outside this window. There is no separate scroll
+	// mode: preview Up/Down move focus and the viewport follows; confirmation
+	// and result Up/Down only adjust the offset.
+	viewportOffset int
+
 	// Authorization opt-ins captured in preview (default off). Frozen at
 	// confirmation so the confirmed run cannot silently authorize more than
 	// the user disclosed. These mirror CLI --allow-stop-processes and
@@ -161,6 +167,20 @@ func newUninstallModel(width, height int) uninstallModel {
 func (m *uninstallModel) setSize(width, height int) {
 	m.width = width
 	m.height = height
+	m.reflowViewportAfterResize()
+}
+
+// reflowViewportAfterResize preserves the focused preview row or current
+// viewport offset after a terminal resize. It never changes selection or auth.
+func (m *uninstallModel) reflowViewportAfterResize() {
+	if m.terminalTooSmall() {
+		return
+	}
+	if m.phase == uninstallPhasePreview && !m.loading {
+		m.ensurePreviewCursorVisible()
+		return
+	}
+	m.clampViewportOffset()
 }
 
 // start kicks off the read-only preview load. No mutation, no history, no
@@ -168,6 +188,7 @@ func (m *uninstallModel) setSize(width, height int) {
 func (m *uninstallModel) start() tea.Cmd {
 	m.loading = true
 	m.phase = uninstallPhasePreview
+	m.viewportOffset = 0
 	return loadUninstallPreviewCmd
 }
 
@@ -180,6 +201,7 @@ func (m *uninstallModel) applyPreviewLoaded(msg uninstallPreviewLoadedMsg) {
 	m.review = msg.review
 	m.rows = uninstallRowsFromApplications(msg.review.Applications)
 	m.cursor = 0
+	m.viewportOffset = 0
 	// Focus the first selectable row so space works immediately.
 	for i, row := range m.rows {
 		if uninstallRowSelectable(row) {
@@ -187,6 +209,7 @@ func (m *uninstallModel) applyPreviewLoaded(msg uninstallPreviewLoadedMsg) {
 			break
 		}
 	}
+	m.ensurePreviewCursorVisible()
 }
 
 func uninstallRowsFromApplications(apps []uninstall.Application) []uninstallAppRow {
@@ -333,6 +356,13 @@ func (m *uninstallModel) handleKey(key string) (uninstallPreviewNav, tea.Cmd) {
 		case "enter", "esc", "b", "escape":
 			m.nav = uninstallNavMenu
 			return m.nav, nil
+		case "up", "k":
+			// Non-selectable content: Up/Down only adjust viewport offset.
+			m.scrollViewport(-1)
+			return uninstallNavNone, nil
+		case "down", "j":
+			m.scrollViewport(1)
+			return uninstallNavNone, nil
 		}
 		return uninstallNavNone, nil
 	case uninstallPhaseConfirmation:
@@ -346,9 +376,18 @@ func (m *uninstallModel) handleKey(key string) (uninstallPreviewNav, tea.Cmd) {
 		case "esc", "b", "escape":
 			// Preserve in-memory selection and authorizations; return to preview.
 			m.phase = uninstallPhasePreview
+			m.viewportOffset = 0
+			m.ensurePreviewCursorVisible()
 			return uninstallNavNone, nil
 		case "enter":
 			return m.beginExecution()
+		case "up", "k":
+			// Non-selectable content: Up/Down only adjust viewport offset.
+			m.scrollViewport(-1)
+			return uninstallNavNone, nil
+		case "down", "j":
+			m.scrollViewport(1)
+			return uninstallNavNone, nil
 		}
 		return uninstallNavNone, nil
 	}
@@ -381,16 +420,19 @@ func (m *uninstallModel) handleKey(key string) (uninstallPreviewNav, tea.Cmd) {
 		// the confirmation phase starts the confirmed run.
 		if m.confirmationEnabled() {
 			m.phase = uninstallPhaseConfirmation
+			m.viewportOffset = 0
 		}
 		return uninstallNavNone, nil
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
 		}
+		m.ensurePreviewCursorVisible()
 	case "down", "j":
 		if m.cursor+1 < len(m.rows) {
 			m.cursor++
 		}
+		m.ensurePreviewCursorVisible()
 	case " ", "space":
 		// Toggle only; never mutates.
 		m.toggleFocusedSelection()
@@ -424,6 +466,7 @@ func (m *uninstallModel) beginExecution() (uninstallPreviewNav, tea.Cmd) {
 	m.executionStarted = true
 	m.executionStartedAt = m.now()
 	m.phase = uninstallPhaseExecuting
+	m.viewportOffset = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelExecution = cancel
 	return uninstallNavNone, executeUninstallSelectionCmd(ctx, m.frozenSelection, m.frozenAllowStop, m.frozenAllowPermanent)
@@ -445,6 +488,7 @@ func (m *uninstallModel) applyExecuted(msg uninstallExecutedMsg) {
 	// outcome, leftover outcomes). The TUI never re-derives outcomes.
 	m.executionResult = msg.result
 	m.phase = uninstallPhaseResult
+	m.viewportOffset = 0
 	if m.cancelExecution != nil {
 		m.cancelExecution = nil
 	}
@@ -456,63 +500,132 @@ func (m uninstallModel) terminalTooSmall() bool {
 	if m.width > 0 && m.width < uninstallMinTerminalWidth {
 		return true
 	}
-	if m.height > 0 && m.height < uninstallMinTerminalHeight {
+	if m.height <= 0 {
+		// Zero height is unconstrained for pure model tests that only assert
+		// textual contracts; production always receives WindowSize.
+		return false
+	}
+	if m.height < uninstallMinTerminalHeight {
 		return true
 	}
-	return false
+	// Dynamic chrome may still exceed the floor when footer diagnostics grow.
+	return m.height < len(m.fixedHeaderLines())+len(m.fixedFooterLines())+1
 }
 
 func (m uninstallModel) tooSmallContent() string {
 	return "Terminal too small\nResize the terminal larger to continue using Uninstall.\n"
 }
 
+// content returns the plain-text frame with fixed header/footer and a
+// height-clamped scrollable body so long app lists remain navigable.
 func (m uninstallModel) content() string {
 	if m.terminalTooSmall() {
 		return m.tooSmallContent()
 	}
-	if m.loading {
-		return m.headerContent() + "\nLoading uninstall preview...\n" + m.footerHints()
+	header := m.fixedHeaderLines()
+	footer := m.fixedFooterLines()
+	body := m.scrollableBodyLines()
+	// height <= 0 means unconstrained (deterministic model tests without a
+	// WindowSize). Otherwise body fills remaining rows under fixed chrome.
+	capacity := len(body)
+	if m.height > 0 {
+		capacity = m.height - len(header) - len(footer)
+		if capacity < 1 {
+			return m.tooSmallContent()
+		}
 	}
-	switch m.phase {
-	case uninstallPhaseConfirmation:
-		return m.headerContent() + m.confirmationBody() + m.footerHints()
-	case uninstallPhaseExecuting:
-		return m.headerContent() + m.executionBody() + m.footerHints()
-	case uninstallPhaseResult:
-		return m.headerContent() + m.resultBody() + m.footerHints()
+	offset := m.clampedViewportOffset(len(body), capacity)
+	end := offset + capacity
+	if end > len(body) {
+		end = len(body)
 	}
-	return m.headerContent() + m.previewBody() + m.footerHints()
-}
 
-func (m uninstallModel) headerContent() string {
 	var b strings.Builder
-	b.WriteString("+--------------------------------------------------+\n")
-	b.WriteString("| Uninstall TUI                                    |\n")
-	switch m.phase {
-	case uninstallPhaseConfirmation:
-		b.WriteString("| Confirm uninstall: review the plan below.        |\n")
-	case uninstallPhaseExecuting:
-		b.WriteString("| Uninstalling... shared execute path is running.  |\n")
-	case uninstallPhaseResult:
-		b.WriteString("| Uninstall result: shared execute outcome.        |\n")
-	default:
-		b.WriteString("| Preview-only: select apps, then confirm to run.  |\n")
+	for _, line := range header {
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
-	b.WriteString("+--------------------------------------------------+\n\n")
-	if m.notice != "" {
-		b.WriteString(m.notice)
-		b.WriteString("\n")
+	if len(body) > 0 {
+		for _, line := range body[offset:end] {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	for _, line := range footer {
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
 
-func (m uninstallModel) previewBody() string {
-	var b strings.Builder
-	if len(m.rows) == 0 {
-		b.WriteString("No installed applications discovered.\n")
-		return b.String()
+func (m uninstallModel) fixedHeaderLines() []string {
+	lines := []string{
+		"+--------------------------------------------------+",
+		"| Uninstall TUI                                    |",
 	}
-	b.WriteString(fmt.Sprintf("Applications (%d):\n", len(m.rows)))
+	switch m.phase {
+	case uninstallPhaseConfirmation:
+		lines = append(lines, "| Confirm uninstall: review the plan below.        |")
+	case uninstallPhaseExecuting:
+		lines = append(lines, "| Uninstalling... shared execute path is running.  |")
+	case uninstallPhaseResult:
+		lines = append(lines, "| Uninstall result: shared execute outcome.        |")
+	default:
+		lines = append(lines, "| Preview-only: select apps, then confirm to run.  |")
+	}
+	lines = append(lines, "+--------------------------------------------------+", "")
+	if m.notice != "" {
+		lines = append(lines, m.notice)
+	}
+	return lines
+}
+
+func (m uninstallModel) fixedFooterLines() []string {
+	if m.loading {
+		return []string{"", m.footerHintsLine()}
+	}
+	switch m.phase {
+	case uninstallPhaseConfirmation, uninstallPhaseExecuting:
+		return []string{"", m.footerHintsLine()}
+	case uninstallPhaseResult:
+		// Result body already includes the return/quit guidance line.
+		return nil
+	}
+	// Preview: selection and authorization stay fixed under the scrollable list.
+	lines := []string{
+		"",
+		fmt.Sprintf("Selected: %d", m.selectedCount()),
+		fmt.Sprintf("Process-stop authorized: %t (toggle: s)", m.allowStopProcesses),
+		fmt.Sprintf("Permanent authorized: %t (toggle: p)", m.allowPermanent),
+	}
+	if m.selectionIncludesPortable() && !m.allowPermanent {
+		lines = append(lines, "Note: selection includes portable removal which requires permanent authorization (toggle p).")
+	}
+	lines = append(lines, "", m.footerHintsLine())
+	return lines
+}
+
+func (m uninstallModel) scrollableBodyLines() []string {
+	if m.loading {
+		return []string{"Loading uninstall preview..."}
+	}
+	switch m.phase {
+	case uninstallPhaseConfirmation:
+		return m.confirmationBodyLines()
+	case uninstallPhaseExecuting:
+		return m.executionBodyLines()
+	case uninstallPhaseResult:
+		return m.resultBodyLines()
+	}
+	return m.previewBodyLines()
+}
+
+func (m uninstallModel) previewBodyLines() []string {
+	if len(m.rows) == 0 {
+		return []string{"No installed applications discovered."}
+	}
+	lines := make([]string, 0, len(m.rows)+1)
+	lines = append(lines, fmt.Sprintf("Applications (%d):", len(m.rows)))
 	for i, row := range m.rows {
 		marker := " "
 		if i == m.cursor {
@@ -532,106 +645,102 @@ func (m uninstallModel) previewBody() string {
 		if row.app.RequiresAdmin {
 			label += " [admin]"
 		}
-		b.WriteString(fmt.Sprintf("%s %s %s\n", marker, checkbox, label))
+		lines = append(lines, fmt.Sprintf("%s %s %s", marker, checkbox, label))
 	}
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("Selected: %d\n", m.selectedCount()))
-	b.WriteString(fmt.Sprintf("Process-stop authorized: %t (toggle: s)\n", m.allowStopProcesses))
-	b.WriteString(fmt.Sprintf("Permanent authorized: %t (toggle: p)\n", m.allowPermanent))
-	if m.selectionIncludesPortable() && !m.allowPermanent {
-		b.WriteString("Note: selection includes portable removal which requires permanent authorization (toggle p).\n")
-	}
-	return b.String()
+	return lines
 }
 
-// confirmationBody renders the confirmation disclosures required by the spec:
-// per selected app planned class (official_uninstaller vs
+// confirmationBodyLines renders the confirmation disclosures required by the
+// spec: per selected app planned class (official_uninstaller vs
 // portable_directory_removal), confirmed leftover scope (count summary),
 // process-stop opt-in state, permanent authorization state (and that portable
 // removal requires it), and admin-need grouping. Paths stay out of the primary
 // list (path-free UX matching Clean TUI); the leftover count is the summary.
-func (m uninstallModel) confirmationBody() string {
-	var b strings.Builder
-	b.WriteString("Confirm uninstall\n")
-	b.WriteString("==================\n")
-	b.WriteString("This will run shared Uninstall Execute for the selected apps.\n")
-	b.WriteString("Leftover deletion uses the Recycle Bin and runs only after the uninstaller reports success.\n")
-	b.WriteString("A failed or canceled uninstaller deletes nothing.\n\n")
-
-	b.WriteString("Selected applications:\n")
+func (m uninstallModel) confirmationBodyLines() []string {
+	lines := []string{
+		"Confirm uninstall",
+		"==================",
+		"This will run shared Uninstall Execute for the selected apps.",
+		"Leftover deletion uses the Recycle Bin and runs only after the uninstaller reports success.",
+		"A failed or canceled uninstaller deletes nothing.",
+		"",
+		"Selected applications:",
+	}
 	// Stable order for deterministic confirmation/test oracle.
-	selectedRows := m.selectedRowsStable()
-	for _, row := range selectedRows {
-		b.WriteString(fmt.Sprintf("  - %s\n", row.app.Name))
-		b.WriteString(fmt.Sprintf("      plan: %s\n", uninstallPlannedClassLabel(row.app.PlannedClass)))
+	for _, row := range m.selectedRowsStable() {
+		lines = append(lines, fmt.Sprintf("  - %s", row.app.Name))
+		lines = append(lines, fmt.Sprintf("      plan: %s", uninstallPlannedClassLabel(row.app.PlannedClass)))
 		if row.app.RequiresAdmin {
-			b.WriteString("      requires admin: true (UAC may be requested)\n")
+			lines = append(lines, "      requires admin: true (UAC may be requested)")
 		}
 	}
-	b.WriteString("\n")
+	lines = append(lines, "")
 
 	leftoverCount := m.confirmedLeftoverCount()
-	b.WriteString(fmt.Sprintf("Confirmed leftover path set: %d path(s) (revalidated subset deleted to Recycle Bin after success)\n", leftoverCount))
-	b.WriteString("\n")
+	lines = append(lines, fmt.Sprintf("Confirmed leftover path set: %d path(s) (revalidated subset deleted to Recycle Bin after success)", leftoverCount))
+	lines = append(lines, "")
 
 	// Disclose the authorization state the user set in preview. Values are
 	// frozen into frozenAllow* only when beginExecution starts the run; during
 	// confirmation the live toggles are the source of truth (and cannot change
 	// in this phase).
-	b.WriteString(fmt.Sprintf("Process-stop authorization: %t\n", m.allowStopProcesses))
-	b.WriteString(fmt.Sprintf("Permanent authorization: %t\n", m.allowPermanent))
+	lines = append(lines,
+		fmt.Sprintf("Process-stop authorization: %t", m.allowStopProcesses),
+		fmt.Sprintf("Permanent authorization: %t", m.allowPermanent),
+	)
 	if m.selectionIncludesPortable() {
 		if m.allowPermanent {
-			b.WriteString("Portable directory removal is authorized (permanent deletion of trusted install trees).\n")
+			lines = append(lines, "Portable directory removal is authorized (permanent deletion of trusted install trees).")
 		} else {
-			b.WriteString("Portable directory removal is NOT authorized: portable targets will be skipped and nothing permanently deleted.\n")
+			lines = append(lines, "Portable directory removal is NOT authorized: portable targets will be skipped and nothing permanently deleted.")
 		}
 	}
-	b.WriteString("\n")
+	lines = append(lines, "")
 
 	if adminApps := m.selectedAdminAppNames(); len(adminApps) > 0 {
-		b.WriteString("Applications likely requiring administrator rights (UAC):\n")
+		lines = append(lines, "Applications likely requiring administrator rights (UAC):")
 		for _, name := range adminApps {
-			b.WriteString(fmt.Sprintf("  - %s\n", name))
+			lines = append(lines, fmt.Sprintf("  - %s", name))
 		}
-		b.WriteString("Without elevation these are skipped with a stable reason.\n\n")
+		lines = append(lines, "Without elevation these are skipped with a stable reason.", "")
 	}
 
-	b.WriteString("Enter: confirm and run shared Execute | esc/b: back to preview\n")
-	return b.String()
+	lines = append(lines, "Enter: confirm and run shared Execute | esc/b: back to preview")
+	return lines
 }
 
-func (m uninstallModel) executionBody() string {
-	var b strings.Builder
-	b.WriteString("Running shared Uninstall Execute...\n")
-	b.WriteString(fmt.Sprintf("Selected: %d app(s).\n", len(m.frozenSelection)))
+func (m uninstallModel) executionBodyLines() []string {
+	lines := []string{
+		"Running shared Uninstall Execute...",
+		fmt.Sprintf("Selected: %d app(s).", len(m.frozenSelection)),
+	}
 	if m.cancellationRequested {
-		b.WriteString(cancellationRequestedMessage + "\n")
+		lines = append(lines, cancellationRequestedMessage)
 	}
-	b.WriteString("\nCompleted work is not rolled back. Ctrl+C requests cooperative cancel.\n")
-	return b.String()
+	lines = append(lines, "", "Completed work is not rolled back. Ctrl+C requests cooperative cancel.")
+	return lines
 }
 
-// resultBody reflects the shared ExecuteResult. The TUI never re-derives
+// resultBodyLines reflects the shared ExecuteResult. The TUI never re-derives
 // outcomes; it projects per-app outcomes, elevation outcome, and totals.
-func (m uninstallModel) resultBody() string {
-	var b strings.Builder
+func (m uninstallModel) resultBodyLines() []string {
 	result := m.executionResult
+	var lines []string
 	switch result.Status {
 	case uninstall.StatusExecuteError:
-		b.WriteString("Status: error\n")
+		lines = append(lines, "Status: error")
 		if result.Message != "" {
-			b.WriteString(result.Message + "\n")
+			lines = append(lines, result.Message)
 		}
 	case uninstall.StatusExecuteCanceled:
-		b.WriteString("Status: canceled\n")
+		lines = append(lines, "Status: canceled")
 		if result.Message != "" {
-			b.WriteString(result.Message + "\n")
+			lines = append(lines, result.Message)
 		}
 	default:
-		b.WriteString("Status: complete\n")
+		lines = append(lines, "Status: complete")
 	}
-	b.WriteString(fmt.Sprintf("Selected: %d, uninstalled: %d, skipped: %d, failed: %d, canceled: %d.\n",
+	lines = append(lines, fmt.Sprintf("Selected: %d, uninstalled: %d, skipped: %d, failed: %d, canceled: %d.",
 		result.Totals.SelectedCount,
 		result.Totals.UninstalledCount,
 		result.Totals.SkippedCount,
@@ -639,48 +748,130 @@ func (m uninstallModel) resultBody() string {
 		result.Totals.CanceledCount,
 	))
 	if result.Elevation.Requested {
-		b.WriteString("Elevation: ")
+		elevation := "Elevation: "
 		if result.Elevation.Granted {
-			b.WriteString("granted")
+			elevation += "granted"
 		} else {
-			b.WriteString("not granted (admin-required apps skipped)")
+			elevation += "not granted (admin-required apps skipped)"
 		}
 		if result.Elevation.Reason != "" {
-			b.WriteString(" - " + result.Elevation.Reason)
+			elevation += " - " + result.Elevation.Reason
 		}
-		b.WriteString("\n")
+		lines = append(lines, elevation)
 	}
 	for _, app := range result.Applications {
-		b.WriteString("\n  - " + uninstallValueOrUnknown(app.Name) + "\n")
-		b.WriteString(fmt.Sprintf("      plan: %s\n", uninstallPlannedClassLabel(app.PlannedClass)))
-		b.WriteString(fmt.Sprintf("      action: %s\n", app.Action))
-		b.WriteString(fmt.Sprintf("      result: %s\n", app.Result))
+		lines = append(lines, "")
+		lines = append(lines, "  - "+uninstallValueOrUnknown(app.Name))
+		lines = append(lines, fmt.Sprintf("      plan: %s", uninstallPlannedClassLabel(app.PlannedClass)))
+		lines = append(lines, fmt.Sprintf("      action: %s", app.Action))
+		lines = append(lines, fmt.Sprintf("      result: %s", app.Result))
 		if app.SkippedReason != "" {
-			b.WriteString(fmt.Sprintf("      skipped reason: %s\n", app.SkippedReason))
+			lines = append(lines, fmt.Sprintf("      skipped reason: %s", app.SkippedReason))
 		}
 		if app.Detail != "" {
-			b.WriteString("      detail: " + app.Detail + "\n")
+			lines = append(lines, "      detail: "+app.Detail)
 		}
 		if len(app.LeftoverOutcomes) > 0 {
-			b.WriteString(fmt.Sprintf("      leftover paths: %d deleted via Recycle Bin, %d skipped\n",
+			lines = append(lines, fmt.Sprintf("      leftover paths: %d deleted via Recycle Bin, %d skipped",
 				uninstallLeftoverDeletedCount(app.LeftoverOutcomes),
 				uninstallLeftoverSkippedCount(app.LeftoverOutcomes)))
 		}
 	}
-	b.WriteString("\nEnter/esc/b: back to menu | q: quit\n")
-	return b.String()
+	lines = append(lines, "", "Enter/esc/b: back to menu | q: quit")
+	return lines
 }
 
-func (m uninstallModel) footerHints() string {
+func (m uninstallModel) footerHintsLine() string {
 	switch m.phase {
 	case uninstallPhaseConfirmation:
-		return "\nHints: enter confirm | esc/b back | q quit\n"
+		return "Hints: j/k scroll | enter confirm | esc/b back | q quit"
 	case uninstallPhaseExecuting:
-		return "\nHints: ctrl+c cooperative cancel\n"
+		return "Hints: ctrl+c cooperative cancel"
 	case uninstallPhaseResult:
 		return ""
 	}
-	return "\nHints: j/k move | space toggle | s stop-proc | p permanent | enter confirm | b back | q quit\n"
+	return "Hints: j/k move | space toggle | s stop-proc | p permanent | enter confirm | b back | q quit"
+}
+
+func (m uninstallModel) bodyCapacity() int {
+	if m.terminalTooSmall() || m.height <= 0 {
+		if m.height <= 0 {
+			// Unconstrained: treat capacity as large enough for full body.
+			return len(m.scrollableBodyLines()) + 1
+		}
+		return 0
+	}
+	cap := m.height - len(m.fixedHeaderLines()) - len(m.fixedFooterLines())
+	if cap < 0 {
+		return 0
+	}
+	return cap
+}
+
+func (m uninstallModel) clampedViewportOffset(bodyLen, capacity int) int {
+	if capacity <= 0 || bodyLen <= 0 {
+		return 0
+	}
+	maxOffset := bodyLen - capacity
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	offset := m.viewportOffset
+	if offset < 0 {
+		return 0
+	}
+	if offset > maxOffset {
+		return maxOffset
+	}
+	return offset
+}
+
+func (m *uninstallModel) clampViewportOffset() {
+	cap := m.bodyCapacity()
+	bodyLen := len(m.scrollableBodyLines())
+	m.viewportOffset = m.clampedViewportOffset(bodyLen, cap)
+}
+
+func (m *uninstallModel) scrollViewport(delta int) {
+	if m.terminalTooSmall() {
+		return
+	}
+	m.viewportOffset += delta
+	m.clampViewportOffset()
+}
+
+// previewBodyLineForRow maps a preview row index to its scrollable body line.
+// Line 0 is the "Applications (N):" heading; row i is at line i+1.
+func (m uninstallModel) previewBodyLineForRow(rowIndex int) int {
+	if rowIndex < 0 || rowIndex >= len(m.rows) {
+		return -1
+	}
+	return rowIndex + 1
+}
+
+func (m *uninstallModel) ensurePreviewCursorVisible() {
+	if m.loading || len(m.rows) == 0 {
+		m.clampViewportOffset()
+		return
+	}
+	m.ensureBodyLineVisible(m.previewBodyLineForRow(m.cursor))
+}
+
+func (m *uninstallModel) ensureBodyLineVisible(lineIndex int) {
+	if lineIndex < 0 {
+		m.clampViewportOffset()
+		return
+	}
+	cap := m.bodyCapacity()
+	if cap <= 0 {
+		return
+	}
+	if lineIndex < m.viewportOffset {
+		m.viewportOffset = lineIndex
+	} else if lineIndex >= m.viewportOffset+cap {
+		m.viewportOffset = lineIndex - cap + 1
+	}
+	m.clampViewportOffset()
 }
 
 // selectedRowsStable returns selected rows in stable display order (cursor

@@ -270,12 +270,53 @@ func launchElevatedHelper(executable, pipeName, nonce string) error {
 	if err != nil {
 		return err
 	}
-	paramStr := fmt.Sprintf("%s %q %s %d", HelperModeArgument, pipeName, nonce, protocolVersion)
-	params, err := windows.UTF16PtrFromString(paramStr)
+	// Use Windows command-line quoting, not Go %q: %q doubles backslashes for
+	// Go string syntax, but CommandLineToArgvW treats backslashes as literals
+	// (except before quotes). Doubled backslashes corrupt \\.\pipe\... so the
+	// elevated helper can never open the coordinator pipe.
+	params, err := windows.UTF16PtrFromString(helperLaunchParameters(pipeName, nonce))
 	if err != nil {
 		return err
 	}
 	return windows.ShellExecute(0, verb, file, params, nil, windows.SW_HIDE)
+}
+
+// helperLaunchParameters builds the ShellExecute lpParameters string for the
+// elevated helper. Pipe names and nonces are quoted with Windows rules so
+// CommandLineToArgvW (and Go's os.Args) recovers the exact values.
+func helperLaunchParameters(pipeName, nonce string) string {
+	return fmt.Sprintf("%s %s %s %d",
+		HelperModeArgument,
+		windowsQuoteArg(pipeName),
+		windowsQuoteArg(nonce),
+		protocolVersion,
+	)
+}
+
+// windowsQuoteArg quotes s for a Windows process command line so
+// CommandLineToArgvW yields the original string. Backslashes are left intact
+// (unlike Go %q); only embedded double quotes are escaped by doubling.
+func windowsQuoteArg(s string) string {
+	if s == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(s, " \t\"") {
+		// No whitespace or quotes: still quote pipe paths so a future format
+		// change cannot split \\.\pipe\... and so the rule is uniform for the
+		// helper argument vector.
+		return `"` + s + `"`
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		if s[i] == '"' {
+			b.WriteByte('"')
+		}
+		b.WriteByte(s[i])
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // isUserDeclinedElevation reports whether a launch error is the user declining

@@ -13,11 +13,13 @@ type CategoryIdentityCandidate struct {
 	Bytes         int64
 	Category      string
 	PlannedAction string
-	// nvidiaDiscovery and validator carry the injects a category-owned
-	// action-neutral validator needs to repeat its fresh proof. They are
-	// package-internal and set by shared Execute from Options so tests exercise
-	// the same seams as production. Categories that do not use them ignore them.
+	// nvidiaDiscovery, lghubDiscovery, and validator carry the injects a
+	// category-owned action-neutral validator needs to repeat its fresh proof.
+	// They are package-internal and set by shared Execute from Options so tests
+	// exercise the same seams as production. Categories that do not use them
+	// ignore them.
 	nvidiaDiscovery NVIDIAInstallerCacheDiscoveryOptions
+	lghubDiscovery  LGHUBCacheDiscoveryOptions
 	validator       pathsafe.Validator
 }
 
