@@ -450,6 +450,145 @@ func TestDiscoverApplicationCachesRespectsDescendantCeiling(t *testing.T) {
 	}
 }
 
+func TestDiscoverApplicationCachesLocalBase(t *testing.T) {
+	// Register a test policy with local base
+	testPolicyID := "test_local_app"
+	testCategory := "test_local_cache"
+	originalPolicies := applicationCachePolicies
+	defer func() { applicationCachePolicies = originalPolicies }()
+
+	applicationCachePolicies = map[string]applicationCachePolicy{
+		testPolicyID: {
+			category:     testCategory,
+			application:  ApplicationVisualStudioCode,
+			base:         applicationCacheBaseLocal,
+			appDataPath:  []string{"TestApp", "Data"},
+			relativeRoots: []string{"Cache", "Logs"},
+		},
+	}
+
+	local := t.TempDir()
+	appRoot := filepath.Join(local, "TestApp", "Data")
+	for _, name := range []string{"Cache", "Logs", "Config"} {
+		if err := os.MkdirAll(filepath.Join(appRoot, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(appRoot, name, "test.bin"), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result := discoverApplicationCaches(context.Background(), testPolicyID, ApplicationCacheDiscoveryOptions{
+		LocalAppDataDir: local,
+	}, pathsafe.Validator{})
+	if len(result.opportunities) != 2 {
+		t.Fatalf("opportunities = %#v, want Cache and Logs only", result.opportunities)
+	}
+	seen := make(map[string]bool)
+	for _, opp := range result.opportunities {
+		if opp.Category != testCategory {
+			t.Fatalf("category = %q, want %q", opp.Category, testCategory)
+		}
+		base := filepath.Base(opp.Path)
+		seen[base] = true
+		if base != "Cache" && base != "Logs" {
+			t.Fatalf("unexpected root %q", base)
+		}
+	}
+	if !seen["Cache"] || !seen["Logs"] {
+		t.Fatalf("missing expected roots: %#v", seen)
+	}
+
+	// Verify RoamingAppDataDir is ignored for local base
+	result = discoverApplicationCaches(context.Background(), testPolicyID, ApplicationCacheDiscoveryOptions{
+		RoamingAppDataDir: local,
+	}, pathsafe.Validator{})
+	if len(result.opportunities) != 0 {
+		t.Fatalf("opportunities = %#v, want none when only RoamingAppDataDir is set", result.opportunities)
+	}
+}
+
+func TestDiscoverApplicationCachesLocalLowBase(t *testing.T) {
+	// Register a test policy with locallow base
+	testPolicyID := "test_locallow_app"
+	testCategory := "test_locallow_cache"
+	originalPolicies := applicationCachePolicies
+	defer func() { applicationCachePolicies = originalPolicies }()
+
+	applicationCachePolicies = map[string]applicationCachePolicy{
+		testPolicyID: {
+			category:     testCategory,
+			application:  ApplicationVisualStudioCode,
+			base:         applicationCacheBaseLocalLow,
+			appDataPath:  []string{"TestAppLow", "Data"},
+			relativeRoots: []string{"Cache"},
+		},
+	}
+
+	localLow := t.TempDir()
+	appRoot := filepath.Join(localLow, "TestAppLow", "Data")
+	if err := os.MkdirAll(filepath.Join(appRoot, "Cache"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appRoot, "Cache", "test.bin"), []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := discoverApplicationCaches(context.Background(), testPolicyID, ApplicationCacheDiscoveryOptions{
+		LocalLowAppDataDir: localLow,
+	}, pathsafe.Validator{})
+	if len(result.opportunities) != 1 {
+		t.Fatalf("opportunities = %#v, want Cache only", result.opportunities)
+	}
+	if result.opportunities[0].Category != testCategory {
+		t.Fatalf("category = %q, want %q", result.opportunities[0].Category, testCategory)
+	}
+	if filepath.Base(result.opportunities[0].Path) != "Cache" {
+		t.Fatalf("path = %q, want Cache root", result.opportunities[0].Path)
+	}
+}
+
+func TestDiscoverApplicationCachesBlankBaseSilent(t *testing.T) {
+	// Register test policies
+	testPolicyIDLocal := "test_local_app_silent"
+	testPolicyIDLow := "test_locallow_app_silent"
+	originalPolicies := applicationCachePolicies
+	defer func() { applicationCachePolicies = originalPolicies }()
+
+	applicationCachePolicies = map[string]applicationCachePolicy{
+		testPolicyIDLocal: {
+			category:     "test_local_cache_silent",
+			application:  ApplicationVisualStudioCode,
+			base:         applicationCacheBaseLocal,
+			appDataPath:  []string{"TestApp"},
+			relativeRoots: []string{"Cache"},
+		},
+		testPolicyIDLow: {
+			category:     "test_locallow_cache_silent",
+			application:  ApplicationVisualStudioCode,
+			base:         applicationCacheBaseLocalLow,
+			appDataPath:  []string{"TestAppLow"},
+			relativeRoots: []string{"Cache"},
+		},
+	}
+
+	// Blank LocalAppDataDir
+	result := discoverApplicationCaches(context.Background(), testPolicyIDLocal, ApplicationCacheDiscoveryOptions{
+		LocalAppDataDir: "",
+	}, pathsafe.Validator{})
+	if len(result.opportunities) != 0 || len(result.incompletes) != 0 {
+		t.Fatalf("blank LocalAppDataDir should be silent: %#v", result)
+	}
+
+	// Blank LocalLowAppDataDir
+	result = discoverApplicationCaches(context.Background(), testPolicyIDLow, ApplicationCacheDiscoveryOptions{
+		LocalLowAppDataDir: "",
+	}, pathsafe.Validator{})
+	if len(result.opportunities) != 0 || len(result.incompletes) != 0 {
+		t.Fatalf("blank LocalLowAppDataDir should be silent: %#v", result)
+	}
+}
+
 type appCacheFakeInfo struct {
 	name string
 	mode os.FileMode

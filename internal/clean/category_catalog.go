@@ -1420,8 +1420,14 @@ func validateApplicationCacheRegistry(
 		if len(policy.relativeRoots) == 0 {
 			return fmt.Errorf("application-cache policy %q has an empty relative-root allowlist", entry.applicationCachePolicyID)
 		}
-		if len(policy.roamingAppDataPath) == 0 {
-			return fmt.Errorf("application-cache policy %q has an empty roaming AppData path", entry.applicationCachePolicyID)
+		if policy.base == "" {
+			return fmt.Errorf("application-cache policy %q has no AppData base declared", entry.applicationCachePolicyID)
+		}
+		if policy.base != "roaming" && policy.base != "local" && policy.base != "locallow" {
+			return fmt.Errorf("application-cache policy %q has invalid AppData base %q", entry.applicationCachePolicyID, policy.base)
+		}
+		if len(policy.appDataPath) == 0 {
+			return fmt.Errorf("application-cache policy %q has an empty AppData path", entry.applicationCachePolicyID)
 		}
 		seenRoots := make(map[string]bool, len(policy.relativeRoots))
 		for _, root := range policy.relativeRoots {
