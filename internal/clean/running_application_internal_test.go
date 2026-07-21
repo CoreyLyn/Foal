@@ -9,6 +9,8 @@ import (
 func TestDetectSupportedBrowserApplicationsClassifiesRunningIdleAndUnknown(t *testing.T) {
 	running := detectSupportedBrowserApplications(context.Background(), func(context.Context) processSnapshot {
 		return processSnapshot{Names: []string{"notepad.exe", "chrome.exe", "msedge.exe", "firefox.exe"}}
+	}, func(context.Context) serviceSnapshot {
+		return serviceSnapshot{}
 	})
 	if running[0].Application != ApplicationGoogleChrome || running[0].State != RunningApplicationStateRunning {
 		t.Fatalf("Chrome state = %#v, want running", running[0])
@@ -22,28 +24,92 @@ func TestDetectSupportedBrowserApplicationsClassifiesRunningIdleAndUnknown(t *te
 
 	idle := detectSupportedBrowserApplications(context.Background(), func(context.Context) processSnapshot {
 		return processSnapshot{Names: []string{"notepad.exe"}}
+	}, func(context.Context) serviceSnapshot {
+		return serviceSnapshot{}
 	})
 	if idle[0].State != RunningApplicationStateIdle || idle[1].State != RunningApplicationStateIdle || idle[2].State != RunningApplicationStateIdle {
 		t.Fatalf("idle states = %#v, want all browsers idle", idle)
 	}
 
-	unknown := detectSupportedBrowserApplications(context.Background(), func(context.Context) processSnapshot {
+	unknownProcess := detectSupportedBrowserApplications(context.Background(), func(context.Context) processSnapshot {
 		return processSnapshot{Err: errors.New("snapshot failed")}
+	}, func(context.Context) serviceSnapshot {
+		return serviceSnapshot{}
 	})
-	if len(unknown) != 3 {
-		t.Fatalf("unknown states = %#v, want Chrome/Edge/Firefox", unknown)
+	if len(unknownProcess) != 3 {
+		t.Fatalf("unknown states = %#v, want Chrome/Edge/Firefox", unknownProcess)
 	}
-	if unknown[0].State != RunningApplicationStateUnknown || unknown[1].State != RunningApplicationStateUnknown || unknown[2].State != RunningApplicationStateUnknown {
-		t.Fatalf("unknown states = %#v, want all unknown", unknown)
+	if unknownProcess[0].State != RunningApplicationStateUnknown || unknownProcess[1].State != RunningApplicationStateUnknown || unknownProcess[2].State != RunningApplicationStateUnknown {
+		t.Fatalf("unknown states = %#v, want all unknown", unknownProcess)
 	}
-	if unknown[0].Message == "" || unknown[1].Message == "" || unknown[2].Message == "" {
-		t.Fatalf("unknown states = %#v, want diagnostic messages", unknown)
+	if unknownProcess[0].Message == "" || unknownProcess[1].Message == "" || unknownProcess[2].Message == "" {
+		t.Fatalf("unknown states = %#v, want diagnostic messages", unknownProcess)
+	}
+
+	unknownService := detectSupportedBrowserApplications(context.Background(), func(context.Context) processSnapshot {
+		return processSnapshot{Names: []string{"notepad.exe"}}
+	}, func(context.Context) serviceSnapshot {
+		return serviceSnapshot{Err: errors.New("service snapshot failed")}
+	})
+	if len(unknownService) != 3 {
+		t.Fatalf("unknown states = %#v, want Chrome/Edge/Firefox", unknownService)
+	}
+	if unknownService[0].State != RunningApplicationStateUnknown || unknownService[1].State != RunningApplicationStateUnknown || unknownService[2].State != RunningApplicationStateUnknown {
+		t.Fatalf("unknown states = %#v, want all unknown", unknownService)
+	}
+}
+
+func TestClassifyApplicationWithServices(t *testing.T) {
+	// Only processes running: application runs
+	state := classifyApplication("test-app", []string{"app.exe"}, []string{"AppService"}, []string{"app.exe"}, nil)
+	if state.State != RunningApplicationStateRunning {
+		t.Fatalf("state = %#v, want running (process detected)", state)
+	}
+
+	// Only services running: application runs
+	state = classifyApplication("test-app", []string{"app.exe"}, []string{"AppService"}, nil, []string{"AppService"})
+	if state.State != RunningApplicationStateRunning {
+		t.Fatalf("state = %#v, want running (service detected)", state)
+	}
+
+	// Neither running: idle
+	state = classifyApplication("test-app", []string{"app.exe"}, []string{"AppService"}, []string{"notepad.exe"}, []string{"OtherService"})
+	if state.State != RunningApplicationStateIdle {
+		t.Fatalf("state = %#v, want idle", state)
+	}
+
+	// Service name comparison is case-insensitive
+	state = classifyApplication("test-app", nil, []string{"AppService"}, nil, []string{"appservice"})
+	if state.State != RunningApplicationStateRunning {
+		t.Fatalf("state = %#v, want running (case-insensitive service match)", state)
+	}
+}
+
+func TestClassifyBrowserWithServices(t *testing.T) {
+	// Only process running: browser runs
+	state := classifyBrowser("test-browser", "browser.exe", []string{"BrowserService"}, []string{"browser.exe"}, nil)
+	if state.State != RunningApplicationStateRunning {
+		t.Fatalf("state = %#v, want running (process detected)", state)
+	}
+
+	// Only service running: browser runs
+	state = classifyBrowser("test-browser", "browser.exe", []string{"BrowserService"}, nil, []string{"BrowserService"})
+	if state.State != RunningApplicationStateRunning {
+		t.Fatalf("state = %#v, want running (service detected)", state)
+	}
+
+	// Neither running: idle
+	state = classifyBrowser("test-browser", "browser.exe", []string{"BrowserService"}, []string{"notepad.exe"}, []string{"OtherService"})
+	if state.State != RunningApplicationStateIdle {
+		t.Fatalf("state = %#v, want idle", state)
 	}
 }
 
 func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 	states := detectSupportedApplications(context.Background(), func(context.Context) processSnapshot {
 		return processSnapshot{Names: []string{"go.exe", "cargo.exe", "notepad.exe"}}
+	}, func(context.Context) serviceSnapshot {
+		return serviceSnapshot{}
 	})
 	// Browsers first, then developer applications, then application-cache apps.
 	wantOrder := []string{
@@ -101,6 +167,35 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 	}
 }
 
+func TestDetectSupportedApplicationsWithService(t *testing.T) {
+	// Save original definitions and restore after test
+	originalDevApps := developerApplicationDefinitions
+	originalAppCacheApps := applicationCacheApplicationDefinitions
+	defer func() {
+		developerApplicationDefinitions = originalDevApps
+		applicationCacheApplicationDefinitions = originalAppCacheApps
+	}()
+
+	// Add a test app with a service
+	developerApplicationDefinitions = []supportedApplicationDefinition{
+		{id: "test-app", displayName: "Test App", executables: []string{"app.exe"}, services: []string{"TestService"}},
+	}
+	applicationCacheApplicationDefinitions = nil
+
+	// App service is running
+	states := detectSupportedApplications(context.Background(), func(context.Context) processSnapshot {
+		return processSnapshot{Names: []string{"notepad.exe"}}
+	}, func(context.Context) serviceSnapshot {
+		return serviceSnapshot{NonStopped: []string{"TestService"}}
+	})
+	if len(states) != 4 { // 3 browsers + 1 test app
+		t.Fatalf("states = %#v, want 4 entries", states)
+	}
+	if states[3].Application != "test-app" || states[3].State != RunningApplicationStateRunning {
+		t.Fatalf("test-app state = %#v, want running (service detected)", states[3])
+	}
+}
+
 func TestClassifyProcessByExecutablesSupportsMultipleNames(t *testing.T) {
 	// uv/uvx: one logical application, either executable means running.
 	executables := []string{"uv.exe", "uvx.exe"}
@@ -118,6 +213,8 @@ func TestClassifyProcessByExecutablesSupportsMultipleNames(t *testing.T) {
 func TestDetectSupportedApplicationsClassifiesCursorCaseInsensitive(t *testing.T) {
 	states := detectSupportedApplications(context.Background(), func(context.Context) processSnapshot {
 		return processSnapshot{Names: []string{"CURSOR.EXE", "notepad.exe"}}
+	}, func(context.Context) serviceSnapshot {
+		return serviceSnapshot{}
 	})
 	var cursorState RunningApplicationState
 	found := false
@@ -145,6 +242,8 @@ func TestDetectSupportedApplicationsClassifiesCursorCaseInsensitive(t *testing.T
 func TestDetectSupportedApplicationsTreatsUVxAsUV(t *testing.T) {
 	states := detectSupportedApplications(context.Background(), func(context.Context) processSnapshot {
 		return processSnapshot{Names: []string{"uvx.exe", "notepad.exe"}}
+	}, func(context.Context) serviceSnapshot {
+		return serviceSnapshot{}
 	})
 	var uvState RunningApplicationState
 	found := false
@@ -179,6 +278,8 @@ func TestClassifyProcessByExecutablesSupportsBunAndBunx(t *testing.T) {
 func TestDetectSupportedApplicationsTreatsBunxAsBun(t *testing.T) {
 	states := detectSupportedApplications(context.Background(), func(context.Context) processSnapshot {
 		return processSnapshot{Names: []string{"bunx.exe", "notepad.exe"}}
+	}, func(context.Context) serviceSnapshot {
+		return serviceSnapshot{}
 	})
 	var bunState RunningApplicationState
 	found := false
