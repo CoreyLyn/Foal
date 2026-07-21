@@ -242,6 +242,23 @@ func TestDiscoverApplicationCachesVRChatMissingRootSilentAbsence(t *testing.T) {
 	}
 }
 
+func TestApplicationCacheBaseDirLocalLowUsesKnownFolder(t *testing.T) {
+	// Regression: the LocalLow base must resolve via the LocalLow AppData known
+	// folder (FOLDERID_LocalAppDataLow, typically %USERPROFILE%\AppData\LocalLow),
+	// not %LOCALAPPDATA%\Low. The wrong path does not exist, so preflight treated
+	// every LocalLow application (vrchat_cache) as silently absent at runtime even
+	// though the real cache directory was present. Injected LocalLowAppDataDir
+	// still wins; this test exercises the non-injected production path.
+	t.Setenv("LOCALAPPDATA", filepath.Join(t.TempDir(), "Local"))
+	got := applicationCacheBaseDir(ApplicationCacheDiscoveryOptions{}, applicationCachePolicy{
+		base: applicationCacheBaseLocalLow,
+	})
+	want := resolveLocalAppDataLowDir()
+	if got != want {
+		t.Fatalf("LocalLow base without injection = %q, want LocalLow known folder %q (not %%LOCALAPPDATA%%\\Low)", got, want)
+	}
+}
+
 func TestDiscoverApplicationCachesBlankAppDataSilent(t *testing.T) {
 	result := discoverApplicationCaches(context.Background(), applicationCachePolicyVSCode, ApplicationCacheDiscoveryOptions{
 		RoamingAppDataDir: "   ",
