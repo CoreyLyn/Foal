@@ -275,6 +275,12 @@ type Options struct {
 	// detectors are used. Tests must use isolated roots and never read the real
 	// LGHUB cache tree.
 	LGHUBCacheDiscoveryOptions LGHUBCacheDiscoveryOptions
+	// ThunderUpdateDownloadDiscoveryOptions injects the fixed-root override,
+	// clock, and platform detection seams for the thunder-update-download
+	// category. Production leaves the zero value so the fixed ProgramData root
+	// and the platform process/service detectors are used. Tests must use
+	// isolated roots and never read the real Thunder download cache tree.
+	ThunderUpdateDownloadDiscoveryOptions ThunderUpdateDownloadDiscoveryOptions
 }
 
 type Rule struct {

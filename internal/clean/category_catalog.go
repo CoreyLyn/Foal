@@ -725,6 +725,27 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 				SelectionPolicy:          CategorySelectionPolicyExactOnly,
 			},
 		), staticPreviewSafetyNote(lghubCacheOptInImpactNotice)),
+		// Thunder update download cache: exact-selection-only, Not-proven move_to_recycle_bin
+		// opt-in for update packages under the fixed C:\ProgramData\Thunder Network\XLLiveUD\Download
+		// root. Candidates are exactly direct children (both files and directories) with a
+		// 30-day stability window (latest observed modification across child and all safely
+		// inspectable descendants must be at least 30 days old); reparse points and the
+		// root itself are never candidates, and no recursive layout guessing occurs below
+		// the direct-child level. Dedicated resolver (not developer-cache / not
+		// application-cache): the `all`, `dev-caches`, `app-caches`, and `cli-agents`
+		// tokens and TUI Select All never select it. Permanent deletion is never eligible.
+		withPreviewSafetyNote(thunderUpdateDownloadCategoryEntry(
+			CleanupCategoryDefinition{
+				Identifier:               CategoryThunderUpdateDownload,
+				Label:                    "Thunder update download cache",
+				ReportCategory:           ReportCategorySystem,
+				Eligibility:              CategoryEligibilityOptIn,
+				Aliases:                  []string{},
+				RunningApplicationPolicy: RunningApplicationPolicyDistinctiveProcessIdle,
+				PlannedAction:            PlannedActionMoveToRecycleBin,
+				SelectionPolicy:          CategorySelectionPolicyExactOnly,
+			},
+		), staticPreviewSafetyNote(thunderUpdateDownloadOptInImpactNotice)),
 	// Windows component store (WinSxS): exact-selection-only servicing category
 	// with planned action invoke_windows_servicing. It never yields a file
 	// candidate or byte estimate; read-only component-store analysis is delegated
@@ -1029,9 +1050,23 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 		case categoryResolverExistenceOpportunity, categoryResolverBrowserCache,
 			categoryResolverApplicationCache, categoryResolverDeveloperCache,
 			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache,
-			categoryResolverLGHUBCache:
+			categoryResolverLGHUBCache, categoryResolverThunderUpdateDownload:
 			if entry.definition.Eligibility != CategoryEligibilityOptIn {
 				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
+			}
+			if entry.resolverKind == categoryResolverThunderUpdateDownload {
+				// Thunder update download cache is an exact-selection-only Recycle
+				// Bin category. Permanent deletion is never eligible, and aggregate/
+				// group tokens must never select it.
+				if entry.definition.PlannedAction != PlannedActionMoveToRecycleBin {
+					return fmt.Errorf("thunder update download category %q must declare move_to_recycle_bin", id)
+				}
+				if entry.definition.SelectionPolicy != CategorySelectionPolicyExactOnly {
+					return fmt.Errorf("thunder update download category %q must be exact-selection-only", id)
+				}
+				if entry.cliAgentProduct {
+					return fmt.Errorf("thunder update download category %q must not be a cli-agent product", id)
+				}
 			}
 			if entry.resolverKind == categoryResolverNVIDIAInstallerCache {
 				// NVIDIA installer cache is a Not-proven, exact-selection-only Recycle
