@@ -14,6 +14,7 @@ func TestServicingOperationLines(t *testing.T) {
 	exit0 := 0
 	exit3010 := 3010
 	exit3017 := 3017
+	exit5 := 5
 	cases := []struct {
 		name string
 		op   clean.ServicingOperation
@@ -33,6 +34,11 @@ func TestServicingOperationLines(t *testing.T) {
 			name: "failure restart",
 			op:   clean.ServicingOperation{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonCleanupFailed, ExitCode: &exit3017, RestartRequired: true},
 			want: []string{"failed", "restart is required"},
+		},
+		{
+			name: "failure access denied exit 5",
+			op:   clean.ServicingOperation{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonCleanupFailed, ExitCode: &exit5},
+			want: []string{"failed", "transient lock", "restart Windows"},
 		},
 		{
 			name: "no work",
@@ -92,5 +98,38 @@ func TestServicingOperationLines(t *testing.T) {
 func TestServicingOperationLinesEmpty(t *testing.T) {
 	if lines := clean.ServicingOperationLines(nil); lines != nil {
 		t.Fatalf("empty operations produced lines: %#v", lines)
+	}
+}
+
+// TestServicingCleanupExitHint proves the ADR 0029 failure guidance fires only
+// for a DISM exit 5 (Win32 ERROR_ACCESS_DENIED) cleanup failure and stays empty
+// for nil, success, and other non-zero exits.
+func TestServicingCleanupExitHint(t *testing.T) {
+	exit5 := 5
+	exit1 := 1
+	exit3010 := 3010
+	cases := []struct {
+		name     string
+		exitCode *int
+		wantHint bool
+	}{
+		{"nil", nil, false},
+		{"exit 5 access denied", &exit5, true},
+		{"exit 1", &exit1, false},
+		{"exit 3010 restart success", &exit3010, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hint := clean.ServicingCleanupExitHint(tc.exitCode)
+			if tc.wantHint && hint == "" {
+				t.Fatalf("expected non-empty hint for %s", tc.name)
+			}
+			if !tc.wantHint && hint != "" {
+				t.Fatalf("expected empty hint for %s, got %q", tc.name, hint)
+			}
+			if tc.wantHint && !strings.Contains(hint, "restart Windows") {
+				t.Fatalf("hint %q missing restart guidance", hint)
+			}
+		})
 	}
 }

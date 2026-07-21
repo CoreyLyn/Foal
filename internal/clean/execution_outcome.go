@@ -44,6 +44,15 @@ type CategoryExecutionOutcome struct {
 	AffectedBytes int64
 	DeletedCount  int
 	SkippedCount  int
+	// ServicingReason is the stable path-free reason for a servicing category's
+	// skipped or failed execution outcome. Empty for non-servicing categories and
+	// for servicing outcomes that carry no reason (completed, no_work). It is a
+	// stable Foal-owned code, never raw DISM text.
+	ServicingReason string
+	// ServicingExitCode is the DISM exit code for a servicing category's
+	// execution outcome, present only when DISM ran to exit. Nil for
+	// non-servicing categories and authorization skips.
+	ServicingExitCode *int
 }
 
 // IsTerminalExecutionState reports whether state is a final category outcome.
@@ -275,13 +284,17 @@ func projectServicingExecutionOutcome(catalog CleanupCategoryCatalog, id string,
 		label = summary.Label
 	}
 	state := CategoryExecutionSkipped
+	var reason string
+	var exitCode *int
 	for _, op := range result.ServicingOperations {
 		if op.Category == id {
 			state = ServicingExecutionState(op.Outcome)
+			reason = op.Reason
+			exitCode = op.ExitCode
 			break
 		}
 	}
-	return CategoryExecutionOutcome{Identifier: id, Label: label, State: state}
+	return CategoryExecutionOutcome{Identifier: id, Label: label, State: state, ServicingReason: reason, ServicingExitCode: exitCode}
 }
 
 // CountTerminalExecutionOutcomes returns how many projected outcomes are terminal.
