@@ -110,8 +110,21 @@ func TestFormatFocusedDetailAggregatesWithoutPaths(t *testing.T) {
 	if !strings.Contains(detail, "state=partial") {
 		t.Fatalf("missing state: %s", detail)
 	}
+	// Bytes and skipped total are required focused-detail fields (#350).
+	if !strings.Contains(detail, "bytes=") {
+		t.Fatalf("missing bytes: %s", detail)
+	}
+	if !strings.Contains(detail, ">= 100 B") && !strings.Contains(detail, ">=100 B") {
+		// Partial sizes stay lower-bound tokens inside detail.
+		if !strings.Contains(detail, "100") {
+			t.Fatalf("missing observed bytes token: %s", detail)
+		}
+	}
 	if !strings.Contains(detail, "files=3") || !strings.Contains(detail, "dirs=2") {
 		t.Fatalf("missing counts: %s", detail)
+	}
+	if !strings.Contains(detail, "skipped_total=5") {
+		t.Fatalf("missing skipped total: %s", detail)
 	}
 	if !strings.Contains(detail, "permission_denied×4") || !strings.Contains(detail, "read_error×1") {
 		t.Fatalf("missing aggregates: %s", detail)
@@ -119,6 +132,11 @@ func TestFormatFocusedDetailAggregatesWithoutPaths(t *testing.T) {
 	// Must not leak descendant or focused path dumps as an error stream.
 	if strings.Contains(detail, `C:\Windows`) {
 		t.Fatalf("detail must not embed paths: %s", detail)
+	}
+	for _, banned := range []string{"reclaimable", "allocated", "physically", "freed"} {
+		if strings.Contains(strings.ToLower(detail), banned) {
+			t.Fatalf("detail must not claim %q: %s", banned, detail)
+		}
 	}
 }
 

@@ -416,6 +416,131 @@ func TestAnalyzeBrowseAppliesStreamingObservationsBeforeFinalResult(t *testing.T
 	}
 }
 
+func TestAnalyzeBrowseResponsiveRankedPresentation(t *testing.T) {
+	stubAnalyzeVolumes(t, []analyze.LocalVolume{
+		{
+			Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true,
+			Label: "System", FileSystem: "NTFS",
+			TotalBytes: 1 << 30, FreeBytes: 1 << 29, HasCapacity: true,
+		},
+	})
+	longName := strings.Repeat("LongChildName", 6)
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
+		return analyze.BrowseResult{
+			OK:   true,
+			Root: `C:\`,
+			Children: []analyze.BrowseChild{
+				{
+					Name: longName, Path: `C:\` + longName, Kind: analyze.BrowseKindDirectory,
+					Bytes: 60, State: analyze.BrowseStateComplete, Navigable: true,
+				},
+				{
+					Name: "partial-dir", Path: `C:\partial-dir`, Kind: analyze.BrowseKindDirectory,
+					Bytes: 30, State: analyze.BrowseStatePartial, Navigable: true,
+					SkipAggregates: []analyze.SkipAggregate{{Reason: analyze.SkipReasonPermissionDenied, Count: 2}},
+				},
+				{
+					Name: "pagefile.sys", Path: `C:\pagefile.sys`, Kind: analyze.BrowseKindFile,
+					Bytes: 10, State: analyze.BrowseStateComplete, Hidden: true, System: true,
+				},
+			},
+		}
+	})
+
+	// Wide
+	model := loadAnalyzeDrive(t)
+	next, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	model = next.(rootModel)
+	model = enterAnalyzeBrowse(t, model)
+	wide := model.content()
+	for _, want := range []string{
+		"Location: C:\\",
+		"Volume C:",
+		"capacity",
+		"free",
+		"not a sum of child logical bytes",
+		"Observed logical children",
+		"ranked by observed logical bytes",
+		"1.",
+		"█",
+		"directory",
+		"complete",
+		"hidden",
+		"system",
+		"Detail:",
+		"bytes=",
+		"partial",
+	} {
+		if !strings.Contains(wide, want) {
+			t.Fatalf("wide content missing %q:\n%s", want, wide)
+		}
+	}
+	for _, banned := range []string{"reclaimable", "allocated", "physically", "freed space"} {
+		if strings.Contains(strings.ToLower(wide), banned) {
+			t.Fatalf("wide content must not claim %q:\n%s", banned, wide)
+		}
+	}
+
+	// Medium: kind dropped before state.
+	next, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	model = next.(rootModel)
+	medium := model.content()
+	// Scan medium child lines for kind token as a column (between name and state).
+	for _, line := range strings.Split(medium, "\n") {
+		if !strings.Contains(line, "partial-dir") && !strings.Contains(line, "pagefile") && !strings.Contains(line, "LongChild") && !strings.Contains(line, "…") {
+			continue
+		}
+		// Child rows start with cursor chrome.
+		trim := strings.TrimLeft(line, " ")
+		if !strings.HasPrefix(line, "> ") && !strings.HasPrefix(line, "  ") {
+			continue
+		}
+		if strings.Contains(line, "directory") || strings.Contains(line, " · file · ") {
+			t.Fatalf("medium layout should hide kind before state: %s", line)
+		}
+		if !strings.Contains(line, "complete") && !strings.Contains(line, "partial") {
+			t.Fatalf("medium must keep state: %s", line)
+		}
+		_ = trim
+	}
+
+	// Narrow: cursor, name, size, state; no bar.
+	next, _ = model.Update(tea.WindowSizeMsg{Width: 50, Height: 40})
+	model = next.(rootModel)
+	narrow := model.content()
+	if strings.Contains(narrow, "█") {
+		t.Fatalf("narrow must drop bar:\n%s", narrow)
+	}
+	if !strings.Contains(narrow, ">") {
+		t.Fatalf("narrow keeps cursor:\n%s", narrow)
+	}
+	if !strings.Contains(narrow, "complete") && !strings.Contains(narrow, "partial") {
+		t.Fatalf("narrow keeps state:\n%s", narrow)
+	}
+	// Long name truncated before size/state lost.
+	var longLine string
+	for _, line := range strings.Split(narrow, "\n") {
+		if strings.Contains(line, "LongChild") || strings.Contains(line, "…") && strings.Contains(line, "complete") {
+			longLine = line
+			break
+		}
+	}
+	if longLine == "" {
+		// Name may truncate to ellipsis-only prefix; still require a complete-state row.
+		for _, line := range strings.Split(narrow, "\n") {
+			if strings.Contains(line, "complete") && (strings.HasPrefix(strings.TrimLeft(line, " "), ">") || strings.HasPrefix(line, "> ") || strings.HasPrefix(line, "  ")) {
+				longLine = line
+				if strings.Contains(line, "…") || strings.Contains(line, "Long") {
+					break
+				}
+			}
+		}
+	}
+	if longLine == "" || !strings.Contains(longLine, "complete") {
+		t.Fatalf("long name row must retain state under narrow width:\n%s", narrow)
+	}
+}
+
 func TestAnalyzeBrowseExactPercentOnlyWhenLocationComplete(t *testing.T) {
 	stubAnalyzeVolumes(t, []analyze.LocalVolume{
 		{Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true},

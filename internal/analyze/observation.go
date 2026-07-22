@@ -149,10 +149,20 @@ func FormatSharePercent(childBytes, observedTotal int64, childState string, loca
 }
 
 // FormatFocusedDetail builds a compact, path-free detail line for the focused child.
-// It exposes aggregate counts and skip reasons without listing descendant paths.
+// It exposes state, logical bytes, file/directory counts, skipped total, and
+// aggregated stable skip reasons without listing descendant paths.
+// formatBytes is optional; nil uses a plain "N B" formatter.
 func FormatFocusedDetail(child BrowseChild) string {
+	return FormatFocusedDetailWith(child, nil)
+}
+
+// FormatFocusedDetailWith is FormatFocusedDetail with an injectable byte formatter
+// so the TUI can reuse cleanFormatBytes without inventing a second size scale.
+func FormatFocusedDetailWith(child BrowseChild, formatBytes func(int64) string) string {
 	var parts []string
 	parts = append(parts, fmt.Sprintf("state=%s", child.State))
+	// Logical observed bytes (lower-bound token for Partial/Incomplete).
+	parts = append(parts, "bytes="+FormatSizeToken(child.Bytes, child.State, formatBytes))
 	parts = append(parts, fmt.Sprintf("files=%d", child.FileCount))
 	parts = append(parts, fmt.Sprintf("dirs=%d", child.DirectoryCount))
 	if child.State == BrowseStateSkipped && child.SkipReason != "" {
@@ -168,11 +178,16 @@ func FormatFocusedDetail(child BrowseChild) string {
 			return aggs[i].Reason < aggs[j].Reason
 		})
 		var skipParts []string
+		var skippedTotal int64
 		for _, a := range aggs {
 			if a.Count <= 0 || a.Reason == "" {
 				continue
 			}
+			skippedTotal += a.Count
 			skipParts = append(skipParts, fmt.Sprintf("%s×%d", a.Reason, a.Count))
+		}
+		if skippedTotal > 0 {
+			parts = append(parts, fmt.Sprintf("skipped_total=%d", skippedTotal))
 		}
 		if len(skipParts) > 0 {
 			parts = append(parts, "skips="+strings.Join(skipParts, ","))

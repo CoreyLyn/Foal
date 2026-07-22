@@ -13,7 +13,8 @@ import (
 
 // tui_analyze_drive.go is the Analyze TUI: drive entry (#345) plus on-demand
 // browse-and-measure of every direct child (#346 / ADR-0034) with honest child
-// measurement states (#347) and two-worker path-bound live ranking (#348).
+// measurement states (#347), two-worker path-bound live ranking (#348), and
+// responsive ranked disk-usage presentation (#350).
 // Status and History keep the generic Command viewer.
 //
 // Directory children measure with at most two concurrent workers; focus promotes
@@ -558,7 +559,7 @@ func (m *analyzeDriveModel) enterBrowseChild() (analyzeDriveNav, tea.Cmd) {
 		}
 		return analyzeDriveNavNone, nil
 	case child.Kind == analyze.BrowseKindDirectory && child.Navigable:
-			return analyzeDriveNavNone, m.beginBrowseLocation(child.Path, fmt.Sprintf("Browsing %s...", child.Name), false)
+		return analyzeDriveNavNone, m.beginBrowseLocation(child.Path, fmt.Sprintf("Browsing %s...", child.Name), false)
 	default:
 		m.notice = fmt.Sprintf("%s cannot be entered.", child.Name)
 		return analyzeDriveNavNone, nil
@@ -724,12 +725,12 @@ func (m analyzeDriveModel) browseContent() string {
 	var b strings.Builder
 	b.WriteString("+--------------------------------------------------+\n")
 	b.WriteString("| Analyze TUI                                      |\n")
-	b.WriteString("| Browse · read-only · direct children on demand    |\n")
+	b.WriteString("| Browse · ranked logical disk usage · read-only    |\n")
 	b.WriteString("+--------------------------------------------------+\n\n")
-	b.WriteString(fmt.Sprintf("Location: %s\n\n", m.browseRoot))
+	b.WriteString(fmt.Sprintf("Location: %s\n", m.browseRoot))
 
 	if m.loading && len(m.browseChildren) == 0 {
-		b.WriteString("Measuring direct children...\n")
+		b.WriteString("\nMeasuring direct children...\n")
 		if m.notice != "" {
 			b.WriteString(m.notice)
 			b.WriteString("\n")
@@ -740,6 +741,16 @@ func (m analyzeDriveModel) browseContent() string {
 
 	locationComplete := !m.measuring && analyze.LocationMeasurementComplete(m.browseChildren)
 	observedTotal := analyze.ObservedLocationBytes(m.browseChildren)
+
+	// Volume capacity/free is independent of summed logical child bytes.
+	if vol := m.volumeForBrowseRoot(); vol != nil {
+		if meta := FormatAnalyzeVolumeMetaLine(vol); meta != "" {
+			b.WriteString(meta)
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString(FormatAnalyzeLocationTotalsLine(observedTotal, locationComplete, m.measuring))
+	b.WriteString("\n\n")
 
 	if m.measuring {
 		b.WriteString("Measuring (approximate observed shares while scanning)...\n\n")
@@ -752,7 +763,7 @@ func (m analyzeDriveModel) browseContent() string {
 			b.WriteString("No direct children in this location.\n")
 		}
 	} else {
-		b.WriteString("Direct children:\n\n")
+		b.WriteString("Direct children (ranked by observed logical bytes):\n\n")
 		selectedIdx := analyze.IndexOfBrowsePath(m.browseChildren, m.browseSelectedPath)
 		vis := m.browseViewportRows()
 		start := m.browseOffset
@@ -766,20 +777,28 @@ func (m analyzeDriveModel) browseContent() string {
 		if end > len(m.browseChildren) {
 			end = len(m.browseChildren)
 		}
+		width := m.width
+		if width <= 0 {
+			width = 80
+		}
 		for i := start; i < end; i++ {
 			child := m.browseChildren[i]
-			prefix := "  "
-			if child.Path == m.browseSelectedPath || i == selectedIdx {
-				prefix = "> "
-			}
-			b.WriteString(prefix)
-			b.WriteString(renderAnalyzeBrowseRow(child, observedTotal, locationComplete))
+			selected := child.Path == m.browseSelectedPath || i == selectedIdx
+			// Rank is absolute position in the full ranked list (not viewport-local).
+			b.WriteString(FormatAnalyzeRankRow(AnalyzeRankRowInput{
+				Child:            child,
+				Rank:             i + 1,
+				ObservedTotal:    observedTotal,
+				LocationComplete: locationComplete,
+				Selected:         selected,
+				Width:            width,
+			}))
 			b.WriteString("\n")
 		}
-		// Focused detail: aggregate counts/reasons, never unbounded paths.
+		// Focused detail: state, bytes, counts, skipped total, aggregate reasons.
 		if child, ok := m.selectedBrowseChild(); ok {
 			b.WriteString("\nDetail: ")
-			b.WriteString(analyze.FormatFocusedDetail(child))
+			b.WriteString(FormatAnalyzeFocusedDetailLine(child))
 			b.WriteString("\n")
 		}
 	}
@@ -791,6 +810,20 @@ func (m analyzeDriveModel) browseContent() string {
 	}
 	b.WriteString(analyzeBrowseFooter)
 	return b.String()
+}
+
+// volumeForBrowseRoot returns volume metadata when the current browse root is a
+// listed volume root; otherwise nil (nested paths do not inherit capacity lines).
+func (m analyzeDriveModel) volumeForBrowseRoot() *analyze.LocalVolume {
+	if m.browseRoot == "" || !isAnalyzeVolumeRoot(m.browseRoot) {
+		return nil
+	}
+	for i := range m.volumes {
+		if strings.EqualFold(filepath.Clean(m.volumes[i].Root), filepath.Clean(m.browseRoot)) {
+			return &m.volumes[i]
+		}
+	}
+	return nil
 }
 
 const analyzeDriveFooter = "\nHints: j/k move | enter open | r refresh | esc/b back | q quit\n" +
@@ -826,35 +859,15 @@ func renderAnalyzeDriveRow(vol analyze.LocalVolume) string {
 	return strings.Join(parts, " · ")
 }
 
+// renderAnalyzeBrowseRow is the compatibility plain-row helper used by older tests.
+// Production browse rows go through FormatAnalyzeRankRow (responsive ranked layout).
 func renderAnalyzeBrowseRow(child analyze.BrowseChild, observedTotal int64, locationComplete bool) string {
-	parts := []string{child.Name, child.Kind}
-	if child.Hidden {
-		parts = append(parts, "hidden")
-	}
-	if child.System {
-		parts = append(parts, "system")
-	}
-	if child.Classification != "" {
-		parts = append(parts, child.Classification)
-	}
-	// Always surface the shared-core state token so Partial/Scanning are explicit.
-	if child.State != "" {
-		parts = append(parts, child.State)
-	}
-	if child.State == analyze.BrowseStateSkipped && child.SkipReason != "" {
-		parts = append(parts, child.SkipReason)
-	}
-	// Size: Partial/Incomplete as lower-bound ">=bytes"; never invent completeness.
-	if child.State != analyze.BrowseStateSkipped {
-		parts = append(parts, analyze.FormatSizeToken(child.Bytes, child.State, cleanFormatBytes))
-	}
-	// Percentage: approximate for scanning/partial/incomplete; exact only when
-	// location total is complete and the child is complete. Never ">=N%".
-	if share := analyze.FormatSharePercent(child.Bytes, observedTotal, child.State, locationComplete); share != "" {
-		parts = append(parts, share)
-	}
-	if child.Kind == analyze.BrowseKindDirectory && child.Navigable {
-		parts = append(parts, "enter")
-	}
-	return strings.Join(parts, " · ")
+	return FormatAnalyzeRankRow(AnalyzeRankRowInput{
+		Child:            child,
+		Rank:             1,
+		ObservedTotal:    observedTotal,
+		LocationComplete: locationComplete,
+		Selected:         false,
+		Width:            120,
+	})
 }

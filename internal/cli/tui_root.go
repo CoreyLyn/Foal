@@ -333,11 +333,15 @@ func (m rootModel) content() string {
 func (m rootModel) View() tea.View {
 	// Clean carries trusted magnitude byte metadata on annotated lines so
 	// tier classification prefers int64 over reverse-parsing display tokens.
+	// Analyze browse uses pink/cyan/yellow/gray state styling (never red).
 	// Other screens keep plain post-process styling.
 	var framed string
-	if m.screen == screenCleanPreview {
+	switch m.screen {
+	case screenCleanPreview:
 		framed = stylizeStyleLines(m.clean.contentStyleLines())
-	} else {
+	case screenAnalyzeDrive:
+		framed = stylizeAnalyzeBrowseFrame(m.content())
+	default:
 		framed = stylizeFrame(m.content())
 	}
 	view := tea.NewView(framed)
