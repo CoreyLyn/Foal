@@ -2325,11 +2325,12 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 	}
 	// Catalog order: opportunities + developer caches + CLI-agent residue +
 	// Applications application caches (obsidian_cache then vrchat_cache, both
-	// registered after grok).
+	// registered after grok) + electron-updater-residue.
 	want := append(append([]string{}, expectedOpportunities...), expectedDevCaches...)
 	want = append(want, clean.CategoryGrokBuildUpdateResidue)
 	want = append(want, clean.OpportunityCategoryObsidianCache)
 	want = append(want, clean.OpportunityCategoryVRChatCache)
+	want = append(want, clean.CategoryElectronUpdaterResidue)
 	if len(capturedOpts.OptIn) != len(want) {
 		t.Fatalf("opts.OptIn has %d categories, want %d: %#v", len(capturedOpts.OptIn), len(want), capturedOpts.OptIn)
 	}

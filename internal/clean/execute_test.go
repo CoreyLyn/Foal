@@ -1041,6 +1041,7 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 	// developer-cache / dev-caches member.
 	expectedOtherOptIn := []string{
 		clean.CategoryGrokBuildUpdateResidue,
+		clean.CategoryElectronUpdaterResidue,
 	}
 	for _, cat := range expectedOpportunities {
 		if !enabled[cat] {
@@ -1124,9 +1125,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// 19 opportunity + nvidia_installer_cache + lghub-cache + thunder-update-download + windows-temp + windows-update-download-cache + winsxs_component_store servicing + 17 dev caches + grok-build-update-residue + "dev-caches" + "app-caches" + "cli-agents" + "all" = 47
-	if len(valid) != 47 {
-		t.Fatalf("expected 47 valid names, got %d: %v", len(valid), valid)
+	// 19 opportunity + nvidia_installer_cache + lghub-cache + thunder-update-download + windows-temp + windows-update-download-cache + electron-updater-residue + winsxs_component_store servicing + 17 dev caches + grok-build-update-residue + "dev-caches" + "app-caches" + "cli-agents" + "all" = 48
+	if len(valid) != 48 {
+		t.Fatalf("expected 48 valid names, got %d: %v", len(valid), valid)
 	}
 }
 

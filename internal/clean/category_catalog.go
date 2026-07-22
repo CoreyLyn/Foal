@@ -1080,6 +1080,24 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		applicationCachePolicyVRChat,
 		ApplicationVRChat,
 	), applicationCachePreviewSafetyNote),
+	// Electron updater residue: opt-in Recycle Bin cleanup for stale electron-builder
+	// updater payloads under per-application directories in LOCALAPPDATA whose
+	// names end with "-updater". Uses standard selection policy: included in `all`,
+	// `app-caches`, and TUI Select All; excluded from `dev-caches` and `cli-agents`.
+	// Permanent deletion is never eligible. See docs/plan/electron-updater-residue.md
+	// and ADR 0031.
+	withPreviewSafetyNote(electronUpdaterResidueCategoryEntry(
+		CleanupCategoryDefinition{
+			Identifier:               CategoryElectronUpdaterResidue,
+			Label:                    "Electron updater residue",
+			ReportCategory:           ReportCategoryApplications,
+			Eligibility:              CategoryEligibilityOptIn,
+			Aliases:                  []string{},
+			RunningApplicationPolicy: RunningApplicationPolicyNotApplicable,
+			PlannedAction:            PlannedActionMoveToRecycleBin,
+			SelectionPolicy:          CategorySelectionPolicyStandard,
+		},
+	), staticPreviewSafetyNote(electronUpdaterResidueOptInImpactNotice)),
 	// Non-executable permission boundary: actionless and cannot enter execution.
 	nonExecutableCategoryEntry(categoryDefinition("administrator_only_caches", "Administrator-only caches", ReportCategorySystem, CategoryEligibilityPermissionBoundary, RunningApplicationPolicyNotApplicable, "")),
 }
@@ -1131,7 +1149,8 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 			categoryResolverApplicationCache, categoryResolverDeveloperCache,
 			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache,
 			categoryResolverLGHUBCache, categoryResolverThunderUpdateDownload,
-			categoryResolverWindowsTemp, categoryResolverWindowsUpdateDownloadCache:
+			categoryResolverWindowsTemp, categoryResolverWindowsUpdateDownloadCache,
+			categoryResolverElectronUpdaterResidue:
 			if entry.definition.Eligibility != CategoryEligibilityOptIn {
 				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
 			}
@@ -1200,6 +1219,20 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 				}
 				if len(entry.runningApplications) != 1 || entry.runningApplications[0] != ApplicationGrokBuild {
 					return fmt.Errorf("grok residue category %q must bind ApplicationGrokBuild only", id)
+				}
+			}
+			if entry.resolverKind == categoryResolverElectronUpdaterResidue {
+				// Electron updater residue is a standard selection policy Recycle Bin
+				// category. Permanent deletion is never eligible, but it is included
+				// in `all`, `app-caches`, and TUI Select All.
+				if entry.definition.PlannedAction != PlannedActionMoveToRecycleBin {
+					return fmt.Errorf("electron-updater-residue category %q must declare move_to_recycle_bin", id)
+				}
+				if entry.definition.SelectionPolicy != CategorySelectionPolicyStandard {
+					return fmt.Errorf("electron-updater-residue category %q must use standard selection policy", id)
+				}
+				if entry.cliAgentProduct {
+					return fmt.Errorf("electron-updater-residue category %q must not be a cli-agent product", id)
 				}
 			}
 		case categoryResolverNonExecutable:
@@ -1465,7 +1498,7 @@ func applicationCachesOptInCategoryIDsFrom(entries []categoryCatalogEntry) []str
 		if entry.definition.ReportCategory != ReportCategoryApplications {
 			continue
 		}
-		if entry.resolverKind == categoryResolverApplicationCache {
+		if entry.resolverKind == categoryResolverApplicationCache || entry.resolverKind == categoryResolverElectronUpdaterResidue {
 			identifiers = append(identifiers, entry.definition.Identifier)
 		}
 	}

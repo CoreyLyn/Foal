@@ -139,9 +139,9 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 		if !enabled[clean.CategoryGrokBuildUpdateResidue] {
 			t.Fatal("expected grok-build-update-residue to be enabled by \"all\"")
 		}
-		// 19 opportunity + 17 developer-cache + 1 CLI-agent residue = 37
-		if len(enabled) != 19+17+1 {
-			t.Fatalf("expected 37 enabled categories (19+17+1), got %d", len(enabled))
+		// 19 opportunity + 17 developer-cache + 1 CLI-agent residue + 1 electron-updater-residue = 38
+		if len(enabled) != 19+17+1+1 {
+			t.Fatalf("expected 38 enabled categories (19+17+1+1), got %d", len(enabled))
 		}
 	})
 
