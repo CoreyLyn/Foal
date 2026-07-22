@@ -305,8 +305,8 @@ A read-only Foal command that measures an analysis root's directory totals and t
 _Avoid_: cleanup opportunity scanner, project scanner, disk-wide cleaner, Mole disk analyzer parity
 
 **Analysis root**:
-The single path Analyze measures. Omitting the path means the process current working directory after absolute resolution. Volume roots, well-known system trees (Windows, Program Files), the current user's profile root, UNC, and other pathsafe user-scan-root rejections fail closed before scanning; ordinary project paths under the profile remain allowed.
-_Avoid_: implied multi-root, disk-wide default, purge multi-root parity, scanning the whole user profile as one root
+The single path Analyze measures. Omitting the path means the process current working directory after absolute resolution. Explicit local fixed or removable volume roots and readable local directories (including Windows-managed trees and the user profile root) are accepted by Analyze-only read-root policy. UNC roots, device paths, malformed paths, unsupported volume types, and reparse roots fail closed. This allowance never authorizes Clean, Purge, or other mutation roots.
+_Avoid_: implied multi-root, purge multi-root parity, treating Analyze volume-root acceptance as cleanup authorization
 
 **Analyze incomplete scan**:
 An Analyze run that stopped because it hit the same 100,000-descendant Opportunity inspection limit (or cooperative cancellation) before finishing the tree. Totals and top children then describe only what was safely inspected; the result must not be presented as a complete directory size. JSON and human/TUI surfaces use top-level `status=incomplete` for this case (not `ok` with a side flag, and not a hard command error).

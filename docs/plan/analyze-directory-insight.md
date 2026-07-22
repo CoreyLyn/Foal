@@ -37,8 +37,8 @@ Related shipped docs: `docs/plan/project-artifact-clues.md`, ADR 0019 (`foal pur
 
 - **Single root.** Multi-root is out of this design.
 - **Default CWD.** Omitting the path means the process current working directory after absolute resolution.
-- **Dangerous-root fail-closed.** After absolute resolution, reject roots that fail pathsafe user-scan-root policy (volume roots, Windows/Program Files trees, current user profile root, UNC, short-name, empty, relative-as-final-root after resolution rules aligned with purge's `ValidateUserScanRoot`). Ordinary project paths under the profile remain allowed.
-- **Not a disk-wide default.** Rejecting the profile root itself prevents “analyze my whole user home as one tree” by accident.
+- **Analyze read-root fail-closed.** After absolute resolution, use Analyze-specific `ValidateAnalyzeReadRoot` (not purge's `ValidateUserScanRoot`). Explicit local fixed/removable volume roots and readable local directories—including Windows-managed trees and the profile root—are accepted for measurement only. UNC, device paths (`\\.\`), short-name, empty, relative final roots, unsupported volume types, and reparse roots fail closed. Mutation-oriented purge/clean root validators remain unchanged.
+- **Not an implied whole-machine default.** No-argument Analyze still uses CWD; volume roots are accepted only when the user supplies them explicitly (or navigates in TUI after later slices).
 
 ### Scan completeness
 
@@ -108,7 +108,7 @@ Related shipped docs: `docs/plan/project-artifact-clues.md`, ADR 0019 (`foal pur
 ## Seams (implementation)
 
 - `internal/analyze` — `Run`, `Result.Status`, ceiling counting, incomplete semantics; tests via public entry with temp trees.
-- `internal/core/pathsafe.ValidateUserScanRoot` — reuse for analysis root after `filepath.Abs` (same policy family as purge; CLI may still accept relative input that resolves to absolute).
+- `internal/core/pathsafe.ValidateAnalyzeReadRoot` — Analyze-only read-root policy after `filepath.Abs` (volume roots and Windows-managed trees allowed; UNC/device/reparse fail closed). Purge keeps `ValidateUserScanRoot`; mutation keeps delete/portable validators.
 - `internal/cli` human renderer for analyze — project from `analyze.Result`, not a second model.
 - `internal/cli` TUI — Command viewer pattern used by status/history/uninstall; wire Analyze with path edit + reload calling shared `analyze.Run`.
 - Contract tests: dangerous root rejection; incomplete status; human output contains bytes/top/clues; TUI has no delete affordance; no history side effects.

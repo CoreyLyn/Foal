@@ -183,40 +183,98 @@ func TestRunReturnsIncompleteWhenDescendantLimitExceeded(t *testing.T) {
 	}
 }
 
-func TestRunRejectsDangerousRoots(t *testing.T) {
+func TestRunAcceptsLocalFixedVolumeAndWindowsManagedRoots(t *testing.T) {
+	// Low descendant limit: root policy is the contract under test, not a full-disk walk.
+	opts := Options{DescendantLimit: 1}
 	tests := []struct {
 		name string
 		path string
-		code string
 	}{
-		{name: "volume root", path: `C:\`, code: "dangerous_root"},
-		{name: "windows", path: `C:\Windows`, code: "dangerous_root"},
-		{name: "program files", path: `C:\Program Files`, code: "dangerous_root"},
+		{name: "volume root", path: `C:\`},
+		{name: "windows", path: `C:\Windows`},
+		{name: "program files", path: `C:\Program Files`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, reason, ok := Run(context.Background(), tt.path, Options{})
-			if ok {
-				t.Fatalf("Run(%q) ok=true, want false", tt.path)
+			result, reason, ok := Run(context.Background(), tt.path, opts)
+			if !ok {
+				t.Fatalf("Run(%q) ok=false reason=%#v, want accepted analyze read root", tt.path, reason)
 			}
-			if reason.Code != tt.code {
-				t.Fatalf("reason.Code = %q, want %q", reason.Code, tt.code)
+			if result.Root == "" {
+				t.Fatal("result.Root is empty")
+			}
+			if result.Status != StatusOK && result.Status != StatusIncomplete {
+				t.Fatalf("result.Status = %q, want ok or incomplete", result.Status)
+			}
+			// Existing JSON projection fields remain present on the result path.
+			if result.TopChildren == nil {
+				t.Fatal("TopChildren is nil")
+			}
+			if result.Skipped == nil {
+				t.Fatal("Skipped is nil")
 			}
 		})
 	}
 }
 
-func TestRunRejectsUserProfileRoot(t *testing.T) {
+func TestRunAcceptsUserProfileRoot(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		t.Skip("user home unavailable")
 	}
-	_, reason, ok := Run(context.Background(), home, Options{})
-	if ok {
-		t.Fatalf("Run(%q) ok=true, want false", home)
+	result, reason, ok := Run(context.Background(), home, Options{DescendantLimit: 1})
+	if !ok {
+		t.Fatalf("Run(%q) ok=false reason=%#v, want accepted analyze read root", home, reason)
 	}
-	if reason.Code != "dangerous_root" {
-		t.Fatalf("reason.Code = %q, want dangerous_root", reason.Code)
+	if result.Root == "" {
+		t.Fatal("result.Root is empty")
+	}
+}
+
+func TestRunRejectsUnsupportedAnalyzeRoots(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		code string
+	}{
+		{name: "unc", path: `\\server\share\proj`, code: "unc_path"},
+		{name: "device path", path: `\\.\C:`, code: "device_path"},
+		{name: "volume device path", path: `\\.\PhysicalDrive0`, code: "device_path"},
+		{name: "empty", path: `   `, code: "empty_path"},
+		{name: "short name", path: `C:\PROGRA~1`, code: "short_name_path"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, reason, ok := Run(context.Background(), tt.path, Options{DescendantLimit: 1})
+			if ok {
+				t.Fatalf("Run(%q) ok=true, want false", tt.path)
+			}
+			if reason.Code != tt.code {
+				t.Fatalf("reason.Code = %q, want %q (message=%q)", reason.Code, tt.code, reason.Message)
+			}
+			if reason.Message == "" {
+				t.Fatal("empty message")
+			}
+		})
+	}
+}
+
+func TestRunRejectsReparseRoot(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.Mkdir(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	_, reason, ok := Run(context.Background(), link, Options{DescendantLimit: 1})
+	if ok {
+		t.Fatalf("Run(reparse root) ok=true, want false")
+	}
+	if reason.Code != "reparse_point" {
+		t.Fatalf("reason.Code = %q, want reparse_point (message=%q)", reason.Code, reason.Message)
 	}
 }
 
