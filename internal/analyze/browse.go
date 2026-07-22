@@ -37,6 +37,12 @@ type BrowseOptions struct {
 	// slot. Active measurements are never canceled or preempted by focus alone.
 	// Nil means pure name-order queueing among remaining work.
 	Focus BrowseFocus
+	// KnownChildren are durable terminal summaries from the current Analyze TUI
+	// session cache. Matching directory children are reused without re-measurement
+	// (Complete, Partial, Skipped, hard-limit Incomplete). Non-durable entries are
+	// ignored. Navigation-cancel Incomplete must not be supplied here.
+	// Identity is matched by canonical path; kind/name from the live entry win.
+	KnownChildren []BrowseChild
 	// MeasurementStart is an optional test/observation hook invoked when a
 	// directory child measurement begins (after it acquires a worker slot).
 	// Must not be used for production control flow. Path is the child root.
@@ -168,8 +174,12 @@ func StreamBrowseLocation(ctx context.Context, root string, opts BrowseOptions, 
 		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
 	})
 
+	// Index durable known children by path for O(1) resume lookups.
+	knownByPath := indexKnownChildren(opts.KnownChildren)
+
 	// Phase 1: classify every direct child. Immediate kinds (file/reparse/skip)
-	// emit and complete without worker slots. Directories enqueue for workers.
+	// emit and complete without worker slots. Directories enqueue for workers
+	// unless a durable known summary is available (session cache resume).
 	childrenByPath := make(map[string]BrowseChild, len(entries))
 	var dirJobs []dirJob
 	var childOrder []string // discovery order (name-sorted entries)
@@ -178,6 +188,8 @@ func StreamBrowseLocation(ctx context.Context, root string, opts BrowseOptions, 
 		select {
 		case <-ctx.Done():
 			// Cooperative cancel before directory work: return immediate inventory.
+			// Unstarted directory seeds stay non-durable; session cache treats
+			// them as missing work on return rather than hard-limit Incomplete.
 			out := make([]BrowseChild, 0, len(childOrder))
 			for _, p := range childOrder {
 				out = append(out, childrenByPath[p])
@@ -191,7 +203,20 @@ func StreamBrowseLocation(ctx context.Context, root string, opts BrowseOptions, 
 		default:
 		}
 
-		child, needsMeasure := classifyBrowseChild(cleanRoot, entry, onObservation)
+		// Classify without emitting so known durable children never flash Scanning.
+		child, needsMeasure := classifyBrowseChild(cleanRoot, entry, nil)
+		if needsMeasure {
+			if known, ok := lookupKnownChild(knownByPath, child.Path); ok {
+				// Reuse durable terminal; keep live identity fields.
+				child = mergeKnownChild(child, known)
+				emitObservation(onObservation, child, true)
+				needsMeasure = false
+			} else {
+				emitObservation(onObservation, child, false)
+			}
+		} else {
+			emitObservation(onObservation, child, true)
+		}
 		childOrder = append(childOrder, child.Path)
 		childrenByPath[child.Path] = child
 		if needsMeasure {
@@ -214,6 +239,49 @@ func StreamBrowseLocation(ctx context.Context, root string, opts BrowseOptions, 
 		OK:        true,
 		ElapsedMS: time.Since(start).Milliseconds(),
 	}
+}
+
+
+// indexKnownChildren builds a path-keyed map of durable known children only.
+func indexKnownChildren(known []BrowseChild) map[string]BrowseChild {
+	out := make(map[string]BrowseChild, len(known))
+	for _, c := range known {
+		if !IsDurableCachedChild(c) || c.Path == "" {
+			continue
+		}
+		out[cacheKey(c.Path)] = c
+	}
+	return out
+}
+
+// lookupKnownChild finds a durable known summary for path.
+func lookupKnownChild(knownByPath map[string]BrowseChild, path string) (BrowseChild, bool) {
+	if len(knownByPath) == 0 {
+		return BrowseChild{}, false
+	}
+	c, ok := knownByPath[cacheKey(path)]
+	return c, ok
+}
+
+// mergeKnownChild overlays durable measurement fields from known onto the live
+// classified child identity (name/path/kind/flags/classification/navigable).
+func mergeKnownChild(live, known BrowseChild) BrowseChild {
+	out := live
+	out.Bytes = known.Bytes
+	out.FileCount = known.FileCount
+	out.DirectoryCount = known.DirectoryCount
+	out.State = known.State
+	out.SkipReason = known.SkipReason
+	if len(known.SkipAggregates) > 0 {
+		out.SkipAggregates = append([]SkipAggregate(nil), known.SkipAggregates...)
+	} else {
+		out.SkipAggregates = nil
+	}
+	// Prefer live classification/navigable from classify; keep known if live empty.
+	if out.Classification == "" {
+		out.Classification = known.Classification
+	}
+	return out
 }
 
 // classifyBrowseChild resolves identity/kind for one direct child. Immediate
