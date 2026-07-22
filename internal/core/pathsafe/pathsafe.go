@@ -174,6 +174,11 @@ func ValidateDeletePath(path string) (Reason, bool) {
 //
 // A failed reason uses code "dangerous_root" for policy rejections so purge can
 // fail closed before any partial scan of system trees.
+//
+// This is a mutation-oriented root policy. Do not use it to authorize cleanup or
+// deletion of Analyze-accepted volume roots; use ValidateDeletePath /
+// ValidatePortableRemovalPath for mutation paths and ValidateAnalyzeReadRoot for
+// read-only Analyze roots.
 func ValidateUserScanRoot(path string) (Reason, bool) {
 	if strings.TrimSpace(path) == "" {
 		return reject("empty_path", "scan root cannot be empty")
@@ -201,6 +206,107 @@ func ValidateUserScanRoot(path string) (Reason, bool) {
 	}
 	if isCurrentUserProfileRoot(cleaned) {
 		return reject("dangerous_root", "user profile roots cannot be used as purge roots; supply a project or workspace directory")
+	}
+	return Reason{}, true
+}
+
+// ValidateAnalyzeReadRoot reports whether path is acceptable as a read-only
+// Analyze measurement root. Unlike ValidateUserScanRoot (purge) and
+// ValidateDeletePath (cleanup mutation), this policy intentionally allows:
+//   - explicit local fixed and removable volume roots (e.g. C:\)
+//   - readable local directories under Windows-managed trees (Windows, Program Files)
+//   - the current user's profile root
+//
+// It still fails closed for empty paths, UNC roots, device paths (\\.\),
+// relative paths, 8.3 short names, unsupported volume types (remote, optical,
+// unknown), and reparse-point roots when the path exists and can be inspected.
+//
+// This function never authorizes cleanup, permanent deletion, purge, or any
+// mutation. Callers must not treat a successful Analyze read-root result as
+// cleanup permission.
+func ValidateAnalyzeReadRoot(path string) (Reason, bool) {
+	if strings.TrimSpace(path) == "" {
+		return reject("empty_path", "analyze root cannot be empty")
+	}
+
+	normalized := stripLongPathPrefix(path)
+	if isDevicePath(normalized) {
+		return reject("device_path", "device paths cannot be used as analyze roots")
+	}
+
+	cleaned := strings.ToLower(filepath.Clean(normalized))
+	if isDevicePath(cleaned) {
+		return reject("device_path", "device paths cannot be used as analyze roots")
+	}
+	if strings.HasPrefix(cleaned, `\\`) {
+		return reject("unc_path", "UNC paths cannot be used as analyze roots")
+	}
+	if !filepath.IsAbs(cleaned) {
+		return reject("relative_path", "analyze root must be absolute")
+	}
+	if containsShortNameSegment(cleaned) {
+		return reject("short_name_path", "8.3 short-name paths cannot be used as analyze roots")
+	}
+
+	volumeRoot := analyzeVolumeRoot(cleaned)
+	if volumeRoot == "" {
+		return reject("unsupported_volume", "analyze roots must be on a local drive-letter volume")
+	}
+	if !isSupportedAnalyzeVolume(volumeRoot) {
+		return reject("unsupported_volume", "analyze roots must be on a local fixed or removable volume")
+	}
+
+	// Reparse roots fail closed when the path exists. Missing paths remain
+	// eligible so Analyze can report not_found skips without inventing a new
+	// missing-root error envelope.
+	if reason, ok := rejectExistingReparseRoot(normalized); !ok {
+		return reason, false
+	}
+
+	return Reason{}, true
+}
+
+// isDevicePath reports Windows device namespace paths such as \\.\C: or
+// \\.\PhysicalDrive0. These must not be accepted as Analyze roots.
+func isDevicePath(path string) bool {
+	if path == "" {
+		return false
+	}
+	// Preserve original separators; Clean can alter some device forms.
+	lower := strings.ToLower(path)
+	return strings.HasPrefix(lower, `\\.\`) || strings.HasPrefix(lower, `//./`)
+}
+
+// analyzeVolumeRoot returns the drive-letter volume root (e.g. c:\) for a
+// cleaned absolute local path, or "" when the path has no usable volume name.
+func analyzeVolumeRoot(cleaned string) string {
+	vol := strings.ToLower(filepath.VolumeName(cleaned))
+	if vol == "" || strings.HasPrefix(vol, `\\`) {
+		return ""
+	}
+	// Drive-letter volumes only (C:). Reject \\server\share volume names.
+	if len(vol) != 2 || vol[1] != ':' {
+		return ""
+	}
+	return vol + `\`
+}
+
+// rejectExistingReparseRoot rejects path when it exists and is a reparse point.
+// Stat/permission failures do not reject here; Analyze scan classifies those.
+func rejectExistingReparseRoot(path string) (Reason, bool) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return Reason{}, true
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return reject("reparse_point", "reparse points cannot be used as analyze roots")
+	}
+	reparse, err := hasReparseAttribute(path)
+	if err != nil {
+		return Reason{}, true
+	}
+	if reparse {
+		return reject("reparse_point", "reparse points cannot be used as analyze roots")
 	}
 	return Reason{}, true
 }

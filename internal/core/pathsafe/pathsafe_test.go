@@ -163,6 +163,67 @@ func TestValidateUserScanRootAllowsOrdinaryProjectPaths(t *testing.T) {
 	}
 }
 
+func TestValidateAnalyzeReadRootAcceptsLocalVolumeAndWindowsManaged(t *testing.T) {
+	tests := []string{`C:\`, `C:\Windows`, `C:\Program Files`}
+	for _, path := range tests {
+		reason, ok := pathsafe.ValidateAnalyzeReadRoot(path)
+		if !ok {
+			t.Fatalf("ValidateAnalyzeReadRoot(%q) = %#v, false; want ok", path, reason)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		reason, ok := pathsafe.ValidateAnalyzeReadRoot(home)
+		if !ok {
+			t.Fatalf("ValidateAnalyzeReadRoot(profile) = %#v, false; want ok", reason)
+		}
+	}
+	root := t.TempDir()
+	reason, ok := pathsafe.ValidateAnalyzeReadRoot(root)
+	if !ok {
+		t.Fatalf("ValidateAnalyzeReadRoot(temp) = %#v, false; want ok", reason)
+	}
+}
+
+func TestValidateAnalyzeReadRootRejectsUnsupportedForms(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		code string
+	}{
+		{name: "unc", path: `\\server\share\proj`, code: "unc_path"},
+		{name: "device path", path: `\\.\C:`, code: "device_path"},
+		{name: "physical drive", path: `\\.\PhysicalDrive0`, code: "device_path"},
+		{name: "empty", path: `  `, code: "empty_path"},
+		{name: "relative", path: `.\my-project`, code: "relative_path"},
+		{name: "short name", path: `C:\PROGRA~1`, code: "short_name_path"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason, ok := pathsafe.ValidateAnalyzeReadRoot(tt.path)
+			if ok {
+				t.Fatalf("ValidateAnalyzeReadRoot(%q) ok=true, want false", tt.path)
+			}
+			if reason.Code != tt.code {
+				t.Fatalf("code = %q, want %q (message=%q)", reason.Code, tt.code, reason.Message)
+			}
+		})
+	}
+}
+
+func TestValidateAnalyzeReadRootDoesNotAuthorizeMutationRoots(t *testing.T) {
+	// Analyze may accept volume roots; mutation-oriented root policies must still reject them.
+	if reason, ok := pathsafe.ValidateUserScanRoot(`C:\`); ok || reason.Code != "dangerous_root" {
+		t.Fatalf("ValidateUserScanRoot(C:\\) = %#v, %t; want dangerous_root", reason, ok)
+	}
+	if reason, ok := pathsafe.ValidateUserScanRoot(`C:\Windows`); ok || reason.Code != "dangerous_root" {
+		t.Fatalf("ValidateUserScanRoot(C:\\Windows) = %#v, %t; want dangerous_root", reason, ok)
+	}
+	validator := pathsafe.NewValidator(nil)
+	if reason, ok := validator.ValidatePortableRemovalPath(`C:\`); ok || reason.Code != "dangerous_root" {
+		t.Fatalf("ValidatePortableRemovalPath(C:\\) = %#v, %t; want dangerous_root", reason, ok)
+	}
+}
+
 func TestValidatorProtectsDescendantsOfVolumeRoot(t *testing.T) {
 	validator := pathsafe.NewValidator([]string{`C:\`})
 

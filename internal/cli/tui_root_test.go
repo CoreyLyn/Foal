@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"os"
 	"strings"
 	"testing"
 
@@ -181,19 +180,28 @@ func TestAnalyzeViewerRendersCoreHumanReportFields(t *testing.T) {
 	}
 }
 
-func TestViewerModelAnalyzeDangerousRootFailsClosed(t *testing.T) {
-	// Test with C:\ which should be rejected by ValidateUserScanRoot
+func TestViewerModelAnalyzeAcceptsVolumeRootAndRejectsUNC(t *testing.T) {
+	// Explicit local volume roots are valid Analyze read roots (CLI/JSON/TUI share analyze.Run).
 	body := renderAnalyzeBody(`C:\`)
-
-	// Should show read-only feedback
+	if strings.Contains(body, "Status: invalid root") {
+		t.Fatalf("volume root should be accepted for Analyze read-only insight:\n%s", body)
+	}
 	if !strings.Contains(body, "read-only") {
-		t.Fatalf("Dangerous root should show read-only feedback:\n%s", body)
+		t.Fatalf("volume root body should remain read-only:\n%s", body)
+	}
+	if !strings.Contains(body, "Status:") {
+		t.Fatalf("volume root body missing Status:\n%s", body)
+	}
+
+	// Unsupported roots still fail closed with read-only feedback.
+	body = renderAnalyzeBody(`\\server\share\proj`)
+	if !strings.Contains(body, "read-only") {
+		t.Fatalf("UNC root should show read-only feedback:\n%s", body)
 	}
 	if !strings.Contains(body, "invalid root") && !strings.Contains(body, "Status: invalid") {
-		t.Fatalf("Dangerous root should show invalid root status:\n%s", body)
+		t.Fatalf("UNC root should show invalid root status:\n%s", body)
 	}
 
-	// Should NOT contain cleanup actions
 	forbiddenPhrases := []string{
 		"delete this", "remove this", "clean up", "reclaim space",
 		"execute cleanup", "confirm deletion", "select items", "move to trash",
@@ -201,16 +209,7 @@ func TestViewerModelAnalyzeDangerousRootFailsClosed(t *testing.T) {
 	}
 	for _, phrase := range forbiddenPhrases {
 		if strings.Contains(strings.ToLower(body), phrase) {
-			t.Fatalf("Dangerous root body contains forbidden phrase %q:\n%s", phrase, body)
-		}
-	}
-
-	// Also test USERPROFILE if available
-	if userProfile := os.Getenv("USERPROFILE"); userProfile != "" {
-		body = renderAnalyzeBody(userProfile)
-		// User profile root should also be rejected
-		if !strings.Contains(body, "read-only") {
-			t.Fatalf("User profile root should show read-only feedback:\n%s", body)
+			t.Fatalf("body contains forbidden phrase %q:\n%s", phrase, body)
 		}
 	}
 }

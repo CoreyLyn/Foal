@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
@@ -72,9 +73,13 @@ type Options struct {
 
 // Run performs directory insight on the supplied root (or current working
 // directory when empty). Returns (Result, Reason, ok) where ok is false when
-// the root was invalid/dangerous (Reason contains the failure details).
+// the root was invalid (Reason contains the failure details).
 // Complete scans return StatusOK; scans halted by limits/cancellation return
 // StatusIncomplete with partial totals describing only inspected content.
+//
+// Root policy uses pathsafe.ValidateAnalyzeReadRoot (read-only). Explicit local
+// fixed/removable volume roots and Windows-managed trees are allowed. This never
+// authorizes Clean, Purge, or other mutation paths.
 func Run(ctx context.Context, root string, opts Options) (Result, pathsafe.Reason, bool) {
 	start := time.Now()
 	if ctx == nil {
@@ -83,13 +88,17 @@ func Run(ctx context.Context, root string, opts Options) (Result, pathsafe.Reaso
 	if root == "" {
 		root = "."
 	}
+	// Whitespace-only explicit roots fail closed (empty string alone means CWD).
+	if strings.TrimSpace(root) == "" {
+		return Result{}, pathsafe.Reason{Code: "empty_path", Message: "analyze root cannot be empty"}, false
+	}
 	cleanRoot, err := filepath.Abs(root)
 	if err != nil {
 		return Result{}, pathsafe.Reason{Code: "invalid_root", Message: "invalid analyze root: " + err.Error()}, false
 	}
 
-	// Fail-closed: validate root before any filesystem walk.
-	if reason, ok := pathsafe.ValidateUserScanRoot(cleanRoot); !ok {
+	// Fail-closed: Analyze-specific read-root policy (not mutation/purge policy).
+	if reason, ok := pathsafe.ValidateAnalyzeReadRoot(cleanRoot); !ok {
 		return Result{}, reason, false
 	}
 

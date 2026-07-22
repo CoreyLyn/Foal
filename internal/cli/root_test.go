@@ -649,12 +649,42 @@ func TestAnalyzeJSONValidRootReportsOK(t *testing.T) {
 	}
 }
 
-func TestAnalyzeJSONDangerousRootReportsError(t *testing.T) {
+func TestAnalyzeJSONAcceptsExplicitLocalVolumeRoot(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"analyze", "--json", `C:\`}, &stdout, &stderr)
 
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	status, _ := result["status"].(string)
+	if status != "ok" && status != "incomplete" {
+		t.Fatalf("result.status = %v, want ok or incomplete", result["status"])
+	}
+	for _, key := range []string{"root", "totals", "top_children", "skipped", "elapsed_ms"} {
+		if _, ok := result[key]; !ok {
+			t.Fatalf("result missing %q: %#v", key, result)
+		}
+	}
+	root, _ := result["root"].(string)
+	if root == "" {
+		t.Fatal("result.root is empty")
+	}
+	// Fixed Top 10 projection: at most 10 top children.
+	if top, ok := result["top_children"].([]interface{}); ok && len(top) > 10 {
+		t.Fatalf("len(top_children) = %d, want <= 10", len(top))
+	}
+}
+
+func TestAnalyzeJSONRejectsUNCRoot(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"analyze", "--json", `\\server\share\proj`}, &stdout, &stderr)
+
 	if code != exitUsage {
-		t.Fatalf("Run returned %d, want %d", code, exitUsage)
+		t.Fatalf("Run returned %d, want %d; stderr=%q stdout=%q", code, exitUsage, stderr.String(), stdout.String())
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
@@ -670,8 +700,8 @@ func TestAnalyzeJSONDangerousRootReportsError(t *testing.T) {
 	if got.Error == nil {
 		t.Fatal("error is nil")
 	}
-	if got.Error.Code != "dangerous_root" {
-		t.Fatalf("error.code = %q, want dangerous_root", got.Error.Code)
+	if got.Error.Code != "unc_path" {
+		t.Fatalf("error.code = %q, want unc_path", got.Error.Code)
 	}
 	if got.Error.Message == "" {
 		t.Fatal("error.message is empty")
@@ -681,18 +711,68 @@ func TestAnalyzeJSONDangerousRootReportsError(t *testing.T) {
 	}
 }
 
-func TestAnalyzeNonJSONDangerousRootReportsError(t *testing.T) {
+func TestAnalyzeJSONRejectsDevicePathRoot(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"analyze", "--json", `\\.\C:`}, &stdout, &stderr)
+
+	if code != exitUsage {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitUsage, stderr.String())
+	}
+	var got envelope
+	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON error: %v\n%s", err, stderr.String())
+	}
+	if got.Error == nil || got.Error.Code != "device_path" {
+		t.Fatalf("error = %#v, want device_path", got.Error)
+	}
+}
+
+func TestAnalyzeNonJSONAcceptsExplicitLocalVolumeRoot(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"analyze", `C:\`}, &stdout, &stderr)
 
-	if code != exitUsage {
-		t.Fatalf("Run returned %d, want %d", code, exitUsage)
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "dangerous_root") {
-		t.Fatalf("stderr = %q, want dangerous_root", stderr.String())
+	output := stdout.String()
+	if !strings.Contains(output, "Foal analyze") {
+		t.Fatalf("stdout missing analyze report:\n%s", output)
+	}
+	if !strings.Contains(output, "Status:") {
+		t.Fatalf("stdout missing Status:\n%s", output)
+	}
+}
+
+func TestAnalyzeNoArgumentUsesCWD(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "cwd-marker.txt"), []byte("marker"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"analyze", "--json"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("Run returned %d, want %d; stderr=%q", code, exitOK, stderr.String())
+	}
+	result := readResultObject(t, stdout.Bytes())
+	gotRoot, _ := result["root"].(string)
+	wantRoot, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(gotRoot, wantRoot) {
+		t.Fatalf("result.root = %q, want CWD %q", gotRoot, wantRoot)
 	}
 }
 
