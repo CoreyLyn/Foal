@@ -34,7 +34,7 @@ type commandSpec struct {
 
 var commands = []commandSpec{
 	{name: "version", description: "Report Foal build and runtime metadata."},
-	{name: "analyze", description: "Inspect disk usage and cleanup opportunities without changing files."},
+	{name: "analyze", description: "Read-only directory insight and on-demand disk browser; never changes files."},
 	{name: "clean", description: "Preview or execute conservative cleanup; permanent categories need per-run --allow-permanent."},
 	{name: "purge", description: "Preview or permanently delete rebuildable project artifacts under explicit root(s)."},
 	{name: "status", description: "Report a read-only system and Foal state snapshot."},
@@ -824,6 +824,8 @@ func helpText() string {
 	builder.WriteString("  foal uninstall --json\n")
 	builder.WriteString("  foal uninstall --execute --select \"Example App\"\n")
 	builder.WriteString("  foal.exe analyze\n")
+	builder.WriteString("  foal analyze .\\my-project\n")
+	builder.WriteString("  foal analyze --json C:\\\n")
 	return builder.String()
 }
 

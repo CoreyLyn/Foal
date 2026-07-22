@@ -803,6 +803,15 @@ func (m analyzeDriveModel) browseContent() string {
 		}
 	}
 
+	// Guarded copy-only Purge handoff: only when the current browse location
+	// passes Purge root validation and has a direct artifact clue. Never
+	// launches Purge or transfers selection.
+	if handoff := FormatAnalyzePurgeHandoffLine(m.browseRoot, m.browseChildren); handoff != "" {
+		b.WriteString("\n")
+		b.WriteString(handoff)
+		b.WriteString("\n")
+	}
+
 	if m.notice != "" {
 		b.WriteString("\n")
 		b.WriteString(m.notice)

@@ -7,8 +7,9 @@ import (
 
 // RenderHumanReport renders a human-readable directory insight report from Result.
 // It never claims complete tree size when Status is StatusIncomplete, and
-// includes purge handoff copy when at least one top child has classification
-// "project_artifact_clue".
+// includes guarded purge handoff copy only when a top child has classification
+// project_artifact_clue and the analysis root independently passes Purge root
+// validation (ValidateUserScanRoot). Volume/system roots never get unusable hints.
 func RenderHumanReport(result Result) string {
 	var b strings.Builder
 	b.WriteString("Foal analyze\n")
@@ -33,19 +34,17 @@ func RenderHumanReport(result Result) string {
 		}
 	}
 
-	// Purge handoff copy when at least one project_artifact_clue present.
+	// Guarded copy-only Purge handoff (never launches Purge).
 	hasArtifactClue := false
 	for _, child := range result.TopChildren {
-		if child.Classification == "project_artifact_clue" {
+		if child.Classification == ClassificationProjectArtifactClue {
 			hasArtifactClue = true
 			break
 		}
 	}
-	if hasArtifactClue {
+	if handoff := FormatPurgeHandoffCopy(result.Root, hasArtifactClue); handoff != "" {
 		b.WriteString("\n")
-		b.WriteString("Next step: run `foal purge ")
-		b.WriteString(escapeForShell(result.Root))
-		b.WriteString("` for explicit-root preview and permanent reclaim of project artifacts.\n")
+		b.WriteString(handoff)
 	}
 
 	return b.String()

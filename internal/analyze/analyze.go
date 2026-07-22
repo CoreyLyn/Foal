@@ -231,7 +231,7 @@ func (s *scanner) addTopChild(path, kind string, totals Totals) {
 func childClassification(path, kind string) string {
 	_, isProjectArtifact := projectArtifactDirectoryNames[filepath.Base(path)]
 	if kind == "directory" && isProjectArtifact {
-		return "project_artifact_clue"
+		return ClassificationProjectArtifactClue
 	}
 	return ""
 }

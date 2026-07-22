@@ -55,6 +55,14 @@ The read-only analyze labels and Clean presentation-only pointer in this plan re
 
 Further allowlist entries, selection filters, or a purge TUI entry need their own issue/tests. Do not fold project-artifact deletion into ordinary Clean opt-in rows without reopening ADR 0019.
 
+
+## Analyze browser release boundary (#351)
+
+- Direct-child exact-name classification remains `project_artifact_clue` in JSON/CLI; the Analyze TUI may render the compact presentation label `artifact`.
+- Recursive size measurement never classifies nested allowlist matches.
+- Copy-only `foal purge <root>` guidance appears only when the current root independently passes Purge `ValidateUserScanRoot` and has a direct artifact clue. Volume roots, Windows-managed roots, and the user profile root never receive an unusable Purge hint.
+- Analyze never launches Purge, transfers selection, deletes, opens/previews files, elevates, stops processes, or writes History.
+
 ## Related
 
-Broader Analyze product identity (directory insight, incomplete scan, human report, TUI viewer, non-deletion): `docs/plan/analyze-directory-insight.md` and ADR 0025.
+Broader Analyze product identity (directory insight, incomplete scan, human report, TUI disk browser, non-deletion): `docs/plan/analyze-directory-insight.md`, ADR 0025 (superseded for TUI shape), and ADR 0034.

@@ -188,9 +188,10 @@ func FormatAnalyzeRankRow(in AnalyzeRankRowInput) string {
 	if flags != "" {
 		nameBase = child.Name + " " + flags
 	}
-	if child.Classification != "" {
-		// Proven direct-child clue only; not cleanup language.
-		nameBase = nameBase + " · " + child.Classification
+	if label := analyze.CompactClassificationLabel(child.Classification); label != "" {
+		// Compact presentation label for proven direct-child clue only.
+		// JSON retains project_artifact_clue; TUI shows "artifact".
+		nameBase = nameBase + " · " + label
 	}
 
 	// Fixed right-hand budget: size then state must never be dropped.
@@ -338,6 +339,21 @@ func FormatAnalyzeFocusedDetailLine(child analyze.BrowseChild) string {
 	return analyze.FormatFocusedDetailWith(child, cleanFormatBytes)
 }
 
+// FormatAnalyzePurgeHandoffLine returns copy-only Purge guidance for the current
+// browse location when it independently passes Purge root validation and has a
+// direct artifact clue. Empty otherwise. Never launches Purge.
+func FormatAnalyzePurgeHandoffLine(root string, children []analyze.BrowseChild) string {
+	hasClue := false
+	for _, c := range children {
+		if c.Classification == analyze.ClassificationProjectArtifactClue {
+			hasClue = true
+			break
+		}
+	}
+	copyText := analyze.FormatPurgeHandoffCopy(root, hasClue)
+	return strings.TrimRight(copyText, "\n")
+}
+
 // stylizeAnalyzeBrowseFrame applies Analyze-specific selection and state colors
 // after plain composition. NO_COLOR keeps symbols/text only (no hues, no red).
 func stylizeAnalyzeBrowseFrame(content string) string {
@@ -375,6 +391,7 @@ func stylizeAnalyzeBrowseLine(line string, colorOn bool) string {
 	if strings.HasPrefix(trimmed, "Hints:") ||
 		strings.HasPrefix(trimmed, "This view is read-only") ||
 		strings.HasPrefix(trimmed, "Files and reparse") ||
+		strings.HasPrefix(trimmed, "Next step:") ||
 		strings.HasPrefix(trimmed, "Volume ") && strings.Contains(trimmed, "volume metadata") {
 		return tuiFaintStyle.Render(trimmed)
 	}

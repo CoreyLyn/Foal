@@ -305,12 +305,36 @@ A read-only Foal command that measures an analysis root's directory totals and t
 _Avoid_: cleanup opportunity scanner, project scanner, disk-wide cleaner, Mole disk analyzer parity
 
 **Analysis root**:
-The single path Analyze measures. Omitting the path means the process current working directory after absolute resolution. Explicit local fixed or removable volume roots and readable local directories (including Windows-managed trees and the user profile root) are accepted by Analyze-only read-root policy. UNC roots, device paths, malformed paths, unsupported volume types, and reparse roots fail closed. This allowance never authorizes Clean, Purge, or other mutation roots.
-_Avoid_: implied multi-root, purge multi-root parity, treating Analyze volume-root acceptance as cleanup authorization
+The single path Analyze measures. CLI omission means the process current working directory after absolute resolution; an explicit Analyze path or TUI drive choice may select a local Windows volume root. This read-only volume-root allowance belongs only to Analyze and never relaxes Clean or Purge dangerous-root validation; UNC roots and unsupported path forms still fail closed.
+_Avoid_: implied multi-root, Clean/Purge volume-root authorization, UNC disk analysis, volume selection as cleanup consent
+
+**Analyze drive entry**:
+The Analyze TUI landing view that lists local fixed and removable Windows drive letters with inexpensive volume label, filesystem, total-space, and free-space metadata, without recursively scanning them. Mapped network drives, optical drives, UNC, and device paths are excluded. It initially focuses `C:` when present, otherwise the first available local volume; unavailable local volumes remain visible but cannot be entered. Choosing an available drive starts read-only analysis at that volume root; it does not select files or authorize any mutation.
+_Avoid_: current-working-directory landing view, multi-drive aggregate, cleanup drive picker, implied deletion scope
 
 **Analyze incomplete scan**:
 An Analyze run that stopped because it hit the same 100,000-descendant Opportunity inspection limit (or cooperative cancellation) before finishing the tree. Totals and top children then describe only what was safely inspected; the result must not be presented as a complete directory size. JSON and human/TUI surfaces use top-level `status=incomplete` for this case (not `ok` with a side flag, and not a hard command error).
 _Avoid_: silent partial totals, estimated full-tree size, treating over-limit as full success, Analyze-specific higher ceiling by default, incomplete as non-zero crash for ordinary over-limit stops
+
+**Analyze child measurement**:
+One independently bounded, read-only recursive measurement of a browse location's direct child for the Analyze TUI browser. Measurement starts only after the user enters that location; sibling drives and locations are not prefetched. Each child has its own 100,000-descendant inspection limit. Children progress separately through scanning, complete, partial, incomplete, or skipped states so one large or unreadable subtree cannot masquerade as a complete location. Partial means traversal ended with unreadable descendants; incomplete means the inspection limit or cancellation stopped traversal; skipped means the direct child itself could not be measured or was a non-traversed reparse point. Scanning, partial, and incomplete rows may show an explicitly approximate share of currently observed bytes; partial and incomplete sizes are `>=` lower bounds, but their percentages are never presented as mathematical lower bounds while the location total remains unknown. Exact percentages appear only when the location total is complete.
+_Avoid_: startup whole-machine scan, sibling-drive prefetch, one shared location budget, unreadable subtree presented as complete, partial or incomplete bytes presented as exact, incomplete percentage presented as a guaranteed lower bound, unknown child treated as zero, measurement as cleanup eligibility
+
+**Analyze logical bytes**:
+The sum of filesystem-reported logical file lengths used consistently by Analyze CLI, JSON, and TUI comparisons. It is distinct from allocated disk space, may differ for compressed, sparse, or hard-linked content, and is never claimed to reconcile with volume used or free space.
+_Avoid_: allocated bytes, physical disk usage, reclaimed space, exact complement of volume free space
+
+**Analyze browse location**:
+The directory currently open in the Analyze TUI browser. Entering it triggers measurement of its direct children, while entering a child creates a new browse location and a new on-demand measurement view.
+_Avoid_: cleanup scope, selected candidate set, background-prefetched directory, multi-root aggregate
+
+**Analyze browse-session cache**:
+The temporary in-memory set of completed child measurements retained while navigating within one Analyze TUI session. Leaving a location cancels its unfinished work; returning reuses completed results and resumes missing measurements, while an explicit refresh discards that location's cached measurements and starts again. The cache is never persisted or used by cleanup execution.
+_Avoid_: background scan after navigation, History record, cleanup manifest, stale result after explicit refresh
+
+**Analyze focused child detail**:
+A compact read-only explanation for the currently focused TUI child, including its state, observed logical bytes, file and directory counts, skipped count, and aggregated stable skip reasons. It does not expand descendant paths or turn diagnostic evidence into cleanup guidance.
+_Avoid_: descendant error log, candidate detail, raw path list, cleanup recommendation
 
 **Analyze human report**:
 The non-JSON presentation of an Analyze result that surfaces the same core insight as JSON: analysis root, complete-or-incomplete status, totals including bytes, top children with size/kind/classification clues, and a skipped summary. It remains read-only guidance and must not invent cleanup actions or Potential space. Top children stay a fixed top-10 by bytes (name tie-break); no user-facing `--top` knob in this design slice.
@@ -320,16 +344,16 @@ _Avoid_: JSON-only detail, Mole-style cleanup opportunity report, execute/delete
 User Protection rules do not suppress, skip, or reshape Analyze measurement. Analyze still skips only filesystem barriers (permission, reparse, missing, read errors). Protection continues to deny cleanup candidates and path-backed review discoveries on Clean/purge only.
 _Avoid_: protection hides disk usage, analyze respects protection as scan deny-list, read-only scan implies delete authorization
 
-**Analyze TUI viewer**:
-A read-only Command viewer that runs Analyze for a chosen analysis root, renders the Analyze human report (or equivalent read model) as scrollable text with reload, and exposes no cleanup, purge, selection, or permanent-deletion affordance. The default analysis root is the process current working directory; the viewer may accept a simple path edit or paste to rescan another allowed root, without becoming a directory browser, overview launcher, or delete surface.
-_Avoid_: mini-Clean, category selection, path-browser-as-delete-picker, Mole overview parity, TUI-owned scan engine separate from CLI analyze, ad hoc Trash deletion from Analyze
+**Analyze TUI browser**:
+A read-only interactive view entered through Analyze drive entry for comparing and scrolling through every direct child of the current browse location, then moving into or back out of local directories, including Windows-managed directories when readable. Children continuously re-rank by their latest observed size while measurement runs, using name as the tie-break; the cursor remains bound to the selected path and the viewport follows it across rank changes. Files remain visible but non-navigable. Hidden and system children participate in measurement and remain visible with presentation-only identification; they are never framed as cleanup opportunities. Enter moves into a directory; Escape moves to its parent, then from a volume root to drive entry, and from drive entry to the Foal main menu. Navigation changes only what Analyze measures; reparse points, UNC and device paths remain non-navigable, and the browser never selects cleanup targets or exposes delete, cleanup, file-open, or file-preview actions. The CLI and JSON Analyze report retain their fixed Top 10 projection.
+_Avoid_: Analyze TUI viewer, mini-Clean, cleanup selection, delete picker, TUI-owned scan engine, ad hoc Trash deletion from Analyze, system-directory cleanup authorization
 
 **Analyze classification clue**:
-A high-confidence review label attached to a measured top child of an analysis root (today: `project_artifact_clue` only). Clues explain "what this large child looks like"; they are not cleanup candidates, purge selections, or Potential space. Near-term design keeps this single classification; no expanded name allowlist and no new clue kinds without separate proof.
+A high-confidence review label attached to a measured direct child of an analysis root or TUI browse location (today: `project_artifact_clue` only). Clues explain "what this large child looks like"; they are not cleanup candidates, purge selections, or Potential space. Near-term design keeps this single classification; no expanded name allowlist and no new clue kinds without separate proof.
 _Avoid_: cleanup candidate, opt-in category, reclaimable bytes, nested deep-scan hit, large-file or old-download clue types in this slice
 
 **Analyze purge handoff**:
-Read-only next-step copy on the Analyze human report and Analyze TUI viewer when at least one project artifact clue is present, pointing at `foal purge <root>` for explicit-root preview and permanent reclaim. It never launches purge, selects candidates, or authorizes deletion from Analyze.
+Read-only next-step copy on the Analyze human report and Analyze TUI browser when at least one project artifact clue is present and the current root independently passes Purge root safety validation, pointing at `foal purge <root>` for explicit-root preview and permanent reclaim. A volume root or Windows-managed tree never receives an unusable Purge handoff merely because a child name matches the clue allowlist. The handoff never launches purge, selects candidates, or authorizes deletion from Analyze.
 _Avoid_: one-click purge from Analyze, Analyze-owned deletion, treating clues as purge selection
 
 **Analyze history non-recording**:
