@@ -13,13 +13,15 @@ import (
 
 // tui_analyze_drive.go is the Analyze TUI: drive entry (#345) plus on-demand
 // browse-and-measure of every direct child (#346 / ADR-0034) with honest child
-// measurement states (#347). Status and History keep the generic Command viewer.
+// measurement states (#347) and two-worker path-bound live ranking (#348).
+// Status and History keep the generic Command viewer.
 //
-// This slice measures directory children serially after entry and projects
-// shared-core states (scanning/complete/partial/incomplete/skipped). Two-worker
-// scheduling, path-bound live ranking, cancel/cache/resume, and presentation
-// polish arrive in later tickets. Analyze remains read-only: no mutation,
-// elevation, process action, or History write.
+// Directory children measure with at most two concurrent workers; focus promotes
+// the selected queued path to the next free slot without preempting active work.
+// Rows re-rank by latest observed logical bytes while selection stays bound to
+// canonical child path. Cancel/cache/resume and presentation polish arrive in
+// later tickets. Analyze remains read-only: no mutation, elevation, process
+// action, or History write.
 
 // analyzeDriveNav is the navigation intent returned by the Analyze browser model.
 type analyzeDriveNav int
@@ -49,6 +51,7 @@ var listAnalyzeLocalVolumes = func() []analyze.LocalVolume {
 // browseAnalyzeLocation is the injectable direct-child browse seam. Production
 // streams path-scoped observations from shared Analyze core; tests inject fakes
 // and may ignore onObservation. Terminal states and aggregates come from the core.
+// opts.Focus carries the live path preference for next-slot promotion.
 var browseAnalyzeLocation = func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
 	return analyze.StreamBrowseLocation(ctx, root, opts, onObservation)
 }
@@ -96,8 +99,15 @@ type analyzeDriveModel struct {
 	// Browse state (only meaningful in analyzePhaseBrowse).
 	browseRoot     string
 	browseChildren []analyze.BrowseChild
-	// browseCursor indexes browseChildren (serial ranking; path-bound live rank is #348).
-	browseCursor int
+	// browseSelectedPath is the canonical child path for selection (not row index).
+	// Enter and the cursor marker follow this path through live re-ranking.
+	browseSelectedPath string
+	// browseOffset is the first visible row index in the vertical viewport.
+	// The viewport follows browseSelectedPath as ranks change.
+	browseOffset int
+	// browseFocus is shared with the in-flight browse stream so j/k promote
+	// queued directory work without preempting active measurements.
+	browseFocus *analyze.AtomicBrowseFocus
 	// gen increments on each browse request so stale loads are ignored.
 	gen int
 	// measuring is true while a browse stream is active (children may already be visible).
@@ -125,7 +135,10 @@ func (m *analyzeDriveModel) start() tea.Cmd {
 	m.nav = analyzeDriveNavNone
 	m.browseRoot = ""
 	m.browseChildren = nil
-	m.browseCursor = 0
+	m.browseSelectedPath = ""
+	m.browseOffset = 0
+	m.browseFocus = nil
+	m.measuring = false
 	return loadAnalyzeVolumesCmd
 }
 
@@ -159,7 +172,9 @@ func (m *analyzeDriveModel) applyBrowseLoaded(msg analyzeBrowseLoadedMsg) tea.Cm
 		if m.phase != analyzePhaseBrowse {
 			m.browseRoot = ""
 			m.browseChildren = nil
-			m.browseCursor = 0
+			m.browseSelectedPath = ""
+			m.browseOffset = 0
+			m.browseFocus = nil
 			m.phase = analyzePhaseDrive
 			return nil
 		}
@@ -168,11 +183,9 @@ func (m *analyzeDriveModel) applyBrowseLoaded(msg analyzeBrowseLoadedMsg) tea.Cm
 	}
 	m.phase = analyzePhaseBrowse
 	m.browseRoot = msg.result.Root
-	// Authoritative final inventory from the shared core (may refine streaming rows).
+	// Authoritative final inventory from the shared core (already ranked).
 	m.browseChildren = append([]analyze.BrowseChild(nil), msg.result.Children...)
-	if m.browseCursor >= len(m.browseChildren) {
-		m.browseCursor = 0
-	}
+	m.syncBrowseSelectionAfterRank()
 	m.notice = ""
 	return nil
 }
@@ -185,9 +198,10 @@ func (m *analyzeDriveModel) applyBrowseStarted(msg analyzeBrowseStartedMsg) tea.
 	m.loading = false
 	m.measuring = true
 	// Keep path identity; clear prior inventory for the new location load.
-	// (enterDrive/enterBrowseChild already set browseRoot.)
+	// (enterDrive/enterBrowseChild already set browseRoot and browseFocus.)
 	m.browseChildren = nil
-	m.browseCursor = 0
+	m.browseSelectedPath = ""
+	m.browseOffset = 0
 	return waitAnalyzeBrowseStreamCmd(msg.gen, msg.stream)
 }
 
@@ -205,8 +219,8 @@ func (m *analyzeDriveModel) applyBrowseObservation(msg analyzeBrowseObservationM
 	return nil
 }
 
-// upsertBrowseObservation merges a path-scoped observation into browseChildren.
-// Ranking remains serial order for this slice (#348 owns path-bound live ranking).
+// upsertBrowseObservation merges a path-scoped observation into browseChildren,
+// re-ranks by latest observed logical bytes, and keeps selection on the same path.
 func (m *analyzeDriveModel) upsertBrowseObservation(obs analyze.ChildObservation) {
 	child := analyze.BrowseChild{
 		Name:           obs.Name,
@@ -223,21 +237,125 @@ func (m *analyzeDriveModel) upsertBrowseObservation(obs analyze.ChildObservation
 		System:         obs.System,
 		Navigable:      obs.Navigable,
 	}
+	found := false
 	for i := range m.browseChildren {
 		if m.browseChildren[i].Path == obs.Path {
 			m.browseChildren[i] = child
-			return
+			found = true
+			break
 		}
 	}
-	m.browseChildren = append(m.browseChildren, child)
+	if !found {
+		m.browseChildren = append(m.browseChildren, child)
+	}
+	// Default selection to the first discovered child when none is set yet.
+	if m.browseSelectedPath == "" && child.Path != "" {
+		m.browseSelectedPath = child.Path
+		m.publishBrowseFocus()
+	}
+	m.browseChildren = analyze.RankBrowseChildren(m.browseChildren)
+	m.syncBrowseSelectionAfterRank()
 }
 
-func loadAnalyzeBrowseCmd(gen int, root string) tea.Cmd {
+// selectedBrowseChild returns the child bound to browseSelectedPath, if any.
+func (m *analyzeDriveModel) selectedBrowseChild() (analyze.BrowseChild, bool) {
+	idx := analyze.IndexOfBrowsePath(m.browseChildren, m.browseSelectedPath)
+	if idx < 0 {
+		return analyze.BrowseChild{}, false
+	}
+	return m.browseChildren[idx], true
+}
+
+// syncBrowseSelectionAfterRank keeps path selection valid and viewport on-path
+// after a rank change. If the selected path disappeared, fall back to the first row.
+func (m *analyzeDriveModel) syncBrowseSelectionAfterRank() {
+	if len(m.browseChildren) == 0 {
+		m.browseSelectedPath = ""
+		m.browseOffset = 0
+		m.publishBrowseFocus()
+		return
+	}
+	idx := analyze.IndexOfBrowsePath(m.browseChildren, m.browseSelectedPath)
+	if idx < 0 {
+		m.browseSelectedPath = m.browseChildren[0].Path
+		idx = 0
+		m.publishBrowseFocus()
+	}
+	m.ensureBrowseSelectionVisible(idx)
+}
+
+// browseViewportRows estimates how many child rows fit in the content area.
+// A conservative fixed reserve keeps the selected path visible without needing
+// full layout measurement in this slice.
+func (m analyzeDriveModel) browseViewportRows() int {
+	// Header (~6) + measuring banner (~2) + detail (~2) + footer (~4) + padding.
+	const reserved = 16
+	rows := m.height - reserved
+	if rows < 3 {
+		rows = 3
+	}
+	return rows
+}
+
+// ensureBrowseSelectionVisible scrolls browseOffset so selectedIdx is on-screen.
+func (m *analyzeDriveModel) ensureBrowseSelectionVisible(selectedIdx int) {
+	if selectedIdx < 0 {
+		return
+	}
+	n := len(m.browseChildren)
+	if n == 0 {
+		m.browseOffset = 0
+		return
+	}
+	vis := m.browseViewportRows()
+	if selectedIdx < m.browseOffset {
+		m.browseOffset = selectedIdx
+	} else if selectedIdx >= m.browseOffset+vis {
+		m.browseOffset = selectedIdx - vis + 1
+	}
+	maxOff := n - vis
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	if m.browseOffset < 0 {
+		m.browseOffset = 0
+	}
+	if m.browseOffset > maxOff {
+		m.browseOffset = maxOff
+	}
+}
+
+func (m *analyzeDriveModel) publishBrowseFocus() {
+	if m.browseFocus != nil {
+		m.browseFocus.Set(m.browseSelectedPath)
+	}
+}
+
+// moveBrowseSelection steps the path-bound cursor by delta (+1 down / -1 up)
+// through the current ranked list and promotes the new path for next-slot work.
+func (m *analyzeDriveModel) moveBrowseSelection(delta int) {
+	n := len(m.browseChildren)
+	if n == 0 {
+		return
+	}
+	idx := analyze.IndexOfBrowsePath(m.browseChildren, m.browseSelectedPath)
+	if idx < 0 {
+		idx = 0
+	}
+	idx = (idx + delta%n + n) % n
+	m.browseSelectedPath = m.browseChildren[idx].Path
+	m.publishBrowseFocus()
+	m.ensureBrowseSelectionVisible(idx)
+	m.notice = ""
+}
+
+func loadAnalyzeBrowseCmd(gen int, root string, focus *analyze.AtomicBrowseFocus) tea.Cmd {
 	return func() tea.Msg {
 		obsCh := make(chan analyze.ChildObservation, 64)
 		resultCh := make(chan analyze.BrowseResult, 1)
 		go func() {
-			result := browseAnalyzeLocation(context.Background(), root, analyze.BrowseOptions{}, func(o analyze.ChildObservation) {
+			opts := analyze.BrowseOptions{Focus: focus}
+			result := browseAnalyzeLocation(context.Background(), root, opts, func(o analyze.ChildObservation) {
 				// Buffer absorbs UI-safe bursts; block rather than drop terminals.
 				obsCh <- o
 			})
@@ -352,15 +470,9 @@ func (m *analyzeDriveModel) handleBrowseKey(key string) (analyzeDriveNav, tea.Cm
 	case "esc", "escape", "b":
 		return m.leaveBrowse()
 	case "j", "down":
-		if len(m.browseChildren) > 0 {
-			m.browseCursor = (m.browseCursor + 1) % len(m.browseChildren)
-			m.notice = ""
-		}
+		m.moveBrowseSelection(1)
 	case "k", "up":
-		if len(m.browseChildren) > 0 {
-			m.browseCursor = (m.browseCursor + len(m.browseChildren) - 1) % len(m.browseChildren)
-			m.notice = ""
-		}
+		m.moveBrowseSelection(-1)
 	case "enter":
 		return m.enterBrowseChild()
 	default:
@@ -388,8 +500,10 @@ func (m *analyzeDriveModel) enterDrive() (analyzeDriveNav, tea.Cmd) {
 	m.notice = fmt.Sprintf("Browsing %s...", vol.Letter)
 	m.browseRoot = vol.Root
 	m.browseChildren = nil
-	m.browseCursor = 0
-	return analyzeDriveNavNone, loadAnalyzeBrowseCmd(m.gen, vol.Root)
+	m.browseSelectedPath = ""
+	m.browseOffset = 0
+	m.browseFocus = analyze.NewAtomicBrowseFocus()
+	return analyzeDriveNavNone, loadAnalyzeBrowseCmd(m.gen, vol.Root, m.browseFocus)
 }
 
 func (m *analyzeDriveModel) enterBrowseChild() (analyzeDriveNav, tea.Cmd) {
@@ -397,10 +511,12 @@ func (m *analyzeDriveModel) enterBrowseChild() (analyzeDriveNav, tea.Cmd) {
 		m.notice = "This location has no children."
 		return analyzeDriveNavNone, nil
 	}
-	if m.browseCursor < 0 || m.browseCursor >= len(m.browseChildren) {
+	// Enter always targets the path selected before the latest re-ranking.
+	child, ok := m.selectedBrowseChild()
+	if !ok {
+		m.notice = "No child is selected."
 		return analyzeDriveNavNone, nil
 	}
-	child := m.browseChildren[m.browseCursor]
 	switch {
 	case child.Kind == analyze.BrowseKindFile:
 		m.notice = fmt.Sprintf("%s is a file and cannot be entered.", child.Name)
@@ -416,7 +532,12 @@ func (m *analyzeDriveModel) enterBrowseChild() (analyzeDriveNav, tea.Cmd) {
 		m.gen++
 		m.loading = true
 		m.notice = fmt.Sprintf("Browsing %s...", child.Name)
-		return analyzeDriveNavNone, loadAnalyzeBrowseCmd(m.gen, child.Path)
+		m.browseRoot = child.Path
+		m.browseChildren = nil
+		m.browseSelectedPath = ""
+		m.browseOffset = 0
+		m.browseFocus = analyze.NewAtomicBrowseFocus()
+		return analyzeDriveNavNone, loadAnalyzeBrowseCmd(m.gen, child.Path, m.browseFocus)
 	default:
 		m.notice = fmt.Sprintf("%s cannot be entered.", child.Name)
 		return analyzeDriveNavNone, nil
@@ -429,7 +550,9 @@ func (m *analyzeDriveModel) leaveBrowse() (analyzeDriveNav, tea.Cmd) {
 		m.phase = analyzePhaseDrive
 		m.browseRoot = ""
 		m.browseChildren = nil
-		m.browseCursor = 0
+		m.browseSelectedPath = ""
+		m.browseOffset = 0
+		m.browseFocus = nil
 		m.loading = false
 		m.measuring = false
 		m.notice = ""
@@ -440,7 +563,9 @@ func (m *analyzeDriveModel) leaveBrowse() (analyzeDriveNav, tea.Cmd) {
 		m.phase = analyzePhaseDrive
 		m.browseRoot = ""
 		m.browseChildren = nil
-		m.browseCursor = 0
+		m.browseSelectedPath = ""
+		m.browseOffset = 0
+		m.browseFocus = nil
 		m.loading = false
 		m.measuring = false
 		m.notice = ""
@@ -450,8 +575,12 @@ func (m *analyzeDriveModel) leaveBrowse() (analyzeDriveNav, tea.Cmd) {
 	m.loading = true
 	m.measuring = false
 	m.browseChildren = nil
+	m.browseSelectedPath = ""
+	m.browseOffset = 0
+	m.browseFocus = analyze.NewAtomicBrowseFocus()
+	m.browseRoot = parent
 	m.notice = "Returning..."
-	return analyzeDriveNavNone, loadAnalyzeBrowseCmd(m.gen, parent)
+	return analyzeDriveNavNone, loadAnalyzeBrowseCmd(m.gen, parent, m.browseFocus)
 }
 
 // isAnalyzeVolumeRoot reports whether path is a drive-letter volume root (C:\).
@@ -560,9 +689,23 @@ func (m analyzeDriveModel) browseContent() string {
 		}
 	} else {
 		b.WriteString("Direct children:\n\n")
-		for i, child := range m.browseChildren {
+		selectedIdx := analyze.IndexOfBrowsePath(m.browseChildren, m.browseSelectedPath)
+		vis := m.browseViewportRows()
+		start := m.browseOffset
+		if start < 0 {
+			start = 0
+		}
+		if start > len(m.browseChildren) {
+			start = 0
+		}
+		end := start + vis
+		if end > len(m.browseChildren) {
+			end = len(m.browseChildren)
+		}
+		for i := start; i < end; i++ {
+			child := m.browseChildren[i]
 			prefix := "  "
-			if i == m.browseCursor {
+			if child.Path == m.browseSelectedPath || i == selectedIdx {
 				prefix = "> "
 			}
 			b.WriteString(prefix)
@@ -570,9 +713,9 @@ func (m analyzeDriveModel) browseContent() string {
 			b.WriteString("\n")
 		}
 		// Focused detail: aggregate counts/reasons, never unbounded paths.
-		if m.browseCursor >= 0 && m.browseCursor < len(m.browseChildren) {
+		if child, ok := m.selectedBrowseChild(); ok {
 			b.WriteString("\nDetail: ")
-			b.WriteString(analyze.FormatFocusedDetail(m.browseChildren[m.browseCursor]))
+			b.WriteString(analyze.FormatFocusedDetail(child))
 			b.WriteString("\n")
 		}
 	}
