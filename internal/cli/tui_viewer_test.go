@@ -126,21 +126,8 @@ func TestViewerEscapeReturnsToMenuLikeB(t *testing.T) {
 		t.Fatalf("esc should return to the main menu:\n%s", model.content())
 	}
 
-	// Analyze viewer (downs=2): same Esc = back behavior.
-	model = loadViewer(t, 2)
-	if model.screen != screenViewer || model.viewer.command != "analyze" {
-		t.Fatalf("expected analyze viewer, screen=%v command=%q", model.screen, model.viewer.command)
-	}
-	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	model = next.(rootModel)
-	if cmd != nil {
-		if msg := cmd(); msg == (tea.QuitMsg{}) {
-			t.Fatal("esc on Analyze must return to the menu, not quit")
-		}
-	}
-	if model.screen != screenMenu {
-		t.Fatalf("Analyze esc screen = %v, want screenMenu", model.screen)
-	}
+	// Analyze no longer uses the generic viewer; Status already covered Esc above.
+	// Drive-entry Esc is covered in tui_analyze_drive_test.go.
 }
 
 func TestRenderHistoryReportListsSessions(t *testing.T) {

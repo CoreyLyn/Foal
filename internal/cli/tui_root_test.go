@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/CoreyLyn/Foal/internal/analyze"
 	"github.com/CoreyLyn/Foal/internal/clean"
 )
 
@@ -148,22 +149,40 @@ func TestRootModelPlaceholderSelectionsAreNonDestructive(t *testing.T) {
 	}
 }
 
-func TestRootModelAnalyzeOpensViewer(t *testing.T) {
+func TestRootModelAnalyzeMenuOpensDriveEntry(t *testing.T) {
+	original := listAnalyzeLocalVolumes
+	listAnalyzeLocalVolumes = func() []analyze.LocalVolume {
+		return []analyze.LocalVolume{{
+			Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true,
+			Label: "System", FileSystem: "NTFS", HasCapacity: true, TotalBytes: 1000, FreeBytes: 400,
+		}}
+	}
+	t.Cleanup(func() { listAnalyzeLocalVolumes = original })
+
 	model := newRootModel()
 	// Navigate to Analyze (position 2)
 	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
 	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
-	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
 
-	// Should be on viewer screen
-	if model.screen != screenViewer {
-		t.Fatal("expected screenViewer after entering Analyze")
+	if model.screen != screenAnalyzeDrive {
+		t.Fatal("expected screenAnalyzeDrive after entering Analyze")
 	}
+	if cmd == nil {
+		t.Fatal("opening Analyze must load volumes")
+	}
+	loaded, ok := cmd().(analyzeVolumesLoadedMsg)
+	if !ok {
+		t.Fatalf("load cmd produced %T, want analyzeVolumesLoadedMsg", cmd())
+	}
+	next, _ = model.Update(loaded)
+	model = next.(rootModel)
 
 	content := model.content()
-	for _, want := range []string{"Analyze TUI", "read-only"} {
+	for _, want := range []string{"Analyze TUI", "Local drive entry", "read-only", "C:"} {
 		if !strings.Contains(content, want) {
-			t.Fatalf("Analyze viewer missing %q:\n%s", want, content)
+			t.Fatalf("Analyze drive entry missing %q: %s", want, content)
 		}
 	}
 }
@@ -214,45 +233,37 @@ func TestViewerModelAnalyzeAcceptsVolumeRootAndRejectsUNC(t *testing.T) {
 	}
 }
 
-func TestViewerModelAnalyzeReloadTriggersRescan(t *testing.T) {
-	vm := newViewerModel("analyze", 80, 24)
-
-	// First, simulate loading completed so we're not in initial loading state
-	vm.applyLoaded(viewerLoadedMsg{command: "analyze", body: "test"})
-	if vm.loading {
-		t.Fatal("should not be loading after applyLoaded")
+func TestRootModelAnalyzeShowsDriveEntryHints(t *testing.T) {
+	original := listAnalyzeLocalVolumes
+	listAnalyzeLocalVolumes = func() []analyze.LocalVolume {
+		return []analyze.LocalVolume{{
+			Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true,
+		}}
 	}
+	t.Cleanup(func() { listAnalyzeLocalVolumes = original })
 
-	// Press 'r' to reload
-	cmd := vm.handleKey("r")
-
-	// Should be in loading state after beginReload
-	if !vm.loading {
-		t.Fatal("should be in loading state after 'r' key")
-	}
-	if !strings.Contains(vm.notice, "Reloading") {
-		t.Fatalf("should show reloading notice, got: %q", vm.notice)
-	}
-
-	// Should return a non-nil cmd (loadAnalyzeViewerCmd)
-	if cmd == nil {
-		t.Fatal("reload should return a non-nil tea.Cmd")
-	}
-}
-
-func TestRootModelAnalyzeShowsPathEditHint(t *testing.T) {
 	model := newRootModel()
 	// Navigate to Analyze
 	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
 	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyDown})
-	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
+	if cmd != nil {
+		if loaded, ok := cmd().(analyzeVolumesLoadedMsg); ok {
+			next, _ = model.Update(loaded)
+			model = next.(rootModel)
+		}
+	}
 
 	content := model.content()
-	if !strings.Contains(content, "e edit path") {
-		t.Fatalf("Analyze viewer missing edit path hint:\n%s", content)
+	if !strings.Contains(content, "r refresh") {
+		t.Fatalf("Analyze drive entry missing refresh hint: %s", content)
 	}
 	if !strings.Contains(content, "no cleanup or deletion") {
-		t.Fatalf("Analyze viewer missing read-only reminder:\n%s", content)
+		t.Fatalf("Analyze drive entry missing read-only reminder: %s", content)
+	}
+	if strings.Contains(content, "e edit path") {
+		t.Fatalf("drive entry must not show path-edit hint: %s", content)
 	}
 }
 
@@ -324,47 +335,6 @@ func TestStylizedFramePreservesPlainFragments(t *testing.T) {
 	}
 }
 
-func TestViewerModelAnalyzePathEditing(t *testing.T) {
-	vm := newViewerModel("analyze", 80, 24)
-	if vm.command != "analyze" {
-		t.Fatal("expected analyze command")
-	}
-	if vm.editingPath {
-		t.Fatal("should not start in edit mode")
-	}
-
-	// Enter edit mode
-	cmd := vm.handleKey("e")
-	if cmd != nil {
-		t.Fatal("unexpected cmd from e key")
-	}
-	if !vm.editingPath {
-		t.Fatal("should be in edit mode after e")
-	}
-
-	// Type some characters
-	vm.handleKey("c")
-	vm.handleKey(":")
-	vm.handleKey(`\`)
-	vm.handleKey("t")
-	vm.handleKey("e")
-	vm.handleKey("s")
-	vm.handleKey("t")
-
-	if vm.analyzePath != `c:\test` {
-		t.Fatalf("path edit failed, got %q", vm.analyzePath)
-	}
-
-	// Cancel edit
-	cmd = vm.handleKey("esc")
-	if cmd != nil {
-		t.Fatal("unexpected cmd from esc")
-	}
-	if vm.editingPath {
-		t.Fatal("should not be in edit mode after esc")
-	}
-}
-
 func TestViewerModelAnalyzeNoCleanupAffordances(t *testing.T) {
 	// Render analyze body and verify no cleanup actions are suggested
 	body := renderAnalyzeBody("")
@@ -392,4 +362,3 @@ func TestViewerModelAnalyzeNoCleanupAffordances(t *testing.T) {
 		t.Fatalf("Analyze body may contain checkbox affordances:\n%s", body)
 	}
 }
-

@@ -15,6 +15,7 @@ const (
 	screenCleanPreview
 	screenUninstallPreview
 	screenViewer
+	screenAnalyzeDrive
 )
 
 type mainMenuItem struct {
@@ -40,7 +41,7 @@ var mainMenuItems = []mainMenuItem{
 	{
 		title:       "Analyze",
 		command:     "analyze",
-		description: "Read-only directory insight; no cleanup or deletion actions.",
+		description: "Read-only local drive entry; no cleanup or deletion actions.",
 		selection:   "",
 	},
 	{
@@ -70,6 +71,7 @@ type rootModel struct {
 	clean     eagerCleanModel
 	uninstall uninstallModel
 	viewer    viewerModel
+	analyze   analyzeDriveModel
 	width     int
 	height    int
 }
@@ -91,6 +93,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clean.setSize(msg.Width, msg.Height)
 		m.uninstall.setSize(msg.Width, msg.Height)
 		m.viewer.setSize(msg.Width, msg.Height)
+		m.analyze.setSize(msg.Width, msg.Height)
 		return m, nil
 	case eagerPreviewStartedMsg:
 		if m.screen != screenCleanPreview {
@@ -157,6 +160,12 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewerLoadedMsg:
 		m.viewer.applyLoaded(msg)
 		return m, nil
+	case analyzeVolumesLoadedMsg:
+		if m.screen != screenAnalyzeDrive {
+			return m, nil
+		}
+		m.analyze.applyLoaded(msg)
+		return m, nil
 	case tea.KeyPressMsg:
 		switch m.screen {
 		case screenCleanPreview:
@@ -165,6 +174,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateUninstallPreviewKey(msg)
 		case screenViewer:
 			return m.updateViewerKey(msg)
+		case screenAnalyzeDrive:
+			return m.updateAnalyzeDriveKey(msg)
 		}
 		return m.updateMenuKey(msg)
 	}
@@ -197,7 +208,12 @@ func (m rootModel) updateMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenUninstallPreview
 			m.uninstall = newUninstallModel(m.width, m.height)
 			return m, m.uninstall.start()
-		case "status", "history", "analyze":
+		case "analyze":
+			// Dedicated drive-entry TUI (#345). Directory browse is #346.
+			m.screen = screenAnalyzeDrive
+			m.analyze = newAnalyzeDriveModel(m.width, m.height)
+			return m, m.analyze.start()
+		case "status", "history":
 			command := mainMenuItems[m.selected].command
 			m.screen = screenViewer
 			m.viewer = newViewerModel(command, m.width, m.height)
@@ -263,8 +279,23 @@ func (m rootModel) updateViewerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.notice = ""
 		return m, nil
 	}
-	// All other keys (including 'r' reload, 'e' edit path, scrolling, etc.) go to the viewer
+	// All other keys (including 'r' reload, scrolling, etc.) go to the viewer
 	cmd := m.viewer.handleKey(key)
+	return m, cmd
+}
+
+func (m rootModel) updateAnalyzeDriveKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	nav, cmd := m.analyze.handleKey(msg.String())
+	switch nav {
+	case analyzeDriveNavMenu:
+		m.screen = screenMenu
+		m.notice = ""
+		return m, nil
+	case analyzeDriveNavQuit:
+		return m, tea.Quit
+	case analyzeDriveNavInterrupt:
+		return m, tea.Interrupt
+	}
 	return m, cmd
 }
 
@@ -278,6 +309,8 @@ func (m rootModel) content() string {
 		return m.uninstall.content()
 	case screenViewer:
 		return m.viewer.content()
+	case screenAnalyzeDrive:
+		return m.analyze.content()
 	}
 	return renderMainMenu(m.selected, m.notice)
 }
