@@ -638,10 +638,10 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 36 delete_permanently + 6 move_to_recycle_bin + 1 invoke_windows_servicing + 1 actionless permission boundary.
-	// The 7th, 8th, 9th, and 10th Recycle Bin categories are the exact-selection-only, Not-proven
-	// nvidia_installer_cache, lghub-cache, thunder-update-download, and machine-wide windows-temp
-	// (registered in the System group below).
+	// 36 delete_permanently + 7 move_to_recycle_bin + 1 invoke_windows_servicing + 1 actionless permission boundary.
+	// The 7th, 8th, 9th, 10th, and 11th Recycle Bin categories are the exact-selection-only, Not-proven
+	// nvidia_installer_cache, lghub-cache, thunder-update-download, machine-wide windows-temp,
+	// and machine-wide windows-update-download-cache (registered in the System group below).
 	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
 	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin)),
@@ -712,70 +712,102 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			SelectionPolicy:          CategorySelectionPolicyExactOnly,
 		},
 	), staticPreviewSafetyNote(nvidiaInstallerCacheOptInImpactNotice)),
-		// LG HUB cache: exact-selection-only, Not-proven move_to_recycle_bin opt-in
-		// for content-addressed download blobs under the fixed C:\ProgramData\LGHUB\cache
-		// root. Candidates are exactly ordinary files named 64 lowercase hex characters
-		// directly under the root; unknown names, directories, reparse points, and the
-		// root itself are never candidates. Dedicated resolver (not developer-cache / not
-		// application-cache): the `all`, `dev-caches`, `app-caches`, and `cli-agents`
-		// tokens and TUI Select All never select it. Permanent deletion is never eligible.
-		withPreviewSafetyNote(lghubCacheCategoryEntry(
-			CleanupCategoryDefinition{
-				Identifier:               CategoryLGHUBCache,
-				Label:                    "LG HUB cache",
-				ReportCategory:           ReportCategorySystem,
-				Eligibility:              CategoryEligibilityOptIn,
-				Aliases:                  []string{},
-				RunningApplicationPolicy: RunningApplicationPolicyDistinctiveProcessIdle,
-				PlannedAction:            PlannedActionMoveToRecycleBin,
-				SelectionPolicy:          CategorySelectionPolicyExactOnly,
-			},
-		), staticPreviewSafetyNote(lghubCacheOptInImpactNotice)),
-		// Thunder update download cache: exact-selection-only, Not-proven move_to_recycle_bin
-		// opt-in for update packages under the fixed C:\ProgramData\Thunder Network\XLLiveUD\Download
-		// root. Candidates are exactly direct children (both files and directories) with a
-		// 30-day stability window (latest observed modification across child and all safely
-		// inspectable descendants must be at least 30 days old); reparse points and the
-		// root itself are never candidates, and no recursive layout guessing occurs below
-		// the direct-child level. Dedicated resolver (not developer-cache / not
-		// application-cache): the `all`, `dev-caches`, `app-caches`, and `cli-agents`
-		// tokens and TUI Select All never select it. Permanent deletion is never eligible.
-		withPreviewSafetyNote(thunderUpdateDownloadCategoryEntry(
-			CleanupCategoryDefinition{
-				Identifier:               CategoryThunderUpdateDownload,
-				Label:                    "Thunder update download cache",
-				ReportCategory:           ReportCategorySystem,
-				Eligibility:              CategoryEligibilityOptIn,
-				Aliases:                  []string{},
-				RunningApplicationPolicy: RunningApplicationPolicyDistinctiveProcessIdle,
-				PlannedAction:            PlannedActionMoveToRecycleBin,
-				SelectionPolicy:          CategorySelectionPolicyExactOnly,
-			},
-		), staticPreviewSafetyNote(thunderUpdateDownloadOptInImpactNotice)),
-		// Windows system temp: exact-selection-only, machine-wide move_to_recycle_bin
-		// opt-in for stale direct children of %SystemRoot%\Temp (resolved from the
-		// SystemRoot env; invalid values are silent absence). Candidates are direct
-		// children (files and directories) whose deep latest observed modification is
-		// at least 14 days old (user_temp semantics); reparse points and the root
-		// itself are never candidates. Requires a narrow, category-owned PathSafe
-		// carve-out for exactly that subtree — the rest of the Windows tree stays
-		// rejected. Non-elevated fail-closed: unreadable enumeration skips the whole
-		// category, per-item access denials are per-item skips. Dedicated resolver
-		// (not developer-cache / not application-cache): the `all`, `dev-caches`,
-		// `app-caches`, and `cli-agents` tokens and TUI Select All never select it.
-		// Permanent deletion is never eligible. See ADR 0030 / ADR 0032.
-		withPreviewSafetyNote(windowsTempCategoryEntry(
-			CleanupCategoryDefinition{
-				Identifier:               CategoryWindowsTemp,
-				Label:                    "Windows system temp",
-				ReportCategory:           ReportCategorySystem,
-				Eligibility:              CategoryEligibilityOptIn,
-				Aliases:                  []string{},
-				RunningApplicationPolicy: RunningApplicationPolicyNotApplicable,
-				PlannedAction:            PlannedActionMoveToRecycleBin,
-				SelectionPolicy:          CategorySelectionPolicyExactOnly,
-			},
-		), staticPreviewSafetyNote(windowsTempOptInImpactNotice)),
+	// LG HUB cache: exact-selection-only, Not-proven move_to_recycle_bin opt-in
+	// for content-addressed download blobs under the fixed C:\ProgramData\LGHUB\cache
+	// root. Candidates are exactly ordinary files named 64 lowercase hex characters
+	// directly under the root; unknown names, directories, reparse points, and the
+	// root itself are never candidates. Dedicated resolver (not developer-cache / not
+	// application-cache): the `all`, `dev-caches`, `app-caches`, and `cli-agents`
+	// tokens and TUI Select All never select it. Permanent deletion is never eligible.
+	withPreviewSafetyNote(lghubCacheCategoryEntry(
+		CleanupCategoryDefinition{
+			Identifier:               CategoryLGHUBCache,
+			Label:                    "LG HUB cache",
+			ReportCategory:           ReportCategorySystem,
+			Eligibility:              CategoryEligibilityOptIn,
+			Aliases:                  []string{},
+			RunningApplicationPolicy: RunningApplicationPolicyDistinctiveProcessIdle,
+			PlannedAction:            PlannedActionMoveToRecycleBin,
+			SelectionPolicy:          CategorySelectionPolicyExactOnly,
+		},
+	), staticPreviewSafetyNote(lghubCacheOptInImpactNotice)),
+	// Thunder update download cache: exact-selection-only, Not-proven move_to_recycle_bin
+	// opt-in for update packages under the fixed C:\ProgramData\Thunder Network\XLLiveUD\Download
+	// root. Candidates are exactly direct children (both files and directories) with a
+	// 30-day stability window (latest observed modification across child and all safely
+	// inspectable descendants must be at least 30 days old); reparse points and the
+	// root itself are never candidates, and no recursive layout guessing occurs below
+	// the direct-child level. Dedicated resolver (not developer-cache / not
+	// application-cache): the `all`, `dev-caches`, `app-caches`, and `cli-agents`
+	// tokens and TUI Select All never select it. Permanent deletion is never eligible.
+	withPreviewSafetyNote(thunderUpdateDownloadCategoryEntry(
+		CleanupCategoryDefinition{
+			Identifier:               CategoryThunderUpdateDownload,
+			Label:                    "Thunder update download cache",
+			ReportCategory:           ReportCategorySystem,
+			Eligibility:              CategoryEligibilityOptIn,
+			Aliases:                  []string{},
+			RunningApplicationPolicy: RunningApplicationPolicyDistinctiveProcessIdle,
+			PlannedAction:            PlannedActionMoveToRecycleBin,
+			SelectionPolicy:          CategorySelectionPolicyExactOnly,
+		},
+	), staticPreviewSafetyNote(thunderUpdateDownloadOptInImpactNotice)),
+	// Windows system temp: exact-selection-only, machine-wide move_to_recycle_bin
+	// opt-in for stale direct children of %SystemRoot%\Temp (resolved from the
+	// SystemRoot env; invalid values are silent absence). Candidates are direct
+	// children (files and directories) whose deep latest observed modification is
+	// at least 14 days old (user_temp semantics); reparse points and the root
+	// itself are never candidates. Requires a narrow, category-owned PathSafe
+	// carve-out for exactly that subtree — the rest of the Windows tree stays
+	// rejected. Non-elevated fail-closed: unreadable enumeration skips the whole
+	// category, per-item access denials are per-item skips. Dedicated resolver
+	// (not developer-cache / not application-cache): the `all`, `dev-caches`,
+	// `app-caches`, and `cli-agents` tokens and TUI Select All never select it.
+	// Permanent deletion is never eligible. See ADR 0030 / ADR 0032.
+	withPreviewSafetyNote(windowsTempCategoryEntry(
+		CleanupCategoryDefinition{
+			Identifier:               CategoryWindowsTemp,
+			Label:                    "Windows system temp",
+			ReportCategory:           ReportCategorySystem,
+			Eligibility:              CategoryEligibilityOptIn,
+			Aliases:                  []string{},
+			RunningApplicationPolicy: RunningApplicationPolicyNotApplicable,
+			PlannedAction:            PlannedActionMoveToRecycleBin,
+			SelectionPolicy:          CategorySelectionPolicyExactOnly,
+		},
+	), staticPreviewSafetyNote(windowsTempOptInImpactNotice)),
+	// Windows Update download cache: exact-selection-only, machine-wide
+	// move_to_recycle_bin opt-in for stale direct children of
+	// %SystemRoot%\SoftwareDistribution\Download (resolved from the SystemRoot
+	// env; invalid values are silent absence). Candidates are direct children
+	// (files and directories) whose deep latest observed modification is at
+	// least 30 days old; reparse points and the root itself are never
+	// candidates. Gated on the Windows Update service stack (wuauserv, bits,
+	// dosvc, UsoSvc) being observably idle before discovery and again after
+	// measurement, queried read-only via SCM: any non-Stopped or unknown state
+	// skips the whole category with the stable reason
+	// windows_update_services_active. Foal never stops or reconfigures those
+	// services. Requires a narrow, category-owned PathSafe carve-out for
+	// exactly that subtree — DataStore/ReportingEvents siblings and the rest of
+	// the Windows tree stay rejected. Non-elevated fail-closed: unreadable
+	// enumeration skips the whole category, per-item access denials are
+	// per-item skips. Dedicated resolver (not developer-cache / not
+	// application-cache): the `all`, `dev-caches`, `app-caches`, and
+	// `cli-agents` tokens and TUI Select All never select it. Permanent
+	// deletion is never eligible; this is an ordinary path-backed deletion,
+	// never the servicing helper. See ADR 0030 / ADR 0033.
+	withPreviewSafetyNote(windowsUpdateDownloadCacheCategoryEntry(
+		CleanupCategoryDefinition{
+			Identifier:               CategoryWindowsUpdateDownloadCache,
+			Label:                    "Windows Update download cache",
+			ReportCategory:           ReportCategorySystem,
+			Eligibility:              CategoryEligibilityOptIn,
+			Aliases:                  []string{},
+			RunningApplicationPolicy: RunningApplicationPolicyDistinctiveProcessIdle,
+			PlannedAction:            PlannedActionMoveToRecycleBin,
+			SelectionPolicy:          CategorySelectionPolicyExactOnly,
+		},
+	), staticPreviewSafetyNote(windowsUpdateDownloadCacheOptInImpactNotice)),
 	// Windows component store (WinSxS): exact-selection-only servicing category
 	// with planned action invoke_windows_servicing. It never yields a file
 	// candidate or byte estimate; read-only component-store analysis is delegated
@@ -1099,7 +1131,7 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 			categoryResolverApplicationCache, categoryResolverDeveloperCache,
 			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache,
 			categoryResolverLGHUBCache, categoryResolverThunderUpdateDownload,
-			categoryResolverWindowsTemp:
+			categoryResolverWindowsTemp, categoryResolverWindowsUpdateDownloadCache:
 			if entry.definition.Eligibility != CategoryEligibilityOptIn {
 				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
 			}
@@ -1115,6 +1147,20 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 				}
 				if entry.cliAgentProduct {
 					return fmt.Errorf("windows-temp category %q must not be a cli-agent product", id)
+				}
+			}
+			if entry.resolverKind == categoryResolverWindowsUpdateDownloadCache {
+				// Windows Update download cache is a machine-wide, exact-selection-only
+				// Recycle Bin category. Permanent deletion is never eligible, and
+				// aggregate/group tokens must never select it.
+				if entry.definition.PlannedAction != PlannedActionMoveToRecycleBin {
+					return fmt.Errorf("windows-update-download-cache category %q must declare move_to_recycle_bin", id)
+				}
+				if entry.definition.SelectionPolicy != CategorySelectionPolicyExactOnly {
+					return fmt.Errorf("windows-update-download-cache category %q must be exact-selection-only", id)
+				}
+				if entry.cliAgentProduct {
+					return fmt.Errorf("windows-update-download-cache category %q must not be a cli-agent product", id)
 				}
 			}
 			if entry.resolverKind == categoryResolverThunderUpdateDownload {

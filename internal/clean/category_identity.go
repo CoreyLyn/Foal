@@ -18,11 +18,12 @@ type CategoryIdentityCandidate struct {
 	// needs to repeat its fresh proof. They are package-internal and set by
 	// shared Execute from Options so tests exercise the same seams as
 	// production. Categories that do not use them ignore them.
-	nvidiaDiscovery                NVIDIAInstallerCacheDiscoveryOptions
-	lghubDiscovery                 LGHUBCacheDiscoveryOptions
-	thunderUpdateDownloadDiscovery ThunderUpdateDownloadDiscoveryOptions
-	windowsTempDiscovery           WindowsTempDiscoveryOptions
-	validator                      pathsafe.Validator
+	nvidiaDiscovery                     NVIDIAInstallerCacheDiscoveryOptions
+	lghubDiscovery                      LGHUBCacheDiscoveryOptions
+	thunderUpdateDownloadDiscovery      ThunderUpdateDownloadDiscoveryOptions
+	windowsTempDiscovery                WindowsTempDiscoveryOptions
+	windowsUpdateDownloadCacheDiscovery WindowsUpdateDownloadCacheDiscoveryOptions
+	validator                           pathsafe.Validator
 }
 
 // CategoryIdentityValidator re-checks, immediately before mutation, that a

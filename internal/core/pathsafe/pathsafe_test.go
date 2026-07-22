@@ -354,3 +354,70 @@ func TestWindowsTempCarveOutRequiresResolvableSystemRoot(t *testing.T) {
 		t.Fatalf("without a resolvable SystemRoot the carve-out must not apply, got %#v, %t", reason, ok)
 	}
 }
+
+// TestValidateDeletePathWindowsUpdateDownloadCarveOut verifies the narrow,
+// category-owned carve-out for exactly %SystemRoot%\SoftwareDistribution\Download
+// (ADR 0033): strict descendants pass the system-tree policy (and then fail only
+// at Lstat because they do not exist), while the Download root itself, the
+// SoftwareDistribution siblings DataStore and ReportingEvents, and the rest of
+// the Windows tree stay rejected as protected_path. User Protection still applies
+// inside the carve-out.
+func TestValidateDeletePathWindowsUpdateDownloadCarveOut(t *testing.T) {
+	t.Setenv("SystemRoot", `C:\Windows`)
+
+	// A strict descendant of the Download subtree passes the protected-tree
+	// policy; because it does not exist it stops later at Lstat with stat_failed.
+	reason, ok := pathsafe.ValidateDeletePath(`C:\Windows\SoftwareDistribution\Download\nonexistent-foal-339`)
+	if ok {
+		t.Fatal("nonexistent carve-out descendant should still fail at Lstat")
+	}
+	if reason.Code == "protected_path" {
+		t.Fatalf("carve-out descendant must pass the protected-tree policy, got %#v", reason)
+	}
+	if reason.Code != "stat_failed" {
+		t.Fatalf("carve-out descendant reason = %#v, want stat_failed (passed carve-out, then missing)", reason)
+	}
+
+	for _, path := range []string{
+		`C:\Windows\SoftwareDistribution\Download`,              // the carve-out root itself is never deletable
+		`C:\Windows\SoftwareDistribution`,                       // the parent stays rejected
+		`C:\Windows\SoftwareDistribution\DataStore\nonexistent`, // sibling stays rejected
+		`C:\Windows\SoftwareDistribution\ReportingEvents\bad`,   // sibling stays rejected
+		`C:\Windows\SoftwareDistribution\Download2\nonexistent`, // prefix look-alike is not the carve-out subtree
+		`C:\Windows\System32\nonexistent`,                       // rest of the tree stays rejected
+	} {
+		reason, ok := pathsafe.ValidateDeletePath(path)
+		if ok || reason.Code != "protected_path" {
+			t.Fatalf("ValidateDeletePath(%q) = %#v, %t; want protected_path", path, reason, ok)
+		}
+	}
+
+	// The Temp carve-out still coexists (both roots are carved out).
+	reason, ok = pathsafe.ValidateDeletePath(`C:\Windows\Temp\nonexistent-foal-338`)
+	if ok || reason.Code == "protected_path" {
+		t.Fatalf("Temp carve-out must still apply alongside the Download carve-out, got %#v, %t", reason, ok)
+	}
+
+	// User Protection rules still apply inside the Download carve-out (deny-only).
+	guarded := `C:\Windows\SoftwareDistribution\Download\guarded`
+	validator := pathsafe.NewValidator([]string{guarded})
+	reason, ok = validator.ValidateDeletePath(guarded + `\child`)
+	if ok || reason.Code != "protected_path" {
+		t.Fatalf("protected descendant inside carve-out = %#v, %t; want protected_path", reason, ok)
+	}
+	if !strings.Contains(reason.Message, "Protection rule") {
+		t.Fatalf("carve-out Protection message = %q, want user Protection rule wording", reason.Message)
+	}
+}
+
+// TestWindowsUpdateDownloadCarveOutRequiresResolvableSystemRoot verifies that when
+// SystemRoot is unusable (relative), no Download carve-out is granted and its
+// descendants stay rejected as protected_path.
+func TestWindowsUpdateDownloadCarveOutRequiresResolvableSystemRoot(t *testing.T) {
+	t.Setenv("SystemRoot", `Windows`) // relative ⇒ no carve-out
+
+	reason, ok := pathsafe.ValidateDeletePath(`C:\Windows\SoftwareDistribution\Download\nonexistent-foal-339`)
+	if ok || reason.Code != "protected_path" {
+		t.Fatalf("without a resolvable SystemRoot the carve-out must not apply, got %#v, %t", reason, ok)
+	}
+}

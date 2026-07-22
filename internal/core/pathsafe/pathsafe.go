@@ -116,25 +116,31 @@ var builtInProtectedSystemRoots = []string{
 // (lowercased, cleaned) absolute directory; the entry itself is never deletable
 // and every sibling stays rejected. The list is deliberately per-subtree so a
 // future category adds its own carve-out root and cannot silently inherit
-// another category's. Currently only %SystemRoot%\Temp (the windows-temp
-// category, ADR 0032) is carved out.
+// another category's. Currently %SystemRoot%\Temp (the windows-temp category,
+// ADR 0032) and %SystemRoot%\SoftwareDistribution\Download (the
+// windows-update-download-cache category, ADR 0033) are carved out; every
+// SoftwareDistribution sibling (DataStore, ReportingEvents, ...) stays rejected.
 func windowsTreeCarveOutRoots() []string {
 	var roots []string
 	if temp, ok := resolveSystemRootSubtree("Temp"); ok {
 		roots = append(roots, temp)
 	}
+	if wuDownload, ok := resolveSystemRootSubtree("SoftwareDistribution", "Download"); ok {
+		roots = append(roots, wuDownload)
+	}
 	return roots
 }
 
-// resolveSystemRootSubtree resolves exactly %SystemRoot%\<sub> to a normalized
+// resolveSystemRootSubtree resolves exactly %SystemRoot%\<sub...> to a normalized
 // (lowercased, cleaned) absolute path. It fails closed (ok=false) when SystemRoot
 // is blank, relative, or UNC so no carve-out is granted for unusable values.
-func resolveSystemRootSubtree(sub string) (string, bool) {
+func resolveSystemRootSubtree(sub ...string) (string, bool) {
 	systemRoot := strings.TrimSpace(stripLongPathPrefix(os.Getenv("SystemRoot")))
 	if systemRoot == "" || strings.HasPrefix(systemRoot, `\\`) || !filepath.IsAbs(systemRoot) {
 		return "", false
 	}
-	return strings.ToLower(filepath.Clean(filepath.Join(systemRoot, sub))), true
+	parts := append([]string{systemRoot}, sub...)
+	return strings.ToLower(filepath.Clean(filepath.Join(parts...))), true
 }
 
 // isWindowsTreeCarveOut reports whether cleaned (already filepath.Clean + lower)
