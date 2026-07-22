@@ -19,9 +19,11 @@ import (
 // Directory children measure with at most two concurrent workers; focus promotes
 // the selected queued path to the next free slot without preempting active work.
 // Rows re-rank by latest observed logical bytes while selection stays bound to
-// canonical child path. Cancel/cache/resume and presentation polish arrive in
-// later tickets. Analyze remains read-only: no mutation, elevation, process
-// action, or History write.
+// canonical child path. Leaving a location cooperatively cancels unfinished
+// child measurements; a session-only in-memory cache reuses durable terminals
+// on return and resumes missing work. Refresh discards the current location
+// cache and rescans. Analyze remains read-only: no mutation, elevation,
+// process action, or History write.
 
 // analyzeDriveNav is the navigation intent returned by the Analyze browser model.
 type analyzeDriveNav int
@@ -112,14 +114,21 @@ type analyzeDriveModel struct {
 	gen int
 	// measuring is true while a browse stream is active (children may already be visible).
 	measuring bool
+	// sessionCache holds durable terminal child summaries for this Analyze TUI
+	// session only. Never persisted, never written to History, never used by cleanup.
+	sessionCache *analyze.BrowseSessionCache
+	// browseCancel cancels the in-flight StreamBrowseLocation for the current gen.
+	// Nil when no browse stream is active.
+	browseCancel context.CancelFunc
 }
 
 func newAnalyzeDriveModel(width, height int) analyzeDriveModel {
 	return analyzeDriveModel{
-		phase:   analyzePhaseDrive,
-		loading: true,
-		width:   width,
-		height:  height,
+		phase:        analyzePhaseDrive,
+		loading:      true,
+		width:        width,
+		height:       height,
+		sessionCache: analyze.NewBrowseSessionCache(),
 	}
 }
 
@@ -129,6 +138,7 @@ func (m *analyzeDriveModel) setSize(width, height int) {
 }
 
 func (m *analyzeDriveModel) start() tea.Cmd {
+	m.cancelBrowseWork()
 	m.phase = analyzePhaseDrive
 	m.loading = true
 	m.notice = ""
@@ -139,6 +149,11 @@ func (m *analyzeDriveModel) start() tea.Cmd {
 	m.browseOffset = 0
 	m.browseFocus = nil
 	m.measuring = false
+	if m.sessionCache == nil {
+		m.sessionCache = analyze.NewBrowseSessionCache()
+	} else {
+		m.sessionCache.Clear()
+	}
 	return loadAnalyzeVolumesCmd
 }
 
@@ -165,6 +180,7 @@ func (m *analyzeDriveModel) applyBrowseLoaded(msg analyzeBrowseLoadedMsg) tea.Cm
 	}
 	m.loading = false
 	m.measuring = false
+	m.browseCancel = nil
 	if !msg.result.OK {
 		m.notice = fmt.Sprintf("Cannot browse: %s", msg.result.Reason.Message)
 		// Failed entry from drive entry: stay on drive list (browseRoot was only
@@ -185,6 +201,8 @@ func (m *analyzeDriveModel) applyBrowseLoaded(msg analyzeBrowseLoadedMsg) tea.Cm
 	m.browseRoot = msg.result.Root
 	// Authoritative final inventory from the shared core (already ranked).
 	m.browseChildren = append([]analyze.BrowseChild(nil), msg.result.Children...)
+	// Retain only durable terminals for this session (not nav-cancel Incomplete).
+	m.ensureSessionCache().PutAll(msg.result.Root, msg.result.Children)
 	m.syncBrowseSelectionAfterRank()
 	m.notice = ""
 	return nil
@@ -207,6 +225,7 @@ func (m *analyzeDriveModel) applyBrowseStarted(msg analyzeBrowseStartedMsg) tea.
 
 func (m *analyzeDriveModel) applyBrowseObservation(msg analyzeBrowseObservationMsg) tea.Cmd {
 	if msg.gen != m.gen {
+		// Stale stream after navigation cancel: do not accept into a newer location.
 		return nil
 	}
 	m.phase = analyzePhaseBrowse
@@ -252,6 +271,10 @@ func (m *analyzeDriveModel) upsertBrowseObservation(obs analyze.ChildObservation
 	if m.browseSelectedPath == "" && child.Path != "" {
 		m.browseSelectedPath = child.Path
 		m.publishBrowseFocus()
+	}
+	// Session cache only durable terminals so mid-scan leave keeps completed work.
+	if analyze.IsDurableCachedChild(child) && m.browseRoot != "" {
+		m.ensureSessionCache().Put(m.browseRoot, child)
 	}
 	m.browseChildren = analyze.RankBrowseChildren(m.browseChildren)
 	m.syncBrowseSelectionAfterRank()
@@ -349,15 +372,25 @@ func (m *analyzeDriveModel) moveBrowseSelection(delta int) {
 	m.notice = ""
 }
 
-func loadAnalyzeBrowseCmd(gen int, root string, focus *analyze.AtomicBrowseFocus) tea.Cmd {
+func loadAnalyzeBrowseCmd(gen int, root string, focus *analyze.AtomicBrowseFocus, known []analyze.BrowseChild, ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		obsCh := make(chan analyze.ChildObservation, 64)
 		resultCh := make(chan analyze.BrowseResult, 1)
 		go func() {
-			opts := analyze.BrowseOptions{Focus: focus}
-			result := browseAnalyzeLocation(context.Background(), root, opts, func(o analyze.ChildObservation) {
-				// Buffer absorbs UI-safe bursts; block rather than drop terminals.
-				obsCh <- o
+			opts := analyze.BrowseOptions{
+				Focus:         focus,
+				KnownChildren: known,
+			}
+			result := browseAnalyzeLocation(ctx, root, opts, func(o analyze.ChildObservation) {
+				// Buffer absorbs UI-safe bursts; after cancel drop remaining obs
+				// so stale work cannot block forever on a dead consumer.
+				select {
+				case obsCh <- o:
+				case <-ctx.Done():
+				}
 			})
 			close(obsCh)
 			resultCh <- result
@@ -415,10 +448,7 @@ func (m *analyzeDriveModel) handleKey(key string) (analyzeDriveNav, tea.Cmd) {
 		case "q":
 			return analyzeDriveNavQuit, nil
 		case "esc", "escape", "b":
-			// Cancel-in-progress: bump gen so result is ignored, then navigate back.
-			m.gen++
-			m.loading = false
-			m.measuring = false
+			// Cancel-in-progress: stop workers and discard stale stream, then navigate back.
 			return m.leaveBrowse()
 		default:
 			return analyzeDriveNavNone, nil
@@ -473,10 +503,17 @@ func (m *analyzeDriveModel) handleBrowseKey(key string) (analyzeDriveNav, tea.Cm
 		m.moveBrowseSelection(1)
 	case "k", "up":
 		m.moveBrowseSelection(-1)
+	case "r":
+		// Refresh: cancel active work, discard this location's session cache,
+		// re-enumerate, and rescan. Does not clear sibling locations.
+		if m.browseRoot == "" {
+			return analyzeDriveNavNone, nil
+		}
+		return analyzeDriveNavNone, m.beginBrowseLocation(m.browseRoot, "Refreshing...", true)
 	case "enter":
 		return m.enterBrowseChild()
 	default:
-		m.notice = "Unknown key. Use j/k, enter, esc/b, or q."
+		m.notice = "Unknown key. Use j/k, enter, r refresh, esc/b, or q."
 	}
 	return analyzeDriveNavNone, nil
 }
@@ -495,15 +532,7 @@ func (m *analyzeDriveModel) enterDrive() (analyzeDriveNav, tea.Cmd) {
 		return analyzeDriveNavNone, nil
 	}
 	// Enumerate and measure only after entry; no sibling drives are prefetched.
-	m.gen++
-	m.loading = true
-	m.notice = fmt.Sprintf("Browsing %s...", vol.Letter)
-	m.browseRoot = vol.Root
-	m.browseChildren = nil
-	m.browseSelectedPath = ""
-	m.browseOffset = 0
-	m.browseFocus = analyze.NewAtomicBrowseFocus()
-	return analyzeDriveNavNone, loadAnalyzeBrowseCmd(m.gen, vol.Root, m.browseFocus)
+	return analyzeDriveNavNone, m.beginBrowseLocation(vol.Root, fmt.Sprintf("Browsing %s...", vol.Letter), false)
 }
 
 func (m *analyzeDriveModel) enterBrowseChild() (analyzeDriveNav, tea.Cmd) {
@@ -529,15 +558,7 @@ func (m *analyzeDriveModel) enterBrowseChild() (analyzeDriveNav, tea.Cmd) {
 		}
 		return analyzeDriveNavNone, nil
 	case child.Kind == analyze.BrowseKindDirectory && child.Navigable:
-		m.gen++
-		m.loading = true
-		m.notice = fmt.Sprintf("Browsing %s...", child.Name)
-		m.browseRoot = child.Path
-		m.browseChildren = nil
-		m.browseSelectedPath = ""
-		m.browseOffset = 0
-		m.browseFocus = analyze.NewAtomicBrowseFocus()
-		return analyzeDriveNavNone, loadAnalyzeBrowseCmd(m.gen, child.Path, m.browseFocus)
+			return analyzeDriveNavNone, m.beginBrowseLocation(child.Path, fmt.Sprintf("Browsing %s...", child.Name), false)
 	default:
 		m.notice = fmt.Sprintf("%s cannot be entered.", child.Name)
 		return analyzeDriveNavNone, nil
@@ -545,6 +566,13 @@ func (m *analyzeDriveModel) enterBrowseChild() (analyzeDriveNav, tea.Cmd) {
 }
 
 func (m *analyzeDriveModel) leaveBrowse() (analyzeDriveNav, tea.Cmd) {
+	// Persist durable terminals observed so far, then cancel unfinished work.
+	if m.browseRoot != "" && len(m.browseChildren) > 0 {
+		m.ensureSessionCache().PutAll(m.browseRoot, m.browseChildren)
+	}
+	m.cancelBrowseWork()
+	m.gen++ // discard any late observations from the canceled generation
+
 	if m.browseRoot == "" || isAnalyzeVolumeRoot(m.browseRoot) {
 		// Volume root → drive entry.
 		m.phase = analyzePhaseDrive
@@ -559,7 +587,7 @@ func (m *analyzeDriveModel) leaveBrowse() (analyzeDriveNav, tea.Cmd) {
 		return analyzeDriveNavNone, nil
 	}
 	parent := parentBrowsePath(m.browseRoot)
-	if parent == "" || isAnalyzeVolumeRoot(parent) && parent == m.browseRoot {
+	if parent == "" || (isAnalyzeVolumeRoot(parent) && parent == m.browseRoot) {
 		m.phase = analyzePhaseDrive
 		m.browseRoot = ""
 		m.browseChildren = nil
@@ -571,16 +599,52 @@ func (m *analyzeDriveModel) leaveBrowse() (analyzeDriveNav, tea.Cmd) {
 		m.notice = ""
 		return analyzeDriveNavNone, nil
 	}
+	return analyzeDriveNavNone, m.beginBrowseLocation(parent, "Returning...", false)
+}
+
+func (m *analyzeDriveModel) ensureSessionCache() *analyze.BrowseSessionCache {
+	if m.sessionCache == nil {
+		m.sessionCache = analyze.NewBrowseSessionCache()
+	}
+	return m.sessionCache
+}
+
+// cancelBrowseWork cooperatively cancels any in-flight location measurement.
+// Stale observations are discarded via gen mismatch; nav-cancel Incomplete is
+// not written as durable hard-limit cache (Put filters non-durable).
+func (m *analyzeDriveModel) cancelBrowseWork() {
+	if m.browseCancel != nil {
+		m.browseCancel()
+		m.browseCancel = nil
+	}
+	m.measuring = false
+}
+
+// beginBrowseLocation cancels prior work, opens a new generation, and starts
+// streaming browse for root. When refresh is true the location session cache
+// is discarded so every child is re-enumerated and remeasured.
+func (m *analyzeDriveModel) beginBrowseLocation(root string, notice string, refresh bool) tea.Cmd {
+	// Persist durable terminals for the location we are leaving (nav or enter).
+	if m.browseRoot != "" && len(m.browseChildren) > 0 {
+		m.ensureSessionCache().PutAll(m.browseRoot, m.browseChildren)
+	}
+	m.cancelBrowseWork()
 	m.gen++
+	if refresh {
+		m.ensureSessionCache().ClearLocation(root)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.browseCancel = cancel
 	m.loading = true
 	m.measuring = false
+	m.notice = notice
+	m.browseRoot = root
 	m.browseChildren = nil
 	m.browseSelectedPath = ""
 	m.browseOffset = 0
 	m.browseFocus = analyze.NewAtomicBrowseFocus()
-	m.browseRoot = parent
-	m.notice = "Returning..."
-	return analyzeDriveNavNone, loadAnalyzeBrowseCmd(m.gen, parent, m.browseFocus)
+	known := m.ensureSessionCache().KnownFor(root)
+	return loadAnalyzeBrowseCmd(m.gen, root, m.browseFocus, known, ctx)
 }
 
 // isAnalyzeVolumeRoot reports whether path is a drive-letter volume root (C:\).
@@ -733,7 +797,7 @@ const analyzeDriveFooter = "\nHints: j/k move | enter open | r refresh | esc/b b
 	"This view is read-only; no cleanup or deletion actions are available.\n" +
 	"Drive entry reads volume metadata only until you enter a drive.\n"
 
-const analyzeBrowseFooter = "\nHints: j/k move | enter open directory | esc/b parent | q quit\n" +
+const analyzeBrowseFooter = "\nHints: j/k move | enter open directory | r refresh | esc/b parent | q quit\n" +
 	"This view is read-only; no cleanup or deletion actions are available.\n" +
 	"Files and reparse points are listed but not navigable. Hidden/system stay visible.\n"
 
