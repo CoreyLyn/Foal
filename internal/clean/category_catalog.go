@@ -638,9 +638,10 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 32 delete_permanently + 9 move_to_recycle_bin + 1 actionless permission boundary.
-	// The 7th, 8th, and 9th Recycle Bin categories are the exact-selection-only, Not-proven
-	// nvidia_installer_cache, lghub-cache, and thunder-update-download (registered in the System group below).
+	// 36 delete_permanently + 6 move_to_recycle_bin + 1 invoke_windows_servicing + 1 actionless permission boundary.
+	// The 7th, 8th, 9th, and 10th Recycle Bin categories are the exact-selection-only, Not-proven
+	// nvidia_installer_cache, lghub-cache, thunder-update-download, and machine-wide windows-temp
+	// (registered in the System group below).
 	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
 	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin)),
@@ -751,6 +752,30 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 				SelectionPolicy:          CategorySelectionPolicyExactOnly,
 			},
 		), staticPreviewSafetyNote(thunderUpdateDownloadOptInImpactNotice)),
+		// Windows system temp: exact-selection-only, machine-wide move_to_recycle_bin
+		// opt-in for stale direct children of %SystemRoot%\Temp (resolved from the
+		// SystemRoot env; invalid values are silent absence). Candidates are direct
+		// children (files and directories) whose deep latest observed modification is
+		// at least 14 days old (user_temp semantics); reparse points and the root
+		// itself are never candidates. Requires a narrow, category-owned PathSafe
+		// carve-out for exactly that subtree — the rest of the Windows tree stays
+		// rejected. Non-elevated fail-closed: unreadable enumeration skips the whole
+		// category, per-item access denials are per-item skips. Dedicated resolver
+		// (not developer-cache / not application-cache): the `all`, `dev-caches`,
+		// `app-caches`, and `cli-agents` tokens and TUI Select All never select it.
+		// Permanent deletion is never eligible. See ADR 0030 / ADR 0032.
+		withPreviewSafetyNote(windowsTempCategoryEntry(
+			CleanupCategoryDefinition{
+				Identifier:               CategoryWindowsTemp,
+				Label:                    "Windows system temp",
+				ReportCategory:           ReportCategorySystem,
+				Eligibility:              CategoryEligibilityOptIn,
+				Aliases:                  []string{},
+				RunningApplicationPolicy: RunningApplicationPolicyNotApplicable,
+				PlannedAction:            PlannedActionMoveToRecycleBin,
+				SelectionPolicy:          CategorySelectionPolicyExactOnly,
+			},
+		), staticPreviewSafetyNote(windowsTempOptInImpactNotice)),
 	// Windows component store (WinSxS): exact-selection-only servicing category
 	// with planned action invoke_windows_servicing. It never yields a file
 	// candidate or byte estimate; read-only component-store analysis is delegated
@@ -1073,9 +1098,24 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 		case categoryResolverExistenceOpportunity, categoryResolverBrowserCache,
 			categoryResolverApplicationCache, categoryResolverDeveloperCache,
 			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache,
-			categoryResolverLGHUBCache, categoryResolverThunderUpdateDownload:
+			categoryResolverLGHUBCache, categoryResolverThunderUpdateDownload,
+			categoryResolverWindowsTemp:
 			if entry.definition.Eligibility != CategoryEligibilityOptIn {
 				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
+			}
+			if entry.resolverKind == categoryResolverWindowsTemp {
+				// Windows system temp is a machine-wide, exact-selection-only Recycle
+				// Bin category. Permanent deletion is never eligible, and aggregate/
+				// group tokens must never select it.
+				if entry.definition.PlannedAction != PlannedActionMoveToRecycleBin {
+					return fmt.Errorf("windows-temp category %q must declare move_to_recycle_bin", id)
+				}
+				if entry.definition.SelectionPolicy != CategorySelectionPolicyExactOnly {
+					return fmt.Errorf("windows-temp category %q must be exact-selection-only", id)
+				}
+				if entry.cliAgentProduct {
+					return fmt.Errorf("windows-temp category %q must not be a cli-agent product", id)
+				}
 			}
 			if entry.resolverKind == categoryResolverThunderUpdateDownload {
 				// Thunder update download cache is an exact-selection-only Recycle

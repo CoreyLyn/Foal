@@ -110,6 +110,48 @@ var builtInProtectedSystemRoots = []string{
 	`c:\program files (x86)`,
 }
 
+// windowsTreeCarveOutRoots returns the exact category-owned subtrees under the
+// Windows system tree whose STRICT descendants specific Clean categories may
+// delete, despite the blanket Windows-tree rejection. Each entry is a normalized
+// (lowercased, cleaned) absolute directory; the entry itself is never deletable
+// and every sibling stays rejected. The list is deliberately per-subtree so a
+// future category adds its own carve-out root and cannot silently inherit
+// another category's. Currently only %SystemRoot%\Temp (the windows-temp
+// category, ADR 0032) is carved out.
+func windowsTreeCarveOutRoots() []string {
+	var roots []string
+	if temp, ok := resolveSystemRootSubtree("Temp"); ok {
+		roots = append(roots, temp)
+	}
+	return roots
+}
+
+// resolveSystemRootSubtree resolves exactly %SystemRoot%\<sub> to a normalized
+// (lowercased, cleaned) absolute path. It fails closed (ok=false) when SystemRoot
+// is blank, relative, or UNC so no carve-out is granted for unusable values.
+func resolveSystemRootSubtree(sub string) (string, bool) {
+	systemRoot := strings.TrimSpace(stripLongPathPrefix(os.Getenv("SystemRoot")))
+	if systemRoot == "" || strings.HasPrefix(systemRoot, `\\`) || !filepath.IsAbs(systemRoot) {
+		return "", false
+	}
+	return strings.ToLower(filepath.Clean(filepath.Join(systemRoot, sub))), true
+}
+
+// isWindowsTreeCarveOut reports whether cleaned (already filepath.Clean + lower)
+// is a STRICT descendant of one of the category-owned Windows-tree carve-out
+// subtrees. The carve-out roots themselves return false so they stay rejected.
+func isWindowsTreeCarveOut(cleaned string) bool {
+	for _, root := range windowsTreeCarveOutRoots() {
+		if root == "" {
+			continue
+		}
+		if cleaned != root && isSameOrDescendant(cleaned, root) {
+			return true
+		}
+	}
+	return false
+}
+
 func ValidateDeletePath(path string) (Reason, bool) {
 	return Validator{}.ValidateDeletePath(path)
 }
@@ -272,6 +314,15 @@ func (v Validator) validateMutationPath(path string, portableMode bool) (Reason,
 	} else {
 		for _, protected := range builtInProtectedSystemRoots {
 			if cleaned == protected || strings.HasPrefix(cleaned, protected+`\`) {
+				// Narrow, category-owned exact-subtree carve-out: a strict
+				// descendant of a Windows-tree carve-out root (e.g. %SystemRoot%\Temp)
+				// is exempt from the blanket system-tree rejection. The carve-out
+				// root itself and every other path under the tree stay rejected;
+				// the user Protection, reparse, and hardlink checks above and below
+				// still apply.
+				if isWindowsTreeCarveOut(cleaned) {
+					break
+				}
 				return reject("protected_path", "protected system paths cannot be cleaned by Foal")
 			}
 		}

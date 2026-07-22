@@ -675,6 +675,7 @@ func composeRecycleBinPreMutation(opts Options, byPath map[string]actionExecutio
 			nvidiaDiscovery:                opts.NVIDIAInstallerCacheDiscoveryOptions,
 			lghubDiscovery:                 opts.LGHUBCacheDiscoveryOptions,
 			thunderUpdateDownloadDiscovery: opts.ThunderUpdateDownloadDiscoveryOptions,
+			windowsTempDiscovery:           opts.WindowsTempDiscoveryOptions,
 			validator:                      opts.Validator,
 		})
 	}

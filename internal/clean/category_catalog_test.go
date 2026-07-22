@@ -29,6 +29,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"nvidia_installer_cache",
 		"lghub-cache",
 		"thunder-update-download",
+		"windows-temp",
 		"winsxs_component_store",
 		"browser_cache",
 		"vscode_cache",
@@ -224,7 +225,7 @@ func lockedPermanentCategoryIDs() []string {
 	}
 }
 
-// lockedRecycleBinCategoryIDs is the complete production Recycle Bin matrix (5).
+// lockedRecycleBinCategoryIDs is the complete production Recycle Bin matrix (6).
 func lockedRecycleBinCategoryIDs() []string {
 	return []string{
 		clean.DefaultCategoryFoalOwnedTempSandboxes,
@@ -232,6 +233,7 @@ func lockedRecycleBinCategoryIDs() []string {
 		clean.CategoryNVIDIAInstallerCache,
 		clean.CategoryLGHUBCache,
 		clean.CategoryThunderUpdateDownload,
+		clean.CategoryWindowsTemp,
 	}
 }
 
@@ -244,7 +246,7 @@ func productionPermanentCategoryIDs() map[string]bool {
 }
 
 // TestCompleteDeletionRuleMatrixLocked is the end-state catalog contract for ADR 0018:
-// exactly 36 delete_permanently, 5 move_to_recycle_bin, and one actionless permission boundary.
+// exactly 36 delete_permanently, 6 move_to_recycle_bin, and one actionless permission boundary.
 func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	wantPermanent := lockedPermanentCategoryIDs()
@@ -252,8 +254,8 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	if len(wantPermanent) != 36 {
 		t.Fatalf("locked permanent matrix length = %d, want 36", len(wantPermanent))
 	}
-	if len(wantRecycleBin) != 5 {
-		t.Fatalf("locked Recycle Bin matrix length = %d, want 5", len(wantRecycleBin))
+	if len(wantRecycleBin) != 6 {
+		t.Fatalf("locked Recycle Bin matrix length = %d, want 6", len(wantRecycleBin))
 	}
 
 	var permanent, recycleBin, servicing, executable []string
@@ -284,12 +286,13 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	// (winsxs_component_store); #309 adds one move_to_recycle_bin category
 	// (nvidia_installer_cache); #325 adds lghub-cache and #326 adds
 	// thunder-update-download (both move_to_recycle_bin); #323 adds
-	// nvidia_gl_cache and #324 adds vrchat_cache (both delete_permanently).
+	// nvidia_gl_cache and #324 adds vrchat_cache (both delete_permanently);
+	// #338 adds the machine-wide windows-temp (move_to_recycle_bin).
 	if len(servicing) != 1 || servicing[0] != clean.CategoryWinSxSComponentStore {
 		t.Fatalf("servicing matrix = %#v, want [%q]", servicing, clean.CategoryWinSxSComponentStore)
 	}
-	if len(executable) != 42 {
-		t.Fatalf("executable categories = %d (%v), want 42 (41 deletion + 1 servicing)", len(executable), executable)
+	if len(executable) != 43 {
+		t.Fatalf("executable categories = %d (%v), want 43 (42 deletion + 1 servicing)", len(executable), executable)
 	}
 	if !reflect.DeepEqual(permanent, wantPermanent) {
 		t.Fatalf("permanent matrix = %#v, want %#v", permanent, wantPermanent)
@@ -340,10 +343,10 @@ func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 		}
 	}
 
-	// Eager queue is all 42 executable rows; permission boundary is never scanned.
+	// Eager queue is all 43 executable rows; permission boundary is never scanned.
 	queue := clean.EagerPreviewQueue()
-	if len(queue) != 42 {
-		t.Fatalf("EagerPreviewQueue length = %d, want 42 executable categories", len(queue))
+	if len(queue) != 43 {
+		t.Fatalf("EagerPreviewQueue length = %d, want 43 executable categories", len(queue))
 	}
 	for _, summary := range queue {
 		if summary.Identifier == "administrator_only_caches" {
