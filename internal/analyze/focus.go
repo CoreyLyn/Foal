@@ -1,6 +1,9 @@
 package analyze
 
-import "sync/atomic"
+import (
+	"path/filepath"
+	"sync/atomic"
+)
 
 // BrowseFocus reports the path the user currently wants preferred for the next
 // free directory-measurement slot. Implementations must be safe for concurrent
@@ -25,9 +28,13 @@ func NewAtomicBrowseFocus() *AtomicBrowseFocus {
 }
 
 // Set stores the preferred queued path (may be "" to clear promotion).
+// Non-empty paths are filepath.Clean'd so promotion matches seed paths.
 func (f *AtomicBrowseFocus) Set(path string) {
 	if f == nil {
 		return
+	}
+	if path != "" {
+		path = filepath.Clean(path)
 	}
 	f.path.Store(path)
 }

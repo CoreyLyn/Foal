@@ -183,7 +183,8 @@ func TestStreamBrowseFocusPromotesQueuedDirectoryWithoutPreemptingActive(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	pathOf := func(name string) string { return filepath.Join(absRoot, name) }
+	cleanRoot := filepath.Clean(absRoot)
+	pathOf := func(name string) string { return filepath.Join(cleanRoot, name) }
 	for _, name := range []string{"a", "b", "c", "d"} {
 		if err := os.Mkdir(pathOf(name), 0755); err != nil {
 			t.Fatal(err)
@@ -195,113 +196,129 @@ func TestStreamBrowseFocusPromotesQueuedDirectoryWithoutPreemptingActive(t *test
 
 	focus := NewAtomicBrowseFocus()
 	var mu sync.Mutex
+	var claimOrder []string
 	var startOrder []string
 	activePaths := map[string]bool{}
-	// Block the first two active measurements until focus is set and we release.
+	// Gate: first two workers park inside MeasurementStart until focus is set.
 	blockFirstTwo := make(chan struct{})
+	firstWaveReady := make(chan struct{})
+	var firstWaveOnce sync.Once
 	var started atomic.Int32
 	var releasedFirstWave atomic.Bool
-	// Capture the real measured path strings for "d" once classification-equivalent
-	// paths appear via MeasurementStart of the first wave (a/b use Abs paths).
 	dPath := pathOf("d")
 
-	done := make(chan struct{})
+	resultCh := make(chan BrowseResult, 1)
 	go func() {
-		defer close(done)
-		// Wait until a and b are both active (name-order default).
-		deadline := time.After(2 * time.Second)
-		for {
-			mu.Lock()
-			n := len(activePaths)
-			hasA := false
-			hasB := false
-			for p := range activePaths {
-				base := filepath.Base(p)
-				if strings.EqualFold(base, "a") {
-					hasA = true
-				}
-				if strings.EqualFold(base, "b") {
-					hasB = true
-				}
-			}
-			mu.Unlock()
-			if n >= 2 && hasA && hasB {
-				// Promote d while a and b remain active — must not cancel them.
-				focus.Set(dPath)
-				// Confirm focus is visible before releasing workers.
-				if focus.FocusedPath() != dPath && !sameBrowsePath(focus.FocusedPath(), dPath) {
-					t.Errorf("focus not set: %q", focus.FocusedPath())
-				}
-				time.Sleep(20 * time.Millisecond)
+		resultCh <- StreamBrowseLocation(context.Background(), cleanRoot, BrowseOptions{
+			ObservationMinInterval: -1,
+			Focus:                  focus,
+			// Claim order is the focus-aware assignment sequence (serialized).
+			MeasurementClaimed: func(path string) {
 				mu.Lock()
-				still := len(activePaths)
-				dActive := false
-				for p := range activePaths {
-					if strings.EqualFold(filepath.Base(p), "d") {
-						dActive = true
-					}
-				}
+				claimOrder = append(claimOrder, filepath.Base(path))
 				mu.Unlock()
-				if still > 2 {
-					t.Errorf("active paths exceeded 2 during focus: %d", still)
+			},
+			MeasurementStart: func(path string) {
+				mu.Lock()
+				startOrder = append(startOrder, filepath.Base(path))
+				activePaths[path] = true
+				n := started.Add(1)
+				mu.Unlock()
+				if n <= 2 {
+					if n == 2 {
+						firstWaveOnce.Do(func() { close(firstWaveReady) })
+					}
+					<-blockFirstTwo
 				}
-				if dActive {
-					t.Errorf("focus must not preempt: d started while a,b active")
-				}
-				releasedFirstWave.Store(true)
-				close(blockFirstTwo)
-				return
-			}
-			select {
-			case <-deadline:
-				close(blockFirstTwo)
-				return
-			default:
-				time.Sleep(5 * time.Millisecond)
-			}
-		}
+			},
+			MeasurementEnd: func(path string) {
+				mu.Lock()
+				delete(activePaths, path)
+				mu.Unlock()
+			},
+		}, nil)
 	}()
 
-	result := StreamBrowseLocation(context.Background(), absRoot, BrowseOptions{
-		ObservationMinInterval: -1,
-		Focus:                  focus,
-		MeasurementStart: func(path string) {
-			mu.Lock()
-			startOrder = append(startOrder, filepath.Base(path))
-			activePaths[path] = true
-			n := started.Add(1)
-			mu.Unlock()
-			if n <= 2 {
-				<-blockFirstTwo
-			}
-		},
-		MeasurementEnd: func(path string) {
-			mu.Lock()
-			delete(activePaths, path)
-			mu.Unlock()
-		},
-	}, nil)
-	<-done
+	select {
+	case <-firstWaveReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first-wave a/b to park")
+	}
+
+	// Promote d while a and b remain active — must not cancel them.
+	// Use the exact path form the scheduler claimed for a sibling when available.
+	mu.Lock()
+	still := len(activePaths)
+	dActive := false
+	var samplePath string
+	for p := range activePaths {
+		samplePath = p
+		if strings.EqualFold(filepath.Base(p), "d") {
+			dActive = true
+		}
+	}
+	mu.Unlock()
+	if still != 2 {
+		t.Fatalf("expected exactly 2 active parked workers, got %d", still)
+	}
+	if dActive {
+		t.Fatal("focus must not preempt: d started while a,b active")
+	}
+	if samplePath != "" {
+		focus.Set(filepath.Join(filepath.Dir(samplePath), "d"))
+	} else {
+		focus.Set(dPath)
+	}
+	if focus.FocusedPath() == "" {
+		t.Fatal("focus not set")
+	}
+	// Stabilize: ensure focus is visible before freeing workers.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if sameBrowsePath(focus.FocusedPath(), dPath) ||
+			(samplePath != "" && sameBrowsePath(focus.FocusedPath(), filepath.Join(filepath.Dir(samplePath), "d"))) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	releasedFirstWave.Store(true)
+	close(blockFirstTwo)
+
+	var result BrowseResult
+	select {
+	case result = <-resultCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for browse to finish")
+	}
 	if !result.OK {
 		t.Fatalf("failed: %#v", result.Reason)
 	}
 	mu.Lock()
-	order := append([]string(nil), startOrder...)
+	claims := append([]string(nil), claimOrder...)
+	starts := append([]string(nil), startOrder...)
 	mu.Unlock()
-	if len(order) != 4 {
-		t.Fatalf("start order = %#v", order)
+	if len(claims) != 4 {
+		t.Fatalf("claim order = %#v (starts=%#v)", claims, starts)
 	}
-	// First wave: a and b.
-	first := map[string]bool{order[0]: true, order[1]: true}
-	if !first["a"] || !first["b"] {
-		t.Fatalf("first wave = %#v, want a and b", order[:2])
+	// First wave claims: a and b in name order (serialized dispatcher).
+	if claims[0] != "a" || claims[1] != "b" {
+		t.Fatalf("first wave claims = %#v, want a then b", claims[:2])
 	}
-	// After focus on d, the next free slot must start d before c.
-	if order[2] != "d" {
-		t.Fatalf("third start = %q, want d (focus promotion); full order %#v", order[2], order)
+	// After focus on d, the next free slot must claim d before c.
+	if claims[2] != "d" {
+		t.Fatalf("third claim = %q, want d (focus promotion); claims=%#v starts=%#v", claims[2], claims, starts)
 	}
-	if order[3] != "c" {
-		t.Fatalf("fourth start = %q, want c; full order %#v", order[3], order)
+	if claims[3] != "c" {
+		t.Fatalf("fourth claim = %q, want c; claims=%#v starts=%#v", claims[3], claims, starts)
+	}
+	// Starts must also include all four; start order among a concurrent wave may
+	// vary, but d must appear among starts after the first wave parks.
+	if len(starts) != 4 {
+		t.Fatalf("start order = %#v", starts)
+	}
+	firstStarts := map[string]bool{starts[0]: true, starts[1]: true}
+	if !firstStarts["a"] || !firstStarts["b"] {
+		t.Fatalf("first wave starts = %#v, want a and b", starts[:2])
 	}
 	if !releasedFirstWave.Load() {
 		t.Fatal("test gate did not observe concurrent a,b before release")

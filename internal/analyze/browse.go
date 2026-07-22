@@ -40,10 +40,17 @@ type BrowseOptions struct {
 	// MeasurementStart is an optional test/observation hook invoked when a
 	// directory child measurement begins (after it acquires a worker slot).
 	// Must not be used for production control flow. Path is the child root.
+	// May block; the scheduler does not hold its lock across this call.
+	// Start order among concurrent workers may differ from claim order.
 	MeasurementStart func(path string)
 	// MeasurementEnd is an optional test/observation hook invoked when a
 	// directory child measurement finishes (before releasing the worker slot).
 	MeasurementEnd func(path string)
+	// MeasurementClaimed is an optional test hook invoked under the scheduler
+	// lock when a directory job is assigned to a free slot (focus-aware pick).
+	// Claim order is the observable assignment order for focus promotion tests.
+	// Must return quickly and must not call back into browse.
+	MeasurementClaimed func(path string)
 }
 
 // BrowseChild is one direct child of a browse location.
@@ -266,8 +273,8 @@ type dirJob struct {
 }
 
 // sameBrowsePath reports whether two canonical browse paths refer to the same
-// child. Comparison is case-insensitive on Windows path semantics via EqualFold
-// after Clean, matching how focus promotion and selection identify children.
+// child. Comparison is case-insensitive via EqualFold after Abs+Clean so focus
+// promotion matches seed paths regardless of relative/absolute form.
 func sameBrowsePath(a, b string) bool {
 	if a == b {
 		return true
@@ -275,7 +282,12 @@ func sameBrowsePath(a, b string) bool {
 	if a == "" || b == "" {
 		return false
 	}
-	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	ca, errA := filepath.Abs(a)
+	cb, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	return strings.EqualFold(filepath.Clean(ca), filepath.Clean(cb))
 }
 
 // runDirectoryMeasurements schedules directory jobs with at most
@@ -283,6 +295,9 @@ func sameBrowsePath(a, b string) bool {
 // the order of dirJobs (name-sorted). Focus.FocusedPath, when present in the
 // remaining queue, is chosen for the next free slot. Active work is never
 // canceled solely due to focus.
+//
+// A single dispatcher serializes every claim so focus is re-read exactly when a
+// free slot is assigned. Workers only measure; they never steal from the queue.
 func runDirectoryMeasurements(
 	ctx context.Context,
 	dirJobs []dirJob,
@@ -292,13 +307,20 @@ func runDirectoryMeasurements(
 	onObservation ObservationHandler,
 	childrenByPath map[string]BrowseChild,
 ) {
+	if len(dirJobs) == 0 {
+		return
+	}
+
 	queue := append([]dirJob(nil), dirJobs...)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	active := 0
+	done := false
+	// slotFreed wakes the dispatcher when a worker finishes (or initially).
+	slotFreed := make(chan struct{}, MaxConcurrentDirectoryMeasurements)
 
 	// pickNext removes and returns the next job: focused path if queued, else head.
-	// Caller must hold mu.
+	// Caller must hold mu. Focus is always re-read under the lock at claim time.
 	pickNext := func() (dirJob, bool) {
 		if len(queue) == 0 {
 			return dirJob{}, false
@@ -321,52 +343,95 @@ func runDirectoryMeasurements(
 		return job, true
 	}
 
-	var launch func()
-	launch = func() {
-		mu.Lock()
-		if active >= MaxConcurrentDirectoryMeasurements {
-			mu.Unlock()
-			return
+	// notifyDispatcher signals that capacity may be available.
+	notifyDispatcher := func() {
+		select {
+		case slotFreed <- struct{}{}:
+		default:
 		}
-		job, ok := pickNext()
-		if !ok {
-			mu.Unlock()
-			return
-		}
-		active++
-		mu.Unlock()
+	}
 
+	// startWorker runs one claimed job. Must not hold mu.
+	startWorker := func(j dirJob) {
 		wg.Add(1)
-		go func(j dirJob) {
+		go func(job dirJob) {
 			defer wg.Done()
 			if opts.MeasurementStart != nil {
-				opts.MeasurementStart(j.seed.Path)
+				opts.MeasurementStart(job.seed.Path)
 			}
-			child := measureBrowseDirectory(ctx, j.seed, limit, minInterval, onObservation)
+			child := measureBrowseDirectory(ctx, job.seed, limit, minInterval, onObservation)
 			if opts.MeasurementEnd != nil {
-				opts.MeasurementEnd(j.seed.Path)
+				opts.MeasurementEnd(job.seed.Path)
 			}
 
 			mu.Lock()
 			childrenByPath[child.Path] = child
 			active--
+			remaining := len(queue)
 			mu.Unlock()
-			// Refill until the concurrency ceiling is met or the queue is empty.
-			for {
-				mu.Lock()
-				canLaunch := active < MaxConcurrentDirectoryMeasurements && len(queue) > 0
-				mu.Unlock()
-				if !canLaunch {
-					break
-				}
-				launch()
+
+			if remaining > 0 {
+				notifyDispatcher()
 			}
-		}(job)
+		}(j)
 	}
 
-	// Prime up to the concurrency ceiling.
-	for i := 0; i < MaxConcurrentDirectoryMeasurements; i++ {
-		launch()
+	// Dispatch until queue empty and no active workers.
+	// Initial kicks fill up to the concurrency ceiling; further kicks come from
+	// worker completion. Focus is consulted on every claim.
+	for {
+		mu.Lock()
+		// Fill free slots while work remains.
+		for active < MaxConcurrentDirectoryMeasurements && len(queue) > 0 {
+			job, ok := pickNext()
+			if !ok {
+				break
+			}
+			active++
+			if opts.MeasurementClaimed != nil {
+				opts.MeasurementClaimed(job.seed.Path)
+			}
+			mu.Unlock()
+			startWorker(job)
+			mu.Lock()
+		}
+		idle := active == 0 && len(queue) == 0
+		if idle {
+			done = true
+		}
+		mu.Unlock()
+
+		if done {
+			break
+		}
+
+		// Wait for a worker to free a slot, or for all work to finish.
+		// If active workers exist but queue is empty, wait for them to finish
+		// via wg; if queue still has work, wait on slotFreed.
+		mu.Lock()
+		needWait := active > 0 || len(queue) > 0
+		queueEmpty := len(queue) == 0
+		mu.Unlock()
+		if !needWait {
+			break
+		}
+		if queueEmpty {
+			// Only active work left; wait for all workers.
+			wg.Wait()
+			continue
+		}
+		// Work queued but slots full (or racing): wait for a free signal.
+		// Also handle the case where slots free without a signal (use short poll
+		// via default after checking active again).
+		select {
+		case <-slotFreed:
+		case <-ctx.Done():
+			// Still drain workers; cancel is handled inside measure.
+			wg.Wait()
+			return
+		case <-time.After(10 * time.Millisecond):
+			// Poll: a worker may have finished between our check and select.
+		}
 	}
 	wg.Wait()
 }
