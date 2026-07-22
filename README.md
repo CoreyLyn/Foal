@@ -101,7 +101,7 @@ Available opt-in groups:
 | Group | Includes |
 | --- | --- |
 | `dev-caches` | Supported package-manager, build-tool, browser-runtime, IDE, and editor caches. |
-| `app-caches` | Supported non-editor application caches, currently Obsidian. |
+| `app-caches` | Supported non-editor application caches (currently Obsidian and VRChat), plus the `electron-updater-residue` opt-in. |
 | `cli-agents` | Independently approved product-scoped CLI-agent residue, currently Grok Build updater backups. |
 | `all` | Every executable opt-in category, except exact-selection-only categories (e.g. `nvidia_installer_cache`, `winsxs_component_store`, the machine-wide `windows-temp`, and the machine-wide `windows-update-download-cache`); still subject to safety gates and permanent authorization. |
 

@@ -23,6 +23,7 @@ type CategoryIdentityCandidate struct {
 	thunderUpdateDownloadDiscovery      ThunderUpdateDownloadDiscoveryOptions
 	windowsTempDiscovery                WindowsTempDiscoveryOptions
 	windowsUpdateDownloadCacheDiscovery WindowsUpdateDownloadCacheDiscoveryOptions
+	electronUpdaterResidueDiscovery     ElectronUpdaterResidueDiscoveryOptions
 	validator                           pathsafe.Validator
 }
 

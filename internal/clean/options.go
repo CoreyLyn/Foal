@@ -294,6 +294,11 @@ type Options struct {
 	// and the platform SCM service detector are used. Tests must use isolated
 	// roots and never read or mutate the real Windows tree or SCM.
 	WindowsUpdateDownloadCacheDiscoveryOptions WindowsUpdateDownloadCacheDiscoveryOptions
+	// ElectronUpdaterResidueDiscoveryOptions injects the root override and clock
+	// seams for the electron-updater-residue category. Production leaves the zero
+	// value so LOCALAPPDATA and time.Now() are used. Tests must use isolated roots
+	// and never read or mutate the real user LOCALAPPDATA tree.
+	ElectronUpdaterResidueDiscoveryOptions ElectronUpdaterResidueDiscoveryOptions
 }
 
 type Rule struct {

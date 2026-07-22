@@ -107,8 +107,8 @@ func TestEagerCleanModelQueueIsCatalogDerived(t *testing.T) {
 }
 
 func TestEagerCleanModelStartRendersFullQueueImmediately(t *testing.T) {
-	// Height must fit all executable rows + group headers after matrix growth (30).
-	model := newEagerCleanModel(120, 60)
+	// Height must fit all executable rows + group headers after matrix growth.
+	model := newEagerCleanModel(120, 64)
 	fixed := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	model.now = func() time.Time { return fixed }
 
@@ -913,19 +913,20 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 			recycleBinOptIns++
 		}
 	}
-	// Complete rule matrix: 1 default + 36 permanent = 37; 6 Recycle Bin opt-ins
-	// unselected (windows_error_reporting plus the exact-selection-only
+	// Complete rule matrix: 1 default + 36 permanent = 37; 7 Recycle Bin opt-ins
+	// unselected (windows_error_reporting, the exact-selection-only
 	// nvidia_installer_cache, lghub-cache, thunder-update-download, windows-temp,
-	// and windows-update-download-cache).
-	if defaults != 1 || permanentOptIns != 36 || recycleBinOptIns != 6 || wantSelected != 37 {
-		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/36/6/37",
+	// and windows-update-download-cache, plus the Standard-selection
+	// electron-updater-residue).
+	if defaults != 1 || permanentOptIns != 36 || recycleBinOptIns != 7 || wantSelected != 37 {
+		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/36/7/37",
 			defaults, permanentOptIns, recycleBinOptIns, wantSelected)
 	}
 	if model.selectedCount() != 37 {
 		t.Fatalf("selectedCount = %d, want 37 (default + all permanent when rows present)", model.selectedCount())
 	}
-	if len(model.rows) != 44 {
-		t.Fatalf("eager rows = %d, want 44 executable categories", len(model.rows))
+	if len(model.rows) != 45 {
+		t.Fatalf("eager rows = %d, want 45 executable categories", len(model.rows))
 	}
 	for _, id := range model.selectedCategoryIDs() {
 		if strings.Contains(id, `\`) || strings.Contains(id, "/") || strings.Contains(id, " ") {
