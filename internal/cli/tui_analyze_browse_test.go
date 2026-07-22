@@ -11,11 +11,31 @@ import (
 	"github.com/CoreyLyn/Foal/internal/analyze"
 )
 
-func stubAnalyzeBrowse(t *testing.T, fn func(ctx context.Context, root string, opts analyze.BrowseOptions) analyze.BrowseResult) {
+func stubAnalyzeBrowse(t *testing.T, fn func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult) {
 	t.Helper()
 	original := browseAnalyzeLocation
 	browseAnalyzeLocation = fn
 	t.Cleanup(func() { browseAnalyzeLocation = original })
+}
+
+// drainAnalyzeBrowse runs the browse start/observation/result stream to terminal.
+func drainAnalyzeBrowse(t *testing.T, model rootModel, cmd tea.Cmd) rootModel {
+	t.Helper()
+	for i := 0; i < 10000 && cmd != nil; i++ {
+		msg := cmd()
+		next, nextCmd := model.Update(msg)
+		model = next.(rootModel)
+		switch msg.(type) {
+		case analyzeBrowseLoadedMsg:
+			return model
+		case analyzeBrowseStartedMsg, analyzeBrowseObservationMsg:
+			cmd = nextCmd
+		default:
+			t.Fatalf("unexpected browse stream msg %T", msg)
+		}
+	}
+	t.Fatal("browse stream did not finish")
+	return model
 }
 
 func enterAnalyzeBrowse(t *testing.T, model rootModel) rootModel {
@@ -25,13 +45,7 @@ func enterAnalyzeBrowse(t *testing.T, model rootModel) rootModel {
 	if cmd == nil {
 		t.Fatal("enter available drive must start browse load")
 	}
-	msg := cmd()
-	loaded, ok := msg.(analyzeBrowseLoadedMsg)
-	if !ok {
-		t.Fatalf("browse cmd produced %T, want analyzeBrowseLoadedMsg", msg)
-	}
-	next, _ = model.Update(loaded)
-	return next.(rootModel)
+	return drainAnalyzeBrowse(t, model, cmd)
 }
 
 func TestAnalyzeEnterDriveBrowsesDirectChildrenOnly(t *testing.T) {
@@ -40,7 +54,7 @@ func TestAnalyzeEnterDriveBrowsesDirectChildrenOnly(t *testing.T) {
 		{Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true, HasCapacity: true, TotalBytes: 100, FreeBytes: 40},
 		{Root: `E:\`, Letter: "E:", Kind: analyze.VolumeKindRemovable, Available: true, Label: "USB"},
 	})
-	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions) analyze.BrowseResult {
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
 		roots = append(roots, root)
 		if root != `C:\` {
 			t.Fatalf("must not prefetch sibling; got root %q", root)
@@ -90,7 +104,7 @@ func TestAnalyzeBrowseEnterDirectoryAndEscToParentThenDrive(t *testing.T) {
 	stubAnalyzeVolumes(t, []analyze.LocalVolume{
 		{Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true},
 	})
-	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions) analyze.BrowseResult {
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
 		switch filepath.Clean(root) {
 		case `C:\`:
 			return analyze.BrowseResult{
@@ -127,12 +141,7 @@ func TestAnalyzeBrowseEnterDirectoryAndEscToParentThenDrive(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("enter Users must load browse")
 	}
-	loaded, ok := cmd().(analyzeBrowseLoadedMsg)
-	if !ok {
-		t.Fatalf("got %T", cmd())
-	}
-	next, _ = model.Update(loaded)
-	model = next.(rootModel)
+	model = drainAnalyzeBrowse(t, model, cmd)
 	if !strings.Contains(model.content(), `Location: C:\Users`) {
 		t.Fatalf("want Users browse:\n%s", model.content())
 	}
@@ -143,12 +152,7 @@ func TestAnalyzeBrowseEnterDirectoryAndEscToParentThenDrive(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("esc from nested must reload parent")
 	}
-	loaded, ok = cmd().(analyzeBrowseLoadedMsg)
-	if !ok {
-		t.Fatalf("got %T", cmd())
-	}
-	next, _ = model.Update(loaded)
-	model = next.(rootModel)
+	model = drainAnalyzeBrowse(t, model, cmd)
 	if model.analyze.phase != analyzePhaseBrowse {
 		t.Fatalf("phase = %v after esc to parent", model.analyze.phase)
 	}
@@ -175,7 +179,7 @@ func TestAnalyzeBrowseFileAndReparseNotNavigable(t *testing.T) {
 		{Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true},
 	})
 	var browseCalls int
-	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions) analyze.BrowseResult {
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
 		browseCalls++
 		return analyze.BrowseResult{
 			OK:   true,
@@ -192,9 +196,7 @@ func TestAnalyzeBrowseFileAndReparseNotNavigable(t *testing.T) {
 	// Enter drive
 	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = next.(rootModel)
-	loaded := cmd().(analyzeBrowseLoadedMsg)
-	next, _ = model.Update(loaded)
-	model = next.(rootModel)
+	model = drainAnalyzeBrowse(t, model, cmd)
 	afterDrive := browseCalls
 
 	// Enter file (cursor 0)
@@ -229,7 +231,7 @@ func TestAnalyzeBrowseUsesSharedBrowseServiceNotTUITraversal(t *testing.T) {
 	stubAnalyzeVolumes(t, []analyze.LocalVolume{
 		{Root: `D:\`, Letter: "D:", Kind: analyze.VolumeKindFixed, Available: true},
 	})
-	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions) analyze.BrowseResult {
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
 		return analyze.BrowseResult{
 			OK:   true,
 			Root: root,
@@ -268,5 +270,201 @@ func TestIsAnalyzeVolumeRoot(t *testing.T) {
 	got := parentBrowsePath(`C:\Users\Public`)
 	if filepath.Clean(got) != filepath.Clean(`C:\Users`) {
 		t.Fatalf("parent = %q", got)
+	}
+}
+
+func TestAnalyzeBrowseRendersHonestStatesAndPercentWording(t *testing.T) {
+	stubAnalyzeVolumes(t, []analyze.LocalVolume{
+		{Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true},
+	})
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
+		return analyze.BrowseResult{
+			OK:   true,
+			Root: `C:\`,
+			Children: []analyze.BrowseChild{
+				{
+					Name: "complete-dir", Path: `C:\complete-dir`, Kind: analyze.BrowseKindDirectory,
+					Bytes: 50, FileCount: 2, DirectoryCount: 1,
+					State: analyze.BrowseStateComplete, Navigable: true,
+				},
+				{
+					Name: "partial-dir", Path: `C:\partial-dir`, Kind: analyze.BrowseKindDirectory,
+					Bytes: 30, FileCount: 1, DirectoryCount: 1,
+					State: analyze.BrowseStatePartial, Navigable: true,
+					SkipAggregates: []analyze.SkipAggregate{
+						{Reason: analyze.SkipReasonPermissionDenied, Count: 2},
+					},
+				},
+				{
+					Name: "incomplete-dir", Path: `C:\incomplete-dir`, Kind: analyze.BrowseKindDirectory,
+					Bytes: 20, FileCount: 1, DirectoryCount: 1,
+					State: analyze.BrowseStateIncomplete, Navigable: true,
+					SkipAggregates: []analyze.SkipAggregate{
+						{Reason: analyze.SkipReasonHardLimit, Count: 1},
+					},
+				},
+				{
+					Name: "link", Path: `C:\link`, Kind: analyze.BrowseKindReparse,
+					State: analyze.BrowseStateSkipped, SkipReason: analyze.SkipReasonReparsePoint,
+				},
+			},
+		}
+	})
+
+	model := loadAnalyzeDrive(t)
+	model = enterAnalyzeBrowse(t, model)
+	content := model.content()
+
+	// Partial/Incomplete sizes use >= ; percentages never use >=.
+	if !strings.Contains(content, "partial") {
+		t.Fatalf("missing partial state:\n%s", content)
+	}
+	if !strings.Contains(content, "incomplete") {
+		t.Fatalf("missing incomplete state:\n%s", content)
+	}
+	if !strings.Contains(content, ">=") {
+		t.Fatalf("partial/incomplete sizes must use >= lower bound:\n%s", content)
+	}
+	if strings.Contains(content, ">=%") || strings.Contains(content, ">= %") {
+		t.Fatalf("percentages must never use >=:\n%s", content)
+	}
+	// Location not complete → approximate observed shares.
+	if !strings.Contains(content, "observed") && !strings.Contains(content, "~") {
+		t.Fatalf("non-complete location must label approximate shares:\n%s", content)
+	}
+	// Skipped reparse with stable reason.
+	if !strings.Contains(content, "skipped") || !strings.Contains(content, "reparse_point") {
+		t.Fatalf("skipped reparse missing:\n%s", content)
+	}
+	// Focused detail aggregates without descendant paths.
+	if !strings.Contains(content, "Detail:") {
+		t.Fatalf("focused detail missing:\n%s", content)
+	}
+	if !strings.Contains(content, "state=") {
+		t.Fatalf("detail must expose state:\n%s", content)
+	}
+	// Cursor starts on first child (complete-dir); move to partial for aggregate reasons.
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	content = model.content()
+	if !strings.Contains(content, "permission_denied") {
+		t.Fatalf("focused partial detail must show aggregate reason:\n%s", content)
+	}
+	// Must not dump synthetic descendant paths from aggregates.
+	if strings.Contains(content, `C:\partial-dir\secret-denied-child`) {
+		t.Fatalf("must not render unbounded descendant paths:\n%s", content)
+	}
+}
+
+func TestAnalyzeBrowseAppliesStreamingObservationsBeforeFinalResult(t *testing.T) {
+	stubAnalyzeVolumes(t, []analyze.LocalVolume{
+		{Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true},
+	})
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
+		if onObservation != nil {
+			onObservation(analyze.ChildObservation{
+				Name: "growing", Path: `C:\growing`, Kind: analyze.BrowseKindDirectory,
+				Bytes: 10, State: analyze.BrowseStateScanning, Navigable: true, Terminal: false,
+			})
+			onObservation(analyze.ChildObservation{
+				Name: "growing", Path: `C:\growing`, Kind: analyze.BrowseKindDirectory,
+				Bytes: 40, State: analyze.BrowseStateScanning, Navigable: true, Terminal: false,
+			})
+		}
+		return analyze.BrowseResult{
+			OK:   true,
+			Root: `C:\`,
+			Children: []analyze.BrowseChild{
+				{Name: "growing", Path: `C:\growing`, Kind: analyze.BrowseKindDirectory, Bytes: 40, State: analyze.BrowseStateComplete, Navigable: true},
+			},
+		}
+	})
+
+	model := loadAnalyzeDrive(t)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
+	if cmd == nil {
+		t.Fatal("enter must start browse stream")
+	}
+	// First message starts the stream; next should surface scanning before terminal load.
+	started := cmd()
+	if _, ok := started.(analyzeBrowseStartedMsg); !ok {
+		t.Fatalf("got %T, want analyzeBrowseStartedMsg", started)
+	}
+	next, cmd = model.Update(started)
+	model = next.(rootModel)
+	if cmd == nil {
+		t.Fatal("started must continue stream wait")
+	}
+	obsMsg := cmd()
+	if _, ok := obsMsg.(analyzeBrowseObservationMsg); !ok {
+		t.Fatalf("got %T, want observation", obsMsg)
+	}
+	next, cmd = model.Update(obsMsg)
+	model = next.(rootModel)
+	content := model.content()
+	if !strings.Contains(content, "scanning") {
+		t.Fatalf("streaming scan must show scanning state:\n%s", content)
+	}
+	if !strings.Contains(content, "growing") {
+		t.Fatalf("streaming scan must show path identity:\n%s", content)
+	}
+	// Drain remaining stream to terminal complete.
+	model = drainAnalyzeBrowse(t, model, cmd)
+	if !strings.Contains(model.content(), "complete") {
+		t.Fatalf("final state should be complete:\n%s", model.content())
+	}
+}
+
+func TestAnalyzeBrowseExactPercentOnlyWhenLocationComplete(t *testing.T) {
+	stubAnalyzeVolumes(t, []analyze.LocalVolume{
+		{Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true},
+	})
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
+		return analyze.BrowseResult{
+			OK:   true,
+			Root: `C:\`,
+			Children: []analyze.BrowseChild{
+				{Name: "a", Path: `C:\a`, Kind: analyze.BrowseKindFile, Bytes: 25, FileCount: 1, State: analyze.BrowseStateComplete},
+				{Name: "b", Path: `C:\b`, Kind: analyze.BrowseKindFile, Bytes: 75, FileCount: 1, State: analyze.BrowseStateComplete},
+			},
+		}
+	})
+	model := loadAnalyzeDrive(t)
+	model = enterAnalyzeBrowse(t, model)
+	content := model.content()
+	// Exact integer percent allowed; no approximate markers required.
+	if !strings.Contains(content, "25%") && !strings.Contains(content, "75%") {
+		// cleanFormatBytes path still shows percent via FormatSharePercent.
+		t.Fatalf("complete location should show exact percentages:\n%s", content)
+	}
+	if strings.Contains(content, "~25%") || strings.Contains(content, "~75%") {
+		t.Fatalf("exact complete location must not force approx on complete children:\n%s", content)
+	}
+	// Scanning-style approx wording must not appear for complete-only inventory.
+	row := renderAnalyzeBrowseRow(analyze.BrowseChild{
+		Name: "a", Kind: analyze.BrowseKindFile, Bytes: 25, State: analyze.BrowseStateComplete,
+	}, 100, true)
+	if strings.Contains(row, ">=") {
+		t.Fatalf("complete size must not use >=: %s", row)
+	}
+	if !strings.Contains(row, "25%") || strings.Contains(row, "~") {
+		t.Fatalf("exact percent row = %q", row)
+	}
+	// Incomplete child percent never ">=N%".
+	inc := renderAnalyzeBrowseRow(analyze.BrowseChild{
+		Name: "x", Kind: analyze.BrowseKindDirectory, Bytes: 40, State: analyze.BrowseStateIncomplete, Navigable: true,
+	}, 100, false)
+	if !strings.Contains(inc, ">=") {
+		t.Fatalf("incomplete bytes need >=: %s", inc)
+	}
+	if strings.Contains(inc, ">=%") || strings.Contains(strings.ReplaceAll(inc, ">=", ""), "BUG") {
+		t.Fatalf("bad percent marker: %s", inc)
+	}
+	// After removing size token, the percent segment must not start with >=.
+	if strings.Contains(inc, ">=40%") || strings.Contains(inc, ">= 40%") {
+		t.Fatalf("percent must not use >=: %s", inc)
+	}
+	if !strings.Contains(inc, "observed") && !strings.Contains(inc, "~") {
+		t.Fatalf("incomplete percent must be approximate: %s", inc)
 	}
 }

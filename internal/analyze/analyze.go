@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	StatusOK       = "ok"
-	StatusIncomplete = "incomplete"
+	StatusOK             = "ok"
+	StatusIncomplete     = "incomplete"
 	defaultTopChildLimit = 10
 	// defaultDescendantLimit matches Clean opportunity inspection ceilings.
 	defaultDescendantLimit = 100_000

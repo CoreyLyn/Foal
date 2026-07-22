@@ -381,9 +381,9 @@ func TestRenderHumanReportIncludesTopChildrenWithSizeKindClassification(t *testi
 				Bytes:          300,
 			},
 			{
-				Name:           "source",
-				Kind:           "directory",
-				Bytes:          200,
+				Name:  "source",
+				Kind:  "directory",
+				Bytes: 200,
 			},
 		},
 	}
