@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -466,5 +467,206 @@ func TestAnalyzeBrowseExactPercentOnlyWhenLocationComplete(t *testing.T) {
 	}
 	if !strings.Contains(inc, "observed") && !strings.Contains(inc, "~") {
 		t.Fatalf("incomplete percent must be approximate: %s", inc)
+	}
+}
+
+func TestAnalyzeBrowseSelectionBoundToPathThroughRerank(t *testing.T) {
+	stubAnalyzeVolumes(t, []analyze.LocalVolume{
+		{Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true},
+	})
+	// Stream observations that invert rank: small first, then large overtakes.
+	// Selection starts on "small"; after re-rank it must stay on small's path.
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
+		if onObservation != nil {
+			onObservation(analyze.ChildObservation{
+				Name: "small", Path: `C:\small`, Kind: analyze.BrowseKindDirectory,
+				Bytes: 10, State: analyze.BrowseStateScanning, Navigable: true, Terminal: false,
+			})
+			onObservation(analyze.ChildObservation{
+				Name: "large", Path: `C:\large`, Kind: analyze.BrowseKindDirectory,
+				Bytes: 5, State: analyze.BrowseStateScanning, Navigable: true, Terminal: false,
+			})
+			// large grows past small — row order changes; selection path must not.
+			onObservation(analyze.ChildObservation{
+				Name: "large", Path: `C:\large`, Kind: analyze.BrowseKindDirectory,
+				Bytes: 100, State: analyze.BrowseStateScanning, Navigable: true, Terminal: false,
+			})
+		}
+		return analyze.BrowseResult{
+			OK:   true,
+			Root: `C:\`,
+			Children: analyze.RankBrowseChildren([]analyze.BrowseChild{
+				{Name: "large", Path: `C:\large`, Kind: analyze.BrowseKindDirectory, Bytes: 100, State: analyze.BrowseStateComplete, Navigable: true},
+				{Name: "small", Path: `C:\small`, Kind: analyze.BrowseKindDirectory, Bytes: 10, State: analyze.BrowseStateComplete, Navigable: true},
+			}),
+		}
+	})
+
+	model := loadAnalyzeDrive(t)
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
+	if cmd == nil {
+		t.Fatal("enter must start browse")
+	}
+	started := cmd()
+	next, cmd = model.Update(started)
+	model = next.(rootModel)
+
+	// Apply first observation (small).
+	obs1 := cmd()
+	next, cmd = model.Update(obs1)
+	model = next.(rootModel)
+	if model.analyze.browseSelectedPath != `C:\small` {
+		t.Fatalf("selected after first obs = %q, want C:\\small", model.analyze.browseSelectedPath)
+	}
+
+	// second observation (large small bytes)
+	obs2 := cmd()
+	next, cmd = model.Update(obs2)
+	model = next.(rootModel)
+	// third observation (large overtakes)
+	obs3 := cmd()
+	next, cmd = model.Update(obs3)
+	model = next.(rootModel)
+
+	if model.analyze.browseSelectedPath != `C:\small` {
+		t.Fatalf("selection must stay on path after re-rank: %q", model.analyze.browseSelectedPath)
+	}
+	// Ranked list: large first, small second — cursor path still small.
+	if len(model.analyze.browseChildren) < 2 {
+		t.Fatalf("children = %#v", model.analyze.browseChildren)
+	}
+	if model.analyze.browseChildren[0].Path != `C:\large` {
+		t.Fatalf("rank0 = %q, want large", model.analyze.browseChildren[0].Path)
+	}
+	// View marks the selected path, not row 0.
+	content := model.content()
+	if !strings.Contains(content, "> small") && !strings.Contains(content, "> small ·") {
+		// Row format is "> name · kind ..."
+		lines := strings.Split(content, "\n")
+		var smallLine, largeLine string
+		for _, line := range lines {
+			if strings.Contains(line, "small") && strings.Contains(line, "directory") {
+				smallLine = line
+			}
+			if strings.Contains(line, "large") && strings.Contains(line, "directory") {
+				largeLine = line
+			}
+		}
+		if !strings.HasPrefix(strings.TrimLeft(smallLine, " "), ">") && !strings.HasPrefix(smallLine, "> ") {
+			t.Fatalf("selected small row must be marked; small=%q large=%q\n%s", smallLine, largeLine, content)
+		}
+		if strings.HasPrefix(largeLine, "> ") {
+			t.Fatalf("large must not steal selection marker: %q", largeLine)
+		}
+	}
+
+	// Move selection to large, then re-rank with final load; Enter must open large.
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	if model.analyze.browseSelectedPath != `C:\large` {
+		t.Fatalf("after j selected = %q", model.analyze.browseSelectedPath)
+	}
+	// Drain to terminal result.
+	model = drainAnalyzeBrowse(t, model, cmd)
+	if model.analyze.browseSelectedPath != `C:\large` {
+		t.Fatalf("selection after final rank = %q, want large", model.analyze.browseSelectedPath)
+	}
+
+	// Enter opens the path selected before/through re-ranking (large).
+	var entered []string
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
+		entered = append(entered, root)
+		return analyze.BrowseResult{OK: true, Root: root, Children: nil}
+	})
+	next, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
+	if cmd == nil {
+		t.Fatal("enter large must browse")
+	}
+	model = drainAnalyzeBrowse(t, model, cmd)
+	if len(entered) != 1 || entered[0] != `C:\large` {
+		t.Fatalf("enter targets = %#v, want C:\\large", entered)
+	}
+}
+
+func TestAnalyzeBrowseFocusPublishedToBrowseOptions(t *testing.T) {
+	stubAnalyzeVolumes(t, []analyze.LocalVolume{
+		{Root: `C:\`, Letter: "C:", Kind: analyze.VolumeKindFixed, Available: true},
+	})
+	var sawFocus bool
+	var focusAtCall string
+	stubAnalyzeBrowse(t, func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
+		sawFocus = opts.Focus != nil
+		if opts.Focus != nil {
+			focusAtCall = opts.Focus.FocusedPath()
+		}
+		return analyze.BrowseResult{
+			OK:   true,
+			Root: `C:\`,
+			Children: []analyze.BrowseChild{
+				{Name: "a", Path: `C:\a`, Kind: analyze.BrowseKindDirectory, Bytes: 1, State: analyze.BrowseStateComplete, Navigable: true},
+				{Name: "b", Path: `C:\b`, Kind: analyze.BrowseKindDirectory, Bytes: 2, State: analyze.BrowseStateComplete, Navigable: true},
+			},
+		}
+	})
+	model := loadAnalyzeDrive(t)
+	model = enterAnalyzeBrowse(t, model)
+	if !sawFocus {
+		t.Fatal("browse options must carry Focus for next-slot promotion")
+	}
+	_ = focusAtCall
+	// Moving focus publishes the selected path for promotion.
+	if model.analyze.browseFocus == nil {
+		t.Fatal("model must hold browseFocus")
+	}
+	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: 'j', Text: "j"})
+	if got := model.analyze.browseFocus.FocusedPath(); got != model.analyze.browseSelectedPath {
+		t.Fatalf("focus path = %q, selected = %q", got, model.analyze.browseSelectedPath)
+	}
+}
+
+func TestAnalyzeBrowseViewportFollowsSelectedPath(t *testing.T) {
+	// Build a tall ranked list and select a path that would fall off-screen
+	// after re-ranking; viewport offset must keep the selected path visible.
+	m := newAnalyzeDriveModel(80, 20)
+	m.phase = analyzePhaseBrowse
+	m.browseRoot = `C:\`
+	// 30 children ranked by bytes descending.
+	children := make([]analyze.BrowseChild, 0, 30)
+	for i := 0; i < 30; i++ {
+		name := fmt.Sprintf("item-%02d", i)
+		children = append(children, analyze.BrowseChild{
+			Name: name, Path: `C:\` + name, Kind: analyze.BrowseKindFile,
+			Bytes: int64(30 - i), State: analyze.BrowseStateComplete,
+		})
+	}
+	m.browseChildren = children
+	// Select a path near the bottom.
+	m.browseSelectedPath = `C:\item-25`
+	m.syncBrowseSelectionAfterRank()
+	if m.browseOffset > analyze.IndexOfBrowsePath(m.browseChildren, m.browseSelectedPath) {
+		t.Fatalf("offset %d past selected", m.browseOffset)
+	}
+	sel := analyze.IndexOfBrowsePath(m.browseChildren, m.browseSelectedPath)
+	if sel < m.browseOffset || sel >= m.browseOffset+m.browseViewportRows() {
+		t.Fatalf("selected idx %d not in viewport [%d,%d)", sel, m.browseOffset, m.browseOffset+m.browseViewportRows())
+	}
+	// Re-rank after inflating item-25 to the top; path selection stays, viewport follows.
+	for i := range m.browseChildren {
+		if m.browseChildren[i].Path == `C:\item-25` {
+			m.browseChildren[i].Bytes = 10_000
+		}
+	}
+	m.browseChildren = analyze.RankBrowseChildren(m.browseChildren)
+	m.syncBrowseSelectionAfterRank()
+	if m.browseSelectedPath != `C:\item-25` {
+		t.Fatalf("path lost after re-rank: %q", m.browseSelectedPath)
+	}
+	sel = analyze.IndexOfBrowsePath(m.browseChildren, m.browseSelectedPath)
+	if sel != 0 {
+		t.Fatalf("item-25 should be rank 0 after inflate, got %d", sel)
+	}
+	if sel < m.browseOffset || sel >= m.browseOffset+m.browseViewportRows() {
+		t.Fatalf("viewport lost selected after re-rank: idx=%d offset=%d vis=%d", sel, m.browseOffset, m.browseViewportRows())
 	}
 }
