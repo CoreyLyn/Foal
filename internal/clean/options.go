@@ -287,6 +287,13 @@ type Options struct {
 	// must use isolated roots and never read or mutate the real C:\Windows\Temp
 	// tree.
 	WindowsTempDiscoveryOptions WindowsTempDiscoveryOptions
+	// WindowsUpdateDownloadCacheDiscoveryOptions injects the root override,
+	// SystemRoot override, clock, and read-only SCM service-detection seams for
+	// the windows-update-download-cache category. Production leaves the zero value
+	// so the resolved %SystemRoot%\SoftwareDistribution\Download root, time.Now(),
+	// and the platform SCM service detector are used. Tests must use isolated
+	// roots and never read or mutate the real Windows tree or SCM.
+	WindowsUpdateDownloadCacheDiscoveryOptions WindowsUpdateDownloadCacheDiscoveryOptions
 }
 
 type Rule struct {

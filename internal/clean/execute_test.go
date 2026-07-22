@@ -1005,7 +1005,7 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 		clean.OpportunityCategoryINetCache,
 		clean.OpportunityCategoryD3DShaderCache,
 		clean.OpportunityCategoryNVIDIADXCache,
-			clean.OpportunityCategoryNVIDIAGLCache,
+		clean.OpportunityCategoryNVIDIAGLCache,
 		clean.OpportunityCategoryAMDGPUShaderCaches,
 		clean.OpportunityCategoryIntelGPUShaderCache,
 		clean.OpportunityCategoryBrowserCache,
@@ -1124,9 +1124,9 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// 19 opportunity + nvidia_installer_cache + lghub-cache + thunder-update-download + windows-temp + winsxs_component_store servicing + 17 dev caches + grok-build-update-residue + "dev-caches" + "app-caches" + "cli-agents" + "all" = 46
-	if len(valid) != 46 {
-		t.Fatalf("expected 46 valid names, got %d: %v", len(valid), valid)
+	// 19 opportunity + nvidia_installer_cache + lghub-cache + thunder-update-download + windows-temp + windows-update-download-cache + winsxs_component_store servicing + 17 dev caches + grok-build-update-residue + "dev-caches" + "app-caches" + "cli-agents" + "all" = 47
+	if len(valid) != 47 {
+		t.Fatalf("expected 47 valid names, got %d: %v", len(valid), valid)
 	}
 }
 
@@ -1346,9 +1346,9 @@ func TestExecuteOptInSkipsWhenRecycleBinDisabled(t *testing.T) {
 	}
 
 	opts := clean.Options{
-		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
-		RecycleBinAdapter:       adapter,
-		OptIn:                   []string{"user_temp"},
+		Rules:             []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		OptIn:             []string{"user_temp"},
 		CategoryPlannedActions: map[string]clean.PlannedAction{
 			"user_temp": clean.PlannedActionMoveToRecycleBin,
 		},
@@ -1419,9 +1419,9 @@ func TestExecuteOptInSkipsWhenItemExceedsRecycleBinCapacity(t *testing.T) {
 	}
 
 	opts := clean.Options{
-		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
-		RecycleBinAdapter:       adapter,
-		OptIn:                   []string{"user_temp"},
+		Rules:             []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		OptIn:             []string{"user_temp"},
 		CategoryPlannedActions: map[string]clean.PlannedAction{
 			"user_temp": clean.PlannedActionMoveToRecycleBin,
 		},
@@ -1489,9 +1489,9 @@ func TestExecuteOptInAllowsItemWhenWithinRecycleBinCapacity(t *testing.T) {
 	}
 
 	opts := clean.Options{
-		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
-		RecycleBinAdapter:       adapter,
-		OptIn:                   []string{"user_temp"},
+		Rules:             []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		OptIn:             []string{"user_temp"},
 		CategoryPlannedActions: map[string]clean.PlannedAction{
 			"user_temp": clean.PlannedActionMoveToRecycleBin,
 		},
@@ -1560,9 +1560,9 @@ func TestExecuteOptInSkipsWhenProbeFails(t *testing.T) {
 	}
 
 	opts := clean.Options{
-		Rules:                   []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
-		RecycleBinAdapter:       adapter,
-		OptIn:                   []string{"user_temp"},
+		Rules:             []clean.Rule{{ID: "test_rule", DefaultEnabled: false}},
+		RecycleBinAdapter: adapter,
+		OptIn:             []string{"user_temp"},
 		CategoryPlannedActions: map[string]clean.PlannedAction{
 			"user_temp": clean.PlannedActionMoveToRecycleBin,
 		},
@@ -1886,8 +1886,8 @@ func TestExecuteOptInNonUserTempCategoryRespectsCapacityPreCheck(t *testing.T) {
 			ID:             "test_rule",
 			DefaultEnabled: false, // Disable default candidate
 		}},
-		RecycleBinAdapter:       adapter,
-		OptIn:                   []string{"crash_dumps"},
+		RecycleBinAdapter: adapter,
+		OptIn:             []string{"crash_dumps"},
 		CategoryPlannedActions: map[string]clean.PlannedAction{
 			"crash_dumps": clean.PlannedActionMoveToRecycleBin,
 		},
