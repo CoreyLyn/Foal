@@ -12,13 +12,14 @@ import (
 )
 
 // tui_analyze_drive.go is the Analyze TUI: drive entry (#345) plus on-demand
-// browse-and-measure of every direct child (#346 / ADR-0034). Status and History
-// keep the generic Command viewer.
+// browse-and-measure of every direct child (#346 / ADR-0034) with honest child
+// measurement states (#347). Status and History keep the generic Command viewer.
 //
-// This slice measures directory children serially after entry. Two-worker
-// scheduling, streaming states, and path-bound live ranking arrive in later
-// tickets. Analyze remains read-only: no mutation, elevation, process action,
-// or History write.
+// This slice measures directory children serially after entry and projects
+// shared-core states (scanning/complete/partial/incomplete/skipped). Two-worker
+// scheduling, path-bound live ranking, cancel/cache/resume, and presentation
+// polish arrive in later tickets. Analyze remains read-only: no mutation,
+// elevation, process action, or History write.
 
 // analyzeDriveNav is the navigation intent returned by the Analyze browser model.
 type analyzeDriveNav int
@@ -46,9 +47,10 @@ var listAnalyzeLocalVolumes = func() []analyze.LocalVolume {
 }
 
 // browseAnalyzeLocation is the injectable direct-child browse seam. Production
-// uses shared analyze.BrowseLocation; tests inject fake trees.
-var browseAnalyzeLocation = func(ctx context.Context, root string, opts analyze.BrowseOptions) analyze.BrowseResult {
-	return analyze.BrowseLocation(ctx, root, opts)
+// streams path-scoped observations from shared Analyze core; tests inject fakes
+// and may ignore onObservation. Terminal states and aggregates come from the core.
+var browseAnalyzeLocation = func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
+	return analyze.StreamBrowseLocation(ctx, root, opts, onObservation)
 }
 
 type analyzeVolumesLoadedMsg struct {
@@ -61,7 +63,26 @@ type analyzeBrowseLoadedMsg struct {
 	result analyze.BrowseResult
 }
 
-// analyzeDriveModel is the Analyze TUI: local drive entry and on-demand browse.
+// analyzeBrowseObservationMsg is one path-scoped child update during measurement.
+// Timing is not part of correctness; gen discards stale streams after navigation.
+type analyzeBrowseObservationMsg struct {
+	gen int
+	obs analyze.ChildObservation
+	// stream is non-nil so the model can continue draining until the final result.
+	stream *analyzeBrowseStream
+}
+
+type analyzeBrowseStartedMsg struct {
+	gen    int
+	stream *analyzeBrowseStream
+}
+
+// analyzeBrowseStream is the async observation + result pipe for one browse load.
+type analyzeBrowseStream struct {
+	observations <-chan analyze.ChildObservation
+	result       <-chan analyze.BrowseResult
+}
+
 type analyzeDriveModel struct {
 	phase   analyzeViewPhase
 	loading bool
@@ -79,6 +100,8 @@ type analyzeDriveModel struct {
 	browseCursor int
 	// gen increments on each browse request so stale loads are ignored.
 	gen int
+	// measuring is true while a browse stream is active (children may already be visible).
+	measuring bool
 }
 
 func newAnalyzeDriveModel(width, height int) analyzeDriveModel {
@@ -123,11 +146,12 @@ func (m *analyzeDriveModel) applyLoaded(msg analyzeVolumesLoadedMsg) {
 	}
 }
 
-func (m *analyzeDriveModel) applyBrowseLoaded(msg analyzeBrowseLoadedMsg) {
+func (m *analyzeDriveModel) applyBrowseLoaded(msg analyzeBrowseLoadedMsg) tea.Cmd {
 	if msg.gen != m.gen {
-		return
+		return nil
 	}
 	m.loading = false
+	m.measuring = false
 	if !msg.result.OK {
 		m.notice = fmt.Sprintf("Cannot browse: %s", msg.result.Reason.Message)
 		// Failed entry from drive entry: stay on drive list (browseRoot was only
@@ -137,41 +161,147 @@ func (m *analyzeDriveModel) applyBrowseLoaded(msg analyzeBrowseLoadedMsg) {
 			m.browseChildren = nil
 			m.browseCursor = 0
 			m.phase = analyzePhaseDrive
-			return
+			return nil
 		}
 		// Already browsing: do not replace successful children with a failed load.
-		return
+		return nil
 	}
 	m.phase = analyzePhaseBrowse
 	m.browseRoot = msg.result.Root
+	// Authoritative final inventory from the shared core (may refine streaming rows).
 	m.browseChildren = append([]analyze.BrowseChild(nil), msg.result.Children...)
-	m.browseCursor = 0
+	if m.browseCursor >= len(m.browseChildren) {
+		m.browseCursor = 0
+	}
 	m.notice = ""
+	return nil
+}
+
+func (m *analyzeDriveModel) applyBrowseStarted(msg analyzeBrowseStartedMsg) tea.Cmd {
+	if msg.gen != m.gen || msg.stream == nil {
+		return nil
+	}
+	m.phase = analyzePhaseBrowse
+	m.loading = false
+	m.measuring = true
+	// Keep path identity; clear prior inventory for the new location load.
+	// (enterDrive/enterBrowseChild already set browseRoot.)
+	m.browseChildren = nil
+	m.browseCursor = 0
+	return waitAnalyzeBrowseStreamCmd(msg.gen, msg.stream)
+}
+
+func (m *analyzeDriveModel) applyBrowseObservation(msg analyzeBrowseObservationMsg) tea.Cmd {
+	if msg.gen != m.gen {
+		return nil
+	}
+	m.phase = analyzePhaseBrowse
+	m.loading = false
+	m.measuring = true
+	m.upsertBrowseObservation(msg.obs)
+	if msg.stream != nil {
+		return waitAnalyzeBrowseStreamCmd(msg.gen, msg.stream)
+	}
+	return nil
+}
+
+// upsertBrowseObservation merges a path-scoped observation into browseChildren.
+// Ranking remains serial order for this slice (#348 owns path-bound live ranking).
+func (m *analyzeDriveModel) upsertBrowseObservation(obs analyze.ChildObservation) {
+	child := analyze.BrowseChild{
+		Name:           obs.Name,
+		Path:           obs.Path,
+		Kind:           obs.Kind,
+		Bytes:          obs.Bytes,
+		FileCount:      obs.FileCount,
+		DirectoryCount: obs.DirectoryCount,
+		Classification: obs.Classification,
+		State:          obs.State,
+		SkipReason:     obs.SkipReason,
+		SkipAggregates: append([]analyze.SkipAggregate(nil), obs.SkipAggregates...),
+		Hidden:         obs.Hidden,
+		System:         obs.System,
+		Navigable:      obs.Navigable,
+	}
+	for i := range m.browseChildren {
+		if m.browseChildren[i].Path == obs.Path {
+			m.browseChildren[i] = child
+			return
+		}
+	}
+	m.browseChildren = append(m.browseChildren, child)
 }
 
 func loadAnalyzeBrowseCmd(gen int, root string) tea.Cmd {
 	return func() tea.Msg {
-		result := browseAnalyzeLocation(context.Background(), root, analyze.BrowseOptions{})
+		obsCh := make(chan analyze.ChildObservation, 64)
+		resultCh := make(chan analyze.BrowseResult, 1)
+		go func() {
+			result := browseAnalyzeLocation(context.Background(), root, analyze.BrowseOptions{}, func(o analyze.ChildObservation) {
+				// Buffer absorbs UI-safe bursts; block rather than drop terminals.
+				obsCh <- o
+			})
+			close(obsCh)
+			resultCh <- result
+		}()
+		return analyzeBrowseStartedMsg{
+			gen: gen,
+			stream: &analyzeBrowseStream{
+				observations: obsCh,
+				result:       resultCh,
+			},
+		}
+	}
+}
+
+// waitAnalyzeBrowseStreamCmd prefers observations, then the final BrowseResult.
+// Cadence is driven by core throttle + channel availability, not by this waiter.
+func waitAnalyzeBrowseStreamCmd(gen int, stream *analyzeBrowseStream) tea.Cmd {
+	return func() tea.Msg {
+		if stream == nil {
+			return analyzeBrowseLoadedMsg{gen: gen, result: analyze.BrowseResult{OK: false}}
+		}
+		if stream.observations != nil {
+			if obs, ok := <-stream.observations; ok {
+				return analyzeBrowseObservationMsg{gen: gen, obs: obs, stream: stream}
+			}
+		}
+		result, ok := <-stream.result
+		if !ok {
+			return analyzeBrowseLoadedMsg{gen: gen, result: analyze.BrowseResult{OK: false}}
+		}
 		return analyzeBrowseLoadedMsg{gen: gen, result: result}
 	}
 }
 
 func (m *analyzeDriveModel) handleKey(key string) (analyzeDriveNav, tea.Cmd) {
 	m.nav = analyzeDriveNavNone
-	if m.loading {
+	// Block interaction only while the initial load has no rows yet. During
+	// streaming measurement, children may already be visible for navigation.
+	if m.loading && len(m.browseChildren) == 0 && m.phase != analyzePhaseBrowse {
 		switch key {
 		case "ctrl+c":
 			return analyzeDriveNavInterrupt, nil
 		case "q":
 			return analyzeDriveNavQuit, nil
 		case "esc", "escape", "b":
-			if m.phase == analyzePhaseBrowse {
-				// Cancel-in-progress: bump gen so result is ignored, then navigate back.
-				m.gen++
-				m.loading = false
-				return m.leaveBrowse()
-			}
 			return analyzeDriveNavMenu, nil
+		default:
+			return analyzeDriveNavNone, nil
+		}
+	}
+	if m.loading && len(m.browseChildren) == 0 && m.phase == analyzePhaseBrowse {
+		switch key {
+		case "ctrl+c":
+			return analyzeDriveNavInterrupt, nil
+		case "q":
+			return analyzeDriveNavQuit, nil
+		case "esc", "escape", "b":
+			// Cancel-in-progress: bump gen so result is ignored, then navigate back.
+			m.gen++
+			m.loading = false
+			m.measuring = false
+			return m.leaveBrowse()
 		default:
 			return analyzeDriveNavNone, nil
 		}
@@ -301,6 +431,7 @@ func (m *analyzeDriveModel) leaveBrowse() (analyzeDriveNav, tea.Cmd) {
 		m.browseChildren = nil
 		m.browseCursor = 0
 		m.loading = false
+		m.measuring = false
 		m.notice = ""
 		return analyzeDriveNavNone, nil
 	}
@@ -311,11 +442,14 @@ func (m *analyzeDriveModel) leaveBrowse() (analyzeDriveNav, tea.Cmd) {
 		m.browseChildren = nil
 		m.browseCursor = 0
 		m.loading = false
+		m.measuring = false
 		m.notice = ""
 		return analyzeDriveNavNone, nil
 	}
 	m.gen++
 	m.loading = true
+	m.measuring = false
+	m.browseChildren = nil
 	m.notice = "Returning..."
 	return analyzeDriveNavNone, loadAnalyzeBrowseCmd(m.gen, parent)
 }
@@ -401,7 +535,7 @@ func (m analyzeDriveModel) browseContent() string {
 	b.WriteString("+--------------------------------------------------+\n\n")
 	b.WriteString(fmt.Sprintf("Location: %s\n\n", m.browseRoot))
 
-	if m.loading {
+	if m.loading && len(m.browseChildren) == 0 {
 		b.WriteString("Measuring direct children...\n")
 		if m.notice != "" {
 			b.WriteString(m.notice)
@@ -411,8 +545,19 @@ func (m analyzeDriveModel) browseContent() string {
 		return b.String()
 	}
 
+	locationComplete := !m.measuring && analyze.LocationMeasurementComplete(m.browseChildren)
+	observedTotal := analyze.ObservedLocationBytes(m.browseChildren)
+
+	if m.measuring {
+		b.WriteString("Measuring (approximate observed shares while scanning)...\n\n")
+	}
+
 	if len(m.browseChildren) == 0 {
-		b.WriteString("No direct children in this location.\n")
+		if m.measuring {
+			b.WriteString("Waiting for first child observations...\n")
+		} else {
+			b.WriteString("No direct children in this location.\n")
+		}
 	} else {
 		b.WriteString("Direct children:\n\n")
 		for i, child := range m.browseChildren {
@@ -421,7 +566,13 @@ func (m analyzeDriveModel) browseContent() string {
 				prefix = "> "
 			}
 			b.WriteString(prefix)
-			b.WriteString(renderAnalyzeBrowseRow(child))
+			b.WriteString(renderAnalyzeBrowseRow(child, observedTotal, locationComplete))
+			b.WriteString("\n")
+		}
+		// Focused detail: aggregate counts/reasons, never unbounded paths.
+		if m.browseCursor >= 0 && m.browseCursor < len(m.browseChildren) {
+			b.WriteString("\nDetail: ")
+			b.WriteString(analyze.FormatFocusedDetail(m.browseChildren[m.browseCursor]))
 			b.WriteString("\n")
 		}
 	}
@@ -468,7 +619,7 @@ func renderAnalyzeDriveRow(vol analyze.LocalVolume) string {
 	return strings.Join(parts, " · ")
 }
 
-func renderAnalyzeBrowseRow(child analyze.BrowseChild) string {
+func renderAnalyzeBrowseRow(child analyze.BrowseChild, observedTotal int64, locationComplete bool) string {
 	parts := []string{child.Name, child.Kind}
 	if child.Hidden {
 		parts = append(parts, "hidden")
@@ -479,17 +630,21 @@ func renderAnalyzeBrowseRow(child analyze.BrowseChild) string {
 	if child.Classification != "" {
 		parts = append(parts, child.Classification)
 	}
-	switch child.State {
-	case analyze.BrowseStateSkipped:
-		parts = append(parts, "skipped")
-		if child.SkipReason != "" {
-			parts = append(parts, child.SkipReason)
-		}
-	case analyze.BrowseStateIncomplete:
-		parts = append(parts, "incomplete")
-		parts = append(parts, fmt.Sprintf(">= %s", cleanFormatBytes(child.Bytes)))
-	default:
-		parts = append(parts, cleanFormatBytes(child.Bytes))
+	// Always surface the shared-core state token so Partial/Scanning are explicit.
+	if child.State != "" {
+		parts = append(parts, child.State)
+	}
+	if child.State == analyze.BrowseStateSkipped && child.SkipReason != "" {
+		parts = append(parts, child.SkipReason)
+	}
+	// Size: Partial/Incomplete as lower-bound ">=bytes"; never invent completeness.
+	if child.State != analyze.BrowseStateSkipped {
+		parts = append(parts, analyze.FormatSizeToken(child.Bytes, child.State, cleanFormatBytes))
+	}
+	// Percentage: approximate for scanning/partial/incomplete; exact only when
+	// location total is complete and the child is complete. Never ">=N%".
+	if share := analyze.FormatSharePercent(child.Bytes, observedTotal, child.State, locationComplete); share != "" {
+		parts = append(parts, share)
 	}
 	if child.Kind == analyze.BrowseKindDirectory && child.Navigable {
 		parts = append(parts, "enter")

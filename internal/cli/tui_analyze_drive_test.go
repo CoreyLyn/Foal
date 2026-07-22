@@ -156,7 +156,7 @@ func TestAnalyzeDriveEntryEnterOnAvailableStartsBrowseNotVolumeRescan(t *testing
 	t.Cleanup(func() { listAnalyzeLocalVolumes = original })
 
 	origBrowse := browseAnalyzeLocation
-	browseAnalyzeLocation = func(ctx context.Context, root string, opts analyze.BrowseOptions) analyze.BrowseResult {
+	browseAnalyzeLocation = func(ctx context.Context, root string, opts analyze.BrowseOptions, onObservation analyze.ObservationHandler) analyze.BrowseResult {
 		browseRoots = append(browseRoots, root)
 		return analyze.BrowseResult{
 			OK:   true,
@@ -182,12 +182,7 @@ func TestAnalyzeDriveEntryEnterOnAvailableStartsBrowseNotVolumeRescan(t *testing
 	if cmd == nil {
 		t.Fatal("enter available drive must return browse command")
 	}
-	loaded, ok := cmd().(analyzeBrowseLoadedMsg)
-	if !ok {
-		t.Fatalf("cmd = %T, want analyzeBrowseLoadedMsg", cmd())
-	}
-	next, _ = model.Update(loaded)
-	model = next.(rootModel)
+	model = drainAnalyzeBrowse(t, model, cmd)
 	if len(browseRoots) != 1 || browseRoots[0] != `C:\` {
 		t.Fatalf("browse roots = %#v, want only C:\\", browseRoots)
 	}

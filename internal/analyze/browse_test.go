@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestBrowseLocationEnumeratesEveryDirectChild(t *testing.T) {
@@ -329,4 +331,270 @@ func TestBrowseLocationNoMutationSurface(t *testing.T) {
 	if err != nil || string(data) != "keep" {
 		t.Fatalf("browse must not mutate files: %v %q", err, data)
 	}
+}
+
+func TestBrowseLocationPartialOnPermissionOmission(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "locked")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Readable nested file so Partial still carries observed lower-bound bytes.
+	if err := os.WriteFile(filepath.Join(dir, "visible.txt"), []byte("seen"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(dir, "denied")
+	if err := os.Mkdir(nested, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	origReadDir := browseReadDir
+	t.Cleanup(func() { browseReadDir = origReadDir })
+	browseReadDir = func(path string) ([]os.DirEntry, error) {
+		if filepath.Clean(path) == filepath.Clean(nested) {
+			return nil, os.ErrPermission
+		}
+		return origReadDir(path)
+	}
+
+	result := BrowseLocation(context.Background(), root, BrowseOptions{})
+	if !result.OK {
+		t.Fatalf("failed: %#v", result.Reason)
+	}
+	var locked *BrowseChild
+	for i := range result.Children {
+		if result.Children[i].Name == "locked" {
+			locked = &result.Children[i]
+			break
+		}
+	}
+	if locked == nil {
+		t.Fatal("locked child missing")
+	}
+	if locked.State != BrowseStatePartial {
+		t.Fatalf("state = %q, want partial", locked.State)
+	}
+	if locked.Bytes < int64(len("seen")) {
+		t.Fatalf("partial must retain observed bytes, got %d", locked.Bytes)
+	}
+	if !hasSkipAggregate(locked.SkipAggregates, SkipReasonPermissionDenied) {
+		t.Fatalf("aggregates = %#v, want permission_denied", locked.SkipAggregates)
+	}
+	// No unbounded path list field.
+	detail := FormatFocusedDetail(*locked)
+	if strings.Contains(detail, nested) {
+		t.Fatalf("detail must not list descendant paths: %s", detail)
+	}
+}
+
+func TestBrowseLocationIncompleteOnHardLimit(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "huge")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		name := filepath.Join(dir, "f"+string(rune('a'+i))+".txt")
+		if err := os.WriteFile(name, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := BrowseLocation(context.Background(), root, BrowseOptions{DescendantLimit: 5})
+	if !result.OK || len(result.Children) != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	child := result.Children[0]
+	if child.State != BrowseStateIncomplete {
+		t.Fatalf("state = %q, want incomplete", child.State)
+	}
+	if child.Bytes == 0 {
+		t.Fatal("incomplete should still report observed bytes")
+	}
+	if !hasSkipAggregate(child.SkipAggregates, SkipReasonHardLimit) {
+		t.Fatalf("aggregates = %#v, want hard_limit", child.SkipAggregates)
+	}
+}
+
+func TestBrowseLocationDirectChildAccessFailureIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	// Create a real entry so ReadDir lists it, then fail Lstat for that child.
+	if err := os.WriteFile(filepath.Join(root, "gone.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(root, "gone.txt")
+	origLstat := browseLstat
+	t.Cleanup(func() { browseLstat = origLstat })
+	browseLstat = func(path string) (os.FileInfo, error) {
+		if filepath.Clean(path) == filepath.Clean(gone) {
+			return nil, os.ErrPermission
+		}
+		return origLstat(path)
+	}
+
+	result := BrowseLocation(context.Background(), root, BrowseOptions{})
+	if !result.OK || len(result.Children) != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	child := result.Children[0]
+	if child.State != BrowseStateSkipped || child.SkipReason != SkipReasonPermissionDenied {
+		t.Fatalf("child = %#v, want skipped/permission_denied", child)
+	}
+}
+
+func TestStreamBrowseLocationEmitsScanningThenTerminal(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "work")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Enough files to produce at least one progress callback under every=32
+	// plus the initial scanning emission and terminal.
+	for i := 0; i < 40; i++ {
+		if err := os.WriteFile(filepath.Join(dir, "f"+strconv.Itoa(i)+".txt"), []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "solo.txt"), []byte("s"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var obs []ChildObservation
+	result := StreamBrowseLocation(context.Background(), root, BrowseOptions{
+		// Disable wall-clock throttle so dense progress can surface when emitted.
+		ObservationMinInterval: -1,
+	}, func(o ChildObservation) {
+		obs = append(obs, o)
+	})
+	if !result.OK {
+		t.Fatalf("failed: %#v", result.Reason)
+	}
+
+	// Directory child must have seen Scanning then terminal Complete.
+	var workStates []string
+	for _, o := range obs {
+		if o.Name == "work" {
+			workStates = append(workStates, o.State)
+		}
+	}
+	if len(workStates) < 2 {
+		t.Fatalf("work observations = %#v, want scanning then terminal", workStates)
+	}
+	if workStates[0] != BrowseStateScanning {
+		t.Fatalf("first work state = %q, want scanning", workStates[0])
+	}
+	last := workStates[len(workStates)-1]
+	if last != BrowseStateComplete || !IsTerminalBrowseState(last) {
+		t.Fatalf("last work state = %q, want complete terminal", last)
+	}
+	// File emits a single terminal complete observation.
+	var fileObs []ChildObservation
+	for _, o := range obs {
+		if o.Name == "solo.txt" {
+			fileObs = append(fileObs, o)
+		}
+	}
+	if len(fileObs) != 1 || fileObs[0].State != BrowseStateComplete || !fileObs[0].Terminal {
+		t.Fatalf("file obs = %#v", fileObs)
+	}
+	// Identity fields stable.
+	for _, o := range obs {
+		if o.Path == "" || o.Name == "" || o.Kind == "" {
+			t.Fatalf("observation missing identity: %#v", o)
+		}
+	}
+}
+
+func TestStreamBrowseLocationTerminalAlwaysEmittedDespiteThrottle(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "d")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var terminalStates []string
+	_ = StreamBrowseLocation(context.Background(), root, BrowseOptions{
+		ObservationMinInterval: time.Hour, // extreme throttle
+	}, func(o ChildObservation) {
+		if o.Terminal || IsTerminalBrowseState(o.State) {
+			terminalStates = append(terminalStates, o.Name+":"+o.State)
+		}
+	})
+	found := false
+	for _, s := range terminalStates {
+		if s == "d:"+BrowseStateComplete {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("terminal complete for d missing; got %#v", terminalStates)
+	}
+}
+
+func TestBrowseLocationCancelProducesIncompleteNotComplete(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "slow")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30; i++ {
+		if err := os.WriteFile(filepath.Join(dir, "f"+strconv.Itoa(i)+".txt"), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Cancel immediately: child measurement should not report complete.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := BrowseLocation(ctx, root, BrowseOptions{})
+	if !result.OK {
+		t.Fatalf("failed: %#v", result.Reason)
+	}
+	// May return zero children if cancel hits before any child, or incomplete child.
+	for _, c := range result.Children {
+		if c.Kind == BrowseKindDirectory && c.State == BrowseStateComplete {
+			t.Fatalf("canceled directory must not be complete: %#v", c)
+		}
+		if c.Kind == BrowseKindDirectory && c.State != BrowseStateIncomplete && c.State != BrowseStateScanning {
+			// Terminal after cancel should be incomplete (measurement ran under canceled ctx).
+			if c.State == BrowseStatePartial {
+				t.Fatalf("cancel must not surface as partial: %#v", c)
+			}
+		}
+	}
+}
+
+func TestBrowseChildObservationFieldsOnCompleteDirectory(t *testing.T) {
+	root := t.TempDir()
+	nodeModules := filepath.Join(root, "node_modules")
+	if err := os.Mkdir(nodeModules, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeModules, "pkg.js"), []byte("pkg"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	result := BrowseLocation(context.Background(), root, BrowseOptions{})
+	if !result.OK || len(result.Children) != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	c := result.Children[0]
+	if c.Path != nodeModules || c.Kind != BrowseKindDirectory || c.State != BrowseStateComplete {
+		t.Fatalf("child = %#v", c)
+	}
+	if c.Classification != "project_artifact_clue" {
+		t.Fatalf("classification = %q", c.Classification)
+	}
+	if c.FileCount != 1 || c.Bytes != 3 {
+		t.Fatalf("counts/bytes = files=%d bytes=%d", c.FileCount, c.Bytes)
+	}
+}
+
+func hasSkipAggregate(aggs []SkipAggregate, reason string) bool {
+	for _, a := range aggs {
+		if a.Reason == reason && a.Count > 0 {
+			return true
+		}
+	}
+	return false
 }

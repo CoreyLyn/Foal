@@ -166,12 +166,21 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.analyze.applyLoaded(msg)
 		return m, nil
+	case analyzeBrowseStartedMsg:
+		if m.screen != screenAnalyzeDrive {
+			return m, nil
+		}
+		return m, m.analyze.applyBrowseStarted(msg)
+	case analyzeBrowseObservationMsg:
+		if m.screen != screenAnalyzeDrive {
+			return m, nil
+		}
+		return m, m.analyze.applyBrowseObservation(msg)
 	case analyzeBrowseLoadedMsg:
 		if m.screen != screenAnalyzeDrive {
 			return m, nil
 		}
-		m.analyze.applyBrowseLoaded(msg)
-		return m, nil
+		return m, m.analyze.applyBrowseLoaded(msg)
 	case tea.KeyPressMsg:
 		switch m.screen {
 		case screenCleanPreview:

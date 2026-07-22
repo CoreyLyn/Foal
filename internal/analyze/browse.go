@@ -11,23 +11,23 @@ import (
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 )
 
-// Browse child kinds and terminal measurement states for on-demand disk browse.
-const (
-	BrowseKindFile      = "file"
-	BrowseKindDirectory = "directory"
-	BrowseKindReparse   = "reparse_point"
-
-	BrowseStateComplete   = "complete"
-	BrowseStateIncomplete = "incomplete"
-	BrowseStateSkipped    = "skipped"
+// Injectable filesystem seams for deterministic Partial/Skipped tests.
+// Production uses the os package; tests may override and must restore.
+var (
+	browseReadDir = os.ReadDir
+	browseLstat   = os.Lstat
 )
 
-// BrowseOptions configures BrowseLocation (zero values select defaults).
+// BrowseOptions configures BrowseLocation / StreamBrowseLocation (zero values select defaults).
 type BrowseOptions struct {
 	// DescendantLimit caps inspected descendants per direct directory child
 	// (zero selects default 100_000). Each directory child is measured
 	// independently with its own ceiling.
 	DescendantLimit int
+	// ObservationMinInterval throttles non-terminal Scanning observations.
+	// Zero selects DefaultObservationMinInterval. Negative disables throttling.
+	// Cadence is never part of correctness; terminals always emit.
+	ObservationMinInterval time.Duration
 }
 
 // BrowseChild is one direct child of a browse location.
@@ -41,10 +41,12 @@ type BrowseChild struct {
 	// Classification is set only for direct children (project_artifact_clue).
 	// Recursive measurement never classifies nested artifacts.
 	Classification string `json:"classification,omitempty"`
-	// State is complete, incomplete, or skipped for this slice.
+	// State is scanning, complete, partial, incomplete, or skipped.
 	State string `json:"state"`
 	// SkipReason is set when State is skipped (e.g. reparse_point, permission_denied).
 	SkipReason string `json:"skip_reason,omitempty"`
+	// SkipAggregates are path-free omission counts under this child (Partial/Incomplete).
+	SkipAggregates []SkipAggregate `json:"skip_aggregates,omitempty"`
 	// Hidden and System are presentation-only Windows attribute flags.
 	Hidden bool `json:"hidden,omitempty"`
 	System bool `json:"system,omitempty"`
@@ -62,6 +64,11 @@ type BrowseResult struct {
 	OK     bool            `json:"ok"`
 }
 
+// ObservationHandler receives path-scoped child measurement updates. Handlers must
+// not retain unbounded descendant-path lists; ChildObservation is already aggregate.
+// Timing of calls is not part of correctness beyond terminal-always-emitted.
+type ObservationHandler func(ChildObservation)
+
 // BrowseLocation enumerates every direct child of root after entry and measures
 // each directory child recursively with an independent descendant limit.
 //
@@ -73,7 +80,19 @@ type BrowseResult struct {
 //   - Nested project artifacts are not classified during recursive walks.
 //   - No sibling locations are prefetched; only root is read.
 //   - Read-only: no mutation, elevation, process action, or History write.
+//
+// Permission/read omissions under a directory → Partial.
+// Per-child hard-limit or cancellation stop → Incomplete.
+// Direct-child access failure or non-traversed reparse → Skipped.
 func BrowseLocation(ctx context.Context, root string, opts BrowseOptions) BrowseResult {
+	return StreamBrowseLocation(ctx, root, opts, nil)
+}
+
+// StreamBrowseLocation is BrowseLocation plus path-scoped incremental observations.
+// onObservation may be nil. Non-terminal Scanning updates are throttled to a
+// UI-safe cadence; terminal states always emit. Tests must not depend on exact
+// intermediate timing or goroutine identity.
+func StreamBrowseLocation(ctx context.Context, root string, opts BrowseOptions, onObservation ObservationHandler) BrowseResult {
 	start := time.Now()
 	if ctx == nil {
 		ctx = context.Background()
@@ -99,8 +118,15 @@ func BrowseLocation(ctx context.Context, root string, opts BrowseOptions) Browse
 	if limit <= 0 {
 		limit = defaultDescendantLimit
 	}
+	minInterval := opts.ObservationMinInterval
+	if minInterval == 0 {
+		minInterval = DefaultObservationMinInterval
+	}
+	if minInterval < 0 {
+		minInterval = 0
+	}
 
-	entries, err := os.ReadDir(cleanRoot)
+	entries, err := browseReadDir(cleanRoot)
 	if err != nil {
 		return BrowseResult{
 			Root:      cleanRoot,
@@ -128,7 +154,7 @@ func BrowseLocation(ctx context.Context, root string, opts BrowseOptions) Browse
 			}
 		default:
 		}
-		children = append(children, inspectBrowseChild(ctx, cleanRoot, entry, limit))
+		children = append(children, inspectBrowseChild(ctx, cleanRoot, entry, limit, minInterval, onObservation))
 	}
 
 	return BrowseResult{
@@ -139,7 +165,14 @@ func BrowseLocation(ctx context.Context, root string, opts BrowseOptions) Browse
 	}
 }
 
-func inspectBrowseChild(ctx context.Context, parent string, entry os.DirEntry, limit int) BrowseChild {
+func inspectBrowseChild(
+	ctx context.Context,
+	parent string,
+	entry os.DirEntry,
+	limit int,
+	minInterval time.Duration,
+	onObservation ObservationHandler,
+) BrowseChild {
 	name := entry.Name()
 	childPath := filepath.Join(parent, name)
 	child := BrowseChild{
@@ -147,11 +180,12 @@ func inspectBrowseChild(ctx context.Context, parent string, entry os.DirEntry, l
 		Path: childPath,
 	}
 
-	info, err := os.Lstat(childPath)
+	info, err := browseLstat(childPath)
 	if err != nil {
 		child.Kind = kindFromDirEntry(entry)
 		child.State = BrowseStateSkipped
 		child.SkipReason = classifyError(err)
+		emitObservation(onObservation, child, true)
 		return child
 	}
 
@@ -163,8 +197,9 @@ func inspectBrowseChild(ctx context.Context, parent string, entry os.DirEntry, l
 		// Visible but neither traversed nor navigable.
 		child.Kind = BrowseKindReparse
 		child.State = BrowseStateSkipped
-		child.SkipReason = "reparse_point"
+		child.SkipReason = SkipReasonReparsePoint
 		child.Navigable = false
+		emitObservation(onObservation, child, true)
 		return child
 	}
 
@@ -174,6 +209,7 @@ func inspectBrowseChild(ctx context.Context, parent string, entry os.DirEntry, l
 		child.FileCount = 1
 		child.State = BrowseStateComplete
 		child.Navigable = false
+		emitObservation(onObservation, child, true)
 		return child
 	}
 
@@ -181,18 +217,82 @@ func inspectBrowseChild(ctx context.Context, parent string, entry os.DirEntry, l
 	child.Navigable = true
 	child.Classification = childClassification(childPath, BrowseKindDirectory)
 
+	// Initial Scanning observation (always, before work).
+	child.State = BrowseStateScanning
+	emitObservation(onObservation, child, false)
+
 	// Independent recursive measurement for this directory only.
 	// Nested artifact classification is intentionally not performed.
-	totals, incomplete := measureDirectoryTree(ctx, childPath, limit)
-	child.Bytes = totals.Bytes
-	child.FileCount = totals.FileCount
-	child.DirectoryCount = totals.DirectoryCount
-	if incomplete {
-		child.State = BrowseStateIncomplete
-	} else {
-		child.State = BrowseStateComplete
+	throttle := newObservationThrottle(minInterval)
+	// First scanning already emitted; start throttle clock so dense trees throttle.
+	if minInterval > 0 {
+		throttle.lastEmit = time.Now()
+		if throttle.now != nil {
+			throttle.lastEmit = throttle.now()
+		}
 	}
+
+	report := func(obs ChildObservation) {
+		if onObservation == nil {
+			return
+		}
+		if !throttle.allow(obs.Terminal) {
+			return
+		}
+		onObservation(obs)
+	}
+
+	outcome := measureDirectoryTree(ctx, childPath, limit, func(progress measureProgress) {
+		obs := ChildObservation{
+			Name:           child.Name,
+			Path:           child.Path,
+			Kind:           child.Kind,
+			Bytes:          progress.Totals.Bytes,
+			FileCount:      progress.Totals.FileCount,
+			DirectoryCount: progress.Totals.DirectoryCount,
+			Classification: child.Classification,
+			State:          BrowseStateScanning,
+			SkipAggregates: aggregatesFromMap(progress.SkipCounts),
+			Hidden:         child.Hidden,
+			System:         child.System,
+			Navigable:      child.Navigable,
+			Terminal:       false,
+		}
+		report(obs)
+	})
+
+	child.Bytes = outcome.Totals.Bytes
+	child.FileCount = outcome.Totals.FileCount
+	child.DirectoryCount = outcome.Totals.DirectoryCount
+	child.SkipAggregates = aggregatesFromMap(outcome.SkipCounts)
+	child.State = outcome.State
+	if outcome.State == BrowseStateSkipped {
+		child.SkipReason = outcome.DirectSkipReason
+	}
+	emitObservation(onObservation, child, true)
 	return child
+}
+
+func emitObservation(on ObservationHandler, child BrowseChild, terminal bool) {
+	if on == nil {
+		return
+	}
+	on(ChildObservation{
+		Name:           child.Name,
+		Path:           child.Path,
+		Kind:           child.Kind,
+		Bytes:          child.Bytes,
+		FileCount:      child.FileCount,
+		DirectoryCount: child.DirectoryCount,
+		Classification: child.Classification,
+		State:          child.State,
+		SkipReason:     child.SkipReason,
+		SkipAggregates: append([]SkipAggregate(nil), child.SkipAggregates...),
+		Hidden:         child.Hidden,
+		System:         child.System,
+		Navigable:      child.Navigable,
+		Terminal:       terminal || IsTerminalBrowseState(child.State),
+	})
 }
 
 func kindFromDirEntry(entry os.DirEntry) string {
@@ -205,49 +305,124 @@ func kindFromDirEntry(entry os.DirEntry) string {
 	return BrowseKindFile
 }
 
+// measureProgress is an incremental recursive-measurement snapshot.
+type measureProgress struct {
+	Totals     Totals
+	SkipCounts map[string]int64
+}
+
+// measureOutcome is the terminal recursive-measurement result for one directory child.
+type measureOutcome struct {
+	Totals           Totals
+	SkipCounts       map[string]int64
+	State            string
+	DirectSkipReason string
+}
+
 // measureDirectoryTree measures path as an independent tree with its own
 // descendant ceiling. It does not classify nested project artifacts.
-func measureDirectoryTree(ctx context.Context, path string, limit int) (Totals, bool) {
+//
+// Terminal state rules:
+//   - Complete: traversal finished with no omitted descendants.
+//   - Partial: permission/read omissions among descendants (traversal finished).
+//   - Incomplete: hard-limit or cooperative cancellation stopped traversal.
+//
+// Cancellation and hard-limit take precedence over Partial when both apply.
+func measureDirectoryTree(ctx context.Context, path string, limit int, onProgress func(measureProgress)) measureOutcome {
 	s := &treeMeasurer{
-		root:  path,
-		limit: limit,
+		root:       path,
+		limit:      limit,
+		skipCounts: map[string]int64{},
+		onProgress: onProgress,
 	}
 	totals := s.measure(ctx, path)
-	return totals, s.incomplete
+	state := BrowseStateComplete
+	switch {
+	case s.incomplete:
+		state = BrowseStateIncomplete
+	case s.hadOmissions:
+		state = BrowseStatePartial
+	}
+	return measureOutcome{
+		Totals:     totals,
+		SkipCounts: s.skipCounts,
+		State:      state,
+	}
 }
 
 type treeMeasurer struct {
-	root        string
-	limit       int
-	incomplete  bool
-	descendants int
+	root         string
+	limit        int
+	incomplete   bool
+	hadOmissions bool
+	descendants  int
+	skipCounts   map[string]int64
+	onProgress   func(measureProgress)
+	// progressEvery controls how often onProgress fires by descendant count
+	// (independent of wall-clock throttle in the observer).
+	// Zero means every successful file/dir contribution.
+	progressEvery int
+	progressN     int
+}
+
+func (s *treeMeasurer) noteSkip(reason string) {
+	if reason == "" {
+		reason = SkipReasonReadError
+	}
+	s.hadOmissions = true
+	s.skipCounts[reason]++
+}
+
+func (s *treeMeasurer) emitProgress(totals Totals) {
+	if s.onProgress == nil {
+		return
+	}
+	s.progressN++
+	every := s.progressEvery
+	if every <= 0 {
+		every = 32 // bound callback volume without making cadence correctness
+	}
+	if s.progressN%every != 0 && !s.incomplete {
+		return
+	}
+	// Copy skip map into a snapshot map for the callback consumer.
+	s.onProgress(measureProgress{
+		Totals:     totals,
+		SkipCounts: copySkipCounts(s.skipCounts),
+	})
 }
 
 func (s *treeMeasurer) measure(ctx context.Context, path string) Totals {
 	select {
 	case <-ctx.Done():
 		s.incomplete = true
+		s.noteSkip(SkipReasonCanceled)
 		return Totals{}
 	default:
 	}
 
-	info, err := os.Lstat(path)
+	info, err := browseLstat(path)
 	if err != nil {
+		s.noteSkip(classifyError(err))
 		return Totals{}
 	}
 	if isReparsePoint(info) || hasReparseAttr(path) {
-		// Nested reparse: do not traverse; omit from observed totals.
+		// Nested reparse: intentional non-traversal (same as CLI analyze). Do not
+		// count as Partial permission/read omission; direct-child reparse is Skipped
+		// before recursive measurement starts.
 		return Totals{}
 	}
 	if !info.IsDir() {
+		// Leaf progress is reported by the parent after totals.add so Scanning
+		// observations always carry cumulative observed bytes for the child root.
 		return Totals{Bytes: info.Size(), FileCount: 1}
 	}
 
 	totals := Totals{DirectoryCount: 1}
-	entries, err := os.ReadDir(path)
+	entries, err := browseReadDir(path)
 	if err != nil {
-		// Unreadable directory still counts as a directory shell (partial-like
-		// omission of descendants). Full Partial state streaming is #347.
+		// Unreadable directory shell: Partial omission of descendants.
+		s.noteSkip(classifyError(err))
 		return totals
 	}
 
@@ -258,6 +433,7 @@ func (s *treeMeasurer) measure(ctx context.Context, path string) Totals {
 		select {
 		case <-ctx.Done():
 			s.incomplete = true
+			s.noteSkip(SkipReasonCanceled)
 		default:
 		}
 		if s.incomplete {
@@ -269,13 +445,44 @@ func (s *treeMeasurer) measure(ctx context.Context, path string) Totals {
 		s.descendants++
 		if s.descendants > s.limit {
 			s.incomplete = true
+			s.noteSkip(SkipReasonHardLimit)
 			break
 		}
 
 		childPath := filepath.Join(path, entry.Name())
-		totals.add(s.measure(ctx, childPath))
+		childTotals := s.measure(ctx, childPath)
+		totals.add(childTotals)
+		s.emitProgress(totals)
 	}
 	return totals
+}
+
+func aggregatesFromMap(m map[string]int64) []SkipAggregate {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]SkipAggregate, 0, len(m))
+	for reason, count := range m {
+		if count <= 0 || reason == "" {
+			continue
+		}
+		out = append(out, SkipAggregate{Reason: reason, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Reason < out[j].Reason
+	})
+	return out
+}
+
+func copySkipCounts(m map[string]int64) map[string]int64 {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]int64, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // presentationAttributes holds Windows presentation-only flags.
