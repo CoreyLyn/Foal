@@ -5,3 +5,4 @@
 /dist/
 /.release-verify
 /.gocache-review
+/.playwright-mcp
