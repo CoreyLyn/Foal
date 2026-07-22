@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0034
+---
+
 # Analyze is directory insight, not a disk explorer or cleanup surface
 
 Foal's `analyze` command is a read-only **directory insight** tool: measure one analysis root (default CWD), report totals and top children by size, and attach only proven high-confidence classification clues (today: top-level `project_artifact_clue`). It is deliberately **not** a Mole-style interactive disk explorer, ad hoc Trash/delete surface, Clean opportunity scanner, or recursive project-artifact finder. Nested rebuildable discovery and permanent reclaim stay on `foal purge`; Clean keeps only presentation pointers.

@@ -23,7 +23,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 | --- | --- |
 | `clean` | Conservative preview-first cleanup with rule-driven mixed-action execution (Recycle Bin or permanent per catalog). |
 | `uninstall` | Current preview-only registry application discovery, installed-application footprint review, orphaned residue review clues, human report, and JSON review sections; future execution model is separate. |
-| `analyze` | Read-only, JSON-first directory insight engine. |
+| `analyze` | Read-only directory insight engine and on-demand TUI disk browser (ADR-0034). |
 | `optimize` | Future read-only health checks and recommendations; not current implementation scope. |
 | `status` | Read-only system snapshot; realtime monitoring is future TUI work. |
 
@@ -34,7 +34,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 | `foal --help` | Shows the implemented command list and Foal/foal/foal.exe examples. |
 | `foal version`, `foal --version`, `--json` forms | Read-only shared build metadata: version, commit, Go runtime, and target platform. |
 | `foal status --json` | Read-only system and Foal state snapshot with disk, OS, elapsed time, skipped items, and errors. |
-| `foal analyze --json <path>` | Read-only directory insight with totals, top children, skipped entries, and elapsed time. |
+| `foal analyze --json <path>` | Read-only directory insight with totals, top children, skipped entries, and elapsed time. Explicit local volume roots allowed for Analyze only; guarded copy-only Purge handoff when applicable. |
 | `foal clean --dry-run --json` | Preview-only cleanup candidate review; reports true planned actions without permanent authorization. |
 | `foal clean --execute` | Explicit cleanup confirmation; uses each category's catalog planned action. Permanent categories also need `--allow-permanent`. |
 | `foal history --json` | Reads Foal operation history and reports sessions or structured history errors. |

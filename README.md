@@ -76,7 +76,7 @@ foal history --json
 | `foal` | Opens the interactive TUI in a terminal. |
 | `foal clean` | Previews or executes catalog-based cleanup. Requires `--dry-run` or `--execute`. |
 | `foal purge <root...>` | Previews or permanently removes allowlisted rebuildable project artifacts under explicit roots. |
-| `foal analyze <path>` | Reports directory totals and top children without changing files. |
+| `foal analyze <path>` | Read-only directory insight (totals, top children, optional artifact clues). Explicit local volume roots allowed for Analyze only; no deletion. |
 | `foal status` | Reports a read-only Windows and Foal state snapshot. |
 | `foal history` | Reads prior Clean and Purge operation records. |
 | `foal uninstall` | Previews installed applications; `--execute --select <name>` runs official uninstallers for selected apps. |
@@ -154,6 +154,21 @@ foal clean --dry-run --opt-in winsxs_component_store --opt-in nvidia_installer_c
 A mixed execution that also selects proven permanent-delete categories must include `--allow-permanent` independently of `--allow-servicing`.
 
 The authoritative category list, action matrix, impact notes, and exclusions live in the [Clean deletion policy](docs/plan/clean-deletion-policy.md).
+
+## Analyze
+
+`analyze` measures one path and never changes files:
+
+```text
+foal analyze
+foal analyze .\my-project
+foal analyze --json C:```
+
+- Omit the path to measure the current directory.
+- Explicit local fixed/removable volume roots are accepted for Analyze only; Clean and Purge still reject dangerous roots.
+- Matching direct-child names may be labeled `project_artifact_clue` (TUI shows a compact `artifact` label). Nested matches are not classified during size walks.
+- When the measured root is a valid Purge root and a direct artifact clue is present, the human report may show copy-only `foal purge <root>` guidance. Analyze never launches Purge.
+- The interactive TUI is a read-only on-demand disk browser (local drives → ranked children → drill-down). It does not delete, open files, elevate, or write History.
 
 ## Project artifact purge
 

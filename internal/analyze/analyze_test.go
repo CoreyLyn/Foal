@@ -407,15 +407,17 @@ func TestRenderHumanReportIncludesTopChildrenWithSizeKindClassification(t *testi
 }
 
 func TestRenderHumanReportIncludesPurgeHandoffWhenArtifactCluePresent(t *testing.T) {
+	// Root must be a real path that passes Purge ValidateUserScanRoot (temp dir does).
+	root := t.TempDir()
 	result := Result{
 		Status: StatusOK,
-		Root:   `C:\test\root`,
+		Root:   root,
 		Totals: Totals{Bytes: 1000, FileCount: 10, DirectoryCount: 5},
 		TopChildren: []ChildResult{
 			{
 				Name:           "node_modules",
 				Kind:           "directory",
-				Classification: "project_artifact_clue",
+				Classification: ClassificationProjectArtifactClue,
 				Bytes:          500,
 			},
 		},
@@ -424,15 +426,16 @@ func TestRenderHumanReportIncludesPurgeHandoffWhenArtifactCluePresent(t *testing
 	if !strings.Contains(report, "foal purge") {
 		t.Fatalf("report missing purge handoff copy:\n%s", report)
 	}
-	if !strings.Contains(report, `C:\test\root`) {
+	if !strings.Contains(report, root) {
 		t.Fatalf("report missing root in purge handoff:\n%s", report)
 	}
 }
 
 func TestRenderHumanReportDoesNotIncludePurgeHandoffWhenNoArtifactClues(t *testing.T) {
+	root := t.TempDir()
 	result := Result{
 		Status: StatusOK,
-		Root:   `C:\test\root`,
+		Root:   root,
 		Totals: Totals{Bytes: 1000, FileCount: 10, DirectoryCount: 5},
 		TopChildren: []ChildResult{
 			{
@@ -445,5 +448,80 @@ func TestRenderHumanReportDoesNotIncludePurgeHandoffWhenNoArtifactClues(t *testi
 	report := RenderHumanReport(result)
 	if strings.Contains(report, "foal purge") {
 		t.Fatalf("report should not include purge handoff when no clues:\n%s", report)
+	}
+}
+
+func TestRenderHumanReportDoesNotIncludePurgeHandoffForVolumeRoot(t *testing.T) {
+	// Volume roots can be measured by Analyze but must never get an unusable Purge hint.
+	result := Result{
+		Status: StatusOK,
+		Root:   `C:\`,
+		Totals: Totals{Bytes: 1000, FileCount: 10, DirectoryCount: 5},
+		TopChildren: []ChildResult{
+			{
+				Name:           "node_modules",
+				Kind:           "directory",
+				Classification: ClassificationProjectArtifactClue,
+				Bytes:          500,
+			},
+		},
+	}
+	report := RenderHumanReport(result)
+	if strings.Contains(report, "foal purge") {
+		t.Fatalf("volume root must not receive purge handoff:\n%s", report)
+	}
+	// Classification labels on top children remain (insight only).
+	if !strings.Contains(report, ClassificationProjectArtifactClue) {
+		t.Fatalf("volume root report should still label artifact clue:\n%s", report)
+	}
+}
+
+func TestRenderHumanReportDoesNotIncludePurgeHandoffForWindowsManagedRoot(t *testing.T) {
+	result := Result{
+		Status: StatusOK,
+		Root:   `C:\Windows`,
+		Totals: Totals{Bytes: 1000, FileCount: 10, DirectoryCount: 5},
+		TopChildren: []ChildResult{
+			{
+				Name:           "node_modules",
+				Kind:           "directory",
+				Classification: ClassificationProjectArtifactClue,
+				Bytes:          500,
+			},
+		},
+	}
+	report := RenderHumanReport(result)
+	if strings.Contains(report, "foal purge") {
+		t.Fatalf("Windows-managed root must not receive purge handoff:\n%s", report)
+	}
+}
+
+func TestShouldOfferPurgeHandoffGuardsRootAndClue(t *testing.T) {
+	project := t.TempDir()
+	if !ShouldOfferPurgeHandoff(project, true) {
+		t.Fatalf("ordinary project root with clue should offer handoff")
+	}
+	if ShouldOfferPurgeHandoff(project, false) {
+		t.Fatalf("no clue must not offer handoff")
+	}
+	if ShouldOfferPurgeHandoff(`C:\`, true) {
+		t.Fatalf("volume root must not offer handoff")
+	}
+	if ShouldOfferPurgeHandoff(`C:\Windows`, true) {
+		t.Fatalf("Windows root must not offer handoff")
+	}
+	if ShouldOfferPurgeHandoff(`C:\Program Files`, true) {
+		t.Fatalf("Program Files must not offer handoff")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if ShouldOfferPurgeHandoff(home, true) {
+			t.Fatalf("user profile root must not offer handoff")
+		}
+	}
+	if CompactClassificationLabel(ClassificationProjectArtifactClue) != PresentationArtifactLabel {
+		t.Fatalf("compact label = %q, want %q", CompactClassificationLabel(ClassificationProjectArtifactClue), PresentationArtifactLabel)
+	}
+	if CompactClassificationLabel("") != "" || CompactClassificationLabel("other") != "" {
+		t.Fatalf("unknown classification must not invent a label")
 	}
 }
