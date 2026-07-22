@@ -41,7 +41,7 @@ var mainMenuItems = []mainMenuItem{
 	{
 		title:       "Analyze",
 		command:     "analyze",
-		description: "Read-only local drive entry; no cleanup or deletion actions.",
+		description: "Read-only local drive browser; measure direct children on demand.",
 		selection:   "",
 	},
 	{
@@ -166,6 +166,12 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.analyze.applyLoaded(msg)
 		return m, nil
+	case analyzeBrowseLoadedMsg:
+		if m.screen != screenAnalyzeDrive {
+			return m, nil
+		}
+		m.analyze.applyBrowseLoaded(msg)
+		return m, nil
 	case tea.KeyPressMsg:
 		switch m.screen {
 		case screenCleanPreview:
@@ -209,7 +215,7 @@ func (m rootModel) updateMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.uninstall = newUninstallModel(m.width, m.height)
 			return m, m.uninstall.start()
 		case "analyze":
-			// Dedicated drive-entry TUI (#345). Directory browse is #346.
+			// Dedicated Analyze browser: drive entry + on-demand browse (#345/#346).
 			m.screen = screenAnalyzeDrive
 			m.analyze = newAnalyzeDriveModel(m.width, m.height)
 			return m, m.analyze.start()

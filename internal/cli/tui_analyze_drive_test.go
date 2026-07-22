@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -73,7 +74,7 @@ func TestRootModelAnalyzeOpensDriveEntry(t *testing.T) {
 		"USB",
 		"FAT32",
 		"removable",
-		"does not scan directory contents",
+		"until you enter a drive",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("drive entry missing %q:\n%s", want, content)
@@ -142,8 +143,9 @@ func TestAnalyzeDriveEntryListsUnavailableAndBlocksEnter(t *testing.T) {
 	}
 }
 
-func TestAnalyzeDriveEntryEnterOnAvailableDoesNotScan(t *testing.T) {
+func TestAnalyzeDriveEntryEnterOnAvailableStartsBrowseNotVolumeRescan(t *testing.T) {
 	var listCalls int
+	var browseRoots []string
 	original := listAnalyzeLocalVolumes
 	listAnalyzeLocalVolumes = func() []analyze.LocalVolume {
 		listCalls++
@@ -153,24 +155,49 @@ func TestAnalyzeDriveEntryEnterOnAvailableDoesNotScan(t *testing.T) {
 	}
 	t.Cleanup(func() { listAnalyzeLocalVolumes = original })
 
+	origBrowse := browseAnalyzeLocation
+	browseAnalyzeLocation = func(ctx context.Context, root string, opts analyze.BrowseOptions) analyze.BrowseResult {
+		browseRoots = append(browseRoots, root)
+		return analyze.BrowseResult{
+			OK:   true,
+			Root: root,
+			Children: []analyze.BrowseChild{
+				{Name: "file.txt", Path: root + `file.txt`, Kind: analyze.BrowseKindFile, Bytes: 4, State: analyze.BrowseStateComplete},
+			},
+		}
+	}
+	t.Cleanup(func() { browseAnalyzeLocation = origBrowse })
+
 	model := loadAnalyzeDrive(t)
 	if listCalls != 1 {
 		t.Fatalf("list calls after open = %d, want 1", listCalls)
 	}
 
-	// Enter must not re-enumerate or start a recursive scan (no second list call
-	// and no analyze.Run / path report body).
-	model = updateRootKeys(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Enter starts on-demand browse of the selected drive only; does not re-list volumes.
+	next, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = next.(rootModel)
 	if listCalls != 1 {
 		t.Fatalf("enter must not re-list volumes; calls = %d", listCalls)
 	}
+	if cmd == nil {
+		t.Fatal("enter available drive must return browse command")
+	}
+	loaded, ok := cmd().(analyzeBrowseLoadedMsg)
+	if !ok {
+		t.Fatalf("cmd = %T, want analyzeBrowseLoadedMsg", cmd())
+	}
+	next, _ = model.Update(loaded)
+	model = next.(rootModel)
+	if len(browseRoots) != 1 || browseRoots[0] != `C:\` {
+		t.Fatalf("browse roots = %#v, want only C:\\", browseRoots)
+	}
 	content := model.content()
-	if !strings.Contains(content, "not available in this slice") && !strings.Contains(content, "read-only") {
-		t.Fatalf("enter should leave a clear non-scan notice:\n%s", content)
+	if !strings.Contains(content, "file.txt") {
+		t.Fatalf("browse should list direct children:\n%s", content)
 	}
 	for _, forbidden := range []string{"Top children", "Totals:", "Loading analyze view", "Rescanning"} {
 		if strings.Contains(content, forbidden) {
-			t.Fatalf("enter must not open directory insight scan: found %q\n%s", forbidden, content)
+			t.Fatalf("enter must not open legacy directory insight scan: found %q\n%s", forbidden, content)
 		}
 	}
 }
