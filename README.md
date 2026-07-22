@@ -103,9 +103,9 @@ Available opt-in groups:
 | `dev-caches` | Supported package-manager, build-tool, browser-runtime, IDE, and editor caches. |
 | `app-caches` | Supported non-editor application caches, currently Obsidian. |
 | `cli-agents` | Independently approved product-scoped CLI-agent residue, currently Grok Build updater backups. |
-| `all` | Every executable opt-in category, except the exact-selection-only `nvidia_installer_cache` and `winsxs_component_store`; still subject to safety gates and permanent authorization. |
+| `all` | Every executable opt-in category, except exact-selection-only categories (e.g. `nvidia_installer_cache`, `winsxs_component_store`, and the machine-wide `windows-temp`); still subject to safety gates and permanent authorization. |
 
-The exact-selection-only categories `nvidia_installer_cache` and `winsxs_component_store` are deliberately excluded from `all`, every group token, and TUI Select All. Name them exactly to include them.
+The exact-selection-only categories (e.g. `nvidia_installer_cache`, `winsxs_component_store`, and the machine-wide `windows-temp`) are deliberately excluded from `all`, every group token, and TUI Select All. Name them exactly to include them.
 
 Use an exact category name when you want the narrowest scope:
 

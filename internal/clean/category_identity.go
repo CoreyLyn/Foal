@@ -21,6 +21,7 @@ type CategoryIdentityCandidate struct {
 	nvidiaDiscovery                NVIDIAInstallerCacheDiscoveryOptions
 	lghubDiscovery                 LGHUBCacheDiscoveryOptions
 	thunderUpdateDownloadDiscovery ThunderUpdateDownloadDiscoveryOptions
+	windowsTempDiscovery           WindowsTempDiscoveryOptions
 	validator                      pathsafe.Validator
 }
 

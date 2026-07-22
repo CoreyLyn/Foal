@@ -295,3 +295,62 @@ func TestIsEmptyOrWhitespacePath(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateDeletePathWindowsTempCarveOut verifies the narrow, category-owned
+// carve-out for exactly %SystemRoot%\Temp: strict descendants pass the system-tree
+// policy (and then fail only at Lstat because they do not exist), while the Temp
+// root itself, the sibling %SystemRoot%\Logs, and the rest of the Windows tree
+// stay rejected as protected_path. User Protection still applies inside the
+// carve-out.
+func TestValidateDeletePathWindowsTempCarveOut(t *testing.T) {
+	t.Setenv("SystemRoot", `C:\Windows`)
+
+	// A strict descendant of %SystemRoot%\Temp passes the protected-tree policy;
+	// because it does not exist, it stops later at Lstat with stat_failed. The key
+	// assertion is that it is NOT rejected as protected_path.
+	reason, ok := pathsafe.ValidateDeletePath(`C:\Windows\Temp\nonexistent-foal-338`)
+	if ok {
+		t.Fatal("nonexistent carve-out descendant should still fail at Lstat")
+	}
+	if reason.Code == "protected_path" {
+		t.Fatalf("carve-out descendant must pass the protected-tree policy, got %#v", reason)
+	}
+	if reason.Code != "stat_failed" {
+		t.Fatalf("carve-out descendant reason = %#v, want stat_failed (passed carve-out, then missing)", reason)
+	}
+
+	for _, path := range []string{
+		`C:\Windows\Temp`,                 // the carve-out root itself is never deletable
+		`C:\Windows\Logs\nonexistent`,     // sibling stays rejected
+		`C:\Windows\System32\nonexistent`, // rest of the tree stays rejected
+		`C:\Windows\Temp2\nonexistent`,    // prefix look-alike is not the carve-out subtree
+	} {
+		reason, ok := pathsafe.ValidateDeletePath(path)
+		if ok || reason.Code != "protected_path" {
+			t.Fatalf("ValidateDeletePath(%q) = %#v, %t; want protected_path", path, reason, ok)
+		}
+	}
+
+	// User Protection rules still apply inside the carve-out (deny-only).
+	guarded := `C:\Windows\Temp\guarded`
+	validator := pathsafe.NewValidator([]string{guarded})
+	reason, ok = validator.ValidateDeletePath(guarded + `\child`)
+	if ok || reason.Code != "protected_path" {
+		t.Fatalf("protected descendant inside carve-out = %#v, %t; want protected_path", reason, ok)
+	}
+	if !strings.Contains(reason.Message, "Protection rule") {
+		t.Fatalf("carve-out Protection message = %q, want user Protection rule wording", reason.Message)
+	}
+}
+
+// TestWindowsTempCarveOutRequiresResolvableSystemRoot verifies that when
+// SystemRoot is unusable (relative), no carve-out is granted and Temp descendants
+// stay rejected as protected_path.
+func TestWindowsTempCarveOutRequiresResolvableSystemRoot(t *testing.T) {
+	t.Setenv("SystemRoot", `Windows`) // relative ⇒ no carve-out
+
+	reason, ok := pathsafe.ValidateDeletePath(`C:\Windows\Temp\nonexistent-foal-338`)
+	if ok || reason.Code != "protected_path" {
+		t.Fatalf("without a resolvable SystemRoot the carve-out must not apply, got %#v, %t", reason, ok)
+	}
+}

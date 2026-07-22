@@ -281,6 +281,12 @@ type Options struct {
 	// and the platform process/service detectors are used. Tests must use
 	// isolated roots and never read the real Thunder download cache tree.
 	ThunderUpdateDownloadDiscoveryOptions ThunderUpdateDownloadDiscoveryOptions
+	// WindowsTempDiscoveryOptions injects the root override, SystemRoot override,
+	// and clock seams for the windows-temp category. Production leaves the zero
+	// value so the resolved %SystemRoot%\Temp root and time.Now() are used. Tests
+	// must use isolated roots and never read or mutate the real C:\Windows\Temp
+	// tree.
+	WindowsTempDiscoveryOptions WindowsTempDiscoveryOptions
 }
 
 type Rule struct {
