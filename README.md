@@ -3,6 +3,8 @@
 [![CI](https://github.com/CoreyLyn/Foal/actions/workflows/ci.yml/badge.svg)](https://github.com/CoreyLyn/Foal/actions/workflows/ci.yml)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 
+![Foal — safe, preview-first cleanup for Windows](assets/brand/foal-readme-hero.png)
+
 Foal is a safe, preview-first cleanup CLI for Windows developers and power users.
 
 It finds reclaimable space, explains the planned action, and makes destructive work explicit. Foal also provides project-artifact cleanup, disk analysis, system snapshots, operation history, and confirmed application uninstall.
