@@ -70,8 +70,12 @@ assets or retarget a published tag; publish a new patch or prerelease instead.
 1. GitHub prereleases are the only initial public channel.
 2. Stable `v0.x.y` GitHub releases follow after deletion semantics, support
    boundaries, signing, and upgrade expectations are stable.
-3. Scoop may follow for the developer audience.
-4. WinGet follows only after signed stable releases have demonstrated a stable
+3. The convenience installer `scripts/install.ps1` is part of the GitHub channel:
+   it installs the published ZIP into `%LOCALAPPDATA%\Programs\foal`, verifies
+   SHA-256 against `checksums.txt`, and may update the user `PATH`. It is not a
+   separate package ecosystem and does not replace Scoop or WinGet.
+4. Scoop may follow for the developer audience.
+5. WinGet follows only after signed stable releases have demonstrated a stable
    asset layout and command contract.
 
 MSI, MSIX, NSIS, Chocolatey, nightly releases, and `go install` are not primary

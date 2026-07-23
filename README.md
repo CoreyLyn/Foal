@@ -22,11 +22,23 @@ Foal is inspired by tools such as Mole, but follows its own Windows-specific saf
 
 ## Install
 
+### One-liner (Windows PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/CoreyLyn/Foal/main/scripts/install.ps1 | iex
+```
+
+This downloads the latest GitHub Release ZIP for your CPU (amd64 or arm64), verifies SHA-256 against `checksums.txt`, installs `foal.exe` to `%LOCALAPPDATA%\Programs\foal`, and prepends that directory to your user `PATH`.
+
+### Manual download
+
 Download the Windows amd64 or arm64 ZIP from [GitHub Releases](https://github.com/CoreyLyn/Foal/releases), extract `foal.exe`, and place it on your `PATH`.
 
-Release archives include SHA-256 checksums and GitHub provenance attestations. Current binaries are not Authenticode-signed; Windows may show an unrecognized-app warning. ARM64 builds remain preview builds until native ARM64 smoke testing is available.
+Release archives include SHA-256 checksums and GitHub provenance attestations. Current binaries are not Authenticode-signed; Windows may show an unrecognized-app warning (including for the install script path). ARM64 builds remain preview builds until native ARM64 smoke testing is available. Scoop and WinGet are planned later; see [`docs/plan/release-process.md`](docs/plan/release-process.md).
 
-To build from source, install Go 1.25 or later on Windows:
+### Build from source
+
+Install Go 1.25 or later on Windows:
 
 ```powershell
 git clone https://github.com/CoreyLyn/Foal.git
