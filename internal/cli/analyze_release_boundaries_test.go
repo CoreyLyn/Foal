@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/CoreyLyn/Foal/internal/analyze"
 )
 
 func TestAnalyzeCLIDoesNotWriteHistory(t *testing.T) {
@@ -30,35 +32,37 @@ func TestAnalyzeCLIDoesNotWriteHistory(t *testing.T) {
 }
 
 func TestAnalyzeHumanReportOmitsPurgeHandoffOnVolumeRoot(t *testing.T) {
-	// Explicit volume root is allowed for Analyze measurement but never gets Purge copy.
-	var stdout, stderr bytes.Buffer
-	code := Run([]string{"analyze", `C:\`}, &stdout, &stderr)
-	if code != exitOK {
-		// Some environments may fail volume root for other reasons; skip only if
-		// validation rejected the root entirely.
-		if strings.Contains(stderr.String(), "dangerous_root") || strings.Contains(stderr.String(), "unsupported") {
-			t.Skipf("volume root not accepted in this environment: %s", stderr.String())
-		}
-		t.Fatalf("Run returned %d; stderr=%q stdout=%q", code, stderr.String(), stdout.String())
-	}
-	if strings.Contains(stdout.String(), "foal purge") {
-		t.Fatalf("volume root human report must not include purge handoff:\n%s", stdout.String())
+	// Do not invoke cli.Run against real volume roots: default descendant limits
+	// make full-disk walks hang CI. Handoff is pure policy over Result.Root.
+	report := analyze.RenderHumanReport(analyze.Result{
+		Status: analyze.StatusOK,
+		Root:   `C:\`,
+		TopChildren: []analyze.ChildResult{{
+			Name:           "node_modules",
+			Kind:           "directory",
+			Classification: analyze.ClassificationProjectArtifactClue,
+			Bytes:          1,
+		}},
+	})
+	if strings.Contains(report, "foal purge") {
+		t.Fatalf("volume root human report must not include purge handoff:\n%s", report)
 	}
 }
 
 func TestAnalyzeHumanReportOmitsPurgeHandoffOnWindowsManagedRoot(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	code := Run([]string{"analyze", `C:\Windows`}, &stdout, &stderr)
-	if code != exitOK {
-		// Permission or other scan issues are fine; still must not print handoff.
-		out := stdout.String() + stderr.String()
-		if strings.Contains(out, "foal purge") {
-			t.Fatalf("Windows-managed root must not include purge handoff:\n%s", out)
-		}
-		return
-	}
-	if strings.Contains(stdout.String(), "foal purge") {
-		t.Fatalf("Windows-managed root must not include purge handoff:\n%s", stdout.String())
+	// Synthetic report only — never walk C:\Windows in tests (CI timeout).
+	report := analyze.RenderHumanReport(analyze.Result{
+		Status: analyze.StatusOK,
+		Root:   `C:\Windows`,
+		TopChildren: []analyze.ChildResult{{
+			Name:           "node_modules",
+			Kind:           "directory",
+			Classification: analyze.ClassificationProjectArtifactClue,
+			Bytes:          1,
+		}},
+	})
+	if strings.Contains(report, "foal purge") {
+		t.Fatalf("Windows-managed root must not include purge handoff:\n%s", report)
 	}
 }
 
