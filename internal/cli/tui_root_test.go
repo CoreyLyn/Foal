@@ -50,6 +50,54 @@ func TestRootModelInitialContentShowsMainMenu(t *testing.T) {
 	if strings.Contains(content, "\x1b[") {
 		t.Fatalf("menu content must stay plain text without escape sequences:\n%q", content)
 	}
+	// Titles only — no (command) slug — with description first letters column-aligned.
+	for _, forbidden := range []string{"(clean)", "(uninstall)", "(analyze)", "(status)", "(history)", "(future)"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("main menu must not show command slug %q:\n%s", forbidden, content)
+		}
+	}
+	descCols := make([]int, 0, len(mainMenuItems))
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.HasPrefix(line, "> ") && !strings.HasPrefix(line, "  ") {
+			continue
+		}
+		// Skip banner/side text and hints that also start with two spaces.
+		if !strings.Contains(line, "Clean") && !strings.Contains(line, "Uninstall") &&
+			!strings.Contains(line, "Analyze") && !strings.Contains(line, "Status") &&
+			!strings.Contains(line, "History") && !strings.Contains(line, "Extensions") {
+			continue
+		}
+		// Description starts after fixed-width title padding.
+		trimmedTitle := strings.TrimLeft(line, "> ")
+		parts := strings.Fields(trimmedTitle)
+		if len(parts) < 2 {
+			continue
+		}
+		// First description word is after title; locate its column on the raw line.
+		title := parts[0]
+		titleIdx := strings.Index(line, title)
+		if titleIdx < 0 {
+			continue
+		}
+		rest := line[titleIdx+len(title):]
+		// Skip spaces after title to find description start column.
+		spaces := 0
+		for spaces < len(rest) && rest[spaces] == ' ' {
+			spaces++
+		}
+		if spaces == 0 {
+			continue
+		}
+		descCols = append(descCols, titleIdx+len(title)+spaces)
+	}
+	if len(descCols) < 2 {
+		t.Fatalf("expected multiple command rows with descriptions:\n%s", content)
+	}
+	for i := 1; i < len(descCols); i++ {
+		if descCols[i] != descCols[0] {
+			t.Fatalf("description first letters not column-aligned: cols=%v\n%s", descCols, content)
+		}
+	}
 }
 
 func TestRootModelNavigationMovesSelection(t *testing.T) {

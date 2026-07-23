@@ -393,7 +393,9 @@ func renderMainMenu(selected int, notice string) string {
 		if index == selected {
 			prefix = ">"
 		}
-		builder.WriteString(fmt.Sprintf("%s %-10s %-10s %s\n", prefix, item.title, "("+item.command+")", item.description))
+		// Fixed-width title so description first letters stay column-aligned;
+		// command slug is internal only and is not shown in the menu.
+		builder.WriteString(fmt.Sprintf("%s %-12s  %s\n", prefix, item.title, item.description))
 	}
 	if notice != "" {
 		builder.WriteString("\n")
