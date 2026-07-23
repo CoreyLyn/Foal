@@ -402,7 +402,7 @@ The no-argument `foal` behavior in an interactive terminal, launching the Foal m
 _Avoid_: blocking non-TTY scripts, replacing help semantics everywhere, implicit command execution
 
 **Main menu command entries**:
-Top-level Foal main menu items that expose the command map, where Clean opens its interactive preview and confirmed-action flow, Uninstall opens multi-select confirmed uninstall through shared Uninstall execution, and Status, History, and Analyze remain read-only views (Analyze via Command viewer over the Analyze human report / read model). The Uninstall TUI is an adapter only: it collects multi-select app names, one confirmation that discloses official vs portable plans, confirmed leftover scope, process-stop opt-in, permanent authorization, and admin-need grouping, then calls the same shared Uninstall Execute path as the CLI; it owns no uninstaller launch, path safety, Protection, elevation, or deletion logic.
+Top-level Foal main menu items that expose the command map: Clean opens its interactive preview and confirmed-action flow; Uninstall opens multi-select confirmed uninstall through shared Uninstall execution; Analyze opens its dedicated read-only drive-entry and on-demand ranked browser; Status and History use read-only command viewers. The Uninstall TUI is an adapter only: it collects multi-select app names, one confirmation that discloses official vs portable plans, confirmed leftover scope, process-stop opt-in, permanent authorization, and admin-need grouping, then calls the same shared Uninstall Execute path as the CLI; it owns no uninstaller launch, path safety, Protection, elevation, or deletion logic.
 _Avoid_: pretending every command has a completed TUI, implicit execution, hiding unavailable capability, Analyze as a cleanup or purge surface
 
 **Command viewer**:
@@ -474,8 +474,8 @@ A fail-closed Clean safety check that establishes Recycle Bin recoverability for
 _Avoid_: per-item-only capacity assurance, assumed capacity, overflow to permanent deletion
 
 **Clean TUI action model**:
-A four-stage TUI interaction boundary (eager category-first preview → exact selection with measured totals → separate confirmation → shared execution/result) where browsing and selection remain side-effect free, the first slice exposes no retry or rescan, and Clean alone may transition through explicit confirmation to the shared Clean execution path; uninstaller execution, process stopping, elevation prompts, and leftover deletion remain absent.
-_Avoid_: TUI-owned execution engine, implicit cleanup, browsing-as-operation history noise, non-Clean execution, deferred retry documented as current
+A four-stage Clean-specific TUI interaction boundary (eager category-first preview → exact selection with measured totals → separate confirmation → shared execution/result) where browsing and selection remain side-effect free and the first slice exposes no retry or rescan. This term does not constrain the separately implemented Uninstall TUI flow or the read-only Analyze browser.
+_Avoid_: TUI-owned execution engine, implicit cleanup, browsing-as-operation history noise, conflating Clean and Uninstall authorization, deferred retry documented as current
 
 **Uninstall preview report**:
 A human-readable presentation surface rendered directly over the uninstall preview read model, mirroring the Mole-inspired report style for dry-run and review before any mutation.

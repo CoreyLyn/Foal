@@ -2,13 +2,13 @@
 
 ## Status
 
-Draft specification (P1). Not yet implemented. Governing decision: [ADR 0033](../adr/0033-windows-update-download-cache-requires-idle-update-services.md).
+Implemented. Governing decision: [ADR 0033](../adr/0033-windows-update-download-cache-requires-idle-update-services.md).
 
 ## Goal
 
 Add one machine-wide, exact-selection-only Clean category that moves completed/stale Windows Update download payloads under `%SystemRoot%\SoftwareDistribution\Download` to the Recycle Bin, gated on Windows Update services being observably idle, without stopping services and without elevation.
 
-Proposed canonical category: `windows-update-download-cache`, label `Windows Update download cache`, report group `System`, eligibility `opt-in` with exact-selection-only policy (ADR 0030 class), running-application policy: service-aware idle gate (ADR 0030 control 2), planned action `move_to_recycle_bin`.
+Canonical category: `windows-update-download-cache`, label `Windows Update download cache`, report group `System`, eligibility `opt-in` with exact-selection-only policy (ADR 0030 class), running-application policy `distinctive-process-must-be-idle` backed by the service-aware idle gate (ADR 0030 control 2), planned action `move_to_recycle_bin`.
 
 ## Evidence
 

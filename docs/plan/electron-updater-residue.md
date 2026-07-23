@@ -2,13 +2,13 @@
 
 ## Status
 
-Draft specification (P1). Not yet implemented. Governing decision: [ADR 0031](../adr/0031-electron-updater-residue-is-a-structural-recycle-bin-category.md).
+Implemented. Governing decision: [ADR 0031](../adr/0031-electron-updater-residue-is-a-structural-recycle-bin-category.md).
 
 ## Goal
 
 Add one opt-in Clean category that reclaims downloaded installer payloads left behind by electron-builder's Windows auto-updater (electron-updater / NSIS web-style updater) under per-app `%LOCALAPPDATA%\<app>-updater\` caches, without treating any application's data, configuration, or the updater directory itself as cache.
 
-Proposed canonical category: `electron-updater-residue`, label `Electron updater installer residue`, report group `Applications`, eligibility `opt-in`, running-application policy `shared-runtime-not-attributable`, planned action `move_to_recycle_bin`.
+Canonical category: `electron-updater-residue`, label `Electron updater residue`, report group `Applications`, eligibility `opt-in`, running-application policy `not-applicable`, planned action `move_to_recycle_bin`.
 
 ## Evidence
 

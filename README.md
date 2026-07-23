@@ -5,7 +5,7 @@
 
 Foal is a safe, preview-first cleanup CLI for Windows developers and power users.
 
-It finds reclaimable space, explains the planned action, and makes destructive work explicit. Foal also provides project-artifact cleanup, disk analysis, system snapshots, operation history, and read-only uninstall review.
+It finds reclaimable space, explains the planned action, and makes destructive work explicit. Foal also provides project-artifact cleanup, disk analysis, system snapshots, operation history, and confirmed application uninstall.
 
 > [!IMPORTANT]
 > Foal is pre-release software. Preview the result before execution and review permanent-deletion selections carefully.
@@ -15,7 +15,7 @@ It finds reclaimable space, explains the planned action, and makes destructive w
 - **Preview first** — inspect candidates and their planned actions before changing files.
 - **Conservative by default** — broader categories require an explicit CLI opt-in or a disclosed TUI confirmation.
 - **Windows-aware safety** — protected paths, reparse points, permissions, running applications, and Recycle Bin capacity are first-class checks.
-- **No silent elevation** — inaccessible items are reported as skipped; Foal never elevates itself.
+- **No silent elevation** — ordinary cleanup stays non-elevated. Only explicitly selected Windows servicing and eligible Uninstall work may request a disclosed UAC prompt.
 - **Automation-friendly** — JSON is the stable contract shared by the CLI and TUI.
 
 Foal is inspired by tools such as Mole, but follows its own Windows-specific safety model rather than pursuing feature parity.
@@ -78,8 +78,8 @@ foal history --json
 | `foal purge <root...>` | Previews or permanently removes allowlisted rebuildable project artifacts under explicit roots. |
 | `foal analyze <path>` | Read-only directory insight (totals, top children, optional artifact clues). Explicit local volume roots allowed for Analyze only; no deletion. |
 | `foal status` | Reports a read-only Windows and Foal state snapshot. |
-| `foal history` | Reads prior Clean and Purge operation records. |
-| `foal uninstall` | Previews installed applications; `--execute --select <name>` runs official uninstallers for selected apps. |
+| `foal history` | Reads prior Clean, Purge, and Uninstall operation records. |
+| `foal uninstall` | Previews installed applications; confirmed execution uses an official uninstaller or an eligible portable-removal plan. |
 | `foal version` | Reports version, commit, Go runtime, and target platform. |
 
 Run `foal --help` for the complete shipped flag surface.
@@ -103,9 +103,9 @@ Available opt-in groups:
 | `dev-caches` | Supported package-manager, build-tool, browser-runtime, IDE, and editor caches. |
 | `app-caches` | Supported non-editor application caches (currently Obsidian and VRChat), plus the `electron-updater-residue` opt-in. |
 | `cli-agents` | Independently approved product-scoped CLI-agent residue, currently Grok Build updater backups. |
-| `all` | Every executable opt-in category, except exact-selection-only categories (e.g. `nvidia_installer_cache`, `winsxs_component_store`, the machine-wide `windows-temp`, and the machine-wide `windows-update-download-cache`); still subject to safety gates and permanent authorization. |
+| `all` | Every standard-selection executable opt-in category; exact-selection-only categories stay excluded. Safety gates and action-specific authorization still apply. |
 
-The exact-selection-only categories (e.g. `nvidia_installer_cache`, `winsxs_component_store`, the machine-wide `windows-temp`, and the machine-wide `windows-update-download-cache`) are deliberately excluded from `all`, every group token, and TUI Select All. Name them exactly to include them.
+The six exact-selection-only categories are `nvidia_installer_cache`, `lghub-cache`, `thunder-update-download`, `windows-temp`, `windows-update-download-cache`, and `winsxs_component_store`. They are deliberately excluded from `all`, every group token, and TUI Select All. Name one exactly to include it.
 
 Use an exact category name when you want the narrowest scope:
 
@@ -122,7 +122,7 @@ foal clean --execute --opt-in vscode_cache --allow-permanent
 foal clean --dry-run --opt-in winsxs_component_store
 ```
 
-This runs `DISM /Online /Cleanup-Image /AnalyzeComponentStore /English /NoRestart` under a disclosed UAC prompt and reports a path-free servicing operation (`ready`, `no_work`, `skipped`, `failed`, or `canceled`) with the reclaimable package count and cleanup recommendation — it deletes nothing. Because the category is exact-selection-only, default Dry-run, the `all`/`dev-caches`/`app-caches`/`cli-agents` group tokens, and TUI entry never analyze `WinSxS` or trigger UAC.
+This runs `DISM /Online /Cleanup-Image /AnalyzeComponentStore /English /NoRestart` under a disclosed UAC prompt and reports a path-free servicing operation (`ready`, `no_work`, `skipped`, `failed`, or `canceled`) with the reclaimable package count and cleanup recommendation — it deletes nothing. Because the category is exact-selection-only, default Dry-run and group tokens never analyze `WinSxS` or trigger UAC. Entering Clean in the TUI also does not analyze it automatically; the user must invoke that row's separate analysis action.
 
 Component-store cleanup (mutation) requires `--execute`, an exact selection of the category, and the dedicated per-run `--allow-servicing` authorization, which is independent of and never implied by `--allow-permanent`:
 
@@ -162,7 +162,8 @@ The authoritative category list, action matrix, impact notes, and exclusions liv
 ```text
 foal analyze
 foal analyze .\my-project
-foal analyze --json C:```
+foal analyze --json C:\
+```
 
 - Omit the path to measure the current directory.
 - Explicit local fixed/removable volume roots are accepted for Analyze only; Clean and Purge still reject dangerous roots.
@@ -189,9 +190,22 @@ foal purge --execute --allow-permanent .\my-project
 
 Deleted dependencies or build output may need to be downloaded or rebuilt. Purge never performs secure erasure, elevation, process stopping, installer cleanup, or implicit root discovery.
 
+## Uninstall
+
+`uninstall` previews installed traditional desktop applications by default. Execution requires an explicit selection:
+
+```powershell
+foal uninstall --json
+foal uninstall --execute --select "Example App"
+```
+
+Foal prefers the application's official quiet uninstaller, then falls back to its interactive uninstaller. Running applications are skipped unless `--allow-stop-processes` is supplied. After a successful official uninstall, Foal moves only the revalidated subset of the already confirmed high-confidence leftover paths to the Recycle Bin; a failed or canceled uninstaller deletes nothing.
+
+An app with no uninstall command may be eligible for portable directory removal when it has a trusted install location. That path requires `--execute --allow-permanent`, permanently deletes only the freshly revalidated install tree, and is never a fallback for a failed official uninstaller. The CLI and TUI call the same execution path and write Uninstall outcomes to History.
+
 ## Protection rules
 
-Create `%APPDATA%\Foal\protection.txt` to exclude paths from Clean and Purge. Use one absolute local path per line; `#` begins a comment. A rule protects that exact path and its full subtree.
+Create `%APPDATA%\Foal\protection.txt` to exclude paths from Clean, Purge, and Uninstall deletion. Use one absolute local path per line; `#` begins a comment. A rule protects that exact path and its full subtree.
 
 ```text
 # Keep local development data
@@ -206,13 +220,13 @@ Set `FOAL_PROTECTION_FILE` to use a different file. Rules are deny-only: they ca
 Foal deliberately does not:
 
 - empty the Recycle Bin;
-- automatically elevate or stop applications (Uninstall may request UAC per ADR 0028; process stopping requires a separate `--allow-stop-processes` flag and is off by default);
+- silently elevate or stop applications (component-store servicing and eligible Uninstall work may request disclosed UAC; process stopping requires `--allow-stop-processes` and is off by default);
 - treat browser history, cookies, credentials, sessions, or user-authored data as cache;
 - claim secure erasure or guaranteed physical-space recovery;
-- delete application leftovers as part of uninstall in this slice (leftover deletion ships separately; a failed or canceled uninstaller never deletes leftovers);
+- delete unconfirmed, shared-state, or orphaned application residue; a failed or canceled uninstaller never deletes confirmed leftovers;
 - perform system optimization actions.
 
-Administrator-only cleanup remains a read-only permission-boundary notice. `optimize` is reserved for future read-only health checks and recommendations.
+Generic administrator-only cleanup remains a read-only permission-boundary notice. The exact `winsxs_component_store` servicing workflow is the narrow, separately authorized exception. `optimize` is reserved for future read-only health checks and recommendations.
 
 ## Platform and releases
 

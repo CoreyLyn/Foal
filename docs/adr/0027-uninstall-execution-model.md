@@ -15,4 +15,4 @@ Foal will implement Uninstall execution as a **Mole-inspired, Windows-native** f
 
 ## Consequences
 
-Shipped code remains preview-only until this model is implemented; `execution.allowed` and empty actions stay correct until then. Implementing execution requires reading uninstall command and install-location fields not used today, shared core orchestration (not TUI-owned), Protection integration, History sessions distinct from Clean, and contract tests for authorization flags and the non-expanding leftover set. Future Force Removal, registry cleanup, or package-manager paths need their own decisions and must not silently reuse Portable directory removal as a failure fallback.
+At decision time, shipped code remained preview-only until this model was implemented. The model is now implemented with shared core orchestration (not TUI-owned), Protection integration, History sessions distinct from Clean, authorization contract tests, and a non-expanding leftover set. Future Force Removal, registry cleanup, or package-manager paths need their own decisions and must not silently reuse Portable directory removal as a failure fallback.

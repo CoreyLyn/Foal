@@ -2,13 +2,13 @@
 
 ## Status
 
-Draft specification (P1). Not yet implemented. Governing decision: [ADR 0032](../adr/0032-windows-temp-is-a-machine-wide-exact-selection-category.md).
+Implemented. Governing decision: [ADR 0032](../adr/0032-windows-temp-is-a-machine-wide-exact-selection-category.md).
 
 ## Goal
 
 Add one machine-wide, exact-selection-only Clean category that moves stale direct children of the shared system temp directory `%SystemRoot%\Temp` to the Recycle Bin, without elevation and without touching any other part of the Windows tree.
 
-Proposed canonical category: `windows-temp`, label `Windows system temp`, report group `System`, eligibility `opt-in` with exact-selection-only policy (ADR 0030 class), running-application policy `not-applicable`, planned action `move_to_recycle_bin`.
+Canonical category: `windows-temp`, label `Windows system temp`, report group `System`, eligibility `opt-in` with exact-selection-only policy (ADR 0030 class), running-application policy `not-applicable`, planned action `move_to_recycle_bin`.
 
 ## Evidence
 

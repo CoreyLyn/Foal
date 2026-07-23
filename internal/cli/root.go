@@ -39,7 +39,7 @@ var commands = []commandSpec{
 	{name: "purge", description: "Preview or permanently delete rebuildable project artifacts under explicit root(s)."},
 	{name: "status", description: "Report a read-only system and Foal state snapshot."},
 	{name: "history", description: "Show previous Foal operation records."},
-	{name: "uninstall", description: "Preview installed applications; --execute runs official uninstallers for selected apps."},
+	{name: "uninstall", description: "Preview installed applications; confirmed execution uses official or eligible portable plans."},
 }
 
 var (
@@ -775,8 +775,10 @@ func helpText() string {
 	builder.WriteString("                       \"cli-agents\" expands independently registered product-scoped\n")
 	builder.WriteString("                       CLI-agent categories only; it is not a mega-category and does not\n")
 	builder.WriteString("                       imply all CLI-agent data is cache or safe to delete.\n")
-	builder.WriteString("                       \"winsxs_component_store\" and \"nvidia_installer_cache\" are\n")
-	builder.WriteString("                       exact-selection-only (never in a group token or TUI Select All).\n")
+	builder.WriteString("                       Exact-selection-only (never in a group token or TUI Select All):\n")
+	builder.WriteString("                       winsxs_component_store, nvidia_installer_cache, lghub-cache,\n")
+	builder.WriteString("                       thunder-update-download, windows-temp, and\n")
+	builder.WriteString("                       windows-update-download-cache.\n")
 	builder.WriteString("                       An exact winsxs_component_store dry-run opt-in requests read-only\n")
 	builder.WriteString("                       Windows component-store analysis through an elevated helper (UAC)\n")
 	builder.WriteString("                       and never deletes files; default Dry-run and group tokens never\n")

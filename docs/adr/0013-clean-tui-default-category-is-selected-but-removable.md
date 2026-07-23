@@ -1,6 +1,6 @@
 # Clean TUI default category is selected but removable
 
-> **Status note (ADR 0018):** Exact per-run selection remains mandatory. In addition to the removable default, every permanent-delete-eligible category starts selected when safely measurable; the five non-default Recycle Bin opt-ins start unselected. Users may clear any initial selection. Confirmation still authorizes only the visible exact set.
+> **Status note (ADR 0018/0029):** Exact per-run selection remains mandatory. In addition to the removable default, every permanent-delete-eligible category starts selected when safely measurable; the seven non-default Recycle Bin opt-ins and the servicing category start unselected. Users may clear any initial selection. Confirmation still authorizes only the visible exact set.
 
 The Clean TUI presents default and opt-in cleanup categories as one explicit per-run selection. A default category starts selected, preserving Foal's conservative recommendation, but the user may clear it before confirmation. Confirmation authorizes exactly the selected category identifiers: the TUI must not perform hidden default cleanup, and its selected-size total must include only checked categories with completed measurements.
 

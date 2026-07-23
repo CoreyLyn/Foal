@@ -1,6 +1,10 @@
+## Status
+
+Implemented.
+
 ## Problem Statement
 
-Foal can review installed Windows applications and related evidence (`foal uninstall`), but it cannot complete Mole-style uninstall work: remove a still-installed app and clean only the high-confidence leftovers the user already saw. Users who want that job today must use a third-party uninstaller or manually delete folders, while Foal stays preview-only and cannot turn a confirmed selection into Official uninstaller invocation, optional process stop, Portable directory removal, or a Confirmed leftover path set under Protection rules and History.
+Before this slice, Foal could review installed Windows applications and related evidence (`foal uninstall`) but could not complete the confirmed uninstall job: remove a still-installed app and clean only the high-confidence leftovers the user already saw.
 
 ## Solution
 
@@ -99,5 +103,5 @@ Ship Uninstall execution aligned with Mole’s product split and ADRs 0026–002
 - Seams agreed: single product seam at Uninstall Review/Execute with injectable ports; CLI/TUI are adapters only.
 - Decisions crystallized in grill-with-docs: W3, L1, D3, P3, E1, S1, U3, X2, B2, C1, R1, F3, H1, T1, A2, V3, M3, Y2, Z2.
 - Glossary updates live in CONTEXT.md; design ADRs are 0026, 0027, 0028.
-- Runtime code is still preview-only until this spec is implemented; agents must not document execution as shipped before the contract tests pass.
+- Runtime code implements this spec; future changes must preserve the authorization, non-expanding leftover-set, failure, and History contracts below.
 - Suggested implementation order inside the issue: discovery fields + plan model → Execute with fakes → leftover ceiling + Protection + delete → History → CLI flags/JSON → TUI multi-select/confirm → docs/help cutover.

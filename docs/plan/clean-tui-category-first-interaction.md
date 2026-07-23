@@ -59,8 +59,8 @@ Make Clean immediately understandable and operable: show every cleanup category,
 
 ## Implemented mixed-action deletion policy
 
-- Shared Clean assigns each canonical category either `move_to_recycle_bin` or `delete_permanently`; the TUI displays and authorizes that action but never chooses it. See ADR 0018 and `docs/plan/clean-deletion-policy.md`.
-- Initial selection is the default category plus every permanent-delete-eligible category when safely measurable (31 rows). The five non-default Recycle Bin opt-ins remain unselected. Empty, skipped, incomplete, or failed rows still clear themselves; users may clear any initial selection.
+- Shared Clean assigns each executable canonical category `move_to_recycle_bin`, `delete_permanently`, or `invoke_windows_servicing`; the TUI displays and authorizes that action but never chooses it. See ADR 0018, ADR 0029, and `docs/plan/clean-deletion-policy.md`.
+- Initial selection is the default category plus every permanent-delete-eligible category when safely measurable (37 rows: 1 default + 36 permanent). The seven non-default Recycle Bin opt-ins and the servicing category remain unselected. Empty, skipped, incomplete, or failed rows still clear themselves; users may clear any initial selection.
 - One strengthened confirmation separates both action groups by category count, candidate count, and measured bytes, labels every category action, retains impact notices, and warns that permanent deletion is irreversible.
-- Execution completes all applicable preflight first, runs Recycle Bin work before permanent work, and remains attached during responsive cancellation until shared Clean returns the final Result.
+- Execution completes all applicable preflight first, runs Recycle Bin work before permanent work and servicing last, and remains attached during responsive cancellation until shared Clean returns the final Result.
 - Result and History expose actual action plus `permanently_deleted_bytes`, `recycle_bin_moved_bytes`, and their `affected_bytes` sum without describing aggregate bytes as released disk space.

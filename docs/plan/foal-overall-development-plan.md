@@ -7,14 +7,14 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 ## Product Decisions
 
 - Target users are Windows developers and power users.
-- The CLI is the primary interface. The TUI is read-model driven and calls shared command/core execution paths for confirmed Clean work.
+- The CLI is the primary automation interface. The TUI is read-model driven and calls shared command/core execution paths for confirmed Clean and Uninstall work.
 - Human output should be readable; JSON contracts are the stable automation surface.
 - Rich human reports may borrow Mole's grouped dry-run style, but the reporting experience must not imply Mole feature parity or expand Foal's default cleanup rules.
 - Default cleanup rules are conservative. Higher-risk rule groups require explicit opt-in.
-- Clean is mixed-action: every executable rule declares `move_to_recycle_bin` or `delete_permanently`. Permanent deletion applies only to proven regenerable categories, is never a Recycle Bin fallback, and requires per-run authorization (`--allow-permanent` or TUI confirmation). See ADR 0018 and `docs/plan/clean-deletion-policy.md`.
-- Automatic elevation is out of scope.
+- Clean is mixed-action: every executable rule declares `move_to_recycle_bin`, `delete_permanently`, or `invoke_windows_servicing`. Permanent deletion applies only to approved categories, is never a Recycle Bin fallback, and requires per-run authorization (`--allow-permanent` or TUI confirmation). Windows servicing uses separate `--allow-servicing` authorization. See ADR 0018, ADR 0029, and `docs/plan/clean-deletion-policy.md`.
+- Silent or product-wide elevation is out of scope. Explicit WinSxS servicing and eligible Uninstall work are the narrow disclosed UAC exceptions.
 - Operation history and logging are MVP-level safety features.
-- `uninstall` is preview-only until a future execution model is designed.
+- `uninstall` previews by default and supports explicitly selected Official uninstaller invocation or eligible Portable directory removal through one shared CLI/TUI execution path.
 - `optimize` is reserved for future read-only health checks and recommendations.
 
 ## Mole Category Mapping
@@ -22,7 +22,7 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 | Mole category | Foal direction |
 | --- | --- |
 | `clean` | Conservative preview-first cleanup with rule-driven mixed-action execution (Recycle Bin or permanent per catalog). |
-| `uninstall` | Current preview-only registry application discovery, installed-application footprint review, orphaned residue review clues, human report, and JSON review sections; future execution model is separate. |
+| `uninstall` | Preview-first installed-application review plus confirmed Official uninstaller invocation or eligible Portable directory removal; confirmed leftovers remain bounded and revalidated. |
 | `analyze` | Read-only directory insight engine and on-demand TUI disk browser (ADR-0034). |
 | `optimize` | Future read-only health checks and recommendations; not current implementation scope. |
 | `status` | Read-only system snapshot; realtime monitoring is future TUI work. |
@@ -38,7 +38,8 @@ Foal may reference Mole as inspiration, but should not position itself as "Mole 
 | `foal clean --dry-run --json` | Preview-only cleanup candidate review; reports true planned actions without permanent authorization. |
 | `foal clean --execute` | Explicit cleanup confirmation; uses each category's catalog planned action. Permanent categories also need `--allow-permanent`. |
 | `foal history --json` | Reads Foal operation history and reports sessions or structured history errors. |
-| `foal uninstall --json` | Preview-only uninstall review with registry-discovered applications, installed-application footprint evidence, orphaned residue review clues, shared-state and unknown-state sections, JSON review sections, and empty execution actions. |
+| `foal uninstall --json` | Preview-only uninstall review with registry-discovered applications, execution plans, installed-application footprint evidence, orphaned residue review clues, and shared/unknown-state sections. |
+| `foal uninstall --execute --select <name>` | Runs selected official uninstallers or authorized portable removal, with separate process-stop/permanent gates, confirmed-leftover revalidation, and History. |
 
 ## Phase 1: Rename and Safety Baseline
 
@@ -100,24 +101,26 @@ Historical phase note: later work added browser/Application cache opportunities,
 - Keep browser caches absent until running-application detection exists, keep the Recycle Bin permanently absent, and keep allowlisted developer-tool caches in Review suggestions so no bytes are duplicated across surfaces.
 - Never inspect SoftwareDistribution, Delivery Optimization, or other administrator-only roots as opportunities. Communicate those exclusions through the shared permission-boundary notice without requesting or recommending elevation.
 
-## Phase 4: Uninstall Preview Quality
+## Phase 4: Uninstall (implemented)
 
 - Implemented registry application discovery and evidence reporting for installed applications.
 - Implemented installed-application footprint review as high-confidence possible leftovers tied to a currently discovered application.
 - Implemented orphaned residue as low-confidence read-only review evidence, distinct from installed-application footprint and never treated as cleanup candidates.
 - Implemented human uninstall reporting and JSON review sections over the shared uninstall result.
-- Continue to explain skipped discovery, unknown state, and shared-state concerns as preview-only review information.
-- Do not execute uninstallers, delete leftovers, stop processes, or add a Phase 5 execution plan in this phase.
+- Implemented shared CLI/TUI execution for exact app selections: Official uninstaller invocation (quiet then interactive) or eligible Portable directory removal.
+- Process stopping remains separately authorized; portable removal requires `--allow-permanent`; eligible machine-wide uninstall may request disclosed UAC.
+- After official-uninstaller success, delete only a revalidated subset of the frozen Confirmed leftover path set through the Recycle Bin. Failure or cancellation deletes nothing.
+- Keep orphaned residue, registry purge, Store/MSIX, package-manager uninstall, and Force Removal outside execution.
 
 ## Phase 5: TUI (Partial) and mixed-action Clean (implemented)
 
-Implemented an interactive TUI: running `foal` with no arguments opens a main menu, a category-first Clean four-stage flow (eager path-free preview scan → exact selection with live measured totals → separate confirmation → shared execution/result), and read-only viewers for uninstall, status, and history. Entering Clean starts a catalog-derived sequential measurement of every canonical default and opt-in cleanup category; defaults start selected but removable, permanent-action categories start selected when safely measurable, Recycle Bin opt-ins start unselected, and selection never restarts scanning. With the current catalog that is 31 initially selected categories when all rows are measurable. Retry and rescan controls remain deliberately outside the current TUI scope; after external state changes, the user leaves Clean and enters it again to start a new eager preview. Review suggestions remain on non-TUI dry-run contracts only. Confirmed execution freezes exact category identifiers and permanent authorization when permanent actions are disclosed, resolves candidates fresh, reloads safety boundaries, performs aggregate per-volume Recycle Bin capacity checks for Recycle Bin work only, executes Recycle Bin work first and permanent work last, validates immediately before each mutation, reports observation-only progress, and records normal Clean history plus optional path-free TUI provenance and split actual-action totals. This mandatory execution-time re-resolution is a safety invariant, not a user-facing preview rescan feature. Preview browsing, empty/unavailable/no-selection, and cancellation before confirmation create no history or companion files. Cancellation during execution does not promise rollback; results show only outcomes returned by shared Clean. Non-Clean TUI commands remain read-only, and Analyze/future extensions remain navigation placeholders.
+Implemented an interactive TUI: running `foal` with no arguments opens a main menu, a category-first Clean four-stage flow, multi-select confirmed Uninstall, a dedicated read-only Analyze disk browser, and read-only Status/History viewers. Entering Clean starts a catalog-derived sequential measurement of all 45 executable categories; defaults start selected but removable, permanent-action categories start selected when safely measurable, and Recycle Bin/servicing opt-ins start unselected. With the current catalog that is 37 initially selected categories (1 default + 36 permanent). Selection never restarts scanning; retry/rescan controls remain outside the current Clean TUI scope. Confirmed Clean execution freezes exact category identifiers and disclosed authorizations, resolves candidates fresh, reloads safety boundaries, performs Recycle Bin capacity checks, executes Recycle Bin work first, permanent work next, and servicing last, validates before mutation, reports path-free progress, and records normal History plus optional TUI provenance. The Analyze TUI separately provides local-drive entry, on-demand ranked direct-child measurement, drill-down, cancellation, in-session resume/cache, refresh, and guarded copy-only Purge guidance; it never mutates or writes History.
 
-ADR 0018 and `docs/plan/clean-deletion-policy.md` describe the implemented rule-driven deletion matrix: 36 permanent and 5 Recycle Bin executable categories plus one non-executable administrator permission boundary. CLI and TUI share category actions; CLI permanent execution requires `--allow-permanent`; the TUI confirmation supplies equivalent authorization; permanent deletion is never a Recycle Bin fallback and is not secure erasure.
+ADR 0018, ADR 0029, and `docs/plan/clean-deletion-policy.md` describe the implemented rule-driven matrix: 36 permanent, 8 Recycle Bin, and 1 Windows servicing category, plus one non-executable administrator permission boundary. CLI and TUI share catalog actions and authorization semantics.
 
 The following design principles continue to govern TUI work:
 
-- Build the Clean TUI as a review, category-selection, confirmation, and result surface; keep other command views read-only.
+- Build the Clean TUI as a review, category-selection, confirmation, and result surface; keep Analyze read-only and Uninstall as a thin adapter over shared execution.
 - Consume shared read models.
 - Call shared command/core execution paths for confirmed actions.
 - Do not place candidate resolution, deletion, uninstall, process-stopping, elevation, or path-safety decisions inside the TUI layer.
@@ -125,7 +128,7 @@ The following design principles continue to govern TUI work:
 ## Explicit Non-Goals For Current Work
 
 - No "Mole for Windows" feature parity commitment.
-- No automatic elevation.
+- No silent or product-wide elevation; only the explicitly selected servicing and Uninstall exceptions.
 - No implicit, undisclosed, fallback, or secure-erasure permanent deletion.
 - No full rule pack or profile system.
 - No browser cache discovery before running-application detection.
@@ -133,4 +136,4 @@ The following design principles continue to govern TUI work:
 - No default expansion of IDE, package-manager, or developer-cache rules; those stay skipped-by-default Review suggestions until explicit Opt-in or Clean TUI selection, then use their catalog planned action (many permanent per ADR 0018).
 - No administrator-only Opportunity roots or automatic elevation.
 - No system optimization actions.
-- No uninstall execution model.
+- No orphan-residue execution, registry purge, Store/MSIX removal, package-manager uninstall, or Force Removal.
