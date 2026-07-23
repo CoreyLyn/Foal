@@ -47,6 +47,16 @@ go build -o foal.exe ./cmd/foal
 .\foal.exe --version
 ```
 
+## Agent skill
+
+Install the bundled [`foal-full-clean`](skills/foal-full-clean/SKILL.md) skill:
+
+```powershell
+npx skills add coreylyn/foal
+```
+
+The skill checks whether Foal is installed, tries the official installer when needed, previews the broadest supported Clean selection, and runs permanent cleanup and Windows component-store servicing only with explicit authorization.
+
 ## Quick start
 
 Preview conservative cleanup candidates without deleting anything:
