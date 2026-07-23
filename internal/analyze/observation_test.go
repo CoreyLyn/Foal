@@ -73,23 +73,83 @@ func TestFormatSizeTokenLowerBoundPrefix(t *testing.T) {
 	}
 }
 
-func TestFormatSharePercentNeverUsesGreaterEqual(t *testing.T) {
-	// Approximate: scanning/partial/incomplete must never carry ">=" on percent.
+func TestFormatSharePercentNeverUsesTildeOrGreaterEqual(t *testing.T) {
+	// Scanning/partial/incomplete must never carry "~" or ">=" on percent.
 	for _, state := range []string{BrowseStateScanning, BrowseStatePartial, BrowseStateIncomplete} {
 		got := FormatSharePercent(25, 100, state, false)
-		if got == "" || strings.Contains(got, ">=") {
-			t.Fatalf("state %s percent = %q (must be non-empty approx without >=)", state, got)
+		if !strings.Contains(got, "25.0%") {
+			t.Fatalf("state %s percent = %q want 25.0%%", state, got)
 		}
-		if !strings.Contains(got, "observed") && !strings.HasPrefix(got, "~") {
-			t.Fatalf("state %s percent = %q want approximate labeling", state, got)
+		if strings.Contains(got, ">=") || strings.Contains(got, "~") {
+			t.Fatalf("state %s percent must not use ~ or >=: %q", state, got)
 		}
 	}
 	exact := FormatSharePercent(25, 100, BrowseStateComplete, true)
-	if exact != "25%" {
-		t.Fatalf("exact = %q want 25%%", exact)
+	if !strings.Contains(exact, "25.0%") {
+		t.Fatalf("exact = %q want 25.0%%", exact)
 	}
 	if strings.Contains(exact, ">=") || strings.Contains(exact, "~") {
-		t.Fatalf("exact must not look approximate: %q", exact)
+		t.Fatalf("exact must not use ~ or >=: %q", exact)
+	}
+}
+
+func TestFormatSharePercentSubTenthAndOneDecimal(t *testing.T) {
+	// Sub-0.1% share of a large total renders as <0.1%, not 0.0%.
+	got := FormatSharePercent(50, 100_000, BrowseStateScanning, false)
+	if !strings.Contains(got, "<0.1%") {
+		t.Fatalf("sub-tenth = %q want <0.1%%", got)
+	}
+	zeroBytes := FormatSharePercent(0, 100, BrowseStateComplete, true)
+	if !strings.Contains(zeroBytes, "<0.1%") {
+		t.Fatalf("zero bytes = %q want <0.1%%", zeroBytes)
+	}
+	// One decimal for mid-range shares (e.g. 1/3 ≈ 33.3%).
+	third := FormatSharePercent(1, 3, BrowseStateComplete, true)
+	if !strings.Contains(third, "33.3%") {
+		t.Fatalf("one-third = %q want 33.3%%", third)
+	}
+	// Whole percents keep the .0 suffix.
+	whole := FormatSharePercent(50, 100, BrowseStateComplete, true)
+	if !strings.Contains(whole, "50.0%") {
+		t.Fatalf("half = %q want 50.0%%", whole)
+	}
+	if FormatSharePercent(1, 0, BrowseStateComplete, true) != "" {
+		t.Fatal("zero total must return empty")
+	}
+}
+
+func TestFormatSharePercentAlignsPercentSign(t *testing.T) {
+	// All non-empty tokens are right-aligned to the same width so '%' columns match.
+	samples := []struct {
+		child, total int64
+	}{
+		{0, 100},
+		{50, 100_000},
+		{1, 1000},   // 0.1%
+		{99, 1000},  // 9.9%
+		{10, 100},   // 10.0%
+		{25, 100},   // 25.0%
+		{100, 100},  // 100.0%
+	}
+	var pctCols []int
+	for _, s := range samples {
+		tok := FormatSharePercent(s.child, s.total, BrowseStateComplete, true)
+		if tok == "" {
+			t.Fatalf("unexpected empty for %d/%d", s.child, s.total)
+		}
+		if len(tok) != sharePercentColWidth {
+			t.Fatalf("token %q width %d want %d", tok, len(tok), sharePercentColWidth)
+		}
+		idx := strings.Index(tok, "%")
+		if idx < 0 {
+			t.Fatalf("token %q missing %%", tok)
+		}
+		pctCols = append(pctCols, idx)
+	}
+	for i := 1; i < len(pctCols); i++ {
+		if pctCols[i] != pctCols[0] {
+			t.Fatalf("%% column misaligned: cols=%v", pctCols)
+		}
 	}
 }
 

@@ -60,7 +60,7 @@ func TestFormatAnalyzeRankRowWideShowsCursorRankBarPercentNameKindStateSize(t *t
 		"> ",
 		"1.",
 		"█",
-		"75%",
+		"75.0%",
 		"Windows",
 		"directory",
 		"complete",
@@ -155,26 +155,37 @@ func TestFormatAnalyzeRankRowTruncatesLongNameBeforeSizeOrState(t *testing.T) {
 	}
 }
 
-func TestFormatAnalyzeRankRowApproximatePercentWhenIncomplete(t *testing.T) {
+func TestFormatAnalyzeRankRowPercentWithoutTilde(t *testing.T) {
 	row := FormatAnalyzeRankRow(AnalyzeRankRowInput{
 		Child: sampleRankChild("scan-me", 25, analyze.BrowseStateScanning, analyze.BrowseKindDirectory),
 		Rank:  1, ObservedTotal: 100, LocationComplete: false, Selected: false, Width: 120,
 	})
-	if !strings.Contains(row, "~") && !strings.Contains(row, "observed") {
-		t.Fatalf("scanning/non-complete percent must be approximate: %s", row)
+	if !strings.Contains(row, "25.0%") {
+		t.Fatalf("percent missing: %s", row)
 	}
-	if strings.Contains(row, ">=25%") || strings.Contains(row, ">= 25%") {
-		t.Fatalf("percent must never use >=: %s", row)
+	if strings.Contains(row, "~") || strings.Contains(row, ">=25") {
+		t.Fatalf("percent must not use ~ or >=: %s", row)
 	}
 	exact := FormatAnalyzeRankRow(AnalyzeRankRowInput{
 		Child: sampleRankChild("done", 25, analyze.BrowseStateComplete, analyze.BrowseKindFile),
 		Rank:  1, ObservedTotal: 100, LocationComplete: true, Selected: false, Width: 120,
 	})
-	if !strings.Contains(exact, "25%") {
-		t.Fatalf("exact percent missing: %s", exact)
+	if !strings.Contains(exact, "25.0%") {
+		t.Fatalf("percent missing: %s", exact)
 	}
-	if strings.Contains(exact, "~25%") {
-		t.Fatalf("exact must not be approximate: %s", exact)
+	if strings.Contains(exact, "~") {
+		t.Fatalf("percent must not use ~: %s", exact)
+	}
+	// Floor-zero share of a large total shows <0.1%, not 0% / ~0%.
+	tiny := FormatAnalyzeRankRow(AnalyzeRankRowInput{
+		Child: sampleRankChild("tiny", 50, analyze.BrowseStateScanning, analyze.BrowseKindFile),
+		Rank:  3, ObservedTotal: 100_000, LocationComplete: false, Selected: false, Width: 120,
+	})
+	if !strings.Contains(tiny, "<0.1%") {
+		t.Fatalf("floor-zero percent missing: %s", tiny)
+	}
+	if strings.Contains(tiny, "~0%") || strings.Contains(tiny, " 0%") {
+		t.Fatalf("floor-zero must not show 0%% form: %s", tiny)
 	}
 }
 
@@ -244,9 +255,10 @@ func TestAnalyzeStateSymbolsPreserveNOColorDistinctions(t *testing.T) {
 }
 
 func TestStylizeAnalyzeBrowseFrameNoRedAndNOColor(t *testing.T) {
-	plain := ">  1. ██████░░░░ 50% Windows · directory · ✓complete · 50 B\n" +
-		"  2. ███░░░░░░░ ~30% observed partial-dir · ◐partial · >= 30 B\n" +
-		"  3. ░░░░░░░░░░ link · ⊘skipped · —\n" +
+	plain := ">  1. ██████░░░░  50.0% Windows · directory · ✓complete · 50 B\n" +
+		"  2. ███░░░░░░░  30.0% partial-dir · ◐partial · >= 30 B\n" +
+		"  3. ░░░░░░░░░░  <0.1% tiny · …scanning · <1 KB\n" +
+		"  4. ░░░░░░░░░░ link · ⊘skipped · —\n" +
 		"Measuring (approximate observed shares while scanning)...\n" +
 		"Observed logical children: 80 B (incomplete location total · approximate shares)\n"
 

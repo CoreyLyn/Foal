@@ -180,7 +180,7 @@ func FormatAnalyzeRankRow(in AnalyzeRankRowInput) string {
 		sizeTok = analyze.FormatSizeToken(child.Bytes, child.State, cleanFormatBytes)
 	}
 
-	// Percentage: approximate for scanning / non-complete location totals.
+	// Percentage: one-decimal share, fixed-width so '%' columns align across rows.
 	pctTok := analyze.FormatSharePercent(child.Bytes, in.ObservedTotal, child.State, in.LocationComplete)
 
 	flags := analyzeNameFlags(child)

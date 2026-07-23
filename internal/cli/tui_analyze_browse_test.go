@@ -558,8 +558,8 @@ func TestAnalyzeBrowseExactPercentOnlyWhenLocationComplete(t *testing.T) {
 	model := loadAnalyzeDrive(t)
 	model = enterAnalyzeBrowse(t, model)
 	content := model.content()
-	// Exact integer percent allowed; no approximate markers required.
-	if !strings.Contains(content, "25%") && !strings.Contains(content, "75%") {
+	// One-decimal percent; no approximate ~ markers required.
+	if !strings.Contains(content, "25.0%") && !strings.Contains(content, "75.0%") {
 		// cleanFormatBytes path still shows percent via FormatSharePercent.
 		t.Fatalf("complete location should show exact percentages:\n%s", content)
 	}
@@ -573,7 +573,7 @@ func TestAnalyzeBrowseExactPercentOnlyWhenLocationComplete(t *testing.T) {
 	if strings.Contains(row, ">=") {
 		t.Fatalf("complete size must not use >=: %s", row)
 	}
-	if !strings.Contains(row, "25%") || strings.Contains(row, "~") {
+	if !strings.Contains(row, "25.0%") || strings.Contains(row, "~") {
 		t.Fatalf("exact percent row = %q", row)
 	}
 	// Incomplete child percent never ">=N%".
@@ -590,8 +590,12 @@ func TestAnalyzeBrowseExactPercentOnlyWhenLocationComplete(t *testing.T) {
 	if strings.Contains(inc, ">=40%") || strings.Contains(inc, ">= 40%") {
 		t.Fatalf("percent must not use >=: %s", inc)
 	}
-	if !strings.Contains(inc, "observed") && !strings.Contains(inc, "~") {
-		t.Fatalf("incomplete percent must be approximate: %s", inc)
+	// Percent is one-decimal (or <0.1%); no ~ / "observed" suffix.
+	if !strings.Contains(inc, "40.0%") {
+		t.Fatalf("incomplete row must still show percent: %s", inc)
+	}
+	if strings.Contains(inc, "~") {
+		t.Fatalf("percent must not use ~: %s", inc)
 	}
 }
 

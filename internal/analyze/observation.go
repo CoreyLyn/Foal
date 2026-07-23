@@ -127,25 +127,48 @@ func FormatSizeToken(bytes int64, state string, formatBytes func(int64) string) 
 	return token
 }
 
-// FormatSharePercent formats childBytes as a percentage of observedTotal.
-// Approximate shares never use a ">=" percentage marker. When exact is allowed,
-// the wording is a plain integer percent. Returns "" when total is zero.
+// sharePercentColWidth is the fixed rune width of FormatSharePercent tokens so
+// the '%' sign lines up vertically across ranked rows (right-aligned).
+// Widest token is "100.0%" (6).
+const sharePercentColWidth = 6
+
+// shareTenths returns childBytes as tenths of a percent of observedTotal
+// (units of 0.1%). 250 means 25.0%. Zero total or non-positive child → 0.
+func shareTenths(childBytes, observedTotal int64) int64 {
+	if observedTotal <= 0 || childBytes <= 0 {
+		return 0
+	}
+	tenths := (childBytes * 1000) / observedTotal
+	if tenths < 0 {
+		return 0
+	}
+	if tenths > 1000 {
+		return 1000
+	}
+	return tenths
+}
+
+// FormatSharePercent formats childBytes as a one-decimal percentage of
+// observedTotal (e.g. "25.0%"). Shares never use "~" or a ">=" percentage
+// marker. Sub-0.1% contributions render as "<0.1%". Tokens are right-aligned
+// to sharePercentColWidth so the '%' column is vertically aligned in lists.
+// Returns "" when total is zero. childState and locationComplete remain for
+// API compatibility; they no longer change wording.
 func FormatSharePercent(childBytes, observedTotal int64, childState string, locationComplete bool) string {
 	if observedTotal <= 0 {
 		return ""
 	}
-	// Integer percent of observed share; never claim more precision than observed.
-	pct := (childBytes * 100) / observedTotal
-	if pct < 0 {
-		pct = 0
+	tenths := shareTenths(childBytes, observedTotal)
+	var raw string
+	if tenths < 1 {
+		raw = "<0.1%"
+	} else {
+		raw = fmt.Sprintf("%d.%d%%", tenths/10, tenths%10)
 	}
-	if pct > 100 {
-		pct = 100
+	if n := len(raw); n < sharePercentColWidth {
+		return strings.Repeat(" ", sharePercentColWidth-n) + raw
 	}
-	if PercentIsApproximate(childState, locationComplete) {
-		return fmt.Sprintf("~%d%% observed", pct)
-	}
-	return fmt.Sprintf("%d%%", pct)
+	return raw
 }
 
 // FormatFocusedDetail builds a compact, path-free detail line for the focused child.
