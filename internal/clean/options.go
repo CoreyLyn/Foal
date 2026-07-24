@@ -269,31 +269,12 @@ type Options struct {
 	// Production leaves the zero value so the fixed ProgramData root and the
 	// platform process/service, signature, and forensic detectors are used.
 	NVIDIAInstallerCacheDiscoveryOptions NVIDIAInstallerCacheDiscoveryOptions
-	// LGHUBCacheDiscoveryOptions injects the fixed-root override and platform
-	// detection seams for the lghub-cache category. Production leaves the zero
-	// value so the fixed ProgramData root and the platform process/service
-	// detectors are used. Tests must use isolated roots and never read the real
-	// LGHUB cache tree.
-	LGHUBCacheDiscoveryOptions LGHUBCacheDiscoveryOptions
-	// ThunderUpdateDownloadDiscoveryOptions injects the fixed-root override,
-	// clock, and platform detection seams for the thunder-update-download
-	// category. Production leaves the zero value so the fixed ProgramData root
-	// and the platform process/service detectors are used. Tests must use
-	// isolated roots and never read the real Thunder download cache tree.
-	ThunderUpdateDownloadDiscoveryOptions ThunderUpdateDownloadDiscoveryOptions
-	// WindowsTempDiscoveryOptions injects the root override, SystemRoot override,
-	// and clock seams for the windows-temp category. Production leaves the zero
-	// value so the resolved %SystemRoot%\Temp root and time.Now() are used. Tests
-	// must use isolated roots and never read or mutate the real C:\Windows\Temp
-	// tree.
-	WindowsTempDiscoveryOptions WindowsTempDiscoveryOptions
-	// WindowsUpdateDownloadCacheDiscoveryOptions injects the root override,
-	// SystemRoot override, clock, and read-only SCM service-detection seams for
-	// the windows-update-download-cache category. Production leaves the zero value
-	// so the resolved %SystemRoot%\SoftwareDistribution\Download root, time.Now(),
-	// and the platform SCM service detector are used. Tests must use isolated
-	// roots and never read or mutate the real Windows tree or SCM.
-	WindowsUpdateDownloadCacheDiscoveryOptions WindowsUpdateDownloadCacheDiscoveryOptions
+	// FixedRootDiscoveryOptions injects roots, SystemRoot, clock, and activity
+	// detectors for the fixed-root category cluster (windows-temp, lghub-cache,
+	// thunder-update-download, windows-update-download-cache). Production leaves
+	// the zero value. Tests must use isolated roots and never read or mutate real
+	// machine-wide cache trees or live process/service state.
+	FixedRootDiscoveryOptions FixedRootDiscoveryOptions
 	// ElectronUpdaterResidueDiscoveryOptions injects the root override and clock
 	// seams for the electron-updater-residue category. Production leaves the zero
 	// value so LOCALAPPDATA and time.Now() are used. Tests must use isolated roots
