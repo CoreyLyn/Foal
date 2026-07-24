@@ -1145,28 +1145,18 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 			if entry.definition.Eligibility != CategoryEligibilityDefault {
 				return fmt.Errorf("default resolver category %q must use default eligibility", id)
 			}
+		case categoryResolverFixedRoot:
+			if err := validateFixedRootRegistryEntry(entry); err != nil {
+				return err
+			}
 		case categoryResolverExistenceOpportunity, categoryResolverBrowserCache,
 			categoryResolverApplicationCache, categoryResolverDeveloperCache,
 			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache,
 			categoryResolverLGHUBCache, categoryResolverThunderUpdateDownload,
-			categoryResolverWindowsTemp, categoryResolverWindowsUpdateDownloadCache,
+			categoryResolverWindowsUpdateDownloadCache,
 			categoryResolverElectronUpdaterResidue:
 			if entry.definition.Eligibility != CategoryEligibilityOptIn {
 				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
-			}
-			if entry.resolverKind == categoryResolverWindowsTemp {
-				// Windows system temp is a machine-wide, exact-selection-only Recycle
-				// Bin category. Permanent deletion is never eligible, and aggregate/
-				// group tokens must never select it.
-				if entry.definition.PlannedAction != PlannedActionMoveToRecycleBin {
-					return fmt.Errorf("windows-temp category %q must declare move_to_recycle_bin", id)
-				}
-				if entry.definition.SelectionPolicy != CategorySelectionPolicyExactOnly {
-					return fmt.Errorf("windows-temp category %q must be exact-selection-only", id)
-				}
-				if entry.cliAgentProduct {
-					return fmt.Errorf("windows-temp category %q must not be a cli-agent product", id)
-				}
 			}
 			if entry.resolverKind == categoryResolverWindowsUpdateDownloadCache {
 				// Windows Update download cache is a machine-wide, exact-selection-only
