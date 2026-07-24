@@ -44,16 +44,16 @@ func chtimesTree(t *testing.T, root string, mtime time.Time) {
 }
 
 // thunderActivity builds a fixed DetectActivity stub returning the given status.
-func thunderActivity(status clean.ThunderUpdateDownloadActivityStatus) func(context.Context) clean.ThunderUpdateDownloadActivityState {
-	return func(context.Context) clean.ThunderUpdateDownloadActivityState {
-		return clean.ThunderUpdateDownloadActivityState{Status: status}
+func thunderActivity(status clean.FixedRootActivityStatus) func(context.Context) clean.FixedRootActivityState {
+	return func(context.Context) clean.FixedRootActivityState {
+		return clean.FixedRootActivityState{Status: status}
 	}
 }
 
 // thunderOpts assembles the shared DryRun options with the injected root, clock,
 // and Thunder activity detector. DetectRunningApplications is intentionally left
 // nil: the thunder-update-download resolver self-gates on DetectActivity only.
-func thunderOpts(root string, now time.Time, detect func(context.Context) clean.ThunderUpdateDownloadActivityState) clean.Options {
+func thunderOpts(root string, now time.Time, detect func(context.Context) clean.FixedRootActivityState) clean.Options {
 	return clean.Options{
 		OptIn: []string{clean.CategoryThunderUpdateDownload},
 		FixedRootDiscoveryOptions: clean.FixedRootDiscoveryOptions{
@@ -85,7 +85,7 @@ func TestThunderUpdateDownload_OldChildBecomesCandidate(t *testing.T) {
 	}
 	chtimesTree(t, child, daysAgo(now, 40))
 
-	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.ThunderUpdateDownloadActivityIdle)))
+	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.FixedRootActivityIdle)))
 
 	if len(result.OptInCandidates) != 1 {
 		t.Fatalf("candidates = %#v, want exactly old-pkg", result.OptInCandidates)
@@ -124,7 +124,7 @@ func TestThunderUpdateDownload_FreshChildExcluded(t *testing.T) {
 	}
 	chtimesTree(t, child, daysAgo(now, 5))
 
-	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.ThunderUpdateDownloadActivityIdle)))
+	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.FixedRootActivityIdle)))
 
 	if len(result.OptInCandidates) != 0 {
 		t.Fatalf("fresh child must be excluded: %#v", result.OptInCandidates)
@@ -154,7 +154,7 @@ func TestThunderUpdateDownload_DeepFreshDescendantExcluded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.ThunderUpdateDownloadActivityIdle)))
+	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.FixedRootActivityIdle)))
 
 	if len(result.OptInCandidates) != 0 {
 		t.Fatalf("fresh descendant must exclude the child: %#v", result.OptInCandidates)
@@ -183,7 +183,7 @@ func TestThunderUpdateDownload_SymlinkChildNeverCandidate(t *testing.T) {
 		t.Skipf("symlink unavailable on this environment: %v", err)
 	}
 
-	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.ThunderUpdateDownloadActivityIdle)))
+	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.FixedRootActivityIdle)))
 
 	if len(result.OptInCandidates) != 1 {
 		t.Fatalf("candidates = %#v, want only real-old", result.OptInCandidates)
@@ -205,7 +205,7 @@ func TestThunderUpdateDownload_MissingRootSilentAbsence(t *testing.T) {
 	now := thunderStableTime
 	root := filepath.Join(t.TempDir(), "does-not-exist")
 
-	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.ThunderUpdateDownloadActivityIdle)))
+	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.FixedRootActivityIdle)))
 
 	if len(result.OptInCandidates) != 0 {
 		t.Fatalf("missing root must yield no candidates: %#v", result.OptInCandidates)
@@ -233,10 +233,10 @@ func TestThunderUpdateDownload_MissingRootSilentAbsence(t *testing.T) {
 func TestThunderUpdateDownload_ActivityGateSkipsCategory(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		status clean.ThunderUpdateDownloadActivityStatus
+		status clean.FixedRootActivityStatus
 	}{
-		{"running", clean.ThunderUpdateDownloadActivityRunning},
-		{"unknown", clean.ThunderUpdateDownloadActivityUnknown},
+		{"running", clean.FixedRootActivityRunning},
+		{"unknown", clean.FixedRootActivityUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			now := thunderStableTime
@@ -284,12 +284,12 @@ func TestThunderUpdateDownload_IdleThenRunningDiscardsCandidates(t *testing.T) {
 	chtimesTree(t, child, daysAgo(now, 40))
 
 	var calls atomic.Int32
-	detect := func(context.Context) clean.ThunderUpdateDownloadActivityState {
-		status := clean.ThunderUpdateDownloadActivityIdle
+	detect := func(context.Context) clean.FixedRootActivityState {
+		status := clean.FixedRootActivityIdle
 		if calls.Add(1) >= 2 {
-			status = clean.ThunderUpdateDownloadActivityRunning
+			status = clean.FixedRootActivityRunning
 		}
-		return clean.ThunderUpdateDownloadActivityState{Status: status}
+		return clean.FixedRootActivityState{Status: status}
 	}
 
 	result := clean.DryRun(context.Background(), thunderOpts(root, now, detect))
@@ -339,7 +339,7 @@ func TestThunderUpdateDownload_IncompleteInspectionDisqualifies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.ThunderUpdateDownloadActivityIdle)))
+	result := clean.DryRun(context.Background(), thunderOpts(root, now, thunderActivity(clean.FixedRootActivityIdle)))
 
 	if len(result.OptInCandidates) != 1 {
 		t.Fatalf("candidates = %#v, want only clean-old", result.OptInCandidates)
@@ -378,7 +378,7 @@ func TestThunderUpdateDownload_ProtectedChildSuppressed(t *testing.T) {
 	}
 	chtimesTree(t, openChild, daysAgo(now, 40))
 
-	opts := thunderOpts(root, now, thunderActivity(clean.ThunderUpdateDownloadActivityIdle))
+	opts := thunderOpts(root, now, thunderActivity(clean.FixedRootActivityIdle))
 	opts.Validator = pathsafe.NewValidator([]string{protectedChild})
 
 	result := clean.DryRun(context.Background(), opts)

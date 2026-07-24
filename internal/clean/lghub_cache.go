@@ -1,7 +1,6 @@
 package clean
 
 import (
-	"context"
 	"os"
 )
 
@@ -25,23 +24,6 @@ const lghubCacheRoot = `C:\ProgramData\LGHUB\cache`
 // must be idle.
 const lghubCacheOptInImpactNotice = "Opt-in LG HUB cache cleanup moves content-addressed download blobs to the Recycle Bin. Blobs can normally be re-downloaded on demand, but this affects all users of the machine. LG HUB processes and services must be idle; active or unknown state skips the entire category. This is not permanent deletion and is not secure erasure."
 
-// LGHUBActivityStatus reports whether relevant LG HUB process/service activity
-// is idle, running, or of unknown/undetermined state. Unknown never means idle.
-type LGHUBActivityStatus string
-
-const (
-	LGHUBActivityIdle    LGHUBActivityStatus = "idle"
-	LGHUBActivityRunning LGHUBActivityStatus = "running"
-	LGHUBActivityUnknown LGHUBActivityStatus = "unknown"
-)
-
-// LGHUBActivityState is one conservative process/service observation. Message
-// is optional path-free diagnostic text.
-type LGHUBActivityState struct {
-	Status  LGHUBActivityStatus
-	Message string
-}
-
 func resolveLGHUBCacheRoot(dc discoveryContext) (string, bool) {
 	return lghubCacheRoot, true
 }
@@ -53,11 +35,6 @@ func acceptLGHUBCacheChild(name string, info os.FileInfo) bool {
 	return info.Mode().IsRegular()
 }
 
-func detectLGHUBActivityAsFixedRoot(ctx context.Context) fixedRootActivityState {
-	s := productionDetectLGHUBActivity(ctx)
-	return fixedRootActivityState{Status: fixedRootActivityStatus(s.Status), Message: s.Message}
-}
-
 // Package-level registration runs before any init(), so catalog validation in
 // category_catalog.init can see the lghub-cache fixed-root policy.
 var registerLGHUBCacheFixedRootPolicy = func() struct{} {
@@ -67,7 +44,7 @@ var registerLGHUBCacheFixedRootPolicy = func() struct{} {
 		acceptChild:            acceptLGHUBCacheChild,
 		bytesFromFileSize:      true,
 		requireByteMatch:       true,
-		detectActivity:         detectLGHUBActivityAsFixedRoot,
+		detectActivity:         productionDetectLGHUBActivity,
 		activityApplication:    ApplicationLGHUB,
 		activitySkipCode:       "lghub_activity",
 		activityRunningMessage: "LG HUB application or service is active; LG HUB cache was skipped",
@@ -84,12 +61,6 @@ var registerLGHUBCacheFixedRootPolicy = func() struct{} {
 
 func init() {
 	registerCategoryIdentityValidator(CategoryLGHUBCache, validateFixedRootIdentity)
-}
-
-// lghubCacheCategoryEntry registers the category on the shared fixed-root
-// resolver. Kept as a named helper so the catalog table stays readable.
-func lghubCacheCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogEntry {
-	return fixedRootCategoryEntry(definition)
 }
 
 // is64LowerHexName reports whether name is exactly 64 lowercase hex characters.

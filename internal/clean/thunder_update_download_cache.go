@@ -1,9 +1,5 @@
 package clean
 
-import (
-	"context"
-)
-
 // CategoryThunderUpdateDownload is the canonical exact-selection-only opt-in
 // category for Thunder update downloads under the fixed ProgramData XLLiveUD
 // download root.
@@ -28,30 +24,8 @@ const thunderUpdateDownloadStabilityWindowDays = 30
 // must be idle.
 const thunderUpdateDownloadOptInImpactNotice = "Opt-in Thunder update download cleanup moves update packages to the Recycle Bin. Packages may be re-downloaded on demand, but this affects all users of the machine. Thunder processes and services must be idle; active or unknown state skips the entire category. This is not permanent deletion and is not secure erasure."
 
-// ThunderUpdateDownloadActivityStatus reports whether relevant Thunder process/service
-// activity is idle, running, or of unknown/undetermined state. Unknown never means idle.
-type ThunderUpdateDownloadActivityStatus string
-
-const (
-	ThunderUpdateDownloadActivityIdle    ThunderUpdateDownloadActivityStatus = "idle"
-	ThunderUpdateDownloadActivityRunning ThunderUpdateDownloadActivityStatus = "running"
-	ThunderUpdateDownloadActivityUnknown ThunderUpdateDownloadActivityStatus = "unknown"
-)
-
-// ThunderUpdateDownloadActivityState is one conservative process/service observation.
-// Message is optional path-free diagnostic text.
-type ThunderUpdateDownloadActivityState struct {
-	Status  ThunderUpdateDownloadActivityStatus
-	Message string
-}
-
 func resolveThunderUpdateDownloadRoot(dc discoveryContext) (string, bool) {
 	return thunderUpdateDownloadCacheRoot, true
-}
-
-func detectThunderActivityAsFixedRoot(ctx context.Context) fixedRootActivityState {
-	s := productionDetectThunderUpdateDownloadActivity(ctx)
-	return fixedRootActivityState{Status: fixedRootActivityStatus(s.Status), Message: s.Message}
 }
 
 // Package-level registration runs before any init(), so catalog validation in
@@ -63,7 +37,7 @@ var registerThunderUpdateDownloadFixedRootPolicy = func() struct{} {
 		acceptChild:            nil, // any ordinary direct child
 		stabilityDays:          thunderUpdateDownloadStabilityWindowDays,
 		requireInspection:      true,
-		detectActivity:         detectThunderActivityAsFixedRoot,
+		detectActivity:         productionDetectThunderUpdateDownloadActivity,
 		activityApplication:    ApplicationThunder,
 		activitySkipCode:       "thunder_update_download_activity",
 		activityRunningMessage: "Thunder application or service is active; thunder update download cache was skipped",
@@ -80,10 +54,4 @@ var registerThunderUpdateDownloadFixedRootPolicy = func() struct{} {
 
 func init() {
 	registerCategoryIdentityValidator(CategoryThunderUpdateDownload, validateFixedRootIdentity)
-}
-
-// thunderUpdateDownloadCategoryEntry registers the category on the shared
-// fixed-root resolver. Kept as a named helper so the catalog table stays readable.
-func thunderUpdateDownloadCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogEntry {
-	return fixedRootCategoryEntry(definition)
 }

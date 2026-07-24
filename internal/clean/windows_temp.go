@@ -67,9 +67,3 @@ var registerWindowsTempFixedRootPolicy = func() struct{} {
 func init() {
 	registerCategoryIdentityValidator(CategoryWindowsTemp, validateFixedRootIdentity)
 }
-
-// windowsTempCategoryEntry registers the category on the shared fixed-root
-// resolver. Kept as a named helper so the catalog table stays readable.
-func windowsTempCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogEntry {
-	return fixedRootCategoryEntry(definition)
-}

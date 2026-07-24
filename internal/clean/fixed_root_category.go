@@ -21,20 +21,22 @@ import (
 // category is a row, not a clone.
 const categoryResolverFixedRoot categoryResolverKind = "fixed-root"
 
-// fixedRootActivityStatus is the three-state observation used by fixed-root
+// FixedRootActivityStatus is the three-state observation used by fixed-root
 // category-wide process/service gates. Unknown never means idle.
-type fixedRootActivityStatus string
+type FixedRootActivityStatus string
 
 const (
-	fixedRootActivityIdle    fixedRootActivityStatus = "idle"
-	fixedRootActivityRunning fixedRootActivityStatus = "running"
-	fixedRootActivityUnknown fixedRootActivityStatus = "unknown"
+	FixedRootActivityIdle    FixedRootActivityStatus = "idle"
+	FixedRootActivityRunning FixedRootActivityStatus = "running"
+	FixedRootActivityUnknown FixedRootActivityStatus = "unknown"
 )
 
-// fixedRootActivityState is one conservative process/service observation.
-// Message is optional path-free diagnostic text.
-type fixedRootActivityState struct {
-	Status  fixedRootActivityStatus
+// FixedRootActivityState is one conservative process/service observation.
+// Message is optional path-free diagnostic text. Shared by every fixed-root
+// activity detector and FixedRootDiscoveryOptions inject so product categories
+// do not each carry a parallel idle/running/unknown enum.
+type FixedRootActivityState struct {
+	Status  FixedRootActivityStatus
 	Message string
 }
 
@@ -65,7 +67,7 @@ type fixedRootPolicy struct {
 	requireByteMatch bool
 	// detectActivity is the production activity detector. Nil means no
 	// category-wide activity gate. Tests override via discoveryContext.
-	detectActivity func(context.Context) fixedRootActivityState
+	detectActivity func(context.Context) FixedRootActivityState
 	// activityApplication is the logical process/service identity projected into
 	// RunningStates when detectActivity is set.
 	activityApplication string
@@ -280,7 +282,7 @@ func fixedRootActivityIdleGate(ctx context.Context, dc discoveryContext, policy 
 	activity := detect(ctx)
 	app := policy.activityApplication
 	switch activity.Status {
-	case fixedRootActivityIdle:
+	case FixedRootActivityIdle:
 		if app != "" {
 			runningGateOutcome{runningStates: []RunningApplicationState{{
 				Application: app,
@@ -288,7 +290,7 @@ func fixedRootActivityIdleGate(ctx context.Context, dc discoveryContext, policy 
 			}}}.apply(&core.RunningStates, nil)
 		}
 		return true
-	case fixedRootActivityRunning:
+	case FixedRootActivityRunning:
 		if app != "" {
 			core.RunningStates = mergeRunningApplicationStates(core.RunningStates, RunningApplicationState{
 				Application: app,

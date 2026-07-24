@@ -6,6 +6,6 @@ import "context"
 
 // productionDetectLGHUBActivity always reports unknown on non-Windows, which
 // skips the entire category.
-func productionDetectLGHUBActivity(ctx context.Context) LGHUBActivityState {
-	return LGHUBActivityState{Status: LGHUBActivityUnknown, Message: "LG HUB cache is only supported on Windows"}
+func productionDetectLGHUBActivity(ctx context.Context) FixedRootActivityState {
+	return FixedRootActivityState{Status: FixedRootActivityUnknown, Message: "LG HUB cache is only supported on Windows"}
 }
