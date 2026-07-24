@@ -8,23 +8,24 @@ import "github.com/CoreyLyn/Foal/internal/core/pathsafe"
 // deletion: it carries the candidate's Planned action so the same validator
 // contract can guard a Recycle Bin move. It is not an authorization token and
 // never expands the candidate set.
+//
+// Fixed-root categories revalidate from Path + Category (+ Bytes for size-match
+// policies) together with fixedRootDiscovery injects. Product identity is
+// path+category; inject bags are test seams only.
 type CategoryIdentityCandidate struct {
 	Path          string
 	Bytes         int64
 	Category      string
 	PlannedAction string
-	// nvidiaDiscovery, lghubDiscovery, thunderUpdateDownloadDiscovery, and
-	// validator carry the injects a category-owned action-neutral validator
-	// needs to repeat its fresh proof. They are package-internal and set by
-	// shared Execute from Options so tests exercise the same seams as
-	// production. Categories that do not use them ignore them.
-	nvidiaDiscovery                     NVIDIAInstallerCacheDiscoveryOptions
-	lghubDiscovery                      LGHUBCacheDiscoveryOptions
-	thunderUpdateDownloadDiscovery      ThunderUpdateDownloadDiscoveryOptions
-	windowsTempDiscovery                WindowsTempDiscoveryOptions
-	windowsUpdateDownloadCacheDiscovery WindowsUpdateDownloadCacheDiscoveryOptions
-	electronUpdaterResidueDiscovery     ElectronUpdaterResidueDiscoveryOptions
-	validator                           pathsafe.Validator
+	// nvidiaDiscovery, fixedRootDiscovery, electronUpdaterResidueDiscovery, and
+	// validator carry the injects a category-owned action-neutral validator needs
+	// to repeat its fresh proof. They are package-internal and set by shared
+	// Execute from Options so tests exercise the same seams as production.
+	// Categories that do not use them ignore them.
+	nvidiaDiscovery                 NVIDIAInstallerCacheDiscoveryOptions
+	fixedRootDiscovery              FixedRootDiscoveryOptions
+	electronUpdaterResidueDiscovery ElectronUpdaterResidueDiscoveryOptions
+	validator                       pathsafe.Validator
 }
 
 // CategoryIdentityValidator re-checks, immediately before mutation, that a

@@ -668,16 +668,14 @@ func composeRecycleBinPreMutation(opts Options, byPath map[string]actionExecutio
 			return pathsafe.Reason{}, true
 		}
 		return validator(CategoryIdentityCandidate{
-			Path:                                candidate.Path,
-			Bytes:                               candidate.Bytes,
-			Category:                            meta.rule,
-			PlannedAction:                       meta.plannedAction,
-			nvidiaDiscovery:                     opts.NVIDIAInstallerCacheDiscoveryOptions,
-			lghubDiscovery:                      opts.LGHUBCacheDiscoveryOptions,
-			thunderUpdateDownloadDiscovery:      opts.ThunderUpdateDownloadDiscoveryOptions,
-			windowsTempDiscovery:                opts.WindowsTempDiscoveryOptions,
-			windowsUpdateDownloadCacheDiscovery: opts.WindowsUpdateDownloadCacheDiscoveryOptions,
-			validator:                           opts.Validator,
+			Path:                            candidate.Path,
+			Bytes:                           candidate.Bytes,
+			Category:                        meta.rule,
+			PlannedAction:                   meta.plannedAction,
+			nvidiaDiscovery:                 opts.NVIDIAInstallerCacheDiscoveryOptions,
+			fixedRootDiscovery:              opts.FixedRootDiscoveryOptions,
+			electronUpdaterResidueDiscovery: opts.ElectronUpdaterResidueDiscoveryOptions,
+			validator:                       opts.Validator,
 		})
 	}
 }

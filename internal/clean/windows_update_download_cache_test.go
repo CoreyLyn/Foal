@@ -26,10 +26,10 @@ func wudcIdle(context.Context) clean.WindowsUpdateServicesState {
 func wudcOpts(root string, now time.Time, detect func(context.Context) clean.WindowsUpdateServicesState) clean.Options {
 	return clean.Options{
 		OptIn: []string{clean.CategoryWindowsUpdateDownloadCache},
-		WindowsUpdateDownloadCacheDiscoveryOptions: clean.WindowsUpdateDownloadCacheDiscoveryOptions{
-			Root:           root,
-			Now:            now,
-			DetectServices: detect,
+		FixedRootDiscoveryOptions: clean.FixedRootDiscoveryOptions{
+			Now:                         now,
+			Roots:                       map[string]string{clean.CategoryWindowsUpdateDownloadCache: root},
+			DetectWindowsUpdateServices: detect,
 		},
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
@@ -228,10 +228,10 @@ func TestWindowsUpdateDownloadCache_UnresolvableSystemRootSilentAbsence(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			opts := clean.Options{
 				OptIn: []string{clean.CategoryWindowsUpdateDownloadCache},
-				WindowsUpdateDownloadCacheDiscoveryOptions: clean.WindowsUpdateDownloadCacheDiscoveryOptions{
-					SystemRoot:     tc.systemRoot,
-					Now:            wudcStableTime,
-					DetectServices: wudcIdle,
+				FixedRootDiscoveryOptions: clean.FixedRootDiscoveryOptions{
+					SystemRoot:                  tc.systemRoot,
+					Now:                         wudcStableTime,
+					DetectWindowsUpdateServices: wudcIdle,
 				},
 				DiscoverOpportunities:     noOpportunities,
 				DiscoverReviewSuggestions: noReviewSuggestions,

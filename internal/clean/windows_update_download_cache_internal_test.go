@@ -65,9 +65,9 @@ func wudcIdentityCandidate(root, path string) CategoryIdentityCandidate {
 	return CategoryIdentityCandidate{
 		Path:     path,
 		Category: CategoryWindowsUpdateDownloadCache,
-		windowsUpdateDownloadCacheDiscovery: WindowsUpdateDownloadCacheDiscoveryOptions{
-			Root: root,
-			Now:  wudcInternalNow,
+		fixedRootDiscovery: FixedRootDiscoveryOptions{
+			Now:   wudcInternalNow,
+			Roots: map[string]string{CategoryWindowsUpdateDownloadCache: root},
 		},
 	}
 }
@@ -75,7 +75,7 @@ func wudcIdentityCandidate(root, path string) CategoryIdentityCandidate {
 func TestValidateWindowsUpdateDownloadCacheIdentity_AcceptsStableCandidate(t *testing.T) {
 	root := t.TempDir()
 	child := wudcMaterializeStaleChild(t, root, "old", 40)
-	if _, ok := validateWindowsUpdateDownloadCacheIdentity(wudcIdentityCandidate(root, child)); !ok {
+	if _, ok := validateFixedRootIdentity(wudcIdentityCandidate(root, child)); !ok {
 		t.Fatal("stable stale direct child must revalidate")
 	}
 }
@@ -85,7 +85,7 @@ func TestValidateWindowsUpdateDownloadCacheIdentity_RejectsWrongCategory(t *test
 	child := wudcMaterializeStaleChild(t, root, "old", 40)
 	candidate := wudcIdentityCandidate(root, child)
 	candidate.Category = "user_temp"
-	reason, ok := validateWindowsUpdateDownloadCacheIdentity(candidate)
+	reason, ok := validateFixedRootIdentity(candidate)
 	if ok || reason.Code != "identity_mismatch" {
 		t.Fatalf("wrong category must fail with identity_mismatch, got %#v ok=%v", reason, ok)
 	}
@@ -96,7 +96,7 @@ func TestValidateWindowsUpdateDownloadCacheIdentity_RejectsPathOutsideRoot(t *te
 	child := wudcMaterializeStaleChild(t, root, "old", 40)
 	// A grandchild is not a direct child of the root.
 	drifted := filepath.Join(child, "f.cab")
-	if _, ok := validateWindowsUpdateDownloadCacheIdentity(wudcIdentityCandidate(root, drifted)); ok {
+	if _, ok := validateFixedRootIdentity(wudcIdentityCandidate(root, drifted)); ok {
 		t.Fatal("non-direct-child path must be rejected")
 	}
 	// A sibling outside the root entirely.
@@ -104,7 +104,7 @@ func TestValidateWindowsUpdateDownloadCacheIdentity_RejectsPathOutsideRoot(t *te
 	if err := os.MkdirAll(outside, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := validateWindowsUpdateDownloadCacheIdentity(wudcIdentityCandidate(root, outside)); ok {
+	if _, ok := validateFixedRootIdentity(wudcIdentityCandidate(root, outside)); ok {
 		t.Fatal("path outside the resolved root must be rejected")
 	}
 }
@@ -116,7 +116,7 @@ func TestValidateWindowsUpdateDownloadCacheIdentity_RejectsReparsePoint(t *testi
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink unavailable on this environment: %v", err)
 	}
-	if _, ok := validateWindowsUpdateDownloadCacheIdentity(wudcIdentityCandidate(root, link)); ok {
+	if _, ok := validateFixedRootIdentity(wudcIdentityCandidate(root, link)); ok {
 		t.Fatal("reparse-point candidate must be rejected at revalidation")
 	}
 }
@@ -126,7 +126,7 @@ func TestValidateWindowsUpdateDownloadCacheIdentity_RejectsFreshDrift(t *testing
 	// A child that is now inside the stability window (5 days old) must fail
 	// revalidation even if it once qualified.
 	child := wudcMaterializeStaleChild(t, root, "fresh", 5)
-	if _, ok := validateWindowsUpdateDownloadCacheIdentity(wudcIdentityCandidate(root, child)); ok {
+	if _, ok := validateFixedRootIdentity(wudcIdentityCandidate(root, child)); ok {
 		t.Fatal("candidate drifted inside the stability window must be rejected")
 	}
 }
@@ -134,7 +134,7 @@ func TestValidateWindowsUpdateDownloadCacheIdentity_RejectsFreshDrift(t *testing
 func TestValidateWindowsUpdateDownloadCacheIdentity_RejectsMissingPath(t *testing.T) {
 	root := t.TempDir()
 	missing := filepath.Join(root, "gone")
-	if _, ok := validateWindowsUpdateDownloadCacheIdentity(wudcIdentityCandidate(root, missing)); ok {
+	if _, ok := validateFixedRootIdentity(wudcIdentityCandidate(root, missing)); ok {
 		t.Fatal("missing candidate must be rejected")
 	}
 }
@@ -143,12 +143,12 @@ func TestValidateWindowsUpdateDownloadCacheIdentity_RejectsUnresolvableRoot(t *t
 	candidate := CategoryIdentityCandidate{
 		Path:     `C:\Windows\SoftwareDistribution\Download\x`,
 		Category: CategoryWindowsUpdateDownloadCache,
-		windowsUpdateDownloadCacheDiscovery: WindowsUpdateDownloadCacheDiscoveryOptions{
+		fixedRootDiscovery: FixedRootDiscoveryOptions{
 			SystemRoot: `relative-not-abs`,
 			Now:        wudcInternalNow,
 		},
 	}
-	if _, ok := validateWindowsUpdateDownloadCacheIdentity(candidate); ok {
+	if _, ok := validateFixedRootIdentity(candidate); ok {
 		t.Fatal("unresolvable root must be rejected")
 	}
 }

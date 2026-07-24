@@ -21,9 +21,9 @@ var wtStableTime = time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 func wtOpts(root string, now time.Time) clean.Options {
 	return clean.Options{
 		OptIn: []string{clean.CategoryWindowsTemp},
-		WindowsTempDiscoveryOptions: clean.WindowsTempDiscoveryOptions{
-			Root: root,
-			Now:  now,
+		FixedRootDiscoveryOptions: clean.FixedRootDiscoveryOptions{
+			Now:   now,
+			Roots: map[string]string{clean.CategoryWindowsTemp: root},
 		},
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,
@@ -294,7 +294,7 @@ func TestWindowsTemp_UnresolvableSystemRootSilentAbsence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := clean.Options{
 				OptIn: []string{clean.CategoryWindowsTemp},
-				WindowsTempDiscoveryOptions: clean.WindowsTempDiscoveryOptions{
+				FixedRootDiscoveryOptions: clean.FixedRootDiscoveryOptions{
 					SystemRoot: tc.systemRoot,
 					Now:        wtStableTime,
 				},

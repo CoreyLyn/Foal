@@ -56,10 +56,10 @@ func thunderActivity(status clean.ThunderUpdateDownloadActivityStatus) func(cont
 func thunderOpts(root string, now time.Time, detect func(context.Context) clean.ThunderUpdateDownloadActivityState) clean.Options {
 	return clean.Options{
 		OptIn: []string{clean.CategoryThunderUpdateDownload},
-		ThunderUpdateDownloadDiscoveryOptions: clean.ThunderUpdateDownloadDiscoveryOptions{
-			Root:           root,
-			Now:            now,
-			DetectActivity: detect,
+		FixedRootDiscoveryOptions: clean.FixedRootDiscoveryOptions{
+			Now:                   now,
+			Roots:                 map[string]string{clean.CategoryThunderUpdateDownload: root},
+			DetectThunderActivity: detect,
 		},
 		DiscoverOpportunities:     noOpportunities,
 		DiscoverReviewSuggestions: noReviewSuggestions,

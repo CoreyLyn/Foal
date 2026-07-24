@@ -65,9 +65,9 @@ func wtIdentityCandidate(root, path string) CategoryIdentityCandidate {
 	return CategoryIdentityCandidate{
 		Path:     path,
 		Category: CategoryWindowsTemp,
-		windowsTempDiscovery: WindowsTempDiscoveryOptions{
-			Root: root,
-			Now:  wtInternalNow,
+		fixedRootDiscovery: FixedRootDiscoveryOptions{
+			Now:   wtInternalNow,
+			Roots: map[string]string{CategoryWindowsTemp: root},
 		},
 	}
 }
@@ -143,7 +143,7 @@ func TestValidateWindowsTempIdentity_RejectsUnresolvableRoot(t *testing.T) {
 	candidate := CategoryIdentityCandidate{
 		Path:     `C:\Windows\Temp\x`,
 		Category: CategoryWindowsTemp,
-		windowsTempDiscovery: WindowsTempDiscoveryOptions{
+		fixedRootDiscovery: FixedRootDiscoveryOptions{
 			SystemRoot: `relative-not-abs`,
 			Now:        wtInternalNow,
 		},

@@ -1,6 +1,7 @@
 package clean
 
 import (
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,8 +11,8 @@ import (
 
 // discoveryContext is the package-private inject surface for category discovery
 // and revalidation. Production fills real FS/env/clock; tests override roots,
-// env values, and now. Public Options composition stays free of per-category
-// DiscoveryOptions bags as categories migrate onto this context.
+// env values, now, and activity detectors. Public Options composition uses a
+// single FixedRootDiscoveryOptions bag for the fixed-root cluster.
 type discoveryContext struct {
 	now      time.Time
 	lstat    func(string) (os.FileInfo, error)
@@ -27,47 +28,96 @@ type discoveryContext struct {
 	// Empty string is a deliberate blank override (fail closed), distinct from
 	// a missing key which falls through to getenv.
 	envOverride map[string]string
+	// activityDetector maps canonical category id → activity observation.
+	// When set, overrides the policy production detector for that category.
+	activityDetector map[string]func(context.Context) fixedRootActivityState
 }
 
 func newProductionDiscoveryContext() discoveryContext {
 	return discoveryContext{
-		now:          time.Now(),
-		lstat:        os.Lstat,
-		readDir:      os.ReadDir,
-		walkDir:      filepath.WalkDir,
-		joinPath:     filepath.Join,
-		getenv:       os.Getenv,
-		rootOverride: map[string]string{},
-		envOverride:  map[string]string{},
+		now:              time.Now(),
+		lstat:            os.Lstat,
+		readDir:          os.ReadDir,
+		walkDir:          filepath.WalkDir,
+		joinPath:         filepath.Join,
+		getenv:           os.Getenv,
+		rootOverride:     map[string]string{},
+		envOverride:      map[string]string{},
+		activityDetector: map[string]func(context.Context) fixedRootActivityState{},
 	}
 }
 
-// discoveryContextFromOptions builds the resolve-time context. Bridges remaining
-// public *DiscoveryOptions fields until those categories migrate fully and the
-// fields are removed from Options.
+// FixedRootDiscoveryOptions injects roots, SystemRoot, clock, and activity
+// detectors for the fixed-root category cluster (windows-temp, lghub-cache,
+// thunder-update-download, windows-update-download-cache). Production leaves
+// the zero value. Tests must use isolated roots and never read or mutate real
+// machine-wide cache trees or live process/service state.
+type FixedRootDiscoveryOptions struct {
+	// Now overrides the current time for stability window calculations.
+	// Test-only; production leaves it zero so time.Now() is used.
+	Now time.Time
+	// Roots maps canonical category id → absolute discovery root override.
+	// Test-only; production leaves it nil/empty.
+	Roots map[string]string
+	// SystemRoot overrides the SystemRoot environment value used by categories
+	// that resolve under %SystemRoot%. Test-only; production leaves it empty so
+	// os.Getenv("SystemRoot") is read. Ignored for a category when Roots[id] is set.
+	SystemRoot string
+	// DetectLGHUBActivity reports LG HUB process/service activity. nil selects
+	// the production platform detector.
+	DetectLGHUBActivity func(context.Context) LGHUBActivityState
+	// DetectThunderActivity reports Thunder process/service activity. nil selects
+	// the production platform detector.
+	DetectThunderActivity func(context.Context) ThunderUpdateDownloadActivityState
+	// DetectWindowsUpdateServices reports Windows Update service-stack state.
+	// nil selects the production platform detector.
+	DetectWindowsUpdateServices func(context.Context) WindowsUpdateServicesState
+}
+
+// discoveryContextFromOptions builds the resolve-time context from Options.
 func discoveryContextFromOptions(opts Options) discoveryContext {
+	return discoveryContextFromFixedRootOptions(opts.FixedRootDiscoveryOptions)
+}
+
+// discoveryContextFromFixedRootOptions builds a context for discovery or
+// identity revalidation from the consolidated fixed-root inject bag.
+func discoveryContextFromFixedRootOptions(opts FixedRootDiscoveryOptions) discoveryContext {
 	dc := newProductionDiscoveryContext()
-	// windows-temp bridge (PR1): public Options field still accepted.
-	wt := opts.WindowsTempDiscoveryOptions
-	if !wt.Now.IsZero() {
-		dc.now = wt.Now
+	if !opts.Now.IsZero() {
+		dc.now = opts.Now
 	}
-	if root := strings.TrimSpace(wt.Root); root != "" {
-		dc.rootOverride[CategoryWindowsTemp] = filepath.Clean(root)
+	for category, root := range opts.Roots {
+		if trimmed := strings.TrimSpace(root); trimmed != "" && strings.TrimSpace(category) != "" {
+			dc.rootOverride[category] = filepath.Clean(trimmed)
+		}
 	}
-	// Match prior windows-temp deps: only a non-blank SystemRoot overrides getenv;
-	// whitespace-only falls through to the real environment.
-	if sr := strings.TrimSpace(wt.SystemRoot); sr != "" {
+	// Match prior windows-temp / windows-update deps: only a non-blank SystemRoot
+	// overrides getenv; whitespace-only falls through to the real environment.
+	if sr := strings.TrimSpace(opts.SystemRoot); sr != "" {
 		dc.envOverride["SystemRoot"] = sr
 	}
+	if opts.DetectLGHUBActivity != nil {
+		detect := opts.DetectLGHUBActivity
+		dc.activityDetector[CategoryLGHUBCache] = func(ctx context.Context) fixedRootActivityState {
+			s := detect(ctx)
+			return fixedRootActivityState{Status: fixedRootActivityStatus(s.Status), Message: s.Message}
+		}
+	}
+	if opts.DetectThunderActivity != nil {
+		detect := opts.DetectThunderActivity
+		dc.activityDetector[CategoryThunderUpdateDownload] = func(ctx context.Context) fixedRootActivityState {
+			s := detect(ctx)
+			return fixedRootActivityState{Status: fixedRootActivityStatus(s.Status), Message: s.Message}
+		}
+	}
+	if opts.DetectWindowsUpdateServices != nil {
+		detect := opts.DetectWindowsUpdateServices
+		dc.activityDetector[CategoryWindowsUpdateDownloadCache] = func(ctx context.Context) fixedRootActivityState {
+			s := detect(ctx)
+			return fixedRootActivityState{Status: fixedRootActivityStatus(s.Status), Message: s.Message}
+		}
+	}
 	return dc
-}
-
-// discoveryContextFromWindowsTempOptions builds a context for identity
-// revalidation that only needs the windows-temp inject bag (still carried on
-// CategoryIdentityCandidate until the identity bag is slimmed).
-func discoveryContextFromWindowsTempOptions(opts WindowsTempDiscoveryOptions) discoveryContext {
-	return discoveryContextFromOptions(Options{WindowsTempDiscoveryOptions: opts})
 }
 
 func (dc discoveryContext) env(name string) (string, bool) {
@@ -91,4 +141,28 @@ func (dc discoveryContext) categoryRootOverride(category string) (string, bool) 
 		return "", false
 	}
 	return root, true
+}
+
+func (dc discoveryContext) hasActivityDetector(category string) bool {
+	if dc.activityDetector == nil {
+		return false
+	}
+	f, ok := dc.activityDetector[category]
+	return ok && f != nil
+}
+
+func (dc discoveryContext) activityDetectorFor(category string) func(context.Context) fixedRootActivityState {
+	if dc.activityDetector == nil {
+		return nil
+	}
+	return dc.activityDetector[category]
+}
+
+// fixedRootOpts is a small builder for tests that need one category root + clock.
+func fixedRootOpts(category, root string, now time.Time) FixedRootDiscoveryOptions {
+	opts := FixedRootDiscoveryOptions{Now: now}
+	if strings.TrimSpace(root) != "" {
+		opts.Roots = map[string]string{category: root}
+	}
+	return opts
 }

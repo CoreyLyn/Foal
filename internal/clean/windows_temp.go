@@ -3,7 +3,6 @@ package clean
 import (
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // CategoryWindowsTemp is the canonical exact-selection-only opt-in category for
@@ -23,27 +22,6 @@ const windowsTempStabilityWindowDays = 14
 // and affects all users, uses the Recycle Bin only, is never permanent, and that
 // a non-elevated run reclaims only the user-deletable subset.
 const windowsTempOptInImpactNotice = "Opt-in Windows system temp cleanup moves stale entries from the shared system temp directory to the Recycle Bin. This affects all users of the machine. Foal never elevates, so entries owned by other users or by system services are skipped and only part of the directory is reclaimed. This is not permanent deletion and is not secure erasure."
-
-// WindowsTempDiscoveryOptions injects the root override, SystemRoot override, and
-// clock seams for the windows-temp category. Production leaves the zero value so
-// the resolved %SystemRoot%\Temp root and time.Now() are used. Tests must use
-// isolated roots and never read or mutate the real C:\Windows\Temp tree.
-//
-// PR1 bridge: still a public Options field and identity-candidate bag entry;
-// discoveryContextFromOptions maps it into the shared inject surface. Later
-// slices remove this type from the public Options interface.
-type WindowsTempDiscoveryOptions struct {
-	// Root overrides the resolved %SystemRoot%\Temp discovery root. Test-only:
-	// production leaves it empty so the SystemRoot environment resolution is used.
-	Root string
-	// SystemRoot overrides the SystemRoot environment value used for root
-	// resolution. Test-only; production leaves it empty so os.Getenv("SystemRoot")
-	// is read. Ignored when Root is set.
-	SystemRoot string
-	// Now overrides the current time for stability window calculations. Test-only;
-	// production leaves it zero so time.Now() is used.
-	Now time.Time
-}
 
 // resolveWindowsTempRootFromSystemRoot resolves the exact %SystemRoot%\Temp
 // directory from a SystemRoot value. It fails closed (ok=false) for blank,
