@@ -719,7 +719,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// root itself are never candidates. Dedicated resolver (not developer-cache / not
 	// application-cache): the `all`, `dev-caches`, `app-caches`, and `cli-agents`
 	// tokens and TUI Select All never select it. Permanent deletion is never eligible.
-	withPreviewSafetyNote(lghubCacheCategoryEntry(
+	withPreviewSafetyNote(fixedRootCategoryEntry(
 		CleanupCategoryDefinition{
 			Identifier:               CategoryLGHUBCache,
 			Label:                    "LG HUB cache",
@@ -740,7 +740,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// the direct-child level. Dedicated resolver (not developer-cache / not
 	// application-cache): the `all`, `dev-caches`, `app-caches`, and `cli-agents`
 	// tokens and TUI Select All never select it. Permanent deletion is never eligible.
-	withPreviewSafetyNote(thunderUpdateDownloadCategoryEntry(
+	withPreviewSafetyNote(fixedRootCategoryEntry(
 		CleanupCategoryDefinition{
 			Identifier:               CategoryThunderUpdateDownload,
 			Label:                    "Thunder update download cache",
@@ -764,7 +764,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// (not developer-cache / not application-cache): the `all`, `dev-caches`,
 	// `app-caches`, and `cli-agents` tokens and TUI Select All never select it.
 	// Permanent deletion is never eligible. See ADR 0030 / ADR 0032.
-	withPreviewSafetyNote(windowsTempCategoryEntry(
+	withPreviewSafetyNote(fixedRootCategoryEntry(
 		CleanupCategoryDefinition{
 			Identifier:               CategoryWindowsTemp,
 			Label:                    "Windows system temp",
@@ -796,7 +796,7 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// `cli-agents` tokens and TUI Select All never select it. Permanent
 	// deletion is never eligible; this is an ordinary path-backed deletion,
 	// never the servicing helper. See ADR 0030 / ADR 0033.
-	withPreviewSafetyNote(windowsUpdateDownloadCacheCategoryEntry(
+	withPreviewSafetyNote(fixedRootCategoryEntry(
 		CleanupCategoryDefinition{
 			Identifier:               CategoryWindowsUpdateDownloadCache,
 			Label:                    "Windows Update download cache",

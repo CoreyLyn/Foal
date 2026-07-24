@@ -1,7 +1,6 @@
 package clean
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 )
@@ -38,23 +37,6 @@ const windowsUpdateDownloadCacheOptInImpactNotice = "Opt-in Windows Update downl
 // Foal only observes these read-only and never mutates their state.
 var windowsUpdateServiceNames = []string{"wuauserv", "bits", "dosvc", "UsoSvc"}
 
-// WindowsUpdateServicesStatus reports whether the Windows Update service stack is
-// idle, running, or of unknown/undetermined state. Unknown never means idle.
-type WindowsUpdateServicesStatus string
-
-const (
-	WindowsUpdateServicesIdle    WindowsUpdateServicesStatus = "idle"
-	WindowsUpdateServicesRunning WindowsUpdateServicesStatus = "running"
-	WindowsUpdateServicesUnknown WindowsUpdateServicesStatus = "unknown"
-)
-
-// WindowsUpdateServicesState is one conservative read-only service observation.
-// Message is optional path-free diagnostic text.
-type WindowsUpdateServicesState struct {
-	Status  WindowsUpdateServicesStatus
-	Message string
-}
-
 // resolveWindowsUpdateDownloadCacheRootFromSystemRoot resolves the exact
 // %SystemRoot%\SoftwareDistribution\Download directory from a SystemRoot value.
 // It fails closed (ok=false) for blank, relative, UNC, or otherwise unusable
@@ -78,11 +60,6 @@ func resolveWindowsUpdateDownloadCacheRoot(dc discoveryContext) (string, bool) {
 	return resolveWindowsUpdateDownloadCacheRootFromSystemRoot(systemRoot)
 }
 
-func detectWindowsUpdateServicesAsFixedRoot(ctx context.Context) fixedRootActivityState {
-	s := productionDetectWindowsUpdateServices(ctx)
-	return fixedRootActivityState{Status: fixedRootActivityStatus(s.Status), Message: s.Message}
-}
-
 // Package-level registration runs before any init(), so catalog validation in
 // category_catalog.init can see the windows-update-download-cache fixed-root policy.
 var registerWindowsUpdateDownloadCacheFixedRootPolicy = func() struct{} {
@@ -92,7 +69,7 @@ var registerWindowsUpdateDownloadCacheFixedRootPolicy = func() struct{} {
 		acceptChild:            nil, // any ordinary direct child
 		stabilityDays:          windowsUpdateDownloadCacheStabilityWindowDays,
 		requireInspection:      true,
-		detectActivity:         detectWindowsUpdateServicesAsFixedRoot,
+		detectActivity:         productionDetectWindowsUpdateServices,
 		activityApplication:    ApplicationWindowsUpdate,
 		activitySkipCode:       "windows_update_services_active",
 		activityRunningMessage: "Windows Update services are active; windows update download cache was skipped",
@@ -109,10 +86,4 @@ var registerWindowsUpdateDownloadCacheFixedRootPolicy = func() struct{} {
 
 func init() {
 	registerCategoryIdentityValidator(CategoryWindowsUpdateDownloadCache, validateFixedRootIdentity)
-}
-
-// windowsUpdateDownloadCacheCategoryEntry registers the category on the shared
-// fixed-root resolver. Kept as a named helper so the catalog table stays readable.
-func windowsUpdateDownloadCacheCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogEntry {
-	return fixedRootCategoryEntry(definition)
 }

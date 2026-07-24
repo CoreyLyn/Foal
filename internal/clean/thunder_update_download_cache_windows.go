@@ -15,24 +15,24 @@ import (
 // service is running; any enumeration failure or uncertain attribution is unknown.
 // Idle requires both a clean process snapshot and a reachable, all-idle Thunder
 // service set. Clean never stops these processes or services.
-func productionDetectThunderUpdateDownloadActivity(ctx context.Context) ThunderUpdateDownloadActivityState {
+func productionDetectThunderUpdateDownloadActivity(ctx context.Context) FixedRootActivityState {
 	snapshot := snapshotProcesses(ctx)
 	if snapshot.Err != nil {
-		return ThunderUpdateDownloadActivityState{Status: ThunderUpdateDownloadActivityUnknown, Message: "Thunder process snapshot was unavailable"}
+		return FixedRootActivityState{Status: FixedRootActivityUnknown, Message: "Thunder process snapshot was unavailable"}
 	}
 	for _, name := range snapshot.Names {
 		if isThunderProcessName(name) {
-			return ThunderUpdateDownloadActivityState{Status: ThunderUpdateDownloadActivityRunning, Message: "a Thunder process is running"}
+			return FixedRootActivityState{Status: FixedRootActivityRunning, Message: "a Thunder process is running"}
 		}
 	}
 	active, err := thunderServicesActive()
 	if err != nil {
-		return ThunderUpdateDownloadActivityState{Status: ThunderUpdateDownloadActivityUnknown, Message: "Thunder service state could not be determined"}
+		return FixedRootActivityState{Status: FixedRootActivityUnknown, Message: "Thunder service state could not be determined"}
 	}
 	if active {
-		return ThunderUpdateDownloadActivityState{Status: ThunderUpdateDownloadActivityRunning, Message: "a Thunder service is running"}
+		return FixedRootActivityState{Status: FixedRootActivityRunning, Message: "a Thunder service is running"}
 	}
-	return ThunderUpdateDownloadActivityState{Status: ThunderUpdateDownloadActivityIdle}
+	return FixedRootActivityState{Status: FixedRootActivityIdle}
 }
 
 // isThunderProcessName matches Thunder process names. This is intentionally broad

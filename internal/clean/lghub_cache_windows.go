@@ -15,24 +15,24 @@ import (
 // running; any enumeration failure or uncertain attribution is unknown. Idle
 // requires both a clean process snapshot and a reachable, all-idle LG HUB
 // service set. Clean never stops these processes or services.
-func productionDetectLGHUBActivity(ctx context.Context) LGHUBActivityState {
+func productionDetectLGHUBActivity(ctx context.Context) FixedRootActivityState {
 	snapshot := snapshotProcesses(ctx)
 	if snapshot.Err != nil {
-		return LGHUBActivityState{Status: LGHUBActivityUnknown, Message: "LG HUB process snapshot was unavailable"}
+		return FixedRootActivityState{Status: FixedRootActivityUnknown, Message: "LG HUB process snapshot was unavailable"}
 	}
 	for _, name := range snapshot.Names {
 		if isLGHUBProcessName(name) {
-			return LGHUBActivityState{Status: LGHUBActivityRunning, Message: "an LG HUB process is running"}
+			return FixedRootActivityState{Status: FixedRootActivityRunning, Message: "an LG HUB process is running"}
 		}
 	}
 	active, err := lghubServicesActive()
 	if err != nil {
-		return LGHUBActivityState{Status: LGHUBActivityUnknown, Message: "LG HUB service state could not be determined"}
+		return FixedRootActivityState{Status: FixedRootActivityUnknown, Message: "LG HUB service state could not be determined"}
 	}
 	if active {
-		return LGHUBActivityState{Status: LGHUBActivityRunning, Message: "an LG HUB service is running"}
+		return FixedRootActivityState{Status: FixedRootActivityRunning, Message: "an LG HUB service is running"}
 	}
-	return LGHUBActivityState{Status: LGHUBActivityIdle}
+	return FixedRootActivityState{Status: FixedRootActivityIdle}
 }
 
 // isLGHUBProcessName matches LG HUB process names. This is intentionally broad

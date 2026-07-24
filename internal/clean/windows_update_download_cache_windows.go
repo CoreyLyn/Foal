@@ -16,21 +16,21 @@ import (
 // any enumeration failure is unknown. A service that is absent or Stopped does
 // not block. Foal only observes and never starts, stops, or reconfigures any
 // service.
-func productionDetectWindowsUpdateServices(ctx context.Context) WindowsUpdateServicesState {
+func productionDetectWindowsUpdateServices(ctx context.Context) FixedRootActivityState {
 	select {
 	case <-ctx.Done():
-		return WindowsUpdateServicesState{Status: WindowsUpdateServicesUnknown, Message: "Windows Update service query was canceled"}
+		return FixedRootActivityState{Status: FixedRootActivityUnknown, Message: "Windows Update service query was canceled"}
 	default:
 	}
 
 	active, err := windowsUpdateServicesActive(ctx)
 	if err != nil {
-		return WindowsUpdateServicesState{Status: WindowsUpdateServicesUnknown, Message: "Windows Update service state could not be determined"}
+		return FixedRootActivityState{Status: FixedRootActivityUnknown, Message: "Windows Update service state could not be determined"}
 	}
 	if active {
-		return WindowsUpdateServicesState{Status: WindowsUpdateServicesRunning, Message: "a Windows Update service is active"}
+		return FixedRootActivityState{Status: FixedRootActivityRunning, Message: "a Windows Update service is active"}
 	}
-	return WindowsUpdateServicesState{Status: WindowsUpdateServicesIdle}
+	return FixedRootActivityState{Status: FixedRootActivityIdle}
 }
 
 // isWindowsUpdateServiceName reports whether serviceName exactly matches one of

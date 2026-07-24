@@ -30,7 +30,7 @@ type discoveryContext struct {
 	envOverride map[string]string
 	// activityDetector maps canonical category id → activity observation.
 	// When set, overrides the policy production detector for that category.
-	activityDetector map[string]func(context.Context) fixedRootActivityState
+	activityDetector map[string]func(context.Context) FixedRootActivityState
 }
 
 func newProductionDiscoveryContext() discoveryContext {
@@ -43,7 +43,7 @@ func newProductionDiscoveryContext() discoveryContext {
 		getenv:           os.Getenv,
 		rootOverride:     map[string]string{},
 		envOverride:      map[string]string{},
-		activityDetector: map[string]func(context.Context) fixedRootActivityState{},
+		activityDetector: map[string]func(context.Context) FixedRootActivityState{},
 	}
 }
 
@@ -65,13 +65,13 @@ type FixedRootDiscoveryOptions struct {
 	SystemRoot string
 	// DetectLGHUBActivity reports LG HUB process/service activity. nil selects
 	// the production platform detector.
-	DetectLGHUBActivity func(context.Context) LGHUBActivityState
+	DetectLGHUBActivity func(context.Context) FixedRootActivityState
 	// DetectThunderActivity reports Thunder process/service activity. nil selects
 	// the production platform detector.
-	DetectThunderActivity func(context.Context) ThunderUpdateDownloadActivityState
+	DetectThunderActivity func(context.Context) FixedRootActivityState
 	// DetectWindowsUpdateServices reports Windows Update service-stack state.
 	// nil selects the production platform detector.
-	DetectWindowsUpdateServices func(context.Context) WindowsUpdateServicesState
+	DetectWindowsUpdateServices func(context.Context) FixedRootActivityState
 }
 
 // discoveryContextFromOptions builds the resolve-time context from Options.
@@ -97,25 +97,13 @@ func discoveryContextFromFixedRootOptions(opts FixedRootDiscoveryOptions) discov
 		dc.envOverride["SystemRoot"] = sr
 	}
 	if opts.DetectLGHUBActivity != nil {
-		detect := opts.DetectLGHUBActivity
-		dc.activityDetector[CategoryLGHUBCache] = func(ctx context.Context) fixedRootActivityState {
-			s := detect(ctx)
-			return fixedRootActivityState{Status: fixedRootActivityStatus(s.Status), Message: s.Message}
-		}
+		dc.activityDetector[CategoryLGHUBCache] = opts.DetectLGHUBActivity
 	}
 	if opts.DetectThunderActivity != nil {
-		detect := opts.DetectThunderActivity
-		dc.activityDetector[CategoryThunderUpdateDownload] = func(ctx context.Context) fixedRootActivityState {
-			s := detect(ctx)
-			return fixedRootActivityState{Status: fixedRootActivityStatus(s.Status), Message: s.Message}
-		}
+		dc.activityDetector[CategoryThunderUpdateDownload] = opts.DetectThunderActivity
 	}
 	if opts.DetectWindowsUpdateServices != nil {
-		detect := opts.DetectWindowsUpdateServices
-		dc.activityDetector[CategoryWindowsUpdateDownloadCache] = func(ctx context.Context) fixedRootActivityState {
-			s := detect(ctx)
-			return fixedRootActivityState{Status: fixedRootActivityStatus(s.Status), Message: s.Message}
-		}
+		dc.activityDetector[CategoryWindowsUpdateDownloadCache] = opts.DetectWindowsUpdateServices
 	}
 	return dc
 }
@@ -151,7 +139,7 @@ func (dc discoveryContext) hasActivityDetector(category string) bool {
 	return ok && f != nil
 }
 
-func (dc discoveryContext) activityDetectorFor(category string) func(context.Context) fixedRootActivityState {
+func (dc discoveryContext) activityDetectorFor(category string) func(context.Context) FixedRootActivityState {
 	if dc.activityDetector == nil {
 		return nil
 	}

@@ -17,13 +17,13 @@ import (
 var wudcStableTime = time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 
 // wudcIdle is an injected read-only service detector that always reports idle.
-func wudcIdle(context.Context) clean.WindowsUpdateServicesState {
-	return clean.WindowsUpdateServicesState{Status: clean.WindowsUpdateServicesIdle}
+func wudcIdle(context.Context) clean.FixedRootActivityState {
+	return clean.FixedRootActivityState{Status: clean.FixedRootActivityIdle}
 }
 
 // wudcOpts assembles the shared DryRun options with the injected root override,
 // clock, and an idle service gate so discovery proceeds.
-func wudcOpts(root string, now time.Time, detect func(context.Context) clean.WindowsUpdateServicesState) clean.Options {
+func wudcOpts(root string, now time.Time, detect func(context.Context) clean.FixedRootActivityState) clean.Options {
 	return clean.Options{
 		OptIn: []string{clean.CategoryWindowsUpdateDownloadCache},
 		FixedRootDiscoveryOptions: clean.FixedRootDiscoveryOptions{
@@ -266,8 +266,8 @@ func TestWindowsUpdateDownloadCache_ServicesRunningSkipsWholeCategory(t *testing
 	}
 	chtimesTree(t, child, daysAgo(now, 40))
 
-	running := func(context.Context) clean.WindowsUpdateServicesState {
-		return clean.WindowsUpdateServicesState{Status: clean.WindowsUpdateServicesRunning, Message: "a Windows Update service is active"}
+	running := func(context.Context) clean.FixedRootActivityState {
+		return clean.FixedRootActivityState{Status: clean.FixedRootActivityRunning, Message: "a Windows Update service is active"}
 	}
 	result := clean.DryRun(context.Background(), wudcOpts(root, now, running))
 
@@ -294,8 +294,8 @@ func TestWindowsUpdateDownloadCache_ServicesUnknownSkipsWholeCategory(t *testing
 	}
 	chtimesTree(t, child, daysAgo(now, 40))
 
-	unknown := func(context.Context) clean.WindowsUpdateServicesState {
-		return clean.WindowsUpdateServicesState{Status: clean.WindowsUpdateServicesUnknown, Message: "service state could not be determined"}
+	unknown := func(context.Context) clean.FixedRootActivityState {
+		return clean.FixedRootActivityState{Status: clean.FixedRootActivityUnknown, Message: "service state could not be determined"}
 	}
 	result := clean.DryRun(context.Background(), wudcOpts(root, now, unknown))
 
@@ -324,12 +324,12 @@ func TestWindowsUpdateDownloadCache_ServicesWakeAfterMeasurementDiscards(t *test
 	chtimesTree(t, child, daysAgo(now, 40))
 
 	calls := 0
-	wakeAfter := func(context.Context) clean.WindowsUpdateServicesState {
+	wakeAfter := func(context.Context) clean.FixedRootActivityState {
 		calls++
 		if calls == 1 {
-			return clean.WindowsUpdateServicesState{Status: clean.WindowsUpdateServicesIdle}
+			return clean.FixedRootActivityState{Status: clean.FixedRootActivityIdle}
 		}
-		return clean.WindowsUpdateServicesState{Status: clean.WindowsUpdateServicesRunning, Message: "update stack woke mid-run"}
+		return clean.FixedRootActivityState{Status: clean.FixedRootActivityRunning, Message: "update stack woke mid-run"}
 	}
 	result := clean.DryRun(context.Background(), wudcOpts(root, now, wakeAfter))
 
