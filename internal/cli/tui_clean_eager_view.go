@@ -349,7 +349,8 @@ func eagerPermanentSelectionNotice(includesPermanent bool) string {
 	if !includesPermanent {
 		return ""
 	}
-	return "Selection includes permanent deletion."
+	// Shared with tui_style permanentSelectionNotice for risk-channel styling.
+	return permanentSelectionNotice
 }
 
 // eagerFooterRuleLine is the horizontal rule framing the preview selection /

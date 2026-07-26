@@ -1356,3 +1356,85 @@ func TestEagerUnavailableContentPure(t *testing.T) {
 		t.Fatalf("defaults = %q", defaults)
 	}
 }
+
+func TestStylizeFrameStateMarkersAndChrome(t *testing.T) {
+	// Minimal polish: marker hues + heading/rule chrome. Plain remains oracle;
+	// no success-green / pure-red on reliability markers (ADR 0023).
+	plain := strings.Join([]string{
+		"Foal Clean",
+		"Scanning 1/2 · Confirmation available after scan completes · 3s",
+		"  > [x] ✓ Done · 1 item(s) · 2 KB",
+		"    [ ] ! Partial · 1 item(s) · 2 KB · partial",
+		"    [ ] ⊘ Skip · skipped",
+		"    [ ] … Wait · waiting",
+		"    [ ] – Empty · empty",
+		"  ✓ Cleaned · cleaned · 2 KB",
+		"  ! Failed · failed",
+		strings.Repeat("=", 12),
+		permanentSelectionNotice,
+		"Hints: space toggle",
+	}, "\n")
+	if strings.Contains(plain, "\x1b[") {
+		t.Fatal("plain frame must stay free of escapes")
+	}
+
+	styled := stylizeFrame(plain)
+	if stripANSIForTest(styled) != plain {
+		t.Fatalf("styled plain projection mismatch:\n got %q\nwant %q", stripANSIForTest(styled), plain)
+	}
+	for _, want := range []string{"Foal Clean", "✓", "!", "⊘", "…", "–", permanentSelectionNotice, "Hints:"} {
+		if !strings.Contains(styled, want) {
+			t.Fatalf("styled frame missing plain fragment %q:\n%q", want, styled)
+		}
+	}
+	if !strings.Contains(styled, "\x1b[") {
+		t.Fatal("styled frame should include chrome/marker escapes when color enabled")
+	}
+	// Reliability markers must not use pure red or classic success-green.
+	for _, line := range strings.Split(styled, "\n") {
+		if strings.Contains(line, "failed") || strings.Contains(line, "Partial") ||
+			strings.Contains(line, "Done") || strings.Contains(line, "Cleaned") {
+			if strings.Contains(line, "[31m") || strings.Contains(line, "[91m") ||
+				strings.Contains(line, "[32m") || strings.Contains(line, "[92m") {
+				t.Fatalf("marker line used risk-red or success-green: %q", line)
+			}
+		}
+	}
+	// Permanent notice is risk-channel red/bold.
+	var noticeLine string
+	for _, line := range strings.Split(styled, "\n") {
+		if strings.Contains(line, permanentSelectionNotice) {
+			noticeLine = line
+			break
+		}
+	}
+	if noticeLine == "" || noticeLine == permanentSelectionNotice {
+		t.Fatalf("permanent notice should receive risk emphasis: %q", noticeLine)
+	}
+}
+
+func TestStylizeFrameStateMarkersRespectNoColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	plain := strings.Join([]string{
+		"Foal Clean",
+		"    [ ] ✓ Done · 1 item(s) · 2 KB",
+		"    [ ] ! Partial · partial",
+		"  ⊘ Skip · skipped",
+		strings.Repeat("=", 8),
+		permanentSelectionNotice,
+	}, "\n")
+	styled := stylizeFrame(plain)
+	if stripANSIForTest(styled) != plain && !strings.Contains(stripANSIForTest(styled), "Foal Clean") {
+		t.Fatalf("NO_COLOR path lost plain copy:\n%q", styled)
+	}
+	for _, hue := range []string{"208", "214", "240", "81", "14", "11", "8"} {
+		// Hue indexes may appear as plain text only if labels contain them; assert
+		// they do not appear as 256-color parameters for our chrome styles.
+		if strings.Contains(styled, "38;5;"+hue) || strings.Contains(styled, "38;5;"+hue+"m") {
+			t.Fatalf("NO_COLOR leaked hue %s:\n%q", hue, styled)
+		}
+	}
+	if strings.Contains(styled, "[31m") || strings.Contains(styled, "[91m") {
+		t.Fatalf("NO_COLOR leaked pure red CSI:\n%q", styled)
+	}
+}
