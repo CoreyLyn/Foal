@@ -1110,18 +1110,28 @@ func (m eagerCleanModel) content() string {
 }
 
 // contentStyleLines builds the same frame as content() with optional trusted
-// magnitude byte metadata on measured/affected lines.
+// magnitude byte metadata on measured/affected lines. Lines are reflowed to the
+// terminal width first, so capacity is counted in the rows the terminal will
+// actually draw rather than in composed lines.
 func (m eagerCleanModel) contentStyleLines() []tuiStyleLine {
-	if m.terminalTooSmall() {
+	// Fixed floors first, then the dynamic check against reflowed chrome.
+	// Header and footer are reflowed once and reused for both decisions.
+	if m.width > 0 && m.width < eagerMinTerminalWidth {
+		return styleLinesFromPlain(m.tooSmallContent())
+	}
+	if m.height > 0 && m.height < eagerMinTerminalHeight {
+		return styleLinesFromPlain(m.tooSmallContent())
+	}
+	header := m.reflowedHeaderStyleLines()
+	footer := m.reflowedFooterStyleLines()
+	if m.height > 0 && m.height < len(header)+len(footer)+1 {
 		return styleLinesFromPlain(m.tooSmallContent())
 	}
 	if m.unavailable != nil {
 		return styleLinesFromPlain(m.unavailableContent())
 	}
 
-	header := m.fixedHeaderStyleLines()
-	footer := m.fixedFooterStyleLines()
-	body := m.scrollableBodyStyleLines()
+	body := m.reflowedBodyStyleLines()
 	// height <= 0 means unconstrained (deterministic model tests without a
 	// WindowSize). Otherwise body fills remaining rows under fixed chrome.
 	capacity := len(body)
@@ -1144,12 +1154,14 @@ func (m eagerCleanModel) contentStyleLines() []tuiStyleLine {
 	}
 	parts = append(parts, footer...)
 	// Trailing empty line preserves the historical final newline from content().
-	parts = append(parts, plainStyleLine(""))
+	parts = append(parts, styledLine("", lineKindBlank))
 	return parts
 }
 
 // terminalTooSmall reports whether the terminal cannot host the minimum safe
-// fixed chrome plus one body line without truncating actionable layout.
+// fixed chrome plus one body line without truncating actionable layout. Chrome
+// is measured after reflow, so wrapped disclosure copy counts as the multiple
+// rows it really occupies.
 func (m eagerCleanModel) terminalTooSmall() bool {
 	if m.width > 0 && m.width < eagerMinTerminalWidth {
 		return true
@@ -1163,8 +1175,8 @@ func (m eagerCleanModel) terminalTooSmall() bool {
 		return true
 	}
 	// Dynamic chrome may still exceed the floor on multi-line diagnostics.
-	headerN := len(m.fixedHeaderLines())
-	footerN := len(m.fixedFooterLines())
+	headerN := len(m.reflowedHeaderStyleLines())
+	footerN := len(m.reflowedFooterStyleLines())
 	return m.height < headerN+footerN+1
 }
 
@@ -1202,32 +1214,32 @@ func (m eagerCleanModel) fixedHeaderLines() []string {
 
 func (m eagerCleanModel) fixedHeaderStyleLines() []tuiStyleLine {
 	if m.unavailable != nil {
-		return []tuiStyleLine{plainStyleLine("Clean unavailable")}
+		return []tuiStyleLine{styledLine("Clean unavailable", lineKindPageTitle)}
 	}
 	switch m.phase {
 	case eagerPhaseConfirmation:
 		return []tuiStyleLine{
-			plainStyleLine("Foal Clean"),
-			plainStyleLine("Confirm cleanup"),
-			plainStyleLine(""),
+			styledLine("Foal Clean", lineKindPageTitle),
+			styledLine("Confirm cleanup", lineKindPageTitle),
+			styledLine("", lineKindBlank),
 		}
 	case eagerPhaseExecuting:
 		return []tuiStyleLine{
-			plainStyleLine("Foal Clean"),
-			plainStyleLine(m.executionHeaderLine()),
-			plainStyleLine(""),
+			styledLine("Foal Clean", lineKindPageTitle),
+			styledLine(m.executionHeaderLine(), lineKindProgressHeader),
+			styledLine("", lineKindBlank),
 		}
 	case eagerPhaseResult:
 		return []tuiStyleLine{
-			plainStyleLine("Foal Clean"),
-			plainStyleLine("Cleanup result"),
-			plainStyleLine(""),
+			styledLine("Foal Clean", lineKindPageTitle),
+			styledLine("Cleanup result", lineKindPageTitle),
+			styledLine("", lineKindBlank),
 		}
 	default:
 		return []tuiStyleLine{
-			plainStyleLine("Foal Clean"),
-			plainStyleLine(m.headerLine()),
-			plainStyleLine(""),
+			styledLine("Foal Clean", lineKindPageTitle),
+			styledLine(m.headerLine(), lineKindProgressHeader),
+			styledLine("", lineKindBlank),
 		}
 	}
 }
@@ -1248,52 +1260,56 @@ func (m eagerCleanModel) fixedFooterStyleLines() []tuiStyleLine {
 			message = m.unavailable.Message
 		}
 		return []tuiStyleLine{
-			plainStyleLine(fmt.Sprintf("Code: %s", code)),
-			plainStyleLine(message),
-			plainStyleLine(""),
-			plainStyleLine("Hints: Enter/Esc/b menu · q quit"),
+			styledLine(fmt.Sprintf("Code: %s", code), lineKindProse),
+			styledLine(message, lineKindProse),
+			styledLine("", lineKindBlank),
+			styledLine("Hints: Enter/Esc/b menu · q quit", lineKindHint),
 		}
 	}
 	switch m.phase {
 	case eagerPhaseConfirmation:
 		return m.confirmationFooterStyleLines()
 	case eagerPhaseExecuting:
-		lines := []tuiStyleLine{plainStyleLine("")}
+		lines := []tuiStyleLine{styledLine("", lineKindBlank)}
 		if m.cancellationRequested {
-			lines = append(lines, plainStyleLine(cancellationRequestedMessage))
+			lines = append(lines, styledLine(cancellationRequestedMessage, lineKindProse))
 		}
-		lines = append(lines, plainStyleLine(m.executionFooterLine()))
+		// Mid-flight totals are provisional: the byte token stays unemphasised
+		// so magnitude keeps meaning "settled measurement".
+		lines = append(lines, styledLine(m.executionFooterLine(), lineKindProgressTotal))
 		if m.cancellationRequested {
-			lines = append(lines, plainStyleLine("Waiting for final Result. Escape, b, and q are inactive."))
+			lines = append(lines, styledLine("Waiting for final Result. Escape, b, and q are inactive.", lineKindProse))
 		} else {
-			lines = append(lines, plainStyleLine("Hints: Ctrl+C cancel · Escape/b/q inactive during execution"))
+			lines = append(lines, styledLine("Hints: Ctrl+C cancel · Escape/b/q inactive during execution", lineKindHint))
 		}
 		return lines
 	case eagerPhaseResult:
 		return m.resultFooterStyleLines()
 	default:
 		n, measured, pending := m.selectionTotals()
-		rule := plainStyleLine(eagerFooterRuleLine(m.width))
+		rule := styledLine(eagerFooterRuleLine(m.width), lineKindRule)
 		// Preview info block: selection summary, permanent notice, focused
 		// detail — framed by '=' rules. Hints stay outside below the box.
 		lines := []tuiStyleLine{
-			plainStyleLine(""),
+			styledLine("", lineKindBlank),
 			rule,
 			// Selected totals: tier from trusted measured bytes.
-			magnitudeStyleLine(eagerSelectionSummaryLine(n, measured, pending), measured),
+			styledMagnitudeLine(eagerSelectionSummaryLine(n, measured, pending), measured, lineKindMeasuredTotal),
 		}
 		// Permanent-selection notice is risk chrome only; disappears when the
 		// exact selection has no permanent category. Does not authorize cleanup.
 		if notice := eagerPermanentSelectionNotice(m.selectionIncludesPermanent()); notice != "" {
-			lines = append(lines, plainStyleLine(notice))
+			lines = append(lines, styledLine(notice, lineKindPermanentNotice))
 		}
+		// Focused diagnostics are prose throughout: their byte tokens are
+		// contextual detail, not a measured total, and take no magnitude hue.
 		for _, line := range strings.Split(m.focusedDetailPanel(), "\n") {
-			lines = append(lines, plainStyleLine(line))
+			lines = append(lines, styledLine(line, lineKindProse))
 		}
 		lines = append(lines, rule)
-		for _, line := range strings.Split(m.footerHints(), "\n") {
-			lines = append(lines, plainStyleLine(line))
-		}
+		lines = append(lines, eagerFooterHintLines(
+			m.allCategoriesTerminal(), m.noWorkState(), m.confirmationEnabled(), m.focusedServicingAnalyzable(),
+		)...)
 		return lines
 	}
 }
@@ -1305,16 +1321,42 @@ func (m eagerCleanModel) scrollableBodyLines() []string {
 }
 
 func (m eagerCleanModel) scrollableBodyStyleLines() []tuiStyleLine {
-	entries := m.scrollableBodyEntries()
+	return bodyEntriesToStyleLines(m.scrollableBodyEntries())
+}
+
+// bodyEntriesToStyleLines projects body entries onto style lines, carrying the
+// declared role and any trusted magnitude bytes across.
+func bodyEntriesToStyleLines(entries []eagerBodyLine) []tuiStyleLine {
 	out := make([]tuiStyleLine, len(entries))
 	for i, line := range entries {
 		if line.hasMagnitudeBytes {
-			out[i] = magnitudeStyleLine(line.text, line.magnitudeBytes)
+			out[i] = styledMagnitudeLine(line.text, line.magnitudeBytes, line.kind)
 		} else {
-			out[i] = plainStyleLine(line.text)
+			out[i] = styledLine(line.text, line.kind)
 		}
 	}
 	return out
+}
+
+// Reflowed accessors return the lines the terminal actually displays at the
+// current width. Every viewport calculation must count these, not the composed
+// lines: a composed line wider than the terminal occupies more than one display
+// row, and counting it as one is what pushes content off screen.
+
+func (m eagerCleanModel) reflowedHeaderStyleLines() []tuiStyleLine {
+	return reflowStyleLines(m.fixedHeaderStyleLines(), m.width)
+}
+
+func (m eagerCleanModel) reflowedFooterStyleLines() []tuiStyleLine {
+	return reflowStyleLines(m.fixedFooterStyleLines(), m.width)
+}
+
+func (m eagerCleanModel) reflowedBodyEntries() []eagerBodyLine {
+	return reflowBodyEntries(m.scrollableBodyEntries(), m.width)
+}
+
+func (m eagerCleanModel) reflowedBodyStyleLines() []tuiStyleLine {
+	return bodyEntriesToStyleLines(m.reflowedBodyEntries())
 }
 
 // styleLinesText projects annotated style lines back to plain strings.
@@ -1328,8 +1370,9 @@ func styleLinesText(lines []tuiStyleLine) []string {
 
 type eagerBodyLine struct {
 	text              string
-	rowIndex          int // preview row index; -1 when not a category row
-	outcomeIndex      int // execution/result outcome index; -1 when not an outcome row
+	kind              tuiLineKind // declared styling role; see tuiLineKind
+	rowIndex          int         // preview row index; -1 when not a category row
+	outcomeIndex      int         // execution/result outcome index; -1 when not an outcome row
 	magnitudeBytes    int64
 	hasMagnitudeBytes bool // trusted int64 for the line's cleanFormatBytes token
 }
@@ -1347,6 +1390,7 @@ func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
 			servicingRow := clean.IsServicingCategory(outcome.Identifier)
 			line := eagerBodyLine{
 				text:         fmt.Sprintf("  %s %s", m.executionRowMarker(outcome.State), m.executionRowLabelFor(outcome, servicingRow)),
+				kind:         lineKindOutcomeRow,
 				rowIndex:     -1,
 				outcomeIndex: i,
 			}
@@ -1373,6 +1417,7 @@ func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
 				currentGroup = row.ReportCategory
 				lines = append(lines, eagerBodyLine{
 					text:         fmt.Sprintf("  %s", currentGroup),
+					kind:         lineKindGroupHeading,
 					rowIndex:     -1,
 					outcomeIndex: -1,
 				})
@@ -1388,6 +1433,7 @@ func (m eagerCleanModel) scrollableBodyEntries() []eagerBodyLine {
 			}
 			line := eagerBodyLine{
 				text:         fmt.Sprintf("  %s %s %s %s", cursor, m.checkbox(row), m.rowMarker(row), label),
+				kind:         lineKindCategoryRow,
 				rowIndex:     i,
 				outcomeIndex: -1,
 			}
@@ -1407,11 +1453,11 @@ func (m eagerCleanModel) bodyCapacity() int {
 	if m.terminalTooSmall() || m.height <= 0 {
 		if m.height <= 0 {
 			// Unconstrained: treat capacity as large enough for full body.
-			return len(m.scrollableBodyLines()) + 1
+			return len(m.reflowedBodyEntries()) + 1
 		}
 		return 0
 	}
-	cap := m.height - len(m.fixedHeaderLines()) - len(m.fixedFooterLines())
+	cap := m.height - len(m.reflowedHeaderStyleLines()) - len(m.reflowedFooterStyleLines())
 	if cap < 0 {
 		return 0
 	}
@@ -1438,7 +1484,7 @@ func (m eagerCleanModel) clampedViewportOffset(bodyLen, capacity int) int {
 
 func (m *eagerCleanModel) clampViewportOffset() {
 	cap := m.bodyCapacity()
-	bodyLen := len(m.scrollableBodyLines())
+	bodyLen := len(m.reflowedBodyEntries())
 	m.viewportOffset = m.clampedViewportOffset(bodyLen, cap)
 }
 
@@ -1459,8 +1505,10 @@ func (m *eagerCleanModel) ensurePreviewCursorVisible() {
 	m.ensureBodyLineVisible(line)
 }
 
+// previewBodyLineForRow returns the first display line the preview row occupies
+// after reflow, which is the line cursor-follow must keep visible.
 func (m eagerCleanModel) previewBodyLineForRow(rowIndex int) int {
-	for i, line := range m.scrollableBodyEntries() {
+	for i, line := range m.reflowedBodyEntries() {
 		if line.rowIndex == rowIndex {
 			return i
 		}
@@ -1510,8 +1558,10 @@ func (m eagerCleanModel) executionActiveIndex() int {
 	return -1
 }
 
+// executionOutcomeBodyLine returns the first display line the outcome occupies
+// after reflow.
 func (m eagerCleanModel) executionOutcomeBodyLine(outcomeIndex int) int {
-	for i, line := range m.scrollableBodyEntries() {
+	for i, line := range m.reflowedBodyEntries() {
 		if line.outcomeIndex == outcomeIndex {
 			return i
 		}
@@ -1536,7 +1586,7 @@ func (m eagerCleanModel) executionOutcomeCompletelyOutside(outcomeIndex int) boo
 	if cap <= 0 {
 		return true
 	}
-	offset := m.clampedViewportOffset(len(m.scrollableBodyLines()), cap)
+	offset := m.clampedViewportOffset(len(m.reflowedBodyEntries()), cap)
 	return line < offset || line >= offset+cap
 }
 
@@ -1641,15 +1691,16 @@ func (m eagerCleanModel) confirmationFooterStyleLines() []tuiStyleLine {
 	includesPermanent := m.selectionIncludesPermanent()
 	_, recycle, servicing := m.confirmationActionGroups()
 	lines := []tuiStyleLine{
-		plainStyleLine(""),
-		magnitudeStyleLine(fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured)), measured),
+		styledLine("", lineKindBlank),
+		styledMagnitudeLine(
+			fmt.Sprintf("Selected: %d categories · %s", n, cleanFormatBytes(measured)), measured, lineKindMeasuredTotal),
 	}
 	// Risk / recoverability first so irreversible disclosure stays visible.
 	if includesPermanent {
-		lines = append(lines, plainStyleLine(confirmationPermanentIrreversibleWarning))
+		lines = append(lines, styledLine(confirmationPermanentIrreversibleWarning, lineKindRisk))
 	}
 	if len(recycle) > 0 {
-		lines = append(lines, plainStyleLine(confirmationRecycleRecoverabilityNote))
+		lines = append(lines, styledLine(confirmationRecycleRecoverabilityNote, lineKindProse))
 	}
 	// Windows servicing disclosure (ADR 0029): administrator consent after
 	// ordinary cleanup, /NoRestart, non-interruptible after mutation begins, and
@@ -1657,15 +1708,15 @@ func (m eagerCleanModel) confirmationFooterStyleLines() []tuiStyleLine {
 	// grants. Only shown when the selection discloses a servicing category.
 	if len(servicing) > 0 {
 		for _, line := range confirmationServicingDisclosureLines() {
-			lines = append(lines, plainStyleLine(line))
+			lines = append(lines, styledLine(line, lineKindProse))
 		}
 	}
 	// Fresh-rescan expectation + action-type safety, then execute hint.
 	lines = append(lines,
-		plainStyleLine(confirmationActionTypeCaveat),
-		plainStyleLine(confirmationNextStepLine),
-		plainStyleLine(""),
-		plainStyleLine(confirmationExecuteHintLine(includesPermanent)),
+		styledLine(confirmationActionTypeCaveat, lineKindProse),
+		styledLine(confirmationNextStepLine, lineKindProse),
+		styledLine("", lineKindBlank),
+		styledLine(confirmationExecuteHintLine(includesPermanent), lineKindProse),
 	)
 	return lines
 }
@@ -1683,31 +1734,37 @@ func (m eagerCleanModel) resultFooterStyleLines() []tuiStyleLine {
 	terminal := clean.CountTerminalExecutionOutcomes(m.executionOutcomes)
 	total := len(m.executionOutcomes)
 	lines := []tuiStyleLine{
-		plainStyleLine(""),
-		plainStyleLine(fmt.Sprintf("Processed: %d/%d", terminal, total)),
-		magnitudeStyleLine(fmt.Sprintf("Recycle Bin moved: %s", cleanFormatBytes(recycle)), recycle),
-		magnitudeStyleLine(fmt.Sprintf("Permanently deleted: %s", cleanFormatBytes(permanent)), permanent),
+		styledLine("", lineKindBlank),
+		styledLine(fmt.Sprintf("Processed: %d/%d", terminal, total), lineKindProgressTotal),
+		styledMagnitudeLine(fmt.Sprintf("Recycle Bin moved: %s", cleanFormatBytes(recycle)), recycle, lineKindMeasuredTotal),
+		styledMagnitudeLine(fmt.Sprintf("Permanently deleted: %s", cleanFormatBytes(permanent)), permanent, lineKindMeasuredTotal),
 		// Aggregate is processed content, never "freed" or "reclaimed" disk space.
-		magnitudeStyleLine(fmt.Sprintf("Affected (processed): %s", cleanFormatBytes(affected)), affected),
+		styledMagnitudeLine(fmt.Sprintf("Affected (processed): %s", cleanFormatBytes(affected)), affected, lineKindMeasuredTotal),
 	}
 	if clean.ResultHasPermanentPartialRisk(m.executionResult) {
-		lines = append(lines, plainStyleLine(clean.PermanentPartialRiskWarning))
+		lines = append(lines, styledLine(clean.PermanentPartialRiskWarning, lineKindProse))
+	}
+	// Run-level failures carry no category Rule, so they appear on no outcome
+	// row. Surface them here (code-mapped, path-free) or a rejected plan would
+	// render as an unexplained all-zero result.
+	for _, note := range eagerResultErrorNotes(m.executionResult) {
+		lines = append(lines, styledLine(note, lineKindProse))
 	}
 	// Windows servicing disclosures (restart required, post-start cancellation)
 	// are preserved from the authoritative Result without inventing bytes.
 	for _, note := range eagerResultServicingNotes(m.executionResult) {
-		lines = append(lines, plainStyleLine(note))
+		lines = append(lines, styledLine(note, lineKindProse))
 	}
 	// Post-mutation free-space observation: an approximate external reading shown
 	// below Affected, de-emphasized (plain, ≈ prefix) so it never reads as a
 	// precise deletion total. A measured-zero or absent observation shows nothing.
 	if observed, present := clean.ServicingObservedFreeBytes(m.executionResult.ServicingOperations); present {
 		lines = append(lines,
-			plainStyleLine(fmt.Sprintf("Windows component store: observed free-space increase ≈ %s (approximate; not in Affected)", cleanFormatBytes(observed))),
-			plainStyleLine(fmt.Sprintf("Mixed cleanup impact ≈ %s (approximate: Affected plus observed servicing free-space)", cleanFormatBytes(affected+observed))),
+			styledLine(fmt.Sprintf("Windows component store: observed free-space increase ≈ %s (approximate; not in Affected)", cleanFormatBytes(observed)), lineKindProse),
+			styledLine(fmt.Sprintf("Mixed cleanup impact ≈ %s (approximate: Affected plus observed servicing free-space)", cleanFormatBytes(affected+observed)), lineKindProse),
 		)
 	}
-	lines = append(lines, plainStyleLine(""), plainStyleLine("Enter/Esc/b: menu · q: quit"))
+	lines = append(lines, styledLine("", lineKindBlank), styledLine("Enter/Esc/b: menu · q: quit", lineKindProse))
 	return lines
 }
 
@@ -1844,10 +1901,15 @@ func (m eagerCleanModel) focusedDetailBody(row eagerCategoryRow) string {
 	return eagerFocusedDetailBody(row)
 }
 
+// focusedServicingAnalyzable reports whether the focused row is a Windows
+// servicing row in a state that accepts the explicit analysis action.
+func (m eagerCleanModel) focusedServicingAnalyzable() bool {
+	row, ok := m.focusedRow()
+	return ok && row.Servicing && clean.ServicingRowAnalyzable(row.ServicingState)
+}
+
 func (m eagerCleanModel) footerHints() string {
-	analyzable := false
-	if row, ok := m.focusedRow(); ok && row.Servicing && clean.ServicingRowAnalyzable(row.ServicingState) {
-		analyzable = true
-	}
-	return eagerFooterHints(m.allCategoriesTerminal(), m.noWorkState(), m.confirmationEnabled(), analyzable)
+	return eagerFooterHints(
+		m.allCategoriesTerminal(), m.noWorkState(), m.confirmationEnabled(), m.focusedServicingAnalyzable(),
+	)
 }

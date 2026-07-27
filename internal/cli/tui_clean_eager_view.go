@@ -225,6 +225,7 @@ func confirmationBodyEntriesFromGroups(permanent, recycle, servicing []eagerCate
 		text, bytes := confirmationGroupSummaryLine(title, rows)
 		lines = append(lines, eagerBodyLine{
 			text:              text,
+			kind:              lineKindConfirmSummary,
 			rowIndex:          -1,
 			outcomeIndex:      -1,
 			magnitudeBytes:    bytes,
@@ -235,27 +236,34 @@ func confirmationBodyEntriesFromGroups(permanent, recycle, servicing []eagerCate
 	appendSummary("Recycle Bin", recycle)
 	if len(servicing) > 0 {
 		// Servicing summary is byte-free: it discloses a package count only.
+		// It is an action-group total like the two above, not a section
+		// heading — the sniffing path rendered it as one because it shares the
+		// "Windows servicing" prefix.
 		lines = append(lines, eagerBodyLine{
 			text:         confirmationServicingSummaryLine(servicing),
+			kind:         lineKindConfirmSummary,
 			rowIndex:     -1,
 			outcomeIndex: -1,
 		})
 	}
 
 	if len(permanent) > 0 || len(recycle) > 0 || len(servicing) > 0 {
-		lines = append(lines, eagerBodyLine{text: "", rowIndex: -1, outcomeIndex: -1})
+		lines = append(lines, eagerBodyLine{text: "", kind: lineKindBlank, rowIndex: -1, outcomeIndex: -1})
 	}
 
 	appendDetails := func(title string, rows []eagerCategoryRow) {
 		if len(rows) == 0 {
 			return
 		}
-		lines = append(lines, eagerBodyLine{text: title, rowIndex: -1, outcomeIndex: -1})
+		lines = append(lines, eagerBodyLine{
+			text: title, kind: lineKindSectionHeading, rowIndex: -1, outcomeIndex: -1,
+		})
 		for _, row := range rows {
 			action := clean.PlannedActionLabel(row.PlannedAction)
 			lines = append(lines, eagerBodyLine{
 				text: fmt.Sprintf("  - %s · %d item(s) · %s · %s",
 					row.Label, row.CandidateCount, cleanFormatBytes(row.Bytes), action),
+				kind:              lineKindConfirmDetail,
 				rowIndex:          -1,
 				outcomeIndex:      -1,
 				magnitudeBytes:    row.Bytes,
@@ -264,6 +272,7 @@ func confirmationBodyEntriesFromGroups(permanent, recycle, servicing []eagerCate
 			if row.SafetyNote != "" {
 				lines = append(lines, eagerBodyLine{
 					text:         "      Impact: " + row.SafetyNote,
+					kind:         lineKindConfirmImpact,
 					rowIndex:     -1,
 					outcomeIndex: -1,
 				})
@@ -283,16 +292,20 @@ func appendServicingDetails(lines *[]eagerBodyLine, servicing []eagerCategoryRow
 	if len(servicing) == 0 {
 		return
 	}
-	*lines = append(*lines, eagerBodyLine{text: "Windows servicing", rowIndex: -1, outcomeIndex: -1})
+	*lines = append(*lines, eagerBodyLine{
+		text: "Windows servicing", kind: lineKindSectionHeading, rowIndex: -1, outcomeIndex: -1,
+	})
 	for _, row := range servicing {
 		*lines = append(*lines, eagerBodyLine{
 			text: fmt.Sprintf("  - %s · %d reclaimable package(s) · size unknown · %s",
 				row.Label, row.ServicingReclaimablePackages, clean.PlannedActionLabel(row.PlannedAction)),
+			kind:         lineKindConfirmDetail,
 			rowIndex:     -1,
 			outcomeIndex: -1,
 		})
 		*lines = append(*lines, eagerBodyLine{
 			text:         "      Impact: administrator consent (UAC) required; cannot be canceled once started.",
+			kind:         lineKindConfirmImpact,
 			rowIndex:     -1,
 			outcomeIndex: -1,
 		})
@@ -619,6 +632,8 @@ func eagerExecutionRowMarker(state clean.CategoryExecutionState, spinnerFrame in
 }
 
 // eagerExecutionRowLabel formats one execution/result outcome without paths.
+// Non-successful terminal outcomes disclose their stable reason code as
+// path-free text so a failure is diagnosable from the result list itself.
 func eagerExecutionRowLabel(outcome clean.CategoryExecutionOutcome) string {
 	switch outcome.State {
 	case clean.CategoryExecutionWaiting:
@@ -634,16 +649,54 @@ func eagerExecutionRowLabel(outcome clean.CategoryExecutionOutcome) string {
 	case clean.CategoryExecutionCleaned:
 		return fmt.Sprintf("%s · cleaned · %s", outcome.Label, cleanFormatBytes(outcome.AffectedBytes))
 	case clean.CategoryExecutionPartial:
-		return fmt.Sprintf("%s · partial · %s", outcome.Label, cleanFormatBytes(outcome.AffectedBytes))
+		return appendExecutionReason(
+			fmt.Sprintf("%s · partial · %s", outcome.Label, cleanFormatBytes(outcome.AffectedBytes)), outcome)
 	case clean.CategoryExecutionSkipped:
-		return outcome.Label + " · skipped"
+		return appendExecutionReason(outcome.Label+" · skipped", outcome)
 	case clean.CategoryExecutionFailed:
-		return outcome.Label + " · failed"
+		return appendExecutionReason(outcome.Label+" · failed", outcome)
 	case clean.CategoryExecutionCanceled:
 		return outcome.Label + " · canceled"
 	default:
 		return outcome.Label
 	}
+}
+
+// appendExecutionReason appends the path-free explanation for an outcome's
+// stable reason code. Only the code is consulted; the originating issue's
+// Message and Path are never read, so raw OS text cannot reach the surface.
+func appendExecutionReason(line string, outcome clean.CategoryExecutionOutcome) string {
+	if outcome.ReasonCode == "" {
+		return line
+	}
+	return line + " · " + pathFreeReasonExplanation(outcome.ReasonCode)
+}
+
+// eagerResultErrorNotes returns path-free notes for run-level issues in the
+// authoritative Result — those with no category Rule, which therefore appear on
+// no category row. Without these the result page can render an all-zero summary
+// with no explanation at all (for example a rejected exact category plan).
+// Only StructuredIssue.Code is read; Message and Path are never forwarded.
+// Order follows the Result; duplicate codes collapse to one note.
+func eagerResultErrorNotes(result clean.Result) []string {
+	var notes []string
+	seen := make(map[string]struct{})
+	for _, issue := range result.Errors {
+		if issue.Rule != "" {
+			// Category-scoped issues already surface on that category's row.
+			continue
+		}
+		code := strings.TrimSpace(issue.Code)
+		if code == "" {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		notes = append(notes, "Cleanup could not start · "+pathFreeReasonExplanation(code))
+	}
+	return notes
 }
 
 // eagerCheckbox formats the selection checkbox glyph.
@@ -715,7 +768,7 @@ func eagerFocusedDetailBody(row eagerCategoryRow) string {
 // text. Never forwards raw OS text that may embed paths.
 func pathFreeReasonExplanation(code string) string {
 	switch code {
-	case clean.PreviewReasonProtected:
+	case clean.PreviewReasonProtected, "protected_path":
 		return "protected by Protection rules"
 	case clean.PreviewReasonApplicationRunning, clean.PreviewReasonDevToolRunning:
 		return "application is running"
@@ -745,6 +798,27 @@ func pathFreeReasonExplanation(code string) string {
 		return "some locked files skipped; rest deleted"
 	case "permanent_delete_failed":
 		return "permanent deletion failed"
+	// Execution-side operational codes. These reach the surface only through
+	// CategoryExecutionOutcome.ReasonCode / run-level Result.Errors, and only
+	// ever as codes — the matching issue Message and Path are never forwarded.
+	case "delete_failed":
+		return "deletion failed"
+	case "permission_denied":
+		return "permission denied"
+	case "file_in_use":
+		return "file in use by another process"
+	case "unsupported_target":
+		return "unsupported target"
+	case "invalid_category_plan":
+		return "category plan is invalid"
+	case "identity_mismatch":
+		return "category identity check failed"
+	case "permanent_deletion_not_authorized":
+		return "permanent deletion was not authorized"
+	case clean.PreviewReasonProtectionConfigFailed:
+		return "Protection rules could not be loaded"
+	case clean.PreviewReasonProtectionInvalidUTF8:
+		return "Protection rules file is not valid UTF-8"
 	default:
 		if code == "" {
 			return "see category state"
@@ -844,6 +918,24 @@ func eagerFooterHints(allTerminal bool, noWork clean.EagerPreviewNoWorkState, co
 		}
 		return base
 	}
+}
+
+// eagerFooterHintLines is eagerFooterHints split into declared roles: an
+// optional no-work notice reads as prose, the key hint line as a hint. The
+// composer owns this split because it owns the string eagerFooterHints builds;
+// the styling layer no longer has to recognise a hint by its prefix.
+func eagerFooterHintLines(allTerminal bool, noWork clean.EagerPreviewNoWorkState, confirmationEnabled, focusedServicingAnalyzable bool) []tuiStyleLine {
+	text := eagerFooterHints(allTerminal, noWork, confirmationEnabled, focusedServicingAnalyzable)
+	parts := strings.Split(text, "\n")
+	out := make([]tuiStyleLine, 0, len(parts))
+	for _, line := range parts {
+		kind := lineKindProse
+		if strings.HasPrefix(line, "Hints:") {
+			kind = lineKindHint
+		}
+		out = append(out, styledLine(line, kind))
+	}
+	return out
 }
 
 // eagerUnavailableContent formats a path-free global unavailable surface.

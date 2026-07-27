@@ -286,6 +286,93 @@ func TestEagerExecutionMarkersAndLabelsPure(t *testing.T) {
 	}
 }
 
+// TestEagerExecutionRowLabelDisclosesReasonCode pins that a non-successful
+// outcome explains itself. Before this, every failure rendered as a bare
+// "· failed" with no way to tell what went wrong.
+func TestEagerExecutionRowLabelDisclosesReasonCode(t *testing.T) {
+	cases := []struct {
+		name    string
+		outcome clean.CategoryExecutionOutcome
+		want    string
+	}{
+		{
+			name: "failed with operational code",
+			outcome: clean.CategoryExecutionOutcome{
+				Label: "Go build cache", State: clean.CategoryExecutionFailed, ReasonCode: "permission_denied",
+			},
+			want: "Go build cache · failed · permission denied",
+		},
+		{
+			name: "skipped with safety code",
+			outcome: clean.CategoryExecutionOutcome{
+				Label: "Crash dumps", State: clean.CategoryExecutionSkipped, ReasonCode: "protected_path",
+			},
+			want: "Crash dumps · skipped · protected by Protection rules",
+		},
+		{
+			name: "partial keeps bytes then reason",
+			outcome: clean.CategoryExecutionOutcome{
+				Label: "Cache", State: clean.CategoryExecutionPartial, AffectedBytes: 4096, ReasonCode: "delete_failed",
+			},
+			want: "Cache · partial · 4 KB · deletion failed",
+		},
+		{
+			name: "no code keeps the bare lifecycle wording",
+			outcome: clean.CategoryExecutionOutcome{
+				Label: "Cache", State: clean.CategoryExecutionFailed,
+			},
+			want: "Cache · failed",
+		},
+		{
+			name: "success never gains a reason",
+			outcome: clean.CategoryExecutionOutcome{
+				Label: "Cache", State: clean.CategoryExecutionCleaned, AffectedBytes: 4096, ReasonCode: "protected_path",
+			},
+			want: "Cache · cleaned · 4 KB",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := eagerExecutionRowLabel(tc.outcome); got != tc.want {
+				t.Fatalf("label = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEagerResultErrorNotesRunLevelOnly pins that run-level issues surface,
+// category-scoped ones do not (they already appear on their own row), and that
+// the issue Message and Path are never forwarded.
+func TestEagerResultErrorNotesRunLevelOnly(t *testing.T) {
+	result := clean.Result{
+		Status: "error",
+		Errors: []clean.StructuredIssue{
+			{Code: "invalid_category_plan", Message: `unknown category under C:\Users\me\AppData`},
+			// Category-scoped: belongs on that category's row, not the footer.
+			{Code: "delete_failed", Message: "boom", Rule: "go_build_cache"},
+			// Duplicate run-level code collapses to a single note.
+			{Code: "invalid_category_plan", Message: "again"},
+			{Code: "", Message: "codeless issues are not renderable"},
+		},
+	}
+	notes := eagerResultErrorNotes(result)
+	if len(notes) != 1 {
+		t.Fatalf("notes = %#v, want exactly one run-level note", notes)
+	}
+	if notes[0] != "Cleanup could not start · category plan is invalid" {
+		t.Fatalf("note = %q", notes[0])
+	}
+	blob := strings.Join(notes, "\n")
+	for _, forbidden := range []string{`C:\`, "AppData", "unknown category", "boom", "again", "codeless"} {
+		if strings.Contains(blob, forbidden) {
+			t.Fatalf("raw issue text %q leaked into notes: %q", forbidden, blob)
+		}
+	}
+	if got := eagerResultErrorNotes(clean.Result{}); len(got) != 0 {
+		t.Fatalf("clean result must produce no notes: %#v", got)
+	}
+}
+
 func TestEagerResultTotalsPure(t *testing.T) {
 	result := clean.Result{
 		Totals: clean.Totals{
@@ -1410,6 +1497,256 @@ func TestStylizeFrameStateMarkersAndChrome(t *testing.T) {
 	}
 	if noticeLine == "" || noticeLine == permanentSelectionNotice {
 		t.Fatalf("permanent notice should receive risk emphasis: %q", noticeLine)
+	}
+}
+
+// declaredKindSample is one real Clean frame line paired with the role its
+// composer would declare for it.
+type declaredKindSample struct {
+	name string
+	line tuiStyleLine
+}
+
+// sniffingMisstyleReason explains why the text-sniffing path styles a line
+// incorrectly. Declared roles deliberately differ on these lines: sniffing
+// recognises a line by what its text looks like, so prose that happens to start
+// with a section-heading prefix, or an execution header whose spinner frame
+// happens to be "|", gets styled as something it is not. These are the only
+// lines where declared and sniffed rendering may diverge; everywhere else the
+// migration must be byte-identical.
+func sniffingMisstyleReason(text string) string {
+	if strings.HasPrefix(text, "| ") {
+		return "execution header starting with the '|' spinner frame matches the box-border rule, " +
+			"so the header flickers between border grey and progress cyan as the spinner advances"
+	}
+	if text == confirmationRecycleRecoverabilityNote {
+		return "recoverability prose matches the 'Recycle Bin' section-heading prefix"
+	}
+	for _, disclosure := range confirmationServicingDisclosureLines() {
+		if text == disclosure && strings.HasPrefix(text, "Windows servicing") {
+			return "servicing disclosure prose matches the 'Windows servicing' section-heading prefix"
+		}
+	}
+	if strings.HasPrefix(text, "Windows servicing · ") {
+		return "servicing action-group total matches the 'Windows servicing' section-heading prefix, " +
+			"so a total renders like the section headings below it"
+	}
+	return ""
+}
+
+// declaredKindSamples covers every Clean line shape across every phase. Each
+// entry's Kind is the role its composer declares; the sample text is what that
+// composer actually emits.
+func declaredKindSamples() []declaredKindSample {
+	return []declaredKindSample{
+		{"page title", tuiStyleLine{Text: "Foal Clean", Kind: lineKindPageTitle}},
+		{"page title result", tuiStyleLine{Text: "Cleanup result", Kind: lineKindPageTitle}},
+		{"section heading", tuiStyleLine{Text: "Permanent deletion", Kind: lineKindSectionHeading}},
+		{"section heading recycle", tuiStyleLine{Text: "Recycle Bin", Kind: lineKindSectionHeading}},
+		{"section heading servicing", tuiStyleLine{Text: "Windows servicing", Kind: lineKindSectionHeading}},
+		{"servicing group summary", tuiStyleLine{
+			Text: "Windows servicing · 1 categories · 3 reclaimable package(s) · size unknown",
+			Kind: lineKindConfirmSummary,
+		}},
+		{"scan progress header", tuiStyleLine{Text: "Scanning 2/5 · 3s", Kind: lineKindProgressHeader}},
+		{"scan complete header", tuiStyleLine{Text: "Scan complete · 5/5 · 9s", Kind: lineKindProgressHeader}},
+		{"execution header", tuiStyleLine{Text: "| Fresh scanning · 3s", Kind: lineKindProgressHeader}},
+		{"execution header other frame", tuiStyleLine{Text: "/ Fresh scanning · 3s", Kind: lineKindProgressHeader}},
+		{"canceled header", tuiStyleLine{Text: "Canceled · 4s", Kind: lineKindProgressHeader}},
+		{"footer rule", tuiStyleLine{Text: strings.Repeat("=", 40), Kind: lineKindRule}},
+		{"hints", tuiStyleLine{Text: "Hints: up/down browse · space toggle · q quit", Kind: lineKindHint}},
+		{"risk warning", tuiStyleLine{Text: confirmationPermanentIrreversibleWarning, Kind: lineKindRisk}},
+		{"permanent notice", tuiStyleLine{Text: permanentSelectionNotice, Kind: lineKindPermanentNotice}},
+
+		// Preview rows, with and without a trusted measured token.
+		{"preview row measured", tuiStyleLine{
+			Text: "    [x] ✓ Chrome cache · 12 item(s) · 1.2 GB",
+			Kind: lineKindCategoryRow, MagnitudeBytes: 1288490188, HasMagnitudeBytes: true,
+		}},
+		{"preview row focused", tuiStyleLine{
+			Text: "  > [x] ✓ Chrome cache · 12 item(s) · 1.2 GB",
+			Kind: lineKindCategoryRow, MagnitudeBytes: 1288490188, HasMagnitudeBytes: true,
+		}},
+		{"preview row empty", tuiStyleLine{Text: "    [ ] – Nothing · empty", Kind: lineKindCategoryRow}},
+		{"preview row scanning", tuiStyleLine{Text: "    [ ] / Busy · scanning", Kind: lineKindCategoryRow}},
+		{"preview row servicing", tuiStyleLine{
+			Text: "    [ ] ? Component store · analysis required (press a)", Kind: lineKindCategoryRow,
+		}},
+
+		// Execution / result rows.
+		{"outcome cleaned", tuiStyleLine{
+			Text: "  ✓ Chrome cache · cleaned · 1.2 GB",
+			Kind: lineKindOutcomeRow, MagnitudeBytes: 1288490188, HasMagnitudeBytes: true,
+		}},
+		{"outcome failed with reason", tuiStyleLine{
+			Text: "  ! Go build cache · failed · permission denied", Kind: lineKindOutcomeRow,
+		}},
+		{"outcome skipped with reason", tuiStyleLine{
+			Text: "  ⊘ Crash dumps · skipped · protected by Protection rules", Kind: lineKindOutcomeRow,
+		}},
+		{"outcome waiting", tuiStyleLine{Text: "  … User temp · waiting", Kind: lineKindOutcomeRow}},
+
+		// Totals. Settled totals take magnitude; mid-flight progress must not.
+		{"selection total", tuiStyleLine{
+			Text: "Selected: 3 categories · 1.2 GB",
+			Kind: lineKindMeasuredTotal, MagnitudeBytes: 1288490188, HasMagnitudeBytes: true,
+		}},
+		{"result recycle total", tuiStyleLine{
+			Text: "Recycle Bin moved: 1.2 GB",
+			Kind: lineKindMeasuredTotal, MagnitudeBytes: 1288490188, HasMagnitudeBytes: true,
+		}},
+		{"result affected total", tuiStyleLine{
+			Text: "Affected (processed): 1.2 GB",
+			Kind: lineKindMeasuredTotal, MagnitudeBytes: 1288490188, HasMagnitudeBytes: true,
+		}},
+		{"mid-flight progress total", tuiStyleLine{
+			Text: "Processed: 2/3 · Affected (processed): 1.2 GB", Kind: lineKindProgressTotal,
+		}},
+		{"result processed count", tuiStyleLine{Text: "Processed: 3/3", Kind: lineKindProgressTotal}},
+
+		// Confirmation body.
+		{"confirm group summary", tuiStyleLine{
+			Text: "Permanent deletion · 2 categories · 40 item(s) · 1.2 GB",
+			Kind: lineKindConfirmSummary, MagnitudeBytes: 1288490188, HasMagnitudeBytes: true,
+		}},
+		{"confirm detail", tuiStyleLine{
+			Text: "  - Chrome cache · 12 item(s) · 1.2 GB · Recycle Bin",
+			Kind: lineKindConfirmDetail, MagnitudeBytes: 1288490188, HasMagnitudeBytes: true,
+		}},
+		{"confirm detail servicing", tuiStyleLine{
+			Text: "  - Component store · 3 reclaimable package(s) · size unknown · Windows servicing",
+			Kind: lineKindConfirmDetail,
+		}},
+		{"confirm impact", tuiStyleLine{
+			Text: "      Impact: administrator consent (UAC) required; cannot be canceled once started.",
+			Kind: lineKindConfirmImpact,
+		}},
+
+		// Preview grouping row: currently unstyled.
+		{"group heading", tuiStyleLine{Text: "  User essentials", Kind: lineKindGroupHeading}},
+
+		// Prose surfaces.
+		{"prose servicing disclosure", tuiStyleLine{Text: confirmationServicingUACLine, Kind: lineKindProse}},
+		{"prose servicing authorization", tuiStyleLine{Text: confirmationServicingAuthorizationLine, Kind: lineKindProse}},
+		{"prose action caveat", tuiStyleLine{Text: confirmationActionTypeCaveat, Kind: lineKindProse}},
+		{"prose next step", tuiStyleLine{Text: confirmationNextStepLine, Kind: lineKindProse}},
+		{"prose recycle note", tuiStyleLine{Text: confirmationRecycleRecoverabilityNote, Kind: lineKindProse}},
+		{"prose cancellation", tuiStyleLine{Text: cancellationRequestedMessage, Kind: lineKindProse}},
+		{"prose execute hint", tuiStyleLine{
+			Text: "Enter: start cleanup | b/Esc: back to preview", Kind: lineKindProse,
+		}},
+		{"prose focused detail", tuiStyleLine{Text: "Focused: Chrome cache", Kind: lineKindProse}},
+		{"prose result menu hint", tuiStyleLine{Text: "Enter/Esc/b: menu · q: quit", Kind: lineKindProse}},
+		{"prose run-level error", tuiStyleLine{
+			Text: "Cleanup could not start · category plan is invalid", Kind: lineKindProse,
+		}},
+		{"prose servicing observation", tuiStyleLine{
+			Text: "Windows component store: observed free-space increase ≈ 1.2 GB (approximate; not in Affected)",
+			Kind: lineKindProse,
+		}},
+		{"blank", tuiStyleLine{Text: "", Kind: lineKindBlank}},
+	}
+}
+
+// TestDeclaredKindMatchesSniffedStyling is the safety net for Clean's declared
+// line kinds. For every real frame line, styling via the declared role must
+// produce byte-identical output to the historical sniffing path — except on the
+// lines sniffing gets wrong, which are enumerated by sniffingMisstyleReason and
+// asserted to actually differ. A mismatch outside that set means a declared
+// Kind is wrong.
+func TestDeclaredKindMatchesSniffedStyling(t *testing.T) {
+	for _, noColor := range []bool{false, true} {
+		mode := "color"
+		if noColor {
+			mode = "no-color"
+		}
+		t.Run(mode, func(t *testing.T) {
+			if noColor {
+				t.Setenv("NO_COLOR", "1")
+			} else {
+				t.Setenv("NO_COLOR", "")
+			}
+			for _, sample := range declaredKindSamples() {
+				t.Run(sample.name, func(t *testing.T) {
+					declared := stylizeStyleLine(sample.line)
+					sniffedInput := sample.line
+					sniffedInput.Kind = lineKindUnknown
+					sniffed := stylizeStyleLine(sniffedInput)
+
+					if reason := sniffingMisstyleReason(sample.line.Text); reason != "" {
+						if declared == sniffed {
+							t.Fatalf("expected the declared role to fix sniffing (%s), but rendering is unchanged: %q",
+								reason, declared)
+						}
+						return
+					}
+					if declared != sniffed {
+						t.Fatalf("kind %d changes rendering for %q:\n declared = %q\n sniffed  = %q",
+							sample.line.Kind, sample.line.Text, declared, sniffed)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestDeclaredKindFixesSniffingMisstyle pins what the declared roles corrected,
+// so the fixes cannot silently regress.
+func TestDeclaredKindFixesSniffingMisstyle(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	headingStyled := stylizeStyleLine(plainStyleLine("Permanent deletion"))
+	borderStyled := stylizeStyleLine(plainStyleLine("| Fresh scanning · 3s"))
+	progressStyled := stylizeStyleLine(styledLine("| Fresh scanning · 3s", lineKindProgressHeader))
+	otherFrame := stylizeStyleLine(styledLine("/ Fresh scanning · 3s", lineKindProgressHeader))
+
+	// The execution header no longer changes colour with the spinner frame.
+	if progressStyled == borderStyled {
+		t.Fatal("execution header still renders as a box border")
+	}
+	if stripANSIForTest(progressStyled) != "| Fresh scanning · 3s" {
+		t.Fatalf("header text changed: %q", progressStyled)
+	}
+	if styleOfStyledForTest(progressStyled) != styleOfStyledForTest(otherFrame) {
+		t.Fatalf("header style still varies by spinner frame:\n | frame = %q\n / frame = %q",
+			progressStyled, otherFrame)
+	}
+
+	// Prose that merely starts with a heading word no longer reads as a heading.
+	for _, prose := range []tuiStyleLine{
+		styledLine(confirmationRecycleRecoverabilityNote, lineKindProse),
+		styledLine(confirmationServicingUACLine, lineKindProse),
+	} {
+		styled := stylizeStyleLine(prose)
+		if styled != prose.Text {
+			t.Fatalf("disclosure prose should render unstyled, got %q", styled)
+		}
+		if stylizeStyleLine(plainStyleLine(prose.Text)) == styled {
+			t.Fatalf("sniffing was expected to misstyle %q", prose.Text)
+		}
+	}
+	// A section heading itself must still read as one.
+	if headingStyled == "Permanent deletion" {
+		t.Fatal("section headings must still be styled")
+	}
+}
+
+// styleOfStyledForTest returns the leading escape sequence of a styled string,
+// so two renderings can be compared by style while ignoring their text.
+func styleOfStyledForTest(styled string) string {
+	if i := strings.IndexByte(styled, 'm'); i >= 0 && strings.HasPrefix(styled, "\x1b[") {
+		return styled[:i+1]
+	}
+	return ""
+}
+
+// TestDeclaredKindPreservesPlainText pins that declaring a role never alters the
+// plain text: styling adds escape sequences only.
+func TestDeclaredKindPreservesPlainText(t *testing.T) {
+	for _, sample := range declaredKindSamples() {
+		styled := stylizeStyleLine(sample.line)
+		if got := stripANSIForTest(styled); got != sample.line.Text {
+			t.Fatalf("%s: plain text changed\n want %q\n got  %q", sample.name, sample.line.Text, got)
+		}
 	}
 }
 

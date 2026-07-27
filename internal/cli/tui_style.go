@@ -15,13 +15,14 @@ import (
 // irreversible risk, not for reclaimable-byte magnitude.
 //
 // Color language (256-color indexes; NO_COLOR drops hues, keeps bold/reverse):
-//   border/rule  — gray 240 (recedes; never competes with content)
-//   heading      — cyan 6
-//   progress/ok  — cyan 14 (scanning + complete markers; not success-green)
-//   attention    — yellow 11 (partial / failed markers; not danger)
-//   skipped      — gray 8
-//   magnitude    — amber 214 / orange 208 (size only)
-//   risk         — pure red 1 (irreversible permanent only)
+//
+//	border/rule  — gray 240 (recedes; never competes with content)
+//	heading      — cyan 6
+//	progress/ok  — cyan 14 (scanning + complete markers; not success-green)
+//	attention    — yellow 11 (partial / failed markers; not danger)
+//	skipped      — gray 8
+//	magnitude    — amber 214 / orange 208 (size only)
+//	risk         — pure red 1 (irreversible permanent only)
 var (
 	// Selection keeps reverse so focused Clean rows stay continuous. Accent cyan
 	// is applied only when color is enabled so NO_COLOR stays reverse/bold only.
@@ -120,29 +121,105 @@ var tuiSectionHeadingPrefixes = []string{
 // cleanPageTitlePrefixes are primary page titles that always get heading style
 // even when they share wording with confirmation measured totals.
 var cleanPageTitleExact = map[string]struct{}{
-	"Foal Clean":          {},
-	"Confirm cleanup":     {},
-	"Cleanup result":      {},
-	"Clean unavailable":   {},
-	"Terminal too small":  {},
-	"Permanent deletion":  {},
-	"Recycle Bin":         {},
-	"Windows servicing":   {},
+	"Foal Clean":         {},
+	"Confirm cleanup":    {},
+	"Cleanup result":     {},
+	"Clean unavailable":  {},
+	"Terminal too small": {},
+	"Permanent deletion": {},
+	"Recycle Bin":        {},
+	"Windows servicing":  {},
 }
+
+// tuiLineKind is the semantic role a frame line plays, declared by the code
+// that composes the line rather than inferred from the rendered text. The
+// sniffing path below (prefix and regexp matching on already-rendered text) is
+// how every surface historically got styled; it stays as the fallback for
+// stylizeFrame callers (analyze, viewer, uninstall, menu), which have only
+// composed text. Clean composes through tuiStyleLine and can declare its roles.
+//
+// Declaring the role removes a class of coupling: cleanStateMarkerAtStart has
+// to exclude ASCII '-' because it would false-colour confirmation bullets
+// ("  - Label"), and cleanPageTitleExact exists to stop heading prefixes
+// over-matching measured totals. Neither constraint applies once the composer
+// says what a line is.
+type tuiLineKind int
+
+const (
+	// lineKindUnknown is the zero value: no declared role, fall back to
+	// sniffing. Non-Clean surfaces stay here.
+	lineKindUnknown tuiLineKind = iota
+	// lineKindBlank is an empty or whitespace-only spacer line.
+	lineKindBlank
+	// lineKindPageTitle is a primary page title ("Foal Clean", "Cleanup result").
+	lineKindPageTitle
+	// lineKindSectionHeading is a section header inside a page (confirmation
+	// action-group titles).
+	lineKindSectionHeading
+	// lineKindGroupHeading is a preview report-category grouping row. NOTE:
+	// this currently renders unstyled — it matches no sniffing rule today.
+	// Preserved as-is; whether it should read as a heading is a separate call.
+	lineKindGroupHeading
+	// lineKindProgressHeader is in-flight phase chrome (scanning / execution).
+	lineKindProgressHeader
+	// lineKindCategoryRow is a preview row: cursor, checkbox, marker, label,
+	// and optionally a trusted measured byte token.
+	lineKindCategoryRow
+	// lineKindOutcomeRow is an execution or result row: marker plus label, with
+	// a trusted affected byte token only on cleaned/partial outcomes.
+	lineKindOutcomeRow
+	// lineKindMeasuredTotal is a total carrying a trusted byte token eligible
+	// for magnitude emphasis (selection totals, result aggregates).
+	lineKindMeasuredTotal
+	// lineKindProgressTotal is the mid-flight execution total. It carries a byte
+	// token but is deliberately NOT magnitude-emphasised: magnitude is reserved
+	// for settled measurements, not provisional progress.
+	lineKindProgressTotal
+	// lineKindConfirmSummary is a confirmation action-group total.
+	lineKindConfirmSummary
+	// lineKindConfirmDetail is a confirmation per-category row ("  - Label · ...").
+	lineKindConfirmDetail
+	// lineKindConfirmImpact is the indented impact note under a detail row.
+	lineKindConfirmImpact
+	// lineKindRisk is irreversible-permanent warning copy.
+	lineKindRisk
+	// lineKindPermanentNotice is the softer preview permanent-selection notice.
+	lineKindPermanentNotice
+	// lineKindProse is disclosure, notice, and explanation copy.
+	lineKindProse
+	// lineKindHint is a key-hint line.
+	lineKindHint
+	// lineKindRule is a horizontal '=' rule.
+	lineKindRule
+)
 
 // tuiStyleLine is one plain-frame line plus optional trusted magnitude bytes
 // for restricted token styling. Text stays the test oracle; when
 // HasMagnitudeBytes is true, production classification uses
 // cleanMagnitudeTierFromBytes and does not reverse-parse the display token.
+// Kind, when set, replaces text sniffing for this line.
 type tuiStyleLine struct {
 	Text              string
+	Kind              tuiLineKind
 	MagnitudeBytes    int64
 	HasMagnitudeBytes bool
 }
 
-// plainStyleLine returns a style line with no magnitude metadata.
+// plainStyleLine returns a style line with no magnitude metadata and no
+// declared role (sniffed styling).
 func plainStyleLine(text string) tuiStyleLine {
 	return tuiStyleLine{Text: text}
+}
+
+// styledLine returns a style line whose role is declared by its composer.
+func styledLine(text string, kind tuiLineKind) tuiStyleLine {
+	return tuiStyleLine{Text: text, Kind: kind}
+}
+
+// styledMagnitudeLine returns a style line with a declared role whose primary
+// cleanFormatBytes token should be tier-classified from the trusted byte count.
+func styledMagnitudeLine(text string, bytes int64, kind tuiLineKind) tuiStyleLine {
+	return tuiStyleLine{Text: text, Kind: kind, MagnitudeBytes: bytes, HasMagnitudeBytes: true}
 }
 
 // magnitudeStyleLine returns a style line whose primary cleanFormatBytes token
@@ -200,6 +277,12 @@ func stylizeStyleLine(line tuiStyleLine) string {
 		return line.Text
 	}
 
+	// A declared role wins; sniffing below is the fallback for callers that
+	// only have composed text.
+	if line.Kind != lineKindUnknown {
+		return stylizeDeclaredLine(line, trimmed)
+	}
+
 	// Risk channel first: irreversible permanent warning (whole-line red/bold).
 	// Distinct from magnitude; must not paint size tokens as danger.
 	if isConfirmationRiskWarningLine(trimmed) {
@@ -225,6 +308,57 @@ func stylizeStyleLine(line tuiStyleLine) string {
 	}
 
 	return stylizeNonMagnitudeLine(line.Text, trimmed)
+}
+
+// stylizeDeclaredLine styles a line whose composer declared its role. Each arm
+// routes to the same style helper the sniffing path would have chosen, so
+// declaring a role changes routing only — never the rendered bytes. The
+// equivalence is pinned by TestDeclaredKindMatchesSniffedStyling.
+func stylizeDeclaredLine(line tuiStyleLine, trimmed string) string {
+	colorOn := tuiMagnitudeColorEnabled()
+	switch line.Kind {
+	case lineKindBlank:
+		return line.Text
+
+	case lineKindPageTitle, lineKindSectionHeading:
+		return tuiHeadingStyle.Render(trimmed)
+
+	case lineKindProgressHeader:
+		if colorOn {
+			return tuiProgressStyle.Render(trimmed)
+		}
+		return tuiSummaryStyle.Render(trimmed)
+
+	case lineKindRule:
+		if colorOn {
+			return tuiRuleStyle.Render(trimmed)
+		}
+		return tuiFaintStyle.Render(trimmed)
+
+	case lineKindHint:
+		return tuiFaintStyle.Render(trimmed)
+
+	case lineKindRisk:
+		return styleRiskWarning(trimmed)
+
+	case lineKindPermanentNotice:
+		return stylePermanentNotice(trimmed)
+
+	// Magnitude-eligible surfaces. A line with no byte token degrades to the
+	// marker-only pass inside stylizeMagnitudeEligibleLine, so these arms are
+	// safe for rows that happen to carry no size (empty, skipped, waiting).
+	case lineKindCategoryRow, lineKindOutcomeRow, lineKindMeasuredTotal,
+		lineKindConfirmSummary, lineKindConfirmDetail:
+		return stylizeMagnitudeEligibleLine(trimmed, line.MagnitudeBytes, line.HasMagnitudeBytes)
+
+	// Unstyled surfaces. lineKindProgressTotal is deliberately here: the
+	// mid-flight execution total carries a byte token that must stay plain.
+	case lineKindGroupHeading, lineKindConfirmImpact, lineKindProgressTotal, lineKindProse:
+		return line.Text
+
+	default:
+		return line.Text
+	}
 }
 
 // stylizeLine decorates one plain line without trusted byte metadata.

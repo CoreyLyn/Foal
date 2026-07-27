@@ -401,13 +401,141 @@ func TestProjectProvisionalCategoryOutcomeMatchesFinalMapping(t *testing.T) {
 	}
 }
 
+// TestProjectCategoryExecutionOutcomesReasonCodePerCategory pins that each
+// category carries the stable code explaining its own non-successful outcome,
+// and that only the code — never the issue Message or Path — survives.
+func TestProjectCategoryExecutionOutcomesReasonCodePerCategory(t *testing.T) {
+	protectedID := clean.OpportunityCategoryCrashDumps
+	failedID := clean.DevCacheCategoryGo
+	canceledID := clean.OpportunityCategoryUserTemp
+
+	result := clean.Result{
+		Status: "ok",
+		Mode:   "execute",
+		Skipped: []clean.SkippedItem{
+			{
+				Path:   `C:\Users\me\AppData\Local\CrashDumps\a.dmp`,
+				Rule:   protectedID,
+				Reason: clean.StructuredIssue{Code: "protected_path", Message: `blocked C:\Users\me\AppData\Local\CrashDumps\a.dmp`},
+			},
+			{
+				Path:   `C:\Users\me\AppData\Local\go-build\pkg`,
+				Rule:   failedID,
+				Reason: clean.StructuredIssue{Code: "delete_failed", Message: `move failed for C:\Users\me\AppData\Local\go-build\pkg`},
+			},
+			{
+				Path:   `C:\Users\me\AppData\Local\Temp\idle`,
+				Rule:   canceledID,
+				Reason: clean.StructuredIssue{Code: "context_canceled", Message: "context canceled"},
+			},
+		},
+	}
+	outcomes := clean.ProjectCategoryExecutionOutcomes(
+		[]string{protectedID, failedID, canceledID},
+		result,
+	)
+	want := map[string]string{
+		protectedID: "protected_path",
+		failedID:    "delete_failed",
+		canceledID:  "context_canceled",
+	}
+	if len(outcomes) != 3 {
+		t.Fatalf("outcomes = %#v", outcomes)
+	}
+	for _, outcome := range outcomes {
+		if outcome.ReasonCode != want[outcome.Identifier] {
+			t.Fatalf("%s reason = %q, want %q", outcome.Identifier, outcome.ReasonCode, want[outcome.Identifier])
+		}
+	}
+	assertOutcomePathFree(t, outcomes, `C:\Users\me`, "CrashDumps", "go-build", "move failed", "blocked")
+}
+
+// TestProjectCategoryExecutionOutcomesReasonCodePrefersOperational pins the
+// selection rule when one category records several issues: an operational
+// failure explains the outcome better than a deliberate safety skip.
+func TestProjectCategoryExecutionOutcomesReasonCodePrefersOperational(t *testing.T) {
+	id := clean.DevCacheCategoryGo
+	result := clean.Result{
+		Status: "ok",
+		Mode:   "execute",
+		Skipped: []clean.SkippedItem{
+			// Safety skip arrives first; the operational code must still win.
+			{Path: `C:\a`, Rule: id, Reason: clean.StructuredIssue{Code: "protected_path", Message: "protected"}},
+			{Path: `C:\b`, Rule: id, Reason: clean.StructuredIssue{Code: "permission_denied", Message: "denied"}},
+			{Path: `C:\c`, Rule: id, Reason: clean.StructuredIssue{Code: "recycle_bin_disabled", Message: "disabled"}},
+		},
+	}
+	outcomes := clean.ProjectCategoryExecutionOutcomes([]string{id}, result)
+	if len(outcomes) != 1 {
+		t.Fatalf("outcomes = %#v", outcomes)
+	}
+	if outcomes[0].ReasonCode != "permission_denied" {
+		t.Fatalf("reason = %q, want operational code to win", outcomes[0].ReasonCode)
+	}
+}
+
+// TestProjectCategoryExecutionOutcomesRunLevelReasonCodeFallback pins that a
+// run-level failure (no category Rule) explains categories that recorded no
+// evidence of their own, and does not overwrite a category that did.
+func TestProjectCategoryExecutionOutcomesRunLevelReasonCodeFallback(t *testing.T) {
+	emptyID := clean.DefaultCategoryFoalOwnedTempSandboxes
+	ownEvidenceID := clean.DevCacheCategoryGo
+	result := clean.Result{
+		Status: "error",
+		Mode:   "execute",
+		Skipped: []clean.SkippedItem{
+			{Path: `C:\b`, Rule: ownEvidenceID, Reason: clean.StructuredIssue{Code: "protected_path", Message: "protected"}},
+		},
+		Errors: []clean.StructuredIssue{{
+			Code:    "invalid_category_plan",
+			Message: `unknown category under C:\Users\me`,
+		}},
+	}
+	outcomes := clean.ProjectCategoryExecutionOutcomes([]string{emptyID, ownEvidenceID}, result)
+	if len(outcomes) != 2 {
+		t.Fatalf("outcomes = %#v", outcomes)
+	}
+	if outcomes[0].ReasonCode != "invalid_category_plan" {
+		t.Fatalf("empty category reason = %q, want run-level fallback", outcomes[0].ReasonCode)
+	}
+	if outcomes[1].ReasonCode != "protected_path" {
+		t.Fatalf("own-evidence category reason = %q, must not take run-level fallback", outcomes[1].ReasonCode)
+	}
+	assertOutcomePathFree(t, outcomes, `C:\Users\me`, "unknown category")
+}
+
+// TestProjectCategoryExecutionOutcomesSuccessCarriesNoReason pins that a fully
+// successful category invents no reason code.
+func TestProjectCategoryExecutionOutcomesSuccessCarriesNoReason(t *testing.T) {
+	id := clean.DefaultCategoryFoalOwnedTempSandboxes
+	result := clean.Result{
+		Status:  "ok",
+		Deleted: []clean.DeletedItem{{Path: `C:\Temp\a`, Bytes: 5, Rule: id}},
+	}
+	outcomes := clean.ProjectCategoryExecutionOutcomes([]string{id}, result)
+	if len(outcomes) != 1 {
+		t.Fatalf("outcomes = %#v", outcomes)
+	}
+	if outcomes[0].State != clean.CategoryExecutionCleaned {
+		t.Fatalf("state = %q", outcomes[0].State)
+	}
+	if outcomes[0].ReasonCode != "" {
+		t.Fatalf("clean success must carry no reason: %q", outcomes[0].ReasonCode)
+	}
+}
+
 func assertOutcomePathFree(t *testing.T, outcomes []clean.CategoryExecutionOutcome, forbidden ...string) {
 	t.Helper()
 	for _, outcome := range outcomes {
+		// Every free-text field must be path-free, including the stable reason
+		// codes: they are projected from issues whose Message/Path may embed
+		// candidate paths, so only the code itself may survive projection.
 		blob := strings.Join([]string{
 			outcome.Identifier,
 			outcome.Label,
 			string(outcome.State),
+			outcome.ReasonCode,
+			outcome.ServicingReason,
 		}, " ")
 		for _, token := range forbidden {
 			if strings.Contains(blob, token) {
@@ -416,6 +544,9 @@ func assertOutcomePathFree(t *testing.T, outcomes []clean.CategoryExecutionOutco
 		}
 		if strings.ContainsAny(outcome.Label, `/\`) {
 			t.Fatalf("label looks path-bearing: %#v", outcome)
+		}
+		if strings.ContainsAny(outcome.ReasonCode, `/\`) {
+			t.Fatalf("reason code looks path-bearing: %#v", outcome)
 		}
 	}
 }
