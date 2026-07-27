@@ -1110,18 +1110,28 @@ func (m eagerCleanModel) content() string {
 }
 
 // contentStyleLines builds the same frame as content() with optional trusted
-// magnitude byte metadata on measured/affected lines.
+// magnitude byte metadata on measured/affected lines. Lines are reflowed to the
+// terminal width first, so capacity is counted in the rows the terminal will
+// actually draw rather than in composed lines.
 func (m eagerCleanModel) contentStyleLines() []tuiStyleLine {
-	if m.terminalTooSmall() {
+	// Fixed floors first, then the dynamic check against reflowed chrome.
+	// Header and footer are reflowed once and reused for both decisions.
+	if m.width > 0 && m.width < eagerMinTerminalWidth {
+		return styleLinesFromPlain(m.tooSmallContent())
+	}
+	if m.height > 0 && m.height < eagerMinTerminalHeight {
+		return styleLinesFromPlain(m.tooSmallContent())
+	}
+	header := m.reflowedHeaderStyleLines()
+	footer := m.reflowedFooterStyleLines()
+	if m.height > 0 && m.height < len(header)+len(footer)+1 {
 		return styleLinesFromPlain(m.tooSmallContent())
 	}
 	if m.unavailable != nil {
 		return styleLinesFromPlain(m.unavailableContent())
 	}
 
-	header := m.fixedHeaderStyleLines()
-	footer := m.fixedFooterStyleLines()
-	body := m.scrollableBodyStyleLines()
+	body := m.reflowedBodyStyleLines()
 	// height <= 0 means unconstrained (deterministic model tests without a
 	// WindowSize). Otherwise body fills remaining rows under fixed chrome.
 	capacity := len(body)
@@ -1149,7 +1159,9 @@ func (m eagerCleanModel) contentStyleLines() []tuiStyleLine {
 }
 
 // terminalTooSmall reports whether the terminal cannot host the minimum safe
-// fixed chrome plus one body line without truncating actionable layout.
+// fixed chrome plus one body line without truncating actionable layout. Chrome
+// is measured after reflow, so wrapped disclosure copy counts as the multiple
+// rows it really occupies.
 func (m eagerCleanModel) terminalTooSmall() bool {
 	if m.width > 0 && m.width < eagerMinTerminalWidth {
 		return true
@@ -1163,8 +1175,8 @@ func (m eagerCleanModel) terminalTooSmall() bool {
 		return true
 	}
 	// Dynamic chrome may still exceed the floor on multi-line diagnostics.
-	headerN := len(m.fixedHeaderLines())
-	footerN := len(m.fixedFooterLines())
+	headerN := len(m.reflowedHeaderStyleLines())
+	footerN := len(m.reflowedFooterStyleLines())
 	return m.height < headerN+footerN+1
 }
 
@@ -1309,7 +1321,12 @@ func (m eagerCleanModel) scrollableBodyLines() []string {
 }
 
 func (m eagerCleanModel) scrollableBodyStyleLines() []tuiStyleLine {
-	entries := m.scrollableBodyEntries()
+	return bodyEntriesToStyleLines(m.scrollableBodyEntries())
+}
+
+// bodyEntriesToStyleLines projects body entries onto style lines, carrying the
+// declared role and any trusted magnitude bytes across.
+func bodyEntriesToStyleLines(entries []eagerBodyLine) []tuiStyleLine {
 	out := make([]tuiStyleLine, len(entries))
 	for i, line := range entries {
 		if line.hasMagnitudeBytes {
@@ -1319,6 +1336,27 @@ func (m eagerCleanModel) scrollableBodyStyleLines() []tuiStyleLine {
 		}
 	}
 	return out
+}
+
+// Reflowed accessors return the lines the terminal actually displays at the
+// current width. Every viewport calculation must count these, not the composed
+// lines: a composed line wider than the terminal occupies more than one display
+// row, and counting it as one is what pushes content off screen.
+
+func (m eagerCleanModel) reflowedHeaderStyleLines() []tuiStyleLine {
+	return reflowStyleLines(m.fixedHeaderStyleLines(), m.width)
+}
+
+func (m eagerCleanModel) reflowedFooterStyleLines() []tuiStyleLine {
+	return reflowStyleLines(m.fixedFooterStyleLines(), m.width)
+}
+
+func (m eagerCleanModel) reflowedBodyEntries() []eagerBodyLine {
+	return reflowBodyEntries(m.scrollableBodyEntries(), m.width)
+}
+
+func (m eagerCleanModel) reflowedBodyStyleLines() []tuiStyleLine {
+	return bodyEntriesToStyleLines(m.reflowedBodyEntries())
 }
 
 // styleLinesText projects annotated style lines back to plain strings.
@@ -1415,11 +1453,11 @@ func (m eagerCleanModel) bodyCapacity() int {
 	if m.terminalTooSmall() || m.height <= 0 {
 		if m.height <= 0 {
 			// Unconstrained: treat capacity as large enough for full body.
-			return len(m.scrollableBodyLines()) + 1
+			return len(m.reflowedBodyEntries()) + 1
 		}
 		return 0
 	}
-	cap := m.height - len(m.fixedHeaderLines()) - len(m.fixedFooterLines())
+	cap := m.height - len(m.reflowedHeaderStyleLines()) - len(m.reflowedFooterStyleLines())
 	if cap < 0 {
 		return 0
 	}
@@ -1446,7 +1484,7 @@ func (m eagerCleanModel) clampedViewportOffset(bodyLen, capacity int) int {
 
 func (m *eagerCleanModel) clampViewportOffset() {
 	cap := m.bodyCapacity()
-	bodyLen := len(m.scrollableBodyLines())
+	bodyLen := len(m.reflowedBodyEntries())
 	m.viewportOffset = m.clampedViewportOffset(bodyLen, cap)
 }
 
@@ -1467,8 +1505,10 @@ func (m *eagerCleanModel) ensurePreviewCursorVisible() {
 	m.ensureBodyLineVisible(line)
 }
 
+// previewBodyLineForRow returns the first display line the preview row occupies
+// after reflow, which is the line cursor-follow must keep visible.
 func (m eagerCleanModel) previewBodyLineForRow(rowIndex int) int {
-	for i, line := range m.scrollableBodyEntries() {
+	for i, line := range m.reflowedBodyEntries() {
 		if line.rowIndex == rowIndex {
 			return i
 		}
@@ -1518,8 +1558,10 @@ func (m eagerCleanModel) executionActiveIndex() int {
 	return -1
 }
 
+// executionOutcomeBodyLine returns the first display line the outcome occupies
+// after reflow.
 func (m eagerCleanModel) executionOutcomeBodyLine(outcomeIndex int) int {
-	for i, line := range m.scrollableBodyEntries() {
+	for i, line := range m.reflowedBodyEntries() {
 		if line.outcomeIndex == outcomeIndex {
 			return i
 		}
@@ -1544,7 +1586,7 @@ func (m eagerCleanModel) executionOutcomeCompletelyOutside(outcomeIndex int) boo
 	if cap <= 0 {
 		return true
 	}
-	offset := m.clampedViewportOffset(len(m.scrollableBodyLines()), cap)
+	offset := m.clampedViewportOffset(len(m.reflowedBodyEntries()), cap)
 	return line < offset || line >= offset+cap
 }
 

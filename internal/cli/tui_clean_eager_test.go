@@ -2751,10 +2751,13 @@ func TestEagerCleanActiveExecutionCancelKeysAndRepeatedCtrlC(t *testing.T) {
 		t.Fatalf("cancel requested=%v calls=%d", model.cancellationRequested, cancelCalls)
 	}
 	content := model.content()
-	if !strings.Contains(content, cancellationRequestedMessage) {
+	// The cancellation notice is longer than this model's width, so it occupies
+	// several display rows. Compare on unwrapped text: the requirement is that
+	// the whole notice reaches the user, not that it fits one terminal row.
+	if !strings.Contains(unwrapForTest(content), unwrapForTest(cancellationRequestedMessage)) {
 		t.Fatalf("cancellation message missing:\n%s", content)
 	}
-	if strings.Contains(content, "roll back") && !strings.Contains(content, "will not be rolled back") {
+	if strings.Contains(content, "roll back") && !strings.Contains(unwrapForTest(content), "will not be rolled back") {
 		t.Fatalf("must not claim rollback:\n%s", content)
 	}
 
