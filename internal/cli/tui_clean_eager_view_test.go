@@ -1500,11 +1500,11 @@ func TestStylizeFrameStateMarkersAndChrome(t *testing.T) {
 	}
 }
 
-func TestSelectedRowStateMarkerKeepsContinuousAccentBackground(t *testing.T) {
+func TestSelectedRowStateMarkerKeepsContinuousDefaultTextBackground(t *testing.T) {
 	// Focused empty row previously used reverse+faint on "–", which painted a
 	// darker cell under reverse video and broke the selection bar mid-row.
-	// Selected markers must share the row accent FG (81 under reverse becomes
-	// the continuous selection bg); reliability hues live on Background.
+	// Selected markers must leave FG unset so reverse uses the terminal's normal
+	// text color as the continuous selection bg; reliability hues live on Background.
 	t.Setenv("NO_COLOR", "")
 
 	emptyPlain := "  > [ ] – Foal-owned temp sandboxes · empty"
@@ -1518,33 +1518,33 @@ func TestSelectedRowStateMarkerKeepsContinuousAccentBackground(t *testing.T) {
 	if strings.Contains(emptyStyled, ";2m") || strings.Contains(emptyStyled, "[2m") || strings.Contains(emptyStyled, ";2;") {
 		t.Fatalf("selected empty marker must not use faint under reverse: %q", emptyStyled)
 	}
-	// Marker segment and surrounding chrome share accent FG 81 so reverse bg matches.
-	if !strings.Contains(emptyStyled, "38;5;81") {
-		t.Fatalf("selected empty row should use accent FG 81: %q", emptyStyled)
+	// No fixed foreground: reverse inherits the terminal's normal text color.
+	if strings.Contains(emptyStyled, "38;5;31") || strings.Contains(emptyStyled, "38;5;81") {
+		t.Fatalf("selected empty row should not impose a fixed foreground: %q", emptyStyled)
 	}
-	// Explicit empty marker style: reverse + accent FG, no reliability Background.
+	// Explicit empty marker style: reverse only, no reliability Background.
 	emptyMarker := styleCleanStateMarker("–", true, true)
-	if !strings.Contains(emptyMarker, "38;5;81") {
-		t.Fatalf("selected empty marker missing accent FG: %q", emptyMarker)
+	if strings.Contains(emptyMarker, "38;5;31") || strings.Contains(emptyMarker, "38;5;81") {
+		t.Fatalf("selected empty marker should not impose a fixed foreground: %q", emptyMarker)
 	}
 	if strings.Contains(emptyMarker, "48;5;") || strings.Contains(emptyMarker, ";2") {
 		t.Fatalf("selected empty marker must not set Background or faint: %q", emptyMarker)
 	}
 
-	// Attention marker on a focused row: accent FG + reliability as Background.
+	// Attention marker on a focused row: default FG + reliability as Background.
 	attentionMarker := styleCleanStateMarker("!", true, true)
-	if !strings.Contains(attentionMarker, "38;5;81") {
-		t.Fatalf("selected attention marker missing accent FG: %q", attentionMarker)
+	if strings.Contains(attentionMarker, "38;5;31") || strings.Contains(attentionMarker, "38;5;81") {
+		t.Fatalf("selected attention marker should not impose a fixed foreground: %q", attentionMarker)
 	}
 	if !strings.Contains(attentionMarker, "48;5;11") && !strings.Contains(attentionMarker, "103m") {
 		// lipgloss may emit 48;5;11 or a bright named form; require some bg cue.
 		t.Fatalf("selected attention marker should carry reliability as Background: %q", attentionMarker)
 	}
 
-	// Selected strong magnitude: same continuous accent FG, magnitude on Background.
+	// Selected strong magnitude: default FG, magnitude on Background.
 	strong := styleMagnitudeTokenWithColor("1 GB", cleanMagnitudeStrong, true, true)
-	if !strings.Contains(strong, "38;5;81") {
-		t.Fatalf("selected strong magnitude missing accent FG: %q", strong)
+	if strings.Contains(strong, "38;5;31") || strings.Contains(strong, "38;5;81") {
+		t.Fatalf("selected strong magnitude should not impose a fixed foreground: %q", strong)
 	}
 	if strings.Contains(strong, "[31m") || strings.Contains(strong, "[91m") {
 		t.Fatalf("selected strong must not use pure red: %q", strong)

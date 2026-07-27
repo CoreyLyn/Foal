@@ -24,10 +24,10 @@ import (
 //	magnitude    — amber 214 / orange 208 (size only)
 //	risk         — pure red 1 (irreversible permanent only)
 var (
-	// Selection keeps reverse so focused Clean rows stay continuous. Accent cyan
-	// is applied only when color is enabled so NO_COLOR stays reverse/bold only.
-	tuiSelectedStyle       = lipgloss.NewStyle().Reverse(true).Bold(true)
-	tuiSelectedAccentStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81"))
+	// Selection uses reverse so the focused-row background inherits the
+	// terminal's normal text color. This keeps the original theme-compatible
+	// selection cue instead of imposing a fixed accent hue.
+	tuiSelectedStyle = lipgloss.NewStyle().Reverse(true).Bold(true)
 	// Borders and footer rules recede; headings stay the cyan focus cue.
 	tuiBorderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	tuiRuleStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
@@ -47,13 +47,13 @@ var (
 	tuiMagnitudeStrongStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("208"))
 	tuiMagnitudeBoldStyle      = lipgloss.NewStyle().Bold(true)
 
-	// Selected-row magnitude stacking: keep the selection accent reverse bg
-	// continuous by using the same FG (81) as tuiSelectedAccentStyle. Magnitude
-	// hue goes on Background so reverse video paints the glyph, not a different
-	// cell background (setting FG alone under reverse would change the bg).
+	// Selected-row magnitude stacking keeps the default-text reverse bg
+	// continuous. Magnitude hue goes on Background so reverse video paints the
+	// glyph, not a different cell background (setting FG alone under reverse
+	// would change the bg).
 	// Orange/amber only — never pure red for size.
-	tuiSelectedMagnitudeAttentionStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("214"))
-	tuiSelectedMagnitudeStrongStyle    = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("208"))
+	tuiSelectedMagnitudeAttentionStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Background(lipgloss.Color("214"))
+	tuiSelectedMagnitudeStrongStyle    = lipgloss.NewStyle().Reverse(true).Bold(true).Background(lipgloss.Color("208"))
 	// Bold-only selected magnitude (NO_COLOR): reverse without a hue so the
 	// focused row stays continuous under reverse-only selection.
 	tuiSelectedMagnitudeBoldStyle = lipgloss.NewStyle().Reverse(true).Bold(true)
@@ -68,16 +68,16 @@ var (
 	tuiStateProgressStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 	tuiStateEmptyStyle     = lipgloss.NewStyle().Faint(true)
 
-	// Selected-row state markers: same reverse accent FG as the focused row so
-	// selection bg stays continuous across checkbox / marker / label segments.
+	// Selected-row state markers use the same default-text reverse background
+	// as the focused row so selection stays continuous across all segments.
 	// Reliability hue is Background (becomes glyph color under reverse). Empty
-	// has no reliability hue — match the row accent only; faint-only reverse
+	// has no reliability hue — match the row selection only; faint-only reverse
 	// previously painted a darker cell and broke the selection bar.
-	tuiSelectedStateOKStyle        = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("14"))
-	tuiSelectedStateAttentionStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("11"))
-	tuiSelectedStateSkippedStyle   = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("8"))
-	tuiSelectedStateProgressStyle  = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("14"))
-	tuiSelectedStateEmptyStyle     = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81"))
+	tuiSelectedStateOKStyle        = lipgloss.NewStyle().Reverse(true).Bold(true).Background(lipgloss.Color("14"))
+	tuiSelectedStateAttentionStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Background(lipgloss.Color("11"))
+	tuiSelectedStateSkippedStyle   = lipgloss.NewStyle().Reverse(true).Bold(true).Background(lipgloss.Color("8"))
+	tuiSelectedStateProgressStyle  = lipgloss.NewStyle().Reverse(true).Bold(true).Background(lipgloss.Color("14"))
+	tuiSelectedStateEmptyStyle     = lipgloss.NewStyle().Reverse(true).Bold(true)
 
 	// Risk channel: pure red + bold for irreversible permanent warning only.
 	// Distinct from magnitude orange — large size is not danger.
@@ -429,12 +429,9 @@ func stylizeNonMagnitudeLine(original, trimmed string) string {
 	return original
 }
 
-// styleSelectedLine applies focused-row reverse. Soft cyan accent only when
-// color is enabled; NO_COLOR keeps reverse+bold without a hue.
-func styleSelectedLine(text string, colorOn bool) string {
-	if colorOn {
-		return tuiSelectedAccentStyle.Render(text)
-	}
+// styleSelectedLine applies focused-row reverse using the terminal's normal
+// text color as the selection background.
+func styleSelectedLine(text string, _ bool) string {
 	return tuiSelectedStyle.Render(text)
 }
 
