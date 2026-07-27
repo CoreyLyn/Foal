@@ -44,6 +44,13 @@ type CategoryExecutionOutcome struct {
 	AffectedBytes int64
 	DeletedCount  int
 	SkippedCount  int
+	// ReasonCode is the stable path-free issue code that best explains a
+	// non-successful outcome (failed, partial, skipped, canceled). It is chosen
+	// from the category's own Failed/Skipped/Errors evidence, falling back to a
+	// run-level issue when the category itself recorded none. It is only ever a
+	// stable Foal-owned code — never StructuredIssue.Message or .Path, which may
+	// embed raw OS text and candidate paths. Empty when no issue applies.
+	ReasonCode string
 	// ServicingReason is the stable path-free reason for a servicing category's
 	// skipped or failed execution outcome. Empty for non-servicing categories and
 	// for servicing outcomes that carry no reason (completed, no_work). It is a
@@ -128,6 +135,21 @@ func HasCategoryCompletion(progress ExecutionProgress) bool {
 		IsTerminalExecutionState(progress.CompletedState)
 }
 
+// executionReasonPriority ranks issue classes when a category recorded more
+// than one issue code. An operational failure explains a failed outcome better
+// than a deliberate safety skip, and cancellation outranks ordinary safety.
+// Equal priority keeps the first code observed so projection stays deterministic.
+func executionReasonPriority(class evidenceIssueClass) int {
+	switch class {
+	case evidenceIssueOperational:
+		return 3
+	case evidenceIssueCancel:
+		return 2
+	default:
+		return 1
+	}
+}
+
 // ProjectCategoryExecutionOutcomes maps the authoritative final Result onto the
 // frozen exact selection in selection order. Categories absent from the Result
 // with no attributed items are empty. Mid-flight progress never feeds this
@@ -147,6 +169,23 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		hasCancel               bool
 		hasOperational          bool
 		hasSafetySkip           bool
+		// reasonCode is the representative path-free issue code for this
+		// category; reasonPriority guards which code wins. Only codes are kept —
+		// never issue Message or Path text.
+		reasonCode     string
+		reasonPriority int
+	}
+	// noteReason records the highest-priority issue code seen for one category.
+	noteReason := func(b *bucket, code string) {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			return
+		}
+		priority := executionReasonPriority(classifyEvidenceIssueCode(code))
+		if priority > b.reasonPriority {
+			b.reasonCode = code
+			b.reasonPriority = priority
+		}
 	}
 	byID := make(map[string]*bucket, len(selected))
 	for _, id := range selected {
@@ -179,6 +218,7 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		// category projection (failed/partial), not successful deletions.
 		b.skipped++
 		b.hasOperational = true
+		noteReason(b, item.Reason.Code)
 	}
 	for _, item := range result.Skipped {
 		b := byID[item.Rule]
@@ -186,6 +226,7 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 			continue
 		}
 		b.skipped++
+		noteReason(b, item.Reason.Code)
 		switch classifyEvidenceIssueCode(item.Reason.Code) {
 		case evidenceIssueCancel:
 			b.hasCancel = true
@@ -208,6 +249,7 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		if b == nil {
 			continue
 		}
+		noteReason(b, issue.Code)
 		switch classifyEvidenceIssueCode(issue.Code) {
 		case evidenceIssueCancel:
 			b.hasCancel = true
@@ -219,11 +261,20 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 	runLevelFailed := result.Status == "error"
 	runLevelCancel := false
 	runLevelOperational := false
+	runLevelReasonCode := ""
+	runLevelReasonPriority := 0
 	for _, issue := range result.Errors {
 		if issue.Rule != "" {
 			continue
 		}
-		switch classifyEvidenceIssueCode(issue.Code) {
+		class := classifyEvidenceIssueCode(issue.Code)
+		if code := strings.TrimSpace(issue.Code); code != "" {
+			if priority := executionReasonPriority(class); priority > runLevelReasonPriority {
+				runLevelReasonCode = code
+				runLevelReasonPriority = priority
+			}
+		}
+		switch class {
 		case evidenceIssueCancel:
 			runLevelCancel = true
 		default:
@@ -253,6 +304,12 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 		if runLevelFailed && b.deleted == 0 && b.skipped == 0 && !hasCancel {
 			hasOperational = true
 		}
+		// A category with no evidence of its own can only be explained by the
+		// run-level issue; one that recorded its own items keeps its own code.
+		reasonCode := b.reasonCode
+		if reasonCode == "" && b.deleted == 0 && b.skipped == 0 {
+			reasonCode = runLevelReasonCode
+		}
 		state := mapExecutionOutcome(categoryEvidenceFactors{
 			SuccessCount:       b.deleted,
 			SkippedCount:       b.skipped,
@@ -269,6 +326,7 @@ func ProjectCategoryExecutionOutcomes(selected []string, result Result) []Catego
 			AffectedBytes:           b.recycleBinMovedBytes + b.permanentlyDeletedBytes,
 			DeletedCount:            b.deleted,
 			SkippedCount:            b.skipped,
+			ReasonCode:              reasonCode,
 		})
 	}
 	return out

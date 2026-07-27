@@ -1864,6 +1864,244 @@ func TestRunExactCleanSelectionRejectsInvalidIdentifiersBeforeCleanup(t *testing
 	}
 }
 
+// TestEagerCleanResultSurfacesRunLevelFailureReason pins that a rejected exact
+// category plan is explained on the result page. Previously the run-level issue
+// was written to Result.Errors and never rendered, so the user saw an all-zero
+// result page with no indication that anything had gone wrong.
+// clearStyleLineKinds strips declared roles so identical content can be routed
+// through the historical text-sniffing path for comparison. Trusted magnitude
+// bytes are preserved so the comparison isolates role routing from the
+// trusted-bytes-vs-parsed-token distinction.
+func clearStyleLineKinds(lines []tuiStyleLine) []tuiStyleLine {
+	out := make([]tuiStyleLine, len(lines))
+	for i, line := range lines {
+		line.Kind = lineKindUnknown
+		out[i] = line
+	}
+	return out
+}
+
+// declaredKindFrameCases builds one model per Clean phase, populated so every
+// line shape that phase can emit is present.
+func declaredKindFrameCases() []struct {
+	name  string
+	model eagerCleanModel
+} {
+	winsxs := clean.CleanupCategorySummary{
+		Identifier:               clean.CategoryWinSxSComponentStore,
+		Label:                    "Windows component store",
+		ReportCategory:           clean.ReportCategorySystem,
+		Eligibility:              clean.CategoryEligibilityOptIn,
+		RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+		PlannedAction:            clean.PlannedActionInvokeWindowsServicing,
+		SelectionPolicy:          clean.CategorySelectionPolicyExactOnly,
+	}
+	summaries := append(append([]clean.CleanupCategorySummary{}, injectedMixedActionSummaries()...), winsxs)
+
+	// newPopulated returns a preview model whose rows span every magnitude tier
+	// plus a ready servicing row, all selected.
+	newPopulated := func() eagerCleanModel {
+		m := newEagerCleanModelFromSummaries(summaries, 100, 40)
+		m.finished = true
+		tiers := []int64{2048, 300 * 1024 * 1024, 2 * 1024 * 1024 * 1024}
+		for i := range m.rows {
+			if m.rows[i].Servicing {
+				m.rows[i].ServicingState = clean.ServicingRowReady
+				m.rows[i].ServicingReclaimablePackages = 3
+				m.rows[i].Selected = true
+				continue
+			}
+			m.rows[i].State = clean.CategoryPreviewComplete
+			m.rows[i].CandidateCount = 12
+			m.rows[i].Bytes = tiers[i%len(tiers)]
+			m.rows[i].Selected = true
+			m.rows[i].SafetyNote = "Regenerated on next use."
+		}
+		return m
+	}
+
+	preview := newPopulated()
+
+	confirmation := newPopulated()
+	confirmation.phase = eagerPhaseConfirmation
+
+	executing := newPopulated()
+	executing.phase = eagerPhaseExecuting
+	executing.executionStarted = true
+	executing.frozenCategories = executing.selectedCategoryIDs()
+	executing.executionOutcomes = initialExecutionOutcomes(executing.frozenCategories)
+	if len(executing.executionOutcomes) > 1 {
+		executing.executionOutcomes[0].State = clean.CategoryExecutionCleaned
+		executing.executionOutcomes[0].AffectedBytes = 2 * 1024 * 1024 * 1024
+		executing.executionOutcomes[1].State = clean.CategoryExecutionFailed
+		executing.executionOutcomes[1].ReasonCode = "permission_denied"
+	}
+	executing.executionProgress = clean.ExecutionProgress{Phase: clean.ExecutionPhaseRecycleBinOperations}
+
+	canceling := executing
+	canceling.cancellationRequested = true
+
+	result := newPopulated()
+	result.phase = eagerPhaseResult
+	result.frozenCategories = result.selectedCategoryIDs()
+	result.executionResult = clean.Result{
+		Status: "error",
+		Mode:   "execute",
+		Deleted: []clean.DeletedItem{{
+			Path: `C:\Temp\a`, Bytes: 2 * 1024 * 1024 * 1024, Rule: result.frozenCategories[0],
+		}},
+		Errors: []clean.StructuredIssue{{Code: "invalid_category_plan", Message: "rejected"}},
+		ServicingOperations: []clean.ServicingOperation{{
+			Category: clean.CategoryWinSxSComponentStore, RestartRequired: true,
+		}},
+	}
+	result.executionOutcomes = clean.ProjectCategoryExecutionOutcomes(result.frozenCategories, result.executionResult)
+
+	unavailable := newPopulated()
+	unavailable.unavailable = &clean.EagerPreviewUnavailable{Code: "no_catalog", Message: "Clean cannot start."}
+
+	tooSmall := newPopulated()
+	tooSmall.setSize(30, 8)
+
+	return []struct {
+		name  string
+		model eagerCleanModel
+	}{
+		{"preview", preview},
+		{"confirmation", confirmation},
+		{"executing", executing},
+		{"executing canceling", canceling},
+		{"result", result},
+		{"unavailable", unavailable},
+		{"terminal too small", tooSmall},
+	}
+}
+
+// TestDeclaredKindsPreserveWholeFrameRendering is the acceptance test for
+// Clean's declared line kinds: for every phase, rendering the composed frame
+// via declared roles must be byte-identical to rendering the same lines through
+// the historical sniffing path — except on lines sniffing gets wrong (see
+// sniffingMisstyleReason), which must differ. A failure names the offending line.
+func TestDeclaredKindsPreserveWholeFrameRendering(t *testing.T) {
+	for _, noColor := range []bool{false, true} {
+		mode := "color"
+		if noColor {
+			mode = "no-color"
+		}
+		t.Run(mode, func(t *testing.T) {
+			if noColor {
+				t.Setenv("NO_COLOR", "1")
+			} else {
+				t.Setenv("NO_COLOR", "")
+			}
+			for _, tc := range declaredKindFrameCases() {
+				t.Run(tc.name, func(t *testing.T) {
+					lines := tc.model.contentStyleLines()
+					stripped := clearStyleLineKinds(lines)
+					for i := range lines {
+						declared := stylizeStyleLine(lines[i])
+						sniffed := stylizeStyleLine(stripped[i])
+						reason := sniffingMisstyleReason(lines[i].Text)
+						if reason != "" {
+							if declared == sniffed {
+								t.Fatalf("line %d %q: expected declared role to fix sniffing (%s)",
+									i, lines[i].Text, reason)
+							}
+							continue
+						}
+						if declared != sniffed {
+							t.Fatalf("line %d %q: declared kind %d changes rendering\n declared = %q\n sniffed  = %q",
+								i, lines[i].Text, lines[i].Kind, declared, sniffed)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestDeclaredKindsCoverEveryCleanLine pins that the migration is complete: no
+// Clean frame line outside the deliberately unmigrated too-small / unavailable
+// fallbacks may still rely on text sniffing.
+func TestDeclaredKindsCoverEveryCleanLine(t *testing.T) {
+	for _, tc := range declaredKindFrameCases() {
+		if tc.name == "unavailable" || tc.name == "terminal too small" {
+			// These compose from plain text via styleLinesFromPlain and keep the
+			// sniffing path deliberately.
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			for i, line := range tc.model.contentStyleLines() {
+				if line.Kind == lineKindUnknown {
+					t.Fatalf("line %d %q has no declared kind", i, line.Text)
+				}
+			}
+		})
+	}
+}
+
+func TestEagerCleanResultSurfacesRunLevelFailureReason(t *testing.T) {
+	summaries := []clean.CleanupCategorySummary{{
+		Identifier:     "not_a_category",
+		Label:          "Bogus category",
+		ReportCategory: clean.ReportCategoryUserEssentials,
+		Eligibility:    clean.CategoryEligibilityDefault,
+		PlannedAction:  clean.PlannedActionMoveToRecycleBin,
+	}}
+	model := newEagerCleanModelFromSummaries(summaries, 100, 40)
+	model.rows[0].Selected = true
+	model.rows[0].State = clean.CategoryPreviewComplete
+
+	if _, cmd := model.beginExactExecution(); cmd != nil {
+		t.Fatal("invalid plan must not start execution")
+	}
+	if model.phase != eagerPhaseResult {
+		t.Fatalf("phase = %v, want result", model.phase)
+	}
+	content := model.content()
+	if !strings.Contains(content, "Cleanup could not start · category plan is invalid") {
+		t.Fatalf("run-level failure not explained on result page:\n%s", content)
+	}
+	// The mapped code is the only thing that may surface; the originating
+	// issue Message is raw text and must never reach the frame.
+	if len(model.executionResult.Errors) == 0 {
+		t.Fatal("expected a run-level error to be recorded")
+	}
+	if raw := model.executionResult.Errors[0].Message; raw != "" && strings.Contains(content, raw) {
+		t.Fatalf("raw issue message leaked into result page: %q\n%s", raw, content)
+	}
+}
+
+// TestEagerCleanResultRowsDiscloseFailureReason pins that a category-scoped
+// failure explains itself on its own outcome row, without forwarding the
+// path-bearing issue message.
+func TestEagerCleanResultRowsDiscloseFailureReason(t *testing.T) {
+	id := clean.DefaultCategoryFoalOwnedTempSandboxes
+	model := newEagerCleanModel(100, 40)
+	model.phase = eagerPhaseResult
+	model.frozenCategories = []string{id}
+	model.executionResult = clean.Result{
+		Status: "ok",
+		Mode:   "execute",
+		Skipped: []clean.SkippedItem{{
+			Path:   `C:\Users\me\AppData\Local\Temp\locked`,
+			Rule:   id,
+			Reason: clean.StructuredIssue{Code: "permission_denied", Message: `denied for C:\Users\me\AppData\Local\Temp\locked`},
+		}},
+	}
+	model.executionOutcomes = clean.ProjectCategoryExecutionOutcomes(model.frozenCategories, model.executionResult)
+
+	content := model.content()
+	if !strings.Contains(content, "· failed · permission denied") {
+		t.Fatalf("category failure reason missing from result rows:\n%s", content)
+	}
+	for _, forbidden := range []string{`C:\`, "AppData", "denied for"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("path-bearing text %q leaked into result page:\n%s", forbidden, content)
+		}
+	}
+}
+
 func TestEagerCleanExecutionRendersPhaseAndSelectedCategoriesOnly(t *testing.T) {
 	var cancelCalls int
 	original := runExactCleanSelection
