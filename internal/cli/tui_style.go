@@ -47,12 +47,16 @@ var (
 	tuiMagnitudeStrongStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("208"))
 	tuiMagnitudeBoldStyle      = lipgloss.NewStyle().Bold(true)
 
-	// Selected-row magnitude stacking: keep reverse on the byte token so the
-	// focused row reads as continuous selection, while magnitude hue stays
-	// visible on the size token (orange/amber, never pure red for size).
-	tuiSelectedMagnitudeAttentionStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("214"))
-	tuiSelectedMagnitudeStrongStyle    = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("208"))
-	tuiSelectedMagnitudeBoldStyle      = lipgloss.NewStyle().Reverse(true).Bold(true)
+	// Selected-row magnitude stacking: keep the selection accent reverse bg
+	// continuous by using the same FG (81) as tuiSelectedAccentStyle. Magnitude
+	// hue goes on Background so reverse video paints the glyph, not a different
+	// cell background (setting FG alone under reverse would change the bg).
+	// Orange/amber only — never pure red for size.
+	tuiSelectedMagnitudeAttentionStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("214"))
+	tuiSelectedMagnitudeStrongStyle    = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("208"))
+	// Bold-only selected magnitude (NO_COLOR): reverse without a hue so the
+	// focused row stays continuous under reverse-only selection.
+	tuiSelectedMagnitudeBoldStyle = lipgloss.NewStyle().Reverse(true).Bold(true)
 
 	// State-marker tokens (restricted mid-line): color carries reliability only.
 	// Never pure red — failed/partial use yellow attention, not risk red.
@@ -64,12 +68,16 @@ var (
 	tuiStateProgressStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 	tuiStateEmptyStyle     = lipgloss.NewStyle().Faint(true)
 
-	// Selected-row state markers stack reverse with the same reliability hues.
-	tuiSelectedStateOKStyle        = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("14"))
-	tuiSelectedStateAttentionStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("11"))
-	tuiSelectedStateSkippedStyle   = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("8"))
-	tuiSelectedStateProgressStyle  = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("14"))
-	tuiSelectedStateEmptyStyle     = lipgloss.NewStyle().Reverse(true).Bold(true).Faint(true)
+	// Selected-row state markers: same reverse accent FG as the focused row so
+	// selection bg stays continuous across checkbox / marker / label segments.
+	// Reliability hue is Background (becomes glyph color under reverse). Empty
+	// has no reliability hue — match the row accent only; faint-only reverse
+	// previously painted a darker cell and broke the selection bar.
+	tuiSelectedStateOKStyle        = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("14"))
+	tuiSelectedStateAttentionStyle = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("11"))
+	tuiSelectedStateSkippedStyle   = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("8"))
+	tuiSelectedStateProgressStyle  = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81")).Background(lipgloss.Color("14"))
+	tuiSelectedStateEmptyStyle     = lipgloss.NewStyle().Reverse(true).Bold(true).Foreground(lipgloss.Color("81"))
 
 	// Risk channel: pure red + bold for irreversible permanent warning only.
 	// Distinct from magnitude orange — large size is not danger.
