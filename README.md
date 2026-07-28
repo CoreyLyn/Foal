@@ -73,6 +73,8 @@ Open the interactive TUI:
 foal
 ```
 
+The Clean TUI measures catalog categories progressively, keeps candidate paths out of the primary view, and shows stable path-free explanations for partial, skipped, and failed execution outcomes. The shared Result and History records remain authoritative.
+
 Run the default cleanup after reviewing the preview:
 
 ```powershell

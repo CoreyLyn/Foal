@@ -14,4 +14,4 @@ The category-first Clean TUI needed clearer scannability for large reclaimable s
 - Implementers must not use pure red for gigabyte magnitude; red stays for irreversible / permanent warning emphasis.
 - Preview lists do not prefix each row with planned-action markers; the permanent-selection notice and confirmation remain the risk cues.
 - Display and scan order stay catalog-stable; size emphasis is visual, not sort order.
-- Future result-state palettes (e.g. success green) need a separate decision so they do not collide with magnitude orange or risk red.
+- A later presentation-only refinement added reliability-state marker colors and semantic line roles: success, attention, skipped, progress, and empty markers stay distinct from magnitude and irreversible-risk cues; failed/partial/canceled use attention rather than pure red. `NO_COLOR` preserves plain symbols and selection semantics. Stable path-free reason codes explain non-successful execution rows without forwarding raw issue messages or paths.

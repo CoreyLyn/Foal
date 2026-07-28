@@ -2,6 +2,8 @@
 
 Design note from a grilling session. Presentation-only polish for the category-first Clean TUI: make large reclaimable sizes scannable and permanent-delete risk visible without conflating "large" with "dangerous".
 
+> Implemented. A later presentation-only refinement added stable reliability-state marker colors and semantic line roles without changing the magnitude-versus-risk decision below.
+
 ## Goal
 
 Improve Clean TUI UI/UE so users can:
@@ -52,10 +54,17 @@ No change to discovery, JSON contracts, selection semantics, planned actions, pa
 - **No** reorder by size (display order stays catalog/scan order).
 - **No** completion celebration, byte-derived percentages, retry/rescan, or full result success-green / fail-red palette in this slice.
 
+## Later reliability-state refinement
+
+- Preview, execution, and result markers now reinforce success, attention, skipped, progress, and empty states. Failed, partial, and canceled remain attention states rather than pure-red danger; pure red remains reserved for irreversible permanent-deletion risk.
+- Partial, skipped, and failed execution/result rows append controlled path-free explanations derived only from stable Foal-owned reason codes. Run-level issues with no category appear once as path-free result notes; raw issue messages and paths are never forwarded.
+- Clean lines declare semantic roles at composition time so headings, progress, totals, prose, and hints are styled by meaning rather than rendered wording. Shared plain-text viewers retain pattern matching as a fallback.
+- `NO_COLOR` removes hues while preserving plain markers, copy, and selection behavior. These presentation cues do not change discovery, authorization, JSON, Result, or History.
+
 ## Engineering constraints
 
 - Plain-text frame remains the source of truth; restricted token styling is applied after plain composition.
-- Tests assert plain fragments (`1.2 GB`, `perm`, `includes permanent deletion`), not ANSI sequences.
+- Tests assert plain fragments (`1.2 GB`, `Selection includes permanent deletion.`, stable reason copy), not ANSI sequences.
 - Existing whole-line styles (cursor reverse, section headings) remain; magnitude/risk tokens are a narrow mid-line exception only for agreed token kinds.
 - TUI never chooses or overrides Planned deletion action; markers and notices project catalog/shared selection state only.
 
@@ -67,12 +76,12 @@ No change to discovery, JSON contracts, selection semantics, planned actions, pa
 - Secure-erasure claims, elevation, process stopping.
 - Sorting categories by size or promoting large rows out of stable order.
 
-## Likely implementation slices
+## Implemented slices
 
-1. Pure helpers: magnitude tier from `int64` bytes; format+style byte token; selection permanent notice line.
-2. Preview/confirm/result view wiring: align bytes, apply token styles, strengthen confirmation warning.
-3. Tests: tier boundaries, no color on zero/pending, plain-frame assertions, footer notice only when selection includes permanent, `NO_COLOR` bold fallback if wired.
-4. Keep `CONTEXT.md` and this plan aligned if thresholds or risk chrome change.
+1. Added pure helpers for magnitude tiers from trusted `int64` bytes, byte-token styling, state markers, and the permanent-selection notice.
+2. Wired preview, confirmation, execution, and result views with semantic line roles while preserving plain frames.
+3. Added boundary, selected-row, reason-code, whole-frame, and `NO_COLOR` tests.
+4. Kept `CONTEXT.md`, the category-first plan, and ADR 0023 aligned with the implemented presentation.
 
 ## References
 

@@ -638,11 +638,11 @@ func developerCacheEntryWithProductScopedChildren(
 
 var canonicalCategoryEntries = []categoryCatalogEntry{
 	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 36 delete_permanently + 7 move_to_recycle_bin + 1 invoke_windows_servicing + 1 actionless permission boundary.
-	// The 7th, 8th, 9th, 10th, and 11th Recycle Bin categories are the exact-selection-only, Not-proven
-	// nvidia_installer_cache, lghub-cache, thunder-update-download, machine-wide windows-temp,
-	// and machine-wide windows-update-download-cache (registered in the System group below).
-	// Recycle Bin system opt-ins: user_temp / crash_dumps / WER stay whole-root;
+	// 36 delete_permanently + 8 move_to_recycle_bin + 1 invoke_windows_servicing + 1 actionless permission boundary.
+	// Five Recycle Bin categories are exact-selection-only and Not-proven:
+	// nvidia_installer_cache, lghub-cache, thunder-update-download, machine-wide
+	// windows-temp, and machine-wide windows-update-download-cache.
+	// Existence-based system opt-ins: user_temp / crash_dumps / WER stay whole-root;
 	// explorer_thumbnail_cache and inet_cache use exact research allowlists (#239).
 	defaultCategoryEntry(categoryDefinition(DefaultCategoryFoalOwnedTempSandboxes, "Foal-owned temp sandboxes", ReportCategoryUserEssentials, CategoryEligibilityDefault, RunningApplicationPolicyNotApplicable, PlannedActionMoveToRecycleBin)),
 	existenceOpportunityEntry(categoryDefinition(OpportunityCategoryUserTemp, "User temp", ReportCategoryUserEssentials, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently)),

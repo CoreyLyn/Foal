@@ -250,7 +250,8 @@ func productionPermanentCategoryIDs() map[string]bool {
 }
 
 // TestCompleteDeletionRuleMatrixLocked is the end-state catalog contract for ADR 0018:
-// exactly 36 delete_permanently, 7 move_to_recycle_bin, and one actionless permission boundary.
+// exactly 36 delete_permanently, 8 move_to_recycle_bin, 1 invoke_windows_servicing,
+// and one actionless permission boundary.
 func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	wantPermanent := lockedPermanentCategoryIDs()
