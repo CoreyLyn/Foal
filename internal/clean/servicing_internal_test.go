@@ -95,10 +95,16 @@ func TestRecordHistorySessionProjectsServicingSeparatelyFromItems(t *testing.T) 
 // group token skip exact-selection-only categories while still expanding
 // standard opt-ins.
 func TestAggregateAndGroupSelectionExcludeExactOnly(t *testing.T) {
+	standardDev := categoryDefinition("standard_dev", "Standard dev", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently)
+	standardDev.SelectionGroup = CategorySelectionGroupDevCaches
+	standardApp := categoryDefinition("standard_app", "Standard app", ReportCategoryApplications, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently)
+	standardApp.SelectionGroup = CategorySelectionGroupAppCaches
+	standardCLI := categoryDefinition("standard_cli", "Standard cli", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently)
+	standardCLI.SelectionGroup = CategorySelectionGroupCLIAgents
 	entries := []categoryCatalogEntry{
-		{definition: categoryDefinition("standard_dev", "Standard dev", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently), resolverKind: categoryResolverDeveloperCache},
-		{definition: categoryDefinition("standard_app", "Standard app", ReportCategoryApplications, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently), resolverKind: categoryResolverApplicationCache},
-		{definition: categoryDefinition("standard_cli", "Standard cli", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionDeletePermanently), cliAgentProduct: true},
+		{definition: standardDev, resolverKind: categoryResolverDeveloperCache},
+		{definition: standardApp, resolverKind: categoryResolverApplicationCache},
+		{definition: standardCLI},
 		exactOnlyEntry("exact_dev", ReportCategoryDeveloperTools, categoryResolverDeveloperCache, false),
 		exactOnlyEntry("exact_app", ReportCategoryApplications, categoryResolverApplicationCache, false),
 		exactOnlyEntry("exact_cli", ReportCategoryDeveloperTools, categoryResolverDeveloperCache, true),
@@ -110,14 +116,14 @@ func TestAggregateAndGroupSelectionExcludeExactOnly(t *testing.T) {
 	} else if !containsAll(got, "standard_dev", "standard_app", "standard_cli") {
 		t.Fatalf("all-token expansion dropped standard opt-ins: %v", got)
 	}
-	if got := developerToolsOptInCategoryIDsFrom(entries); containsAny(got, "exact_dev") {
-		t.Fatalf("dev-caches included exact-only: %v", got)
+	if got := developerToolsOptInCategoryIDsFrom(entries); !containsAll(got, "standard_dev") || containsAny(got, "exact_dev", "standard_app", "standard_cli") {
+		t.Fatalf("dev-caches = %v", got)
 	}
-	if got := applicationCachesOptInCategoryIDsFrom(entries); containsAny(got, "exact_app") {
-		t.Fatalf("app-caches included exact-only: %v", got)
+	if got := applicationCachesOptInCategoryIDsFrom(entries); !containsAll(got, "standard_app") || containsAny(got, "exact_app", "standard_dev", "standard_cli") {
+		t.Fatalf("app-caches = %v", got)
 	}
-	if got := cliAgentCategoryIDsFrom(entries); containsAny(got, "exact_cli") {
-		t.Fatalf("cli-agents included exact-only: %v", got)
+	if got := cliAgentCategoryIDsFrom(entries); !containsAll(got, "standard_cli") || containsAny(got, "exact_cli", "standard_dev", "standard_app") {
+		t.Fatalf("cli-agents = %v", got)
 	}
 }
 
@@ -160,7 +166,15 @@ func TestServicingObservationProjectsAndStaysOutOfTotals(t *testing.T) {
 func exactOnlyEntry(id string, report ReportCategory, kind categoryResolverKind, cliAgent bool) categoryCatalogEntry {
 	def := categoryDefinition(id, id, report, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionInvokeWindowsServicing)
 	def.SelectionPolicy = CategorySelectionPolicyExactOnly
-	return categoryCatalogEntry{definition: def, resolverKind: kind, cliAgentProduct: cliAgent}
+	switch {
+	case cliAgent:
+		def.SelectionGroup = CategorySelectionGroupCLIAgents
+	case kind == categoryResolverApplicationCache:
+		def.SelectionGroup = CategorySelectionGroupAppCaches
+	case kind == categoryResolverDeveloperCache:
+		def.SelectionGroup = CategorySelectionGroupDevCaches
+	}
+	return categoryCatalogEntry{definition: def, resolverKind: kind}
 }
 
 func containsAny(ids []string, wanted ...string) bool {

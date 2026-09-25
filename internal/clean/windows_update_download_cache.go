@@ -80,10 +80,7 @@ var registerWindowsUpdateDownloadCacheFixedRootPolicy = func() struct{} {
 		impactNotice:           windowsUpdateDownloadCacheOptInImpactNotice,
 		requireExactOnly:       true,
 		requireRecycleBin:      true,
+		identityValidator:      validateFixedRootIdentity,
 	})
 	return struct{}{}
 }()
-
-func init() {
-	registerCategoryIdentityValidator(CategoryWindowsUpdateDownloadCache, validateFixedRootIdentity)
-}

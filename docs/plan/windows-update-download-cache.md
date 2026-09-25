@@ -53,4 +53,4 @@ Canonical category: `windows-update-download-cache`, label `Windows Update downl
 ## Test intent
 
 - Hermetic seam tests with injected env/FS/clock/SCM fakes: root resolution and carve-out boundary (`DataStore` sibling still rejected), gate matrix (each service running/stopped/unknown × before/after), 30-day boundary (exactly-30-days is a candidate), future/unknown timestamps, reparse exclusion, per-item access-denied isolation, exact-selection-only exclusion, impact notices, pre-mutation revalidation drift.
-- Count-assertion sites: `execute_test.go` opt-in names, `tui_clean_eager_test.go` matrix, `category_catalog_test.go` locked lengths + Recycle Bin matrix + exact-selection-only set, catalog matrix comment, `CONTEXT.md`, `AGENTS.md`, README, `docs/plan/clean-deletion-policy.md`.
+- Adding a category follows the checklist above `canonicalCategoryEntries` in `internal/clean/category_catalog.go`. Census lengths are derived from the catalog. Still update the ordered identifier list in `category_catalog_test.go` and, when the product set changes, `docs/plan/clean-deletion-policy.md`, `AGENTS.md`, and `CONTEXT.md`.

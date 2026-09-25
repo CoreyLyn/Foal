@@ -86,11 +86,11 @@ func (grokBuildUpdateResidueResolver) resolve(ctx context.Context, opts Options,
 }
 
 func grokBuildUpdateResidueCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogEntry {
+	definition = withSelectionGroup(definition, CategorySelectionGroupCLIAgents)
 	return categoryCatalogEntry{
 		definition:          definition,
 		resolverKind:        categoryResolverGrokBuildUpdateResidue,
 		resolver:            grokBuildUpdateResidueResolver{},
-		cliAgentProduct:     true, // participates in `cli-agents` selection group only
 		runningApplications: []string{ApplicationGrokBuild},
 	}
 }

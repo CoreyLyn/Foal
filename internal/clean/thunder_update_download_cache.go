@@ -48,10 +48,7 @@ var registerThunderUpdateDownloadFixedRootPolicy = func() struct{} {
 		impactNotice:           thunderUpdateDownloadOptInImpactNotice,
 		requireExactOnly:       true,
 		requireRecycleBin:      true,
+		identityValidator:      validateFixedRootIdentity,
 	})
 	return struct{}{}
 }()
-
-func init() {
-	registerCategoryIdentityValidator(CategoryThunderUpdateDownload, validateFixedRootIdentity)
-}

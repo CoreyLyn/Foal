@@ -873,60 +873,34 @@ func TestEagerCleanModelDefaultSelectionAndCursorIndependence(t *testing.T) {
 
 	defaults := 0
 	optIns := 0
+	wantSelected := 0
 	for i, row := range model.rows {
 		switch row.Eligibility {
 		case clean.CategoryEligibilityDefault:
 			defaults++
-			if !row.Selected {
-				t.Fatalf("default %q must start selected", row.Identifier)
-			}
 		case clean.CategoryEligibilityOptIn:
 			optIns++
-			// Permanent-action opt-ins (complete 20-category matrix) start selected.
-			if row.PlannedAction == clean.PlannedActionDeletePermanently {
-				if !row.Selected {
-					t.Fatalf("permanent opt-in %q must start selected", row.Identifier)
-				}
-			} else if row.Selected {
-				t.Fatalf("recycle-bin opt-in %q must start unselected", row.Identifier)
-			}
 		default:
 			t.Fatalf("queue row eligibility = %q", row.Eligibility)
 		}
-		// Selection IDs are canonical catalog identifiers only.
 		if row.Identifier != queue[i].Identifier {
 			t.Fatalf("non-canonical id %q", row.Identifier)
+		}
+		if clean.InitiallySelectedCategory(queue[i]) {
+			wantSelected++
+		}
+		if row.Selected != clean.InitiallySelectedCategory(queue[i]) {
+			t.Fatalf("%s selected=%v, catalog initial=%v", row.Identifier, row.Selected, clean.InitiallySelectedCategory(queue[i]))
 		}
 	}
 	if defaults == 0 || optIns == 0 {
 		t.Fatalf("defaults=%d optIns=%d", defaults, optIns)
 	}
-	wantSelected := defaults
-	permanentOptIns := 0
-	recycleBinOptIns := 0
-	for _, row := range model.rows {
-		if row.Eligibility == clean.CategoryEligibilityOptIn && row.PlannedAction == clean.PlannedActionDeletePermanently {
-			wantSelected++
-			permanentOptIns++
-		}
-		if row.Eligibility == clean.CategoryEligibilityOptIn && row.PlannedAction == clean.PlannedActionMoveToRecycleBin {
-			recycleBinOptIns++
-		}
+	if model.selectedCount() != wantSelected {
+		t.Fatalf("selectedCount = %d, want %d derived from the catalog", model.selectedCount(), wantSelected)
 	}
-	// Complete rule matrix: 1 default + 36 permanent = 37; 7 Recycle Bin opt-ins
-	// unselected (windows_error_reporting, the exact-selection-only
-	// nvidia_installer_cache, lghub-cache, thunder-update-download, windows-temp,
-	// and windows-update-download-cache, plus the Standard-selection
-	// electron-updater-residue).
-	if defaults != 1 || permanentOptIns != 36 || recycleBinOptIns != 7 || wantSelected != 37 {
-		t.Fatalf("matrix selection defaults=%d permanent=%d rb_opt_ins=%d wantSelected=%d; want 1/36/7/37",
-			defaults, permanentOptIns, recycleBinOptIns, wantSelected)
-	}
-	if model.selectedCount() != 37 {
-		t.Fatalf("selectedCount = %d, want 37 (default + all permanent when rows present)", model.selectedCount())
-	}
-	if len(model.rows) != 45 {
-		t.Fatalf("eager rows = %d, want 45 executable categories", len(model.rows))
+	if len(model.rows) != len(queue) {
+		t.Fatalf("eager rows = %d, want %d executable categories", len(model.rows), len(queue))
 	}
 	for _, id := range model.selectedCategoryIDs() {
 		if strings.Contains(id, `\`) || strings.Contains(id, "/") || strings.Contains(id, " ") {

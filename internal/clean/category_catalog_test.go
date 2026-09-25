@@ -173,6 +173,22 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 		// Ensure a valid executable definition still constructs (control case uses
 		// a separate positive test below; this only lists rejection cases).
 		{name: "duplicate with executable", definitions: []clean.CleanupCategoryDefinition{validExecutable, validExecutable}},
+		{name: "unknown selection group", definitions: []clean.CleanupCategoryDefinition{{
+			Identifier: "unknown-group", Label: "Unknown group", ReportCategory: clean.ReportCategorySystem,
+			Eligibility: clean.CategoryEligibilityOptIn, RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+			PlannedAction: clean.PlannedActionMoveToRecycleBin, SelectionGroup: "other-caches",
+		}}},
+		{name: "exact-only joins a group", definitions: []clean.CleanupCategoryDefinition{{
+			Identifier: "exact-grouped", Label: "Exact grouped", ReportCategory: clean.ReportCategorySystem,
+			Eligibility: clean.CategoryEligibilityOptIn, RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+			PlannedAction: clean.PlannedActionMoveToRecycleBin, SelectionPolicy: clean.CategorySelectionPolicyExactOnly,
+			SelectionGroup: clean.CategorySelectionGroupDevCaches,
+		}}},
+		{name: "non-executable joins a group", definitions: []clean.CleanupCategoryDefinition{{
+			Identifier: "boundary-grouped", Label: "Boundary grouped", ReportCategory: clean.ReportCategorySystem,
+			Eligibility: clean.CategoryEligibilityPermissionBoundary, RunningApplicationPolicy: clean.RunningApplicationPolicyNotApplicable,
+			SelectionGroup: clean.CategorySelectionGroupAppCaches,
+		}}},
 	}
 
 	for _, tt := range tests {
@@ -184,225 +200,90 @@ func TestCategoryCatalogRejectsInvalidDefinitions(t *testing.T) {
 	}
 }
 
-// lockedPermanentCategoryIDs is the complete production permanent matrix (36).
-// Order matches catalog registration among permanent-action categories.
-func lockedPermanentCategoryIDs() []string {
-	return []string{
-		clean.OpportunityCategoryUserTemp,
-		clean.OpportunityCategoryCrashDumps,
-		clean.OpportunityCategoryExplorerThumbnailCache,
-		clean.OpportunityCategoryINetCache,
-		clean.OpportunityCategoryD3DShaderCache,
-		clean.OpportunityCategoryNVIDIADXCache,
-		clean.OpportunityCategoryNVIDIAGLCache,
-		clean.OpportunityCategoryAMDGPUShaderCaches,
-		clean.OpportunityCategoryIntelGPUShaderCache,
-		clean.OpportunityCategoryBrowserCache,
-		clean.OpportunityCategoryVSCodeCache,
-		clean.OpportunityCategoryCursorCache,
-		clean.OpportunityCategoryVSCodeInsidersCache,
-		clean.OpportunityCategoryVSCodiumCache,
-		clean.OpportunityCategoryWindsurfCache,
-		clean.OpportunityCategoryTraeCache,
-		clean.DevCacheCategoryNPM,
-		clean.DevCacheCategoryPNPM,
-		clean.DevCacheCategoryYarn,
-		clean.DevCacheCategoryGo,
-		clean.DevCacheCategoryGoModCache,
-		clean.DevCacheCategoryPip,
-		clean.DevCacheCategoryCargo,
-		clean.DevCacheCategoryNuGet,
-		clean.DevCacheCategoryNuGetGlobalPackages,
-		clean.DevCacheCategoryCorepack,
-		clean.DevCacheCategoryUV,
-		clean.DevCacheCategoryBun,
-		clean.DevCacheCategoryPlaywright,
-		clean.DevCacheCategoryPuppeteerBrowsers,
-		clean.DevCacheCategoryElectron,
-		clean.DevCacheCategoryJetBrainsIDECaches,
-		clean.DevCacheCategoryVisualStudioCaches,
-		clean.CategoryGrokBuildUpdateResidue,
-		clean.OpportunityCategoryObsidianCache,
-		clean.OpportunityCategoryVRChatCache,
-	}
-}
-
-// lockedRecycleBinCategoryIDs is the complete production Recycle Bin matrix (8).
-func lockedRecycleBinCategoryIDs() []string {
-	return []string{
-		clean.DefaultCategoryFoalOwnedTempSandboxes,
-		clean.OpportunityCategoryWindowsErrorReporting,
-		clean.CategoryNVIDIAInstallerCache,
-		clean.CategoryLGHUBCache,
-		clean.CategoryThunderUpdateDownload,
-		clean.CategoryWindowsTemp,
-		clean.CategoryWindowsUpdateDownloadCache,
-		clean.CategoryElectronUpdaterResidue,
-	}
-}
-
-func productionPermanentCategoryIDs() map[string]bool {
-	want := make(map[string]bool, len(lockedPermanentCategoryIDs()))
-	for _, id := range lockedPermanentCategoryIDs() {
-		want[id] = true
-	}
-	return want
-}
-
-// TestCompleteDeletionRuleMatrixLocked is the end-state catalog contract for ADR 0018:
-// exactly 36 delete_permanently, 8 move_to_recycle_bin, 1 invoke_windows_servicing,
-// and one actionless permission boundary.
-func TestCompleteDeletionRuleMatrixLocked(t *testing.T) {
+// TestDeletionRuleMatrixDerivesFromCatalog checks action, initial selection, and
+// the eager queue against the catalog. Counts are derived; adding a category
+// does not update a parallel length lock.
+func TestDeletionRuleMatrixDerivesFromCatalog(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
-	wantPermanent := lockedPermanentCategoryIDs()
-	wantRecycleBin := lockedRecycleBinCategoryIDs()
-	if len(wantPermanent) != 36 {
-		t.Fatalf("locked permanent matrix length = %d, want 36", len(wantPermanent))
-	}
-	if len(wantRecycleBin) != 8 {
-		t.Fatalf("locked Recycle Bin matrix length = %d, want 8", len(wantRecycleBin))
-	}
-
-	var permanent, recycleBin, servicing, executable []string
+	var executable []string
 	for _, definition := range catalog.Definitions() {
+		summary, ok := catalog.Summary(definition.Identifier)
+		if !ok {
+			t.Fatalf("summary missing for %q", definition.Identifier)
+		}
+		if summary.PlannedAction != definition.PlannedAction || summary.SelectionGroup != definition.SelectionGroup ||
+			summary.SelectionPolicy != definition.SelectionPolicy {
+			t.Fatalf("summary drifted from definition for %q: summary=%#v definition=%#v", definition.Identifier, summary, definition)
+		}
 		switch definition.Eligibility {
 		case clean.CategoryEligibilityDefault, clean.CategoryEligibilityOptIn:
 			executable = append(executable, definition.Identifier)
 			switch definition.PlannedAction {
-			case clean.PlannedActionDeletePermanently:
-				permanent = append(permanent, definition.Identifier)
-			case clean.PlannedActionMoveToRecycleBin:
-				recycleBin = append(recycleBin, definition.Identifier)
-			case clean.PlannedActionInvokeWindowsServicing:
-				servicing = append(servicing, definition.Identifier)
+			case clean.PlannedActionDeletePermanently, clean.PlannedActionMoveToRecycleBin, clean.PlannedActionInvokeWindowsServicing:
 			default:
 				t.Fatalf("executable %q has unsupported planned_action %q", definition.Identifier, definition.PlannedAction)
 			}
+			wantSelected := definition.SelectionPolicy != clean.CategorySelectionPolicyExactOnly &&
+				(definition.Eligibility == clean.CategoryEligibilityDefault || definition.PlannedAction == clean.PlannedActionDeletePermanently)
+			if clean.InitiallySelectedCategory(summary) != wantSelected {
+				t.Fatalf("%s initially selected = %v, want %v", definition.Identifier, clean.InitiallySelectedCategory(summary), wantSelected)
+			}
 		case clean.CategoryEligibilityPermissionBoundary, clean.CategoryEligibilityReviewOnly:
-			if definition.PlannedAction != "" {
-				t.Fatalf("non-executable %q must be actionless, got %q", definition.Identifier, definition.PlannedAction)
+			if definition.PlannedAction != "" || definition.SelectionGroup != "" {
+				t.Fatalf("non-executable %q must be actionless and ungrouped, got action %q group %q",
+					definition.Identifier, definition.PlannedAction, definition.SelectionGroup)
+			}
+			if clean.InitiallySelectedCategory(summary) {
+				t.Fatalf("%s must not start selected", definition.Identifier)
 			}
 		default:
 			t.Fatalf("unexpected eligibility %q on %q", definition.Eligibility, definition.Identifier)
 		}
 	}
 
-	// ADR 0029 adds exactly one invoke_windows_servicing category
-	// (winsxs_component_store); #309 adds one move_to_recycle_bin category
-	// (nvidia_installer_cache); #325 adds lghub-cache and #326 adds
-	// thunder-update-download (both move_to_recycle_bin); #323 adds
-	// nvidia_gl_cache and #324 adds vrchat_cache (both delete_permanently);
-	// #338 adds the machine-wide windows-temp and #339 the machine-wide
-	// windows-update-download-cache (both move_to_recycle_bin).
-	if len(servicing) != 1 || servicing[0] != clean.CategoryWinSxSComponentStore {
-		t.Fatalf("servicing matrix = %#v, want [%q]", servicing, clean.CategoryWinSxSComponentStore)
-	}
-	if len(executable) != 45 {
-		t.Fatalf("executable categories = %d (%v), want 45 (44 deletion + 1 servicing)", len(executable), executable)
-	}
-	if !reflect.DeepEqual(permanent, wantPermanent) {
-		t.Fatalf("permanent matrix = %#v, want %#v", permanent, wantPermanent)
-	}
-	if !reflect.DeepEqual(recycleBin, wantRecycleBin) {
-		t.Fatalf("Recycle Bin matrix = %#v, want %#v", recycleBin, wantRecycleBin)
-	}
-
 	boundary, ok := catalog.Summary("administrator_only_caches")
-	if !ok {
-		t.Fatal("administrator_only_caches missing")
-	}
-	if boundary.Eligibility != clean.CategoryEligibilityPermissionBoundary || boundary.PlannedAction != "" {
+	if !ok || boundary.Eligibility != clean.CategoryEligibilityPermissionBoundary || boundary.PlannedAction != "" {
 		t.Fatalf("administrator_only_caches = %#v, want actionless permission boundary", boundary)
 	}
-	if clean.InitiallySelectedCategory(boundary) {
-		t.Fatal("administrator_only_caches must never start selected")
-	}
 
-	// TUI initial selection when every executable row is present: default + 36 permanent = 37.
-	selected := 0
-	for _, summary := range catalog.Summaries() {
-		if !clean.InitiallySelectedCategory(summary) {
-			continue
-		}
-		selected++
-		if summary.Eligibility != clean.CategoryEligibilityDefault &&
-			summary.PlannedAction != clean.PlannedActionDeletePermanently {
-			t.Fatalf("unexpected initial selection %q eligibility=%q action=%q",
-				summary.Identifier, summary.Eligibility, summary.PlannedAction)
-		}
-	}
-	if selected != 37 {
-		t.Fatalf("initially selected categories = %d, want 37 (default + 36 permanent)", selected)
-	}
-	for _, id := range []string{
-		clean.OpportunityCategoryWindowsErrorReporting,
-	} {
-		summary, ok := catalog.Summary(id)
-		if !ok {
-			t.Fatalf("%s missing", id)
-		}
-		if clean.InitiallySelectedCategory(summary) {
-			t.Fatalf("%s must start unselected (Recycle Bin opt-in)", id)
-		}
-		if summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
-			t.Fatalf("%s planned_action = %q, want move_to_recycle_bin", id, summary.PlannedAction)
-		}
-	}
-
-	// Eager queue is all 45 executable rows; permission boundary is never scanned.
 	queue := clean.EagerPreviewQueue()
-	if len(queue) != 45 {
-		t.Fatalf("EagerPreviewQueue length = %d, want 45 executable categories", len(queue))
+	if len(queue) != len(executable) {
+		t.Fatalf("EagerPreviewQueue length = %d, want %d executable categories", len(queue), len(executable))
 	}
-	for _, summary := range queue {
+	for i, summary := range queue {
+		if summary.Identifier != executable[i] {
+			t.Fatalf("queue[%d] = %q, want %q", i, summary.Identifier, executable[i])
+		}
 		if summary.Identifier == "administrator_only_caches" {
 			t.Fatal("permission boundary must not enter the eager queue")
-		}
-		if summary.PlannedAction != clean.PlannedActionDeletePermanently &&
-			summary.PlannedAction != clean.PlannedActionMoveToRecycleBin &&
-			summary.PlannedAction != clean.PlannedActionInvokeWindowsServicing {
-			t.Fatalf("queue %q planned_action = %q", summary.Identifier, summary.PlannedAction)
 		}
 	}
 }
 
 func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
-	wantPermanent := productionPermanentCategoryIDs()
 	for _, definition := range catalog.Definitions() {
+		summary, ok := catalog.Summary(definition.Identifier)
+		if !ok {
+			t.Fatalf("summary missing for %q", definition.Identifier)
+		}
+		if summary.PlannedAction != definition.PlannedAction {
+			t.Fatalf("summary planned_action for %q = %q, want %q", definition.Identifier, summary.PlannedAction, definition.PlannedAction)
+		}
 		switch definition.Eligibility {
 		case clean.CategoryEligibilityDefault, clean.CategoryEligibilityOptIn:
-			if definition.PlannedAction == clean.PlannedActionInvokeWindowsServicing {
-				// Servicing categories declare invoke_windows_servicing rather than
-				// a deletion action; they are validated by the servicing matrix.
-				if definition.Identifier != clean.CategoryWinSxSComponentStore {
-					t.Fatalf("unexpected servicing category %q", definition.Identifier)
-				}
-				summary, ok := catalog.Summary(definition.Identifier)
-				if !ok || summary.PlannedAction != clean.PlannedActionInvokeWindowsServicing {
-					t.Fatalf("servicing summary for %q = %#v", definition.Identifier, summary)
-				}
-				continue
+			switch definition.PlannedAction {
+			case clean.PlannedActionMoveToRecycleBin, clean.PlannedActionDeletePermanently, clean.PlannedActionInvokeWindowsServicing:
+			default:
+				t.Fatalf("executable category %q has unsupported planned_action %q", definition.Identifier, definition.PlannedAction)
 			}
-			want := clean.PlannedActionMoveToRecycleBin
-			if wantPermanent[definition.Identifier] {
-				want = clean.PlannedActionDeletePermanently
-			}
-			if definition.PlannedAction != want {
-				t.Fatalf("executable category %q planned_action = %q, want %q",
-					definition.Identifier, definition.PlannedAction, want)
-			}
-			summary, ok := catalog.Summary(definition.Identifier)
-			if !ok || summary.PlannedAction != definition.PlannedAction {
-				t.Fatalf("summary planned_action for %q = %#v, want %#v", definition.Identifier, summary, definition.PlannedAction)
+			if definition.PlannedAction == clean.PlannedActionInvokeWindowsServicing &&
+				definition.Identifier != clean.CategoryWinSxSComponentStore {
+				t.Fatalf("unexpected servicing category %q", definition.Identifier)
 			}
 		case clean.CategoryEligibilityPermissionBoundary, clean.CategoryEligibilityReviewOnly:
 			if definition.PlannedAction != "" {
 				t.Fatalf("non-executable category %q must be actionless, got %q", definition.Identifier, definition.PlannedAction)
-			}
-			summary, ok := catalog.Summary(definition.Identifier)
-			if !ok || summary.PlannedAction != "" {
-				t.Fatalf("non-executable summary %q planned_action = %#v", definition.Identifier, summary)
 			}
 		default:
 			t.Fatalf("unexpected eligibility %q on %q", definition.Eligibility, definition.Identifier)
@@ -422,42 +303,54 @@ func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T
 	}
 }
 
-func TestProductionPermanentCategoriesMatchActivationSet(t *testing.T) {
-	// Compatibility alias for the locked permanent set; full matrix is TestCompleteDeletionRuleMatrixLocked.
+func TestSelectionGroupExpansionMatchesCatalogField(t *testing.T) {
 	catalog := clean.CanonicalCleanupCategoryCatalog()
-	want := productionPermanentCategoryIDs()
-	var permanent []string
-	for _, definition := range catalog.Definitions() {
-		if definition.PlannedAction == clean.PlannedActionDeletePermanently {
-			permanent = append(permanent, definition.Identifier)
-			if !want[definition.Identifier] {
-				t.Fatalf("unexpected permanent category %q", definition.Identifier)
+	groups := []struct {
+		token string
+		group clean.CategorySelectionGroup
+	}{
+		{token: clean.DevCacheCategoryAll, group: clean.CategorySelectionGroupDevCaches},
+		{token: clean.ApplicationCacheCategoryGroup, group: clean.CategorySelectionGroupAppCaches},
+		{token: clean.CLIAgentCategoryGroup, group: clean.CategorySelectionGroupCLIAgents},
+	}
+	for _, tc := range groups {
+		enabled, invalid, _ := clean.NormalizedOptInSet([]string{tc.token})
+		if len(invalid) != 0 {
+			t.Fatalf("%s invalid = %#v", tc.token, invalid)
+		}
+		var want []string
+		for _, summary := range catalog.Summaries() {
+			if summary.SelectionGroup != tc.group {
+				continue
 			}
-			summary, ok := catalog.Summary(definition.Identifier)
-			if !ok {
-				t.Fatalf("%s missing from catalog", definition.Identifier)
+			if summary.Eligibility != clean.CategoryEligibilityOptIn || summary.SelectionPolicy == clean.CategorySelectionPolicyExactOnly {
+				t.Fatalf("%s carries selection group %s but cannot expand", summary.Identifier, tc.group)
 			}
-			if summary.Eligibility != clean.CategoryEligibilityOptIn {
-				t.Fatalf("%s eligibility = %q, want opt-in", definition.Identifier, summary.Eligibility)
-			}
-			if !clean.InitiallySelectedCategory(summary) {
-				t.Fatalf("%s must initially select when permanently eligible", definition.Identifier)
+			want = append(want, summary.Identifier)
+			if !enabled[summary.Identifier] {
+				t.Fatalf("%s missing %q", tc.token, summary.Identifier)
 			}
 		}
+		if len(enabled) != len(want) {
+			t.Fatalf("%s enabled %#v, want %#v", tc.token, enabled, want)
+		}
 	}
-	if len(permanent) != 36 || len(permanent) != len(want) {
-		t.Fatalf("production permanent categories = %v, want exactly 36", permanent)
+
+	pins := map[string]clean.CategorySelectionGroup{
+		clean.OpportunityCategoryVSCodeCache:   clean.CategorySelectionGroupDevCaches,
+		clean.OpportunityCategoryObsidianCache: clean.CategorySelectionGroupAppCaches,
+		clean.CategoryElectronUpdaterResidue:   clean.CategorySelectionGroupAppCaches,
+		clean.CategoryGrokBuildUpdateResidue:   clean.CategorySelectionGroupCLIAgents,
+		clean.OpportunityCategoryUserTemp:      "",
+		clean.CategoryNVIDIAInstallerCache:     "",
 	}
-	for _, id := range lockedRecycleBinCategoryIDs() {
+	for id, want := range pins {
 		summary, ok := catalog.Summary(id)
 		if !ok {
 			t.Fatalf("%s missing", id)
 		}
-		if summary.PlannedAction != clean.PlannedActionMoveToRecycleBin {
-			t.Fatalf("%s planned_action = %q, want move_to_recycle_bin", id, summary.PlannedAction)
-		}
-		if summary.Eligibility == clean.CategoryEligibilityOptIn && clean.InitiallySelectedCategory(summary) {
-			t.Fatalf("%s must start unselected (Recycle Bin opt-in)", id)
+		if summary.SelectionGroup != want {
+			t.Fatalf("%s selection_group = %q, want %q", id, summary.SelectionGroup, want)
 		}
 	}
 }

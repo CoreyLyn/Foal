@@ -88,6 +88,9 @@ type fixedRootPolicy struct {
 	// requireExactOnly / requireRecycleBin are catalog validation expectations.
 	requireExactOnly  bool
 	requireRecycleBin bool
+	// identityValidator re-checks category identity immediately before mutation.
+	// Required. registerFixedRootPolicy installs it and panics when it is nil.
+	identityValidator CategoryIdentityValidator
 }
 
 var fixedRootPolicies = map[string]fixedRootPolicy{}
@@ -96,10 +99,14 @@ func registerFixedRootPolicy(p fixedRootPolicy) {
 	if p.id == "" {
 		panic("fixed-root policy missing id")
 	}
+	if p.identityValidator == nil {
+		panic("fixed-root policy " + p.id + " missing identity validator")
+	}
 	if _, exists := fixedRootPolicies[p.id]; exists {
 		panic("duplicate fixed-root policy " + p.id)
 	}
 	fixedRootPolicies[p.id] = p
+	registerCategoryIdentityValidator(p.id, p.identityValidator)
 }
 
 func fixedRootPolicyByID(id string) (fixedRootPolicy, bool) {
@@ -405,8 +412,8 @@ func validateFixedRootRegistryEntry(entry categoryCatalogEntry) error {
 	if policy.requireExactOnly && entry.definition.SelectionPolicy != CategorySelectionPolicyExactOnly {
 		return fmt.Errorf("fixed-root category %q must be exact-selection-only", id)
 	}
-	if entry.cliAgentProduct {
-		return fmt.Errorf("fixed-root category %q must not be a cli-agent product", id)
+	if lookupCategoryIdentityValidator(Options{}, id) == nil {
+		return fmt.Errorf("fixed-root category %q is missing an identity validator", id)
 	}
 	return nil
 }

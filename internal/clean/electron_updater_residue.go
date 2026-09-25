@@ -69,6 +69,7 @@ func (electronUpdaterResidueResolver) resolve(ctx context.Context, opts Options,
 }
 
 func electronUpdaterResidueCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogEntry {
+	definition = withSelectionGroup(definition, CategorySelectionGroupAppCaches)
 	return categoryCatalogEntry{
 		definition:        definition,
 		resolverKind:      categoryResolverElectronUpdaterResidue,

@@ -93,6 +93,26 @@ func validCategorySelectionPolicy(policy CategorySelectionPolicy) bool {
 	}
 }
 
+// CategorySelectionGroup is the catalog-owned selection-group token. The empty
+// group joins no token. Values match the public opt-in tokens so expansion and
+// the tokens cannot drift.
+type CategorySelectionGroup string
+
+const (
+	CategorySelectionGroupDevCaches CategorySelectionGroup = DevCacheCategoryAll
+	CategorySelectionGroupAppCaches CategorySelectionGroup = ApplicationCacheCategoryGroup
+	CategorySelectionGroupCLIAgents CategorySelectionGroup = CLIAgentCategoryGroup
+)
+
+func validCategorySelectionGroup(group CategorySelectionGroup) bool {
+	switch group {
+	case "", CategorySelectionGroupDevCaches, CategorySelectionGroupAppCaches, CategorySelectionGroupCLIAgents:
+		return true
+	default:
+		return false
+	}
+}
+
 // CleanupCategoryDefinition is the path-free policy vocabulary shared by
 // Clean callers. Discovery paths and executable configuration stay private to
 // the Clean package.
@@ -110,6 +130,12 @@ type CleanupCategoryDefinition struct {
 	// selection; exact-selection-only categories are excluded from aggregate and
 	// group selection. It has no effect on non-executable entries.
 	SelectionPolicy CategorySelectionPolicy `json:"selection_policy,omitempty"`
+	// SelectionGroup is the single selection-group token this category joins
+	// (`dev-caches`, `app-caches`, or `cli-agents`). Empty means exact name and
+	// `all` only. Group tokens expand this field; they do not infer membership
+	// from report category or resolver kind. Exact-selection-only and
+	// non-executable categories must leave it empty.
+	SelectionGroup CategorySelectionGroup `json:"selection_group,omitempty"`
 }
 
 // CleanupCategorySummary is the stable, path-free projection intended for
@@ -126,6 +152,9 @@ type CleanupCategorySummary struct {
 	// SelectionPolicy is the catalog-owned selection metadata (empty = standard,
 	// or exact-selection-only). It governs aggregate/group/Select All inclusion.
 	SelectionPolicy CategorySelectionPolicy `json:"selection_policy,omitempty"`
+	// SelectionGroup is the catalog-owned selection-group token, or empty when
+	// the category joins no group. Group tokens expand this field only.
+	SelectionGroup CategorySelectionGroup `json:"selection_group,omitempty"`
 }
 
 // CleanupCategoryCatalog is an immutable metadata catalog. Constructing one
@@ -156,12 +185,14 @@ func NewCleanupCategoryCatalog(definitions []CleanupCategoryDefinition) (Cleanup
 		definition.Label = strings.TrimSpace(definition.Label)
 		definition.PlannedAction = PlannedAction(strings.TrimSpace(string(definition.PlannedAction)))
 		definition.SelectionPolicy = CategorySelectionPolicy(strings.TrimSpace(string(definition.SelectionPolicy)))
+		definition.SelectionGroup = CategorySelectionGroup(strings.TrimSpace(string(definition.SelectionGroup)))
 		if definition.Identifier == "" || definition.Label == "" || definition.ReportCategory == "" ||
 			definition.Eligibility == "" || definition.RunningApplicationPolicy == "" {
 			return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has incomplete metadata", definition.Identifier)
 		}
 		if !validReportCategory(definition.ReportCategory) || !validCategoryEligibility(definition.Eligibility) ||
-			!validRunningApplicationPolicy(definition.RunningApplicationPolicy) || !validCategorySelectionPolicy(definition.SelectionPolicy) {
+			!validRunningApplicationPolicy(definition.RunningApplicationPolicy) || !validCategorySelectionPolicy(definition.SelectionPolicy) ||
+			!validCategorySelectionGroup(definition.SelectionGroup) {
 			return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
 		}
 		if isExecutableCategoryEligibility(definition.Eligibility) {
@@ -179,14 +210,18 @@ func NewCleanupCategoryCatalog(definitions []CleanupCategoryDefinition) (Cleanup
 				definition.Eligibility != CategoryEligibilityOptIn {
 				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
 			}
+			// Exact-selection-only categories are excluded from every group token.
+			if definition.SelectionGroup != "" && definition.SelectionPolicy == CategorySelectionPolicyExactOnly {
+				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
+			}
 		} else {
 			if definition.PlannedAction != "" {
 				// Permission-boundary and other non-executable entries remain actionless
 				// and cannot enter execution.
 				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
 			}
-			// Selection policy is meaningless for non-executable entries.
-			if definition.SelectionPolicy != CategorySelectionPolicyStandard {
+			// Selection policy and selection group are meaningless for non-executable entries.
+			if definition.SelectionPolicy != CategorySelectionPolicyStandard || definition.SelectionGroup != "" {
 				return CleanupCategoryCatalog{}, fmt.Errorf("cleanup category %q has unsupported metadata", definition.Identifier)
 			}
 		}
@@ -330,6 +365,7 @@ func summaryFromDefinition(definition CleanupCategoryDefinition) CleanupCategory
 		RunningApplicationPolicy: definition.RunningApplicationPolicy,
 		PlannedAction:            definition.PlannedAction,
 		SelectionPolicy:          definition.SelectionPolicy,
+		SelectionGroup:           definition.SelectionGroup,
 	}
 }
 
@@ -479,12 +515,6 @@ type categoryCatalogEntry struct {
 	resolverKind      categoryResolverKind
 	resolver          categoryResolver
 	previewSafetyNote categorySafetyNoteResolver
-	// cliAgentProduct marks an independently registered product-scoped CLI-agent
-	// category for the `cli-agents` selection group. The group token expands
-	// these entries only; it owns no resolver, candidates, or deletion action.
-	// Membership is explicit catalog registration (never inferred from report
-	// group, path shape, or cache-like names).
-	cliAgentProduct bool
 	// existenceRoots lists exact fixed roots for existence-opportunity
 	// categories. Empty means no fixed-root discovery (user_temp).
 	existenceRoots      []existenceRootSpec
@@ -566,6 +596,11 @@ func applicationCacheCategoryEntry(
 	policyID string,
 	runningApplications ...string,
 ) categoryCatalogEntry {
+	group := CategorySelectionGroupDevCaches
+	if definition.ReportCategory == ReportCategoryApplications {
+		group = CategorySelectionGroupAppCaches
+	}
+	definition = withSelectionGroup(definition, group)
 	return categoryCatalogEntry{
 		definition:               definition,
 		resolverKind:             categoryResolverApplicationCache,
@@ -594,6 +629,7 @@ func developerCacheEntry(
 	reviewSuggestionTools []string,
 	runningApplications ...string,
 ) categoryCatalogEntry {
+	definition = withSelectionGroup(definition, CategorySelectionGroupDevCaches)
 	return categoryCatalogEntry{
 		definition:            definition,
 		resolverKind:          categoryResolverDeveloperCache,
@@ -636,9 +672,26 @@ func developerCacheEntryWithProductScopedChildren(
 	return entry
 }
 
+// Adding a cleanup category:
+//
+//  1. Prefer an existing engine: existence-opportunity, application-cache,
+//     developer-cache, or fixed-root. A layout none of those can express needs
+//     its own resolver kind and a case in validateSelectionGroup.
+//  2. Declare planned action, selection policy, and selection group on the
+//     definition. Group tokens expand SelectionGroup only. Exact-selection-only
+//     categories leave the group empty. The developer-cache, application-cache,
+//     electron-updater, and CLI-agent constructors fill an empty group.
+//  3. Fixed-root policies set identityValidator. Registration panics without
+//     one and installs it before catalog init.
+//  4. Add tests for the allowlist, gates, and pre-mutation identity. Do not add
+//     census length locks: TestDeletionRuleMatrixDerivesFromCatalog derives
+//     executable, initial-selection, and eager-queue counts from this slice.
+//     Keep identifier order in
+//     TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries.
+//  5. When the product set changes, update docs/plan/clean-deletion-policy.md,
+//     AGENTS.md, and CONTEXT.md.
 var canonicalCategoryEntries = []categoryCatalogEntry{
-	// Complete rule matrix (ADR 0018 / docs/plan/clean-deletion-policy.md):
-	// 36 delete_permanently + 8 move_to_recycle_bin + 1 invoke_windows_servicing + 1 actionless permission boundary.
+	// Planned actions are declared per row. Counts are derived from this slice.
 	// Five Recycle Bin categories are exact-selection-only and Not-proven:
 	// nvidia_installer_cache, lghub-cache, thunder-update-download, machine-wide
 	// windows-temp, and machine-wide windows-update-download-cache.
@@ -1114,6 +1167,15 @@ func categoryDefinition(identifier, label string, reportCategory ReportCategory,
 	}
 }
 
+// withSelectionGroup fills an empty selection group. An explicit group already
+// on the definition is kept. Exact-selection-only definitions stay ungrouped.
+func withSelectionGroup(definition CleanupCategoryDefinition, group CategorySelectionGroup) CleanupCategoryDefinition {
+	if definition.SelectionGroup == "" && definition.SelectionPolicy != CategorySelectionPolicyExactOnly {
+		definition.SelectionGroup = group
+	}
+	return definition
+}
+
 var canonicalCleanupCategoryCatalog = mustCleanupCategoryCatalog(canonicalCategoryEntries)
 
 func init() {
@@ -1166,9 +1228,6 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 				if entry.definition.SelectionPolicy != CategorySelectionPolicyExactOnly {
 					return fmt.Errorf("nvidia installer cache category %q must be exact-selection-only", id)
 				}
-				if entry.cliAgentProduct {
-					return fmt.Errorf("nvidia installer cache category %q must not be a cli-agent product", id)
-				}
 			}
 			if entry.resolverKind == categoryResolverGrokBuildUpdateResidue {
 				if entry.definition.RunningApplicationPolicy != RunningApplicationPolicyDistinctiveProcessIdle {
@@ -1190,9 +1249,6 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 				}
 				if entry.definition.SelectionPolicy != CategorySelectionPolicyStandard {
 					return fmt.Errorf("electron-updater-residue category %q must use standard selection policy", id)
-				}
-				if entry.cliAgentProduct {
-					return fmt.Errorf("electron-updater-residue category %q must not be a cli-agent product", id)
 				}
 			}
 		case categoryResolverNonExecutable:
@@ -1218,6 +1274,58 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 			}
 		default:
 			return fmt.Errorf("cleanup category %q has unsupported resolver kind %q", id, entry.resolverKind)
+		}
+		if err := validateSelectionGroup(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSelectionGroup checks that SelectionGroup matches the resolver that
+// owns the category. Expansion reads the field only; this is the closed set of
+// legal combinations. A new resolver kind that joins a group adds a case here.
+func validateSelectionGroup(entry categoryCatalogEntry) error {
+	id := entry.definition.Identifier
+	group := entry.definition.SelectionGroup
+	if !validCategorySelectionGroup(group) {
+		return fmt.Errorf("cleanup category %q has unsupported selection group %q", id, group)
+	}
+	if group != "" && entry.definition.SelectionPolicy == CategorySelectionPolicyExactOnly {
+		return fmt.Errorf("exact-selection-only category %q must not join a selection group", id)
+	}
+	if group != "" && !isExecutableCategoryEligibility(entry.definition.Eligibility) {
+		return fmt.Errorf("non-executable category %q must not join a selection group", id)
+	}
+	switch entry.resolverKind {
+	case categoryResolverDeveloperCache:
+		if group != CategorySelectionGroupDevCaches || entry.definition.ReportCategory != ReportCategoryDeveloperTools {
+			return fmt.Errorf("developer-cache category %q must join %s under Developer tools", id, CategorySelectionGroupDevCaches)
+		}
+	case categoryResolverApplicationCache:
+		switch entry.definition.ReportCategory {
+		case ReportCategoryDeveloperTools:
+			if group != CategorySelectionGroupDevCaches {
+				return fmt.Errorf("application-cache category %q must join %s", id, CategorySelectionGroupDevCaches)
+			}
+		case ReportCategoryApplications:
+			if group != CategorySelectionGroupAppCaches {
+				return fmt.Errorf("application-cache category %q must join %s", id, CategorySelectionGroupAppCaches)
+			}
+		default:
+			return fmt.Errorf("application-cache category %q has no selection group for report category %q", id, entry.definition.ReportCategory)
+		}
+	case categoryResolverElectronUpdaterResidue:
+		if group != CategorySelectionGroupAppCaches || entry.definition.ReportCategory != ReportCategoryApplications {
+			return fmt.Errorf("electron-updater category %q must join %s under Applications", id, CategorySelectionGroupAppCaches)
+		}
+	case categoryResolverGrokBuildUpdateResidue:
+		if group != CategorySelectionGroupCLIAgents {
+			return fmt.Errorf("grok residue category %q must join %s", id, CategorySelectionGroupCLIAgents)
+		}
+	default:
+		if group != "" {
+			return fmt.Errorf("cleanup category %q resolver %q cannot join selection group %q", id, entry.resolverKind, group)
 		}
 	}
 	return nil
@@ -1404,83 +1512,53 @@ func developerCacheCategoryIDs() []string {
 	return identifiers
 }
 
-// developerToolsOptInCategoryIDs returns Developer tools opt-in categories for
-// the `dev-caches` group: registered developer-cache categories plus idle
-// Application cache opportunity categories under Developer tools (the VS Code-
-// family editors plus Trae). It MUST NOT include Applications report-category
-// application-cache categories (Obsidian); those expand via `app-caches`.
-// CLI-agent product categories are intentionally excluded (updater residue is
-// not a cache).
+// developerToolsOptInCategoryIDs returns categories whose SelectionGroup is
+// dev-caches, in catalog order. The token owns no resolver.
 func developerToolsOptInCategoryIDs() []string {
 	return developerToolsOptInCategoryIDsFrom(canonicalCategoryEntries)
 }
 
 func developerToolsOptInCategoryIDsFrom(entries []categoryCatalogEntry) []string {
-	var identifiers []string
-	for _, entry := range entries {
-		if entry.definition.Eligibility != CategoryEligibilityOptIn {
-			continue
-		}
-		if entry.definition.SelectionPolicy == CategorySelectionPolicyExactOnly {
-			continue
-		}
-		if entry.definition.ReportCategory != ReportCategoryDeveloperTools {
-			continue
-		}
-		if entry.cliAgentProduct {
-			continue
-		}
-		if entry.resolverKind == categoryResolverDeveloperCache || entry.resolverKind == categoryResolverApplicationCache {
-			identifiers = append(identifiers, entry.definition.Identifier)
-		}
-	}
-	return identifiers
+	return categoryIDsInSelectionGroup(entries, CategorySelectionGroupDevCaches)
 }
 
-// applicationCachesOptInCategoryIDs returns application-cache opt-in categories
-// whose Report category is Applications for the `app-caches` selection group
-// (initially just obsidian_cache), in deterministic catalog order. The token
-// owns no resolver, candidates, or deletion action and parallels cli-agents.
-// Editor application-cache categories stay under Developer tools / dev-caches.
+// applicationCachesOptInCategoryIDs returns categories whose SelectionGroup is
+// app-caches, in catalog order. The token owns no resolver.
 func applicationCachesOptInCategoryIDs() []string {
 	return applicationCachesOptInCategoryIDsFrom(canonicalCategoryEntries)
 }
 
 func applicationCachesOptInCategoryIDsFrom(entries []categoryCatalogEntry) []string {
+	return categoryIDsInSelectionGroup(entries, CategorySelectionGroupAppCaches)
+}
+
+// cliAgentCategoryIDs returns categories whose SelectionGroup is cli-agents, in
+// catalog order. The token owns no resolver and does not imply every CLI-agent
+// artifact is cache or safe to delete.
+func cliAgentCategoryIDs() []string {
+	return cliAgentCategoryIDsFrom(canonicalCategoryEntries)
+}
+
+func cliAgentCategoryIDsFrom(entries []categoryCatalogEntry) []string {
+	return categoryIDsInSelectionGroup(entries, CategorySelectionGroupCLIAgents)
+}
+
+// categoryIDsInSelectionGroup expands one selection group from the catalog
+// field. Exact-selection-only rows are skipped even if a caller set a group;
+// production registration rejects that combination.
+func categoryIDsInSelectionGroup(entries []categoryCatalogEntry, group CategorySelectionGroup) []string {
 	var identifiers []string
 	for _, entry := range entries {
+		if entry.definition.SelectionGroup != group {
+			continue
+		}
 		if entry.definition.Eligibility != CategoryEligibilityOptIn {
 			continue
 		}
 		if entry.definition.SelectionPolicy == CategorySelectionPolicyExactOnly {
 			continue
 		}
-		if entry.definition.ReportCategory != ReportCategoryApplications {
-			continue
-		}
-		if entry.resolverKind == categoryResolverApplicationCache || entry.resolverKind == categoryResolverElectronUpdaterResidue {
-			identifiers = append(identifiers, entry.definition.Identifier)
-		}
-	}
-	return identifiers
-}
-
-// cliAgentCategoryIDs returns independently registered product-scoped CLI-agent
-// categories for the `cli-agents` selection group in deterministic catalog
-// order. The token owns no resolver, candidates, or deletion action.
-func cliAgentCategoryIDs() []string {
-	return cliAgentCategoryIDsFrom(canonicalCategoryEntries)
-}
-
-func cliAgentCategoryIDsFrom(entries []categoryCatalogEntry) []string {
-	var identifiers []string
-	for _, entry := range entries {
-		if entry.definition.SelectionPolicy == CategorySelectionPolicyExactOnly {
-			continue
-		}
-		if entry.cliAgentProduct {
-			identifiers = append(identifiers, entry.definition.Identifier)
-		}
+		identifiers = append(identifiers, entry.definition.Identifier)
 	}
 	return identifiers
 }

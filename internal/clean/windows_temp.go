@@ -60,10 +60,7 @@ var registerWindowsTempFixedRootPolicy = func() struct{} {
 		impactNotice:          windowsTempOptInImpactNotice,
 		requireExactOnly:      true,
 		requireRecycleBin:     true,
+		identityValidator:     validateFixedRootIdentity,
 	})
 	return struct{}{}
 }()
-
-func init() {
-	registerCategoryIdentityValidator(CategoryWindowsTemp, validateFixedRootIdentity)
-}

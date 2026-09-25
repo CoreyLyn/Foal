@@ -55,13 +55,10 @@ var registerLGHUBCacheFixedRootPolicy = func() struct{} {
 		impactNotice:           lghubCacheOptInImpactNotice,
 		requireExactOnly:       true,
 		requireRecycleBin:      true,
+		identityValidator:      validateFixedRootIdentity,
 	})
 	return struct{}{}
 }()
-
-func init() {
-	registerCategoryIdentityValidator(CategoryLGHUBCache, validateFixedRootIdentity)
-}
 
 // is64LowerHexName reports whether name is exactly 64 lowercase hex characters.
 func is64LowerHexName(name string) bool {

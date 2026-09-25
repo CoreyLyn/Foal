@@ -5,6 +5,32 @@ import (
 	"testing"
 )
 
+func TestRegisterFixedRootPolicyRequiresIdentityValidator(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("registerFixedRootPolicy() did not panic for a missing identity validator")
+		}
+	}()
+	registerFixedRootPolicy(fixedRootPolicy{id: "fixed-root-missing-validator"})
+}
+
+func TestValidateSelectionGroupRejectsResolverMismatch(t *testing.T) {
+	definition := categoryDefinition(
+		"future-cache", "Future cache", ReportCategoryDeveloperTools,
+		CategoryEligibilityOptIn, RunningApplicationPolicySharedRuntime,
+		PlannedActionDeletePermanently,
+	)
+	definition.SelectionGroup = CategorySelectionGroupAppCaches
+	entry := categoryCatalogEntry{
+		definition:   definition,
+		resolverKind: categoryResolverDeveloperCache,
+		resolver:     developerCacheResolver{},
+	}
+	if err := validateCategoryResolverRegistry([]categoryCatalogEntry{entry}); err == nil {
+		t.Fatal("expected selection group mismatch")
+	}
+}
+
 func TestCanonicalExecutableCategoriesBindResolvers(t *testing.T) {
 	for _, entry := range canonicalCategoryEntries {
 		executable := isExecutableCategoryEligibility(entry.definition.Eligibility)

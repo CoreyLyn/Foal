@@ -291,24 +291,17 @@ func issue(code, message string, recoverable bool, path, ruleID string) Structur
 
 // NormalizedOptInSet returns the set of opt-in categories enabled, resolving
 // group tokens: "all" to every implemented opt-in category except exact-
-// selection-only categories, "dev-caches" to developer-cache plus editor
-// Application cache categories (Developer tools), "app-caches" to non-editor
-// Application cache categories (Applications), and "cli-agents" to independently
-// registered product-scoped CLI-agent categories. Exact-selection-only
+// selection-only categories, and "dev-caches", "app-caches", and "cli-agents"
+// to categories whose catalog SelectionGroup is that token. Exact-selection-only
 // categories remain valid exact names but are never expanded by any token.
 // Group tokens own no resolver, candidates, or deletion action.
 // Returns the set, a list of invalid names (if any), and the list of valid
 // names for error reporting.
 func NormalizedOptInSet(optIn []string) (enabled map[string]bool, invalid []string, valid []string) {
 	selectable := selectableCategoryIDs()
-	// dev-caches expands from catalog policy: developer-cache categories plus
-	// idle Application cache opportunities under Developer tools (editors+Trae).
+	// Group tokens expand the catalog SelectionGroup field in catalog order.
 	devCaches := developerToolsOptInCategoryIDs()
-	// app-caches expands application-cache categories under the Applications
-	// report category (non-editor end-user apps, initially just obsidian_cache).
 	appCaches := applicationCachesOptInCategoryIDs()
-	// cli-agents expands independently registered product-scoped CLI-agent
-	// categories in deterministic catalog order (not a mega-category).
 	cliAgents := cliAgentCategoryIDs()
 	valid = make([]string, 0, len(selectable)+4)
 	valid = append(valid, selectable...)

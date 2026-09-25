@@ -76,4 +76,4 @@ Any reparse point, nested directory, or unknown filename anywhere in the two-lev
 ## Test intent
 
 - Hermetic seam tests with injected env/base-dir/clock/FS fakes (pattern: `grok_build_update_residue` tests). Matrix: signature accept/reject per unknown child, reparse points, suffix matching, quiet-window boundary (exactly-24h is quiet), future/zero timestamps, pending-only-update-info case, per-directory vs per-category skip isolation, protection suppression, identity revalidation drift.
-- Count-assertion sites to bump when registering the category: `execute_test.go` valid opt-in names, `tui_clean_eager_test.go` matrix, `category_catalog_test.go` locked lengths and Recycle Bin matrix, catalog matrix comment, `CONTEXT.md`, AGENTS.md/README policy lists, `docs/plan/clean-deletion-policy.md`.
+- Adding a category follows the checklist above `canonicalCategoryEntries` in `internal/clean/category_catalog.go`. Census lengths are derived from the catalog. Still update the ordered identifier list in `category_catalog_test.go` and, when the product set changes, `docs/plan/clean-deletion-policy.md`, `AGENTS.md`, and `CONTEXT.md`.

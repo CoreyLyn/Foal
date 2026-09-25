@@ -1125,9 +1125,24 @@ func TestInvalidOptInNameReturnsErrorList(t *testing.T) {
 	if len(invalid) != 1 || invalid[0] != "invalid_name" {
 		t.Fatalf("expected invalid name list to include \"invalid_name\", got %v", invalid)
 	}
-	// 19 opportunity + nvidia_installer_cache + lghub-cache + thunder-update-download + windows-temp + windows-update-download-cache + electron-updater-residue + winsxs_component_store servicing + 17 dev caches + grok-build-update-residue + "dev-caches" + "app-caches" + "cli-agents" + "all" = 48
-	if len(valid) != 48 {
-		t.Fatalf("expected 48 valid names, got %d: %v", len(valid), valid)
+	want := map[string]bool{
+		"all":                               true,
+		clean.DevCacheCategoryAll:           true,
+		clean.ApplicationCacheCategoryGroup: true,
+		clean.CLIAgentCategoryGroup:         true,
+	}
+	for _, summary := range clean.CanonicalCleanupCategoryCatalog().Summaries() {
+		if summary.Eligibility == clean.CategoryEligibilityOptIn {
+			want[summary.Identifier] = true
+		}
+	}
+	if len(valid) != len(want) {
+		t.Fatalf("valid names = %d (%v), want %d derived from the catalog", len(valid), valid, len(want))
+	}
+	for _, name := range valid {
+		if !want[name] {
+			t.Fatalf("unexpected valid name %q", name)
+		}
 	}
 }
 
