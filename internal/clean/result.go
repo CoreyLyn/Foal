@@ -166,11 +166,12 @@ func DefaultRuleCatalog() []Rule {
 				"foal-",
 				"Foal-",
 			},
+			MinimumQuietPeriod: foalOwnedTempQuietPeriod,
 		},
 	}
 }
 
-func previewCandidate(ctx context.Context, opts Options, path, ruleID string, result *Result) {
+func previewCandidate(ctx context.Context, opts Options, path, ruleID string, quiet time.Duration, result *Result) {
 	planned := resolvePlannedAction(ruleID, opts.CategoryPlannedActions)
 	select {
 	case <-ctx.Done():
@@ -190,6 +191,16 @@ func previewCandidate(ctx context.Context, opts Options, path, ruleID string, re
 			Rule:          ruleID,
 			PlannedAction: planned,
 			Reason:        fromPathsafeReason(reason, path, ruleID),
+		})
+		return
+	}
+
+	if problem, ok := ruleQuietPeriodIssue(ctx, path, ruleID, quiet, defaultRuleNow(opts)); !ok {
+		result.Skipped = append(result.Skipped, SkippedItem{
+			Path:          path,
+			Rule:          ruleID,
+			PlannedAction: planned,
+			Reason:        problem,
 		})
 		return
 	}

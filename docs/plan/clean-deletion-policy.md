@@ -16,7 +16,7 @@ This is the implemented Clean deletion policy. Shared Clean assigns each executa
 
 | Canonical category | Catalog class | Permanent-delete eligibility | Initially selected | Planned action | Reason and mandatory guard |
 | --- | --- | --- | --- | --- | --- |
-| `foal_owned_temp_sandboxes` | Default | Not proven | Yes | `move_to_recycle_bin` | The `foal-` / `Foal-` prefix alone does not prove ownership or inactivity. |
+| `foal_owned_temp_sandboxes` | Default | Not proven | Yes | `move_to_recycle_bin` | The `foal-` / `Foal-` prefix alone does not prove ownership. A top-level Temp entry is a candidate only when its deep latest observed modification is at least 24 hours old; recent, future-dated, or uninspectable entries are skipped (`foal_owned_temp_recent` or the inspection reason), and the quiet period is rechecked immediately before the move. |
 | `user_temp` | Opt-in | Industry-default permanent | Yes | `delete_permanently` | Follows industry convention for disposable temp files; opt-in + `--allow-permanent`/confirmation + irreversible disclosure gate the action. Locked files are skipped and the rest deleted (partial). |
 | `crash_dumps` | Opt-in | Industry-default permanent | Yes | `delete_permanently` | Follows industry convention; opt-in + authorization + disclosure gate the action. Locked files are skipped and the rest deleted (partial). |
 | `windows_error_reporting` | Opt-in | Not proven | No | `move_to_recycle_bin` | WER content is non-recreatable diagnostic evidence. |

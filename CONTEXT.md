@@ -13,8 +13,8 @@ Cleanup items that Foal may preview by default and may later execute through the
 _Avoid_: aggressive defaults, hidden cleanup
 
 **Foal-owned temp sandbox candidate**:
-A top-level current-user Temp entry selected by the default `foal_owned_temp_sandboxes` rule using the current `foal-` or `Foal-` name prefix. The prefix expresses intended ownership but does not prove origin or inactivity, so the rule retains Recycle Bin policy until a separate ownership marker, strict structure, and non-active lifecycle proof are designed.
-_Avoid_: prefix proves ownership, default implies permanent deletion, active sandbox cleanup
+A top-level current-user Temp entry selected by the default `foal_owned_temp_sandboxes` rule using the current `foal-` or `Foal-` name prefix whose deep latest observed modification (the entry itself and every descendant) is at least 24 hours old. The prefix expresses intended ownership but does not prove origin, so the rule retains Recycle Bin policy; the 24-hour quiet period is the non-active lifecycle gate. Recent, future-dated, or uninspectable entries are skipped with the stable recoverable reason `foal_owned_temp_recent` (or the inspection reason), and the quiet period is rechecked immediately before mutation.
+_Avoid_: prefix proves ownership, default implies permanent deletion, active sandbox cleanup, prefix-only default selection
 
 **Skipped by default**:
 Recognized cleanup opportunities that Foal may report with size, count, status, or review commands, but does not include in default execution.

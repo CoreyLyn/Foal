@@ -98,11 +98,13 @@ func resolveExecuteCandidates(ctx context.Context, opts Options, categoryPlan Ca
 	appendDefaultCandidates(ctx, opts, planDefaultSet(categoryPlan), exactDefaults, result)
 
 	executionCandidates := make([]actionExecutionCandidate, 0, len(result.Candidates))
+	quietPeriods := ruleQuietPeriods(opts)
 	for _, candidate := range result.Candidates {
 		executionCandidates = append(executionCandidates, actionExecutionCandidate{
 			candidate:     delete.Candidate{Path: candidate.Path, Bytes: candidate.Bytes},
 			rule:          candidate.Rule,
 			plannedAction: resolvePlannedAction(candidate.Rule, opts.CategoryPlannedActions),
+			quietPeriod:   quietPeriods[candidate.Rule],
 		})
 	}
 
@@ -224,6 +226,9 @@ type actionExecutionCandidate struct {
 	rule          string
 	isOptIn       bool
 	plannedAction string
+	// quietPeriod is the default rule's MinimumQuietPeriod, repeated
+	// immediately before mutation. Zero means no quiet-period gate.
+	quietPeriod time.Duration
 }
 
 type recycleBinVolumeGroup struct {
@@ -607,7 +612,7 @@ func groupCandidatesByCategory(candidates []actionExecutionCandidate) []category
 func composePermanentPreMutation(opts Options, byPath map[string]actionExecutionCandidate) delete.PreMutationValidator {
 	hasValidator := false
 	for _, candidate := range byPath {
-		if lookupPermanentIdentityValidator(opts, candidate.rule) != nil {
+		if lookupPermanentIdentityValidator(opts, candidate.rule) != nil || candidate.quietPeriod > 0 {
 			hasValidator = true
 			break
 		}
@@ -623,6 +628,9 @@ func composePermanentPreMutation(opts Options, byPath map[string]actionExecution
 				Code:    "identity_mismatch",
 				Message: "permanent candidate context is unavailable for identity validation",
 			}, false
+		}
+		if reason, ok := quietPeriodPreMutation(opts, meta); !ok {
+			return reason, false
 		}
 		validator := lookupPermanentIdentityValidator(opts, meta.rule)
 		if validator == nil {
@@ -646,7 +654,7 @@ func composePermanentPreMutation(opts Options, byPath map[string]actionExecution
 func composeRecycleBinPreMutation(opts Options, byPath map[string]actionExecutionCandidate) delete.PreMutationValidator {
 	hasValidator := false
 	for _, candidate := range byPath {
-		if lookupCategoryIdentityValidator(opts, candidate.rule) != nil {
+		if lookupCategoryIdentityValidator(opts, candidate.rule) != nil || candidate.quietPeriod > 0 {
 			hasValidator = true
 			break
 		}
@@ -662,6 +670,9 @@ func composeRecycleBinPreMutation(opts Options, byPath map[string]actionExecutio
 				Code:    "identity_mismatch",
 				Message: "recycle bin candidate context is unavailable for identity validation",
 			}, false
+		}
+		if reason, ok := quietPeriodPreMutation(opts, meta); !ok {
+			return reason, false
 		}
 		validator := lookupCategoryIdentityValidator(opts, meta.rule)
 		if validator == nil {

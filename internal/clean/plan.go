@@ -300,7 +300,7 @@ func appendDefaultCandidates(ctx context.Context, opts Options, selectedDefaults
 		// ProgressReporter nil so this is a no-op on preview paths.
 		reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseScanning, rule.ID)
 		for _, path := range rule.CandidatePaths {
-			previewCandidate(ctx, opts, path, rule.ID, result)
+			previewCandidate(ctx, opts, path, rule.ID, rule.MinimumQuietPeriod, result)
 		}
 		for _, root := range rule.Roots {
 			select {
@@ -320,7 +320,7 @@ func appendDefaultCandidates(ctx context.Context, opts Options, selectedDefaults
 					continue
 				}
 				path := filepath.Join(root, entry.Name())
-				previewCandidate(ctx, opts, path, rule.ID, result)
+				previewCandidate(ctx, opts, path, rule.ID, rule.MinimumQuietPeriod, result)
 			}
 		}
 	}

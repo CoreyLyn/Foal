@@ -2,6 +2,7 @@ package clean
 
 import (
 	"context"
+	"time"
 
 	"github.com/CoreyLyn/Foal/internal/core/delete"
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
@@ -171,6 +172,9 @@ type Options struct {
 	Validator             pathsafe.Validator
 	ProtectionDiagnostics []ProtectionDiagnostic
 	ProtectionLoadError   *StructuredIssue
+	// DefaultRuleNow is the clock seam for Rule.MinimumQuietPeriod gates in
+	// preview and immediately before mutation. Nil selects time.Now.
+	DefaultRuleNow func() time.Time
 
 	// --- mutation adapters (nil → production defaults) ---
 	RecycleBinAdapter delete.Adapter
@@ -286,6 +290,11 @@ type Rule struct {
 	Roots                 []string
 	CandidatePaths        []string
 	CandidateNamePrefixes []string
+	// MinimumQuietPeriod, when positive, requires every candidate's deep latest
+	// observed modification to be at least this old. Recent, future-dated, or
+	// uninspectable entries are skipped in preview and rechecked immediately
+	// before mutation. Zero keeps the rule ungated.
+	MinimumQuietPeriod time.Duration
 }
 
 type Result struct {

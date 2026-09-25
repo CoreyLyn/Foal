@@ -788,6 +788,8 @@ func pathFreeReasonExplanation(code string) string {
 		// Busy or undetermined NVIDIA process/service state; the whole
 		// nvidia_installer_cache category is skipped and cannot be selected.
 		return "NVIDIA activity detected or state unknown"
+	case clean.PreviewReasonFoalOwnedTempRecent:
+		return "modified within the last 24 hours"
 	case "recycle_bin_capacity":
 		return "did not fit remaining Recycle Bin capacity"
 	case "recycle_bin_disabled":
