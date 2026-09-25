@@ -26,11 +26,23 @@ func RenderHumanReport(result Result) string {
 	if len(result.TopChildren) > 0 {
 		b.WriteString("\nTop children by size:\n")
 		for _, child := range result.TopChildren {
-			var classification string
-			if child.Classification != "" {
-				classification = fmt.Sprintf(" (%s)", child.Classification)
+			size := fmt.Sprintf("%d", child.Bytes)
+			if SizeIsLowerBound(child.State) {
+				// Partial/incomplete children report observed lower bounds only.
+				size = ">=" + size
 			}
-			b.WriteString(fmt.Sprintf("  %-12s %10d  %s%s\n", child.Kind, child.Bytes, child.Name, classification))
+			var notes []string
+			if child.Classification != "" {
+				notes = append(notes, child.Classification)
+			}
+			if child.State != "" && child.State != BrowseStateComplete {
+				notes = append(notes, child.State)
+			}
+			var suffix string
+			if len(notes) > 0 {
+				suffix = fmt.Sprintf(" (%s)", strings.Join(notes, ", "))
+			}
+			b.WriteString(fmt.Sprintf("  %-12s %12s  %s%s\n", child.Kind, size, child.Name, suffix))
 		}
 	}
 

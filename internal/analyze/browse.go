@@ -618,11 +618,21 @@ type measureOutcome struct {
 //
 // Cancellation and hard-limit take precedence over Partial when both apply.
 func measureDirectoryTree(ctx context.Context, path string, limit int, onProgress func(measureProgress)) measureOutcome {
+	return measureDirectoryTreeWithSkips(ctx, path, limit, onProgress, nil)
+}
+
+// measureDirectoryTreeWithSkips is measureDirectoryTree plus an optional
+// path-bearing onSkip callback for each unreadable descendant or non-traversed
+// nested reparse point. Browse passes nil and keeps only path-free aggregates;
+// the CLI/JSON path uses it to preserve its skipped path list. Nested reparse
+// points are reported to onSkip but never counted as Partial omissions.
+func measureDirectoryTreeWithSkips(ctx context.Context, path string, limit int, onProgress func(measureProgress), onSkip func(path, reason, detail string)) measureOutcome {
 	s := &treeMeasurer{
 		root:       path,
 		limit:      limit,
 		skipCounts: map[string]int64{},
 		onProgress: onProgress,
+		onSkip:     onSkip,
 	}
 	totals := s.measure(ctx, path)
 	state := BrowseStateComplete
@@ -647,6 +657,7 @@ type treeMeasurer struct {
 	descendants  int
 	skipCounts   map[string]int64
 	onProgress   func(measureProgress)
+	onSkip       func(path, reason, detail string)
 	// progressEvery controls how often onProgress fires by descendant count
 	// (independent of wall-clock throttle in the observer).
 	// Zero means every successful file/dir contribution.
@@ -660,6 +671,13 @@ func (s *treeMeasurer) noteSkip(reason string) {
 	}
 	s.hadOmissions = true
 	s.skipCounts[reason]++
+}
+
+// reportSkip forwards one path-specific omission to the optional onSkip hook.
+func (s *treeMeasurer) reportSkip(path, reason, detail string) {
+	if s.onSkip != nil {
+		s.onSkip(path, reason, detail)
+	}
 }
 
 func (s *treeMeasurer) emitProgress(totals Totals) {
@@ -693,12 +711,21 @@ func (s *treeMeasurer) measure(ctx context.Context, path string) Totals {
 	info, err := browseLstat(path)
 	if err != nil {
 		s.noteSkip(classifyError(err))
+		s.reportSkip(path, classifyError(err), err.Error())
 		return Totals{}
 	}
-	if isReparsePoint(info) || hasReparseAttr(path) {
+	return s.measureInfo(ctx, path, info)
+}
+
+// measureInfo measures path given its already-read FileInfo. Descendants reuse
+// the parent's directory-entry data (DirEntry.Info) instead of a per-entry
+// Lstat and attribute syscall.
+func (s *treeMeasurer) measureInfo(ctx context.Context, path string, info os.FileInfo) Totals {
+	if isReparseInfo(path, info) {
 		// Nested reparse: intentional non-traversal (same as CLI analyze). Do not
 		// count as Partial permission/read omission; direct-child reparse is Skipped
 		// before recursive measurement starts.
+		s.reportSkip(path, SkipReasonReparsePoint, "not traversed")
 		return Totals{}
 	}
 	if !info.IsDir() {
@@ -712,6 +739,7 @@ func (s *treeMeasurer) measure(ctx context.Context, path string) Totals {
 	if err != nil {
 		// Unreadable directory shell: Partial omission of descendants.
 		s.noteSkip(classifyError(err))
+		s.reportSkip(path, classifyError(err), err.Error())
 		return totals
 	}
 
@@ -739,7 +767,14 @@ func (s *treeMeasurer) measure(ctx context.Context, path string) Totals {
 		}
 
 		childPath := filepath.Join(path, entry.Name())
-		childTotals := s.measure(ctx, childPath)
+		childInfo, err := entry.Info()
+		if err != nil {
+			s.noteSkip(classifyError(err))
+			s.reportSkip(childPath, classifyError(err), err.Error())
+			s.emitProgress(totals)
+			continue
+		}
+		childTotals := s.measureInfo(ctx, childPath, childInfo)
 		totals.add(childTotals)
 		s.emitProgress(totals)
 	}
@@ -787,7 +822,9 @@ func filePresentationAttributes(path string, info os.FileInfo) presentationAttri
 	return platformPresentationAttributes(path, info)
 }
 
-func hasReparseAttr(path string) bool {
-	attrs := platformPresentationAttributes(path, nil)
-	return attrs.Reparse
+// isReparseInfo reports whether info describes a reparse point (symlink,
+// junction, mount point, cloud placeholder, ...). On Windows the attribute comes
+// from info.Sys() when available, so directory-entry data needs no syscall.
+func isReparseInfo(path string, info os.FileInfo) bool {
+	return isReparsePoint(info) || platformPresentationAttributes(path, info).Reparse
 }

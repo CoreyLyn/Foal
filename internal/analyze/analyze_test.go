@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -159,10 +160,9 @@ func TestRunReturnsIncompleteWhenDescendantLimitExceeded(t *testing.T) {
 		t.Fatalf("full result.Status = %q, want %q", fullResult.Status, StatusOK)
 	}
 
-	// Now set a low limit that we'll definitely hit.
-	// Top-level directories themselves aren't counted as descendants when path == root,
-	// but their children are.
-	result, reason, ok := Run(context.Background(), root, Options{DescendantLimit: 20})
+	// Now set a low per-child limit that each directory child will hit: every
+	// child has five descendants and may inspect only three.
+	result, reason, ok := Run(context.Background(), root, Options{DescendantLimit: 3})
 	if !ok {
 		t.Fatalf("Run failed unexpectedly: %v", reason)
 	}
@@ -177,9 +177,198 @@ func TestRunReturnsIncompleteWhenDescendantLimitExceeded(t *testing.T) {
 		t.Fatalf("partial bytes (%d) >= full bytes (%d), incomplete didn't work",
 			result.Totals.Bytes, fullResult.Totals.Bytes)
 	}
-	// Top children should still be present for the ones we processed.
-	if len(result.TopChildren) == 0 {
-		t.Fatalf("len(result.TopChildren) = 0, want at least some top children")
+	// Every child is still ranked, each marked incomplete.
+	if len(result.TopChildren) != 10 {
+		t.Fatalf("len(result.TopChildren) = %d, want all 10 children", len(result.TopChildren))
+	}
+	for _, child := range result.TopChildren {
+		if child.State != BrowseStateIncomplete {
+			t.Fatalf("child %s state = %q, want incomplete", child.Name, child.State)
+		}
+	}
+}
+
+// TestRunMeasuresEveryDirectChildIndependently is the regression for volume
+// roots: a lexically-first huge child that exceeds its ceiling must not hide
+// later siblings (previously one global ceiling stopped the whole scan inside
+// C:\Program Files and silently omitted C:\Users and C:\Windows).
+func TestRunMeasuresEveryDirectChildIndependently(t *testing.T) {
+	root := t.TempDir()
+	huge := filepath.Join(root, "a-huge")
+	if err := os.Mkdir(huge, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30; i++ {
+		if err := os.WriteFile(filepath.Join(huge, "f"+strconv.Itoa(i)+".bin"), []byte("xx"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	small := filepath.Join(root, "b-small")
+	if err := os.Mkdir(small, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(small, "data.bin"), []byte("12345"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "c-file.txt"), []byte("abc"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, reason, ok := Run(context.Background(), root, Options{DescendantLimit: 10})
+	if !ok {
+		t.Fatalf("Run failed: %#v", reason)
+	}
+	if result.Status != StatusIncomplete {
+		t.Fatalf("status = %q, want incomplete because a-huge hit its ceiling", result.Status)
+	}
+	byName := map[string]ChildResult{}
+	for _, child := range result.TopChildren {
+		byName[child.Name] = child
+	}
+	if got := byName["a-huge"]; got.State != BrowseStateIncomplete || got.Bytes == 0 || got.Bytes >= 60 {
+		t.Fatalf("a-huge = %#v, want incomplete observed lower bound", got)
+	}
+	if got := byName["b-small"]; got.State != BrowseStateComplete || got.Bytes != 5 || got.FileCount != 1 || got.DirectoryCount != 1 {
+		t.Fatalf("b-small = %#v, want complete 5 bytes after the huge sibling", got)
+	}
+	if got := byName["c-file.txt"]; got.State != BrowseStateComplete || got.Kind != "file" || got.Bytes != 3 {
+		t.Fatalf("c-file.txt = %#v, want complete file", got)
+	}
+	if result.Totals.Bytes != byName["a-huge"].Bytes+5+3 {
+		t.Fatalf("totals = %#v, want observed sum of every child", result.Totals)
+	}
+}
+
+func TestRunPartialChildKeepsStatusOKAndListsSkippedPath(t *testing.T) {
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	denied := filepath.Join(locked, "denied")
+	if err := os.MkdirAll(denied, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "visible.txt"), []byte("seen"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origReadDir := browseReadDir
+	t.Cleanup(func() { browseReadDir = origReadDir })
+	browseReadDir = func(path string) ([]os.DirEntry, error) {
+		if filepath.Clean(path) == filepath.Clean(denied) {
+			return nil, os.ErrPermission
+		}
+		return origReadDir(path)
+	}
+
+	result, reason, ok := Run(context.Background(), root, Options{})
+	if !ok {
+		t.Fatalf("Run failed: %#v", reason)
+	}
+	if result.Status != StatusOK {
+		t.Fatalf("status = %q, want ok: permission omissions are partial, not incomplete", result.Status)
+	}
+	if len(result.TopChildren) != 1 || result.TopChildren[0].State != BrowseStatePartial || result.TopChildren[0].Bytes != 4 {
+		t.Fatalf("top children = %#v, want one partial child with 4 observed bytes", result.TopChildren)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Path != denied || result.Skipped[0].Reason != "permission_denied" {
+		t.Fatalf("skipped = %#v, want the denied nested path", result.Skipped)
+	}
+}
+
+func TestRunReparseDirectChildIsSkippedNotTraversed(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "big.bin"), make([]byte, 64), 0644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+
+	result, reason, ok := Run(context.Background(), root, Options{})
+	if !ok {
+		t.Fatalf("Run failed: %#v", reason)
+	}
+	if len(result.TopChildren) != 1 {
+		t.Fatalf("top children = %#v, want the link", result.TopChildren)
+	}
+	child := result.TopChildren[0]
+	if child.Kind != "reparse_point" || child.State != BrowseStateSkipped || child.Bytes != 0 {
+		t.Fatalf("link child = %#v, want skipped reparse point with no bytes", child)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason != "reparse_point" {
+		t.Fatalf("skipped = %#v, want one reparse_point entry", result.Skipped)
+	}
+}
+
+func TestRunCanceledContextMarksChildrenIncomplete(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"one", "two"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name, "f.txt"), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, _, ok := Run(ctx, root, Options{})
+	if !ok {
+		t.Fatal("Run failed")
+	}
+	if result.Status != StatusIncomplete {
+		t.Fatalf("status = %q, want incomplete", result.Status)
+	}
+	if len(result.TopChildren) != 2 {
+		t.Fatalf("top children = %#v, want both children listed", result.TopChildren)
+	}
+	for _, child := range result.TopChildren {
+		if child.State != BrowseStateIncomplete {
+			t.Fatalf("child %s state = %q, want incomplete", child.Name, child.State)
+		}
+	}
+}
+
+func TestRunJSONTopChildrenCarryState(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	result := RunCompat(root)
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		TopChildren []map[string]any `json:"top_children"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.TopChildren) != 1 || decoded.TopChildren[0]["state"] != "complete" {
+		t.Fatalf("top_children = %#v, want state=complete", decoded.TopChildren)
+	}
+}
+
+func TestRenderHumanReportMarksLowerBoundChildren(t *testing.T) {
+	result := Result{
+		Status: StatusIncomplete,
+		Root:   `C:\`,
+		TopChildren: []ChildResult{
+			{Name: "Users", Kind: "directory", Bytes: 900, State: BrowseStateIncomplete},
+			{Name: "Program Files", Kind: "directory", Bytes: 500, State: BrowseStatePartial},
+			{Name: "pagefile.sys", Kind: "file", Bytes: 100, State: BrowseStateComplete},
+		},
+	}
+	report := RenderHumanReport(result)
+	for _, want := range []string{">=900  Users (incomplete)", ">=500  Program Files (partial)", "100  pagefile.sys\n"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+	if strings.Contains(report, ">=100") {
+		t.Fatalf("complete child must not be a lower bound:\n%s", report)
 	}
 }
 

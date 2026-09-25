@@ -16,9 +16,9 @@ Turn the Analyze TUI into a responsive, read-only Windows disk browser inspired 
 
 | Surface | Behavior |
 | --- | --- |
-| CLI/JSON | `foal analyze [path]`; omit path means CWD; one recursive result with totals, fixed Top 10 children, skipped entries, and elapsed time |
+| CLI/JSON | `foal analyze [path]`; omit path means CWD; one result with totals, fixed Top 10 children (each with its own `state`), skipped entries, and elapsed time |
 | Validation | Analyze-only `ValidateAnalyzeReadRoot`: explicit local fixed/removable volume roots and readable local directories (including Windows-managed trees) allowed; UNC, device, unsupported volume, reparse roots fail closed. Never weakens Clean/Purge `ValidateUserScanRoot` |
-| Limit | CLI/JSON: one global 100,000-descendant ceiling (`status=incomplete` on limit/cancel). TUI browse: independent 100,000-descendant ceiling per direct directory child |
+| Limit | CLI/JSON and TUI browse: independent 100,000-descendant ceiling per direct directory child (ADR-0035); root `status=incomplete` when any child hit its ceiling or the run was canceled |
 | Size | Logical file bytes from filesystem metadata (not allocated/physical; not free-space complement) |
 | TUI | Read-only on-demand disk browser (ADR-0034): drive entry → ranked direct children → drill-down; session cache; no Command-viewer path edit as primary UX |
 | Classification | Exact direct-child allowlist names only → `project_artifact_clue` (TUI compact label `artifact`); recursive size walks do not classify nested matches |
@@ -148,10 +148,10 @@ Render a ranked table with these concepts:
 
 - Explicit local volume roots become valid: `foal analyze C:\` and its JSON form.
 - No-argument CLI remains CWD.
-- Preserve the existing one-result contract: `status`, `root`, `totals`, fixed Top 10 `top_children`, `skipped`, and `elapsed_ms`.
-- Preserve the CLI's one global 100,000-descendant limit for this slice.
+- Preserve the existing one-result contract: `status`, `root`, `totals`, fixed Top 10 `top_children`, `skipped`, and `elapsed_ms`; `top_children` entries add a `state` field (`complete`, `partial`, `incomplete`, `skipped`).
+- Measure every direct child independently with its own 100,000-descendant ceiling through the shared engine (ADR-0035 supersedes the former global CLI limit), so no child of a large root is silently omitted.
 - Preserve logical-byte semantics.
-- TUI-specific all-child and incremental state need not expand the existing JSON result; they must still come from shared Analyze core types and traversal rules.
+- TUI-specific incremental state need not expand the existing JSON result; it must still come from shared Analyze core types and traversal rules.
 
 ## Safety invariants
 

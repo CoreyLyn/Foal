@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
@@ -16,8 +17,12 @@ const (
 	StatusOK             = "ok"
 	StatusIncomplete     = "incomplete"
 	defaultTopChildLimit = 10
-	// defaultDescendantLimit matches Clean opportunity inspection ceilings.
+	// defaultDescendantLimit matches Clean opportunity inspection ceilings. It
+	// applies independently to each direct directory child of the root.
 	defaultDescendantLimit = 100_000
+	// defaultChildMeasurementWorkers bounds concurrent direct-child directory
+	// measurements for the CLI/JSON path.
+	defaultChildMeasurementWorkers = 4
 )
 
 var projectArtifactDirectoryNames = map[string]struct{}{
@@ -29,10 +34,6 @@ var projectArtifactDirectoryNames = map[string]struct{}{
 	".next":        {},
 	"__pycache__":  {},
 }
-
-var (
-	errInspectionLimit = errors.New("analyze inspection descendant limit exceeded")
-)
 
 type Result struct {
 	Status      string        `json:"status"`
@@ -57,6 +58,11 @@ type ChildResult struct {
 	Bytes          int64  `json:"bytes"`
 	FileCount      int64  `json:"file_count"`
 	DirectoryCount int64  `json:"directory_count"`
+	// State is the child's own measurement state: complete, partial (readable
+	// but some descendants omitted), incomplete (its descendant ceiling or
+	// cancellation stopped traversal), or skipped (unreadable or a reparse
+	// point). Partial and incomplete bytes are observed lower bounds.
+	State string `json:"state"`
 }
 
 type SkippedItem struct {
@@ -67,15 +73,21 @@ type SkippedItem struct {
 
 // Options configures analyze.Run behavior (zero values select defaults).
 type Options struct {
-	// DescendantLimit caps inspected descendants (zero selects default 100_000).
+	// DescendantLimit caps inspected descendants per direct directory child
+	// (zero selects default 100_000).
 	DescendantLimit int
 }
 
 // Run performs directory insight on the supplied root (or current working
 // directory when empty). Returns (Result, Reason, ok) where ok is false when
 // the root was invalid (Reason contains the failure details).
-// Complete scans return StatusOK; scans halted by limits/cancellation return
-// StatusIncomplete with partial totals describing only inspected content.
+//
+// Every direct child of the root is enumerated and appears in the ranking
+// input; each directory child is measured independently with its own
+// descendant ceiling (the shared Analyze measurement engine used by the TUI
+// browser), so one huge child can never hide its siblings. The root status is
+// StatusIncomplete when any child's traversal was stopped by its ceiling or by
+// cancellation; totals then describe only inspected content.
 //
 // Root policy uses pathsafe.ValidateAnalyzeReadRoot (read-only). Explicit local
 // fixed/removable volume roots and Windows-managed trees are allowed. This never
@@ -107,29 +119,39 @@ func Run(ctx context.Context, root string, opts Options) (Result, pathsafe.Reaso
 		limit = defaultDescendantLimit
 	}
 
-	scanner := scanner{
-		root:       cleanRoot,
-		limit:      limit,
-		children:   map[string]ChildResult{},
-		skipped:    []SkippedItem{},
-		incomplete: false,
-	}
-	scanner.scan(ctx, cleanRoot)
-	topChildren := scanner.topChildren(defaultTopChildLimit)
-
-	status := StatusOK
-	if scanner.incomplete {
-		status = StatusIncomplete
-	}
-
-	return Result{
-		Status:      status,
+	result := Result{
+		Status:      StatusOK,
 		Root:        cleanRoot,
-		Totals:      scanner.totals,
-		TopChildren: topChildren,
-		Skipped:     scanner.skipped,
-		ElapsedMS:   time.Since(start).Milliseconds(),
-	}, pathsafe.Reason{}, true
+		Totals:      Totals{DirectoryCount: 1},
+		TopChildren: []ChildResult{},
+		Skipped:     []SkippedItem{},
+	}
+
+	entries, err := browseReadDir(cleanRoot)
+	if err != nil {
+		result.Skipped = append(result.Skipped, SkippedItem{Path: cleanRoot, Reason: classifyError(err), Detail: err.Error()})
+		result.ElapsedMS = time.Since(start).Milliseconds()
+		return result, pathsafe.Reason{}, true
+	}
+
+	outcomes, jobs := classifyRootChildren(cleanRoot, entries)
+	measureRootChildren(ctx, outcomes, jobs, limit)
+
+	children := make([]ChildResult, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		result.Totals.add(outcome.totals)
+		result.Skipped = append(result.Skipped, outcome.skipped...)
+		children = append(children, outcome.child)
+		if outcome.child.State == BrowseStateIncomplete {
+			result.Status = StatusIncomplete
+		}
+	}
+	if ctx.Err() != nil {
+		result.Status = StatusIncomplete
+	}
+	result.TopChildren = rankTopChildren(children, defaultTopChildLimit)
+	result.ElapsedMS = time.Since(start).Milliseconds()
+	return result, pathsafe.Reason{}, true
 }
 
 // RunCompat is a compatibility wrapper for the old Run signature (no context,
@@ -139,93 +161,107 @@ func RunCompat(root string) Result {
 	return result
 }
 
-type scanner struct {
-	root        string
-	limit       int
-	totals      Totals
-	children    map[string]ChildResult
-	skipped     []SkippedItem
-	incomplete  bool
-	descendants int
+// rootChildOutcome is one direct child's measurement plus its path-bearing
+// omissions, kept in directory order for deterministic merging.
+type rootChildOutcome struct {
+	child   ChildResult
+	totals  Totals
+	skipped []SkippedItem
 }
 
-func (s *scanner) scan(ctx context.Context, path string) Totals {
-	// Check for cancellation first.
-	select {
-	case <-ctx.Done():
-		s.incomplete = true
-		return Totals{}
-	default:
-	}
-
-	info, err := os.Lstat(path)
-	if err != nil {
-		s.skip(path, classifyError(err), err.Error())
-		return Totals{}
-	}
-	if isReparsePoint(info) {
-		s.skip(path, "reparse_point", "not traversed")
-		return Totals{}
-	}
-	if !info.IsDir() {
-		totals := Totals{Bytes: info.Size(), FileCount: 1}
-		s.totals.add(totals)
-		return totals
-	}
-
-	totals := Totals{DirectoryCount: 1}
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		s.skip(path, classifyError(err), err.Error())
-		s.totals.add(totals)
-		return totals
-	}
-
-	for _, entry := range entries {
-		// Stop if we've already hit limits or been canceled.
-		if s.incomplete {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			s.incomplete = true
-			break
-		default:
-		}
-
-		// Count descendants (children of the root are first counted here).
-		if path != s.root {
-			s.descendants++
-			if s.descendants > s.limit {
-				s.incomplete = true
-				break
+// classifyRootChildren resolves every direct child from its directory-entry
+// data. Files are complete immediately; unreadable entries and reparse points
+// are skipped and never traversed; directories are returned as measurement jobs.
+func classifyRootChildren(root string, entries []os.DirEntry) ([]rootChildOutcome, []int) {
+	outcomes := make([]rootChildOutcome, len(entries))
+	var jobs []int
+	for i, entry := range entries {
+		childPath := filepath.Join(root, entry.Name())
+		child := ChildResult{Name: entry.Name(), Path: childPath}
+		info, err := entry.Info()
+		switch {
+		case err != nil:
+			child.Kind = childKind(entry)
+			child.State = BrowseStateSkipped
+			outcomes[i] = rootChildOutcome{
+				child:   child,
+				skipped: []SkippedItem{{Path: childPath, Reason: classifyError(err), Detail: err.Error()}},
 			}
+		case isReparseInfo(childPath, info):
+			child.Kind = BrowseKindReparse
+			child.State = BrowseStateSkipped
+			outcomes[i] = rootChildOutcome{
+				child:   child,
+				skipped: []SkippedItem{{Path: childPath, Reason: SkipReasonReparsePoint, Detail: "not traversed"}},
+			}
+		case !info.IsDir():
+			child.Kind = BrowseKindFile
+			child.Bytes = info.Size()
+			child.FileCount = 1
+			child.State = BrowseStateComplete
+			outcomes[i] = rootChildOutcome{child: child, totals: Totals{Bytes: info.Size(), FileCount: 1}}
+		default:
+			child.Kind = BrowseKindDirectory
+			child.Classification = childClassification(childPath, BrowseKindDirectory)
+			outcomes[i] = rootChildOutcome{child: child}
+			jobs = append(jobs, i)
 		}
-
-		childPath := filepath.Join(path, entry.Name())
-		childTotals := s.scan(ctx, childPath)
-		if path == s.root {
-			s.addTopChild(childPath, childKind(entry), childTotals)
-		}
-		totals.add(childTotals)
 	}
-
-	// Always add what we found for this directory, even if incomplete.
-	// This maintains original counting behavior.
-	s.totals.add(Totals{DirectoryCount: 1})
-	return totals
+	return outcomes, jobs
 }
 
-func (s *scanner) addTopChild(path, kind string, totals Totals) {
-	s.children[path] = ChildResult{
-		Name:           filepath.Base(path),
-		Path:           path,
-		Kind:           kind,
-		Classification: childClassification(path, kind),
-		Bytes:          totals.Bytes,
-		FileCount:      totals.FileCount,
-		DirectoryCount: totals.DirectoryCount,
+// measureRootChildren measures directory children with bounded concurrency.
+// Each job writes only its own outcome slot, so merging stays deterministic.
+func measureRootChildren(ctx context.Context, outcomes []rootChildOutcome, jobs []int, limit int) {
+	if len(jobs) == 0 {
+		return
 	}
+	workers := defaultChildMeasurementWorkers
+	if workers > len(jobs) {
+		workers = len(jobs)
+	}
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range next {
+				outcome := &outcomes[index]
+				var skipped []SkippedItem
+				measured := measureDirectoryTreeWithSkips(ctx, outcome.child.Path, limit, nil, func(path, reason, detail string) {
+					skipped = append(skipped, SkippedItem{Path: path, Reason: reason, Detail: detail})
+				})
+				outcome.totals = measured.Totals
+				outcome.skipped = skipped
+				outcome.child.Bytes = measured.Totals.Bytes
+				outcome.child.FileCount = measured.Totals.FileCount
+				outcome.child.DirectoryCount = measured.Totals.DirectoryCount
+				outcome.child.State = measured.State
+			}
+		}()
+	}
+	for _, index := range jobs {
+		next <- index
+	}
+	close(next)
+	wg.Wait()
+}
+
+// rankTopChildren orders children by observed bytes (name tie-break) and keeps
+// the first limit entries.
+func rankTopChildren(children []ChildResult, limit int) []ChildResult {
+	ranked := append([]ChildResult(nil), children...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].Bytes == ranked[j].Bytes {
+			return ranked[i].Name < ranked[j].Name
+		}
+		return ranked[i].Bytes > ranked[j].Bytes
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	return ranked
 }
 
 func childClassification(path, kind string) string {
@@ -234,31 +270,6 @@ func childClassification(path, kind string) string {
 		return ClassificationProjectArtifactClue
 	}
 	return ""
-}
-
-func (s *scanner) skip(path, reason, detail string) {
-	s.skipped = append(s.skipped, SkippedItem{
-		Path:   path,
-		Reason: reason,
-		Detail: detail,
-	})
-}
-
-func (s *scanner) topChildren(limit int) []ChildResult {
-	children := make([]ChildResult, 0, len(s.children))
-	for _, child := range s.children {
-		children = append(children, child)
-	}
-	sort.Slice(children, func(i, j int) bool {
-		if children[i].Bytes == children[j].Bytes {
-			return children[i].Name < children[j].Name
-		}
-		return children[i].Bytes > children[j].Bytes
-	})
-	if len(children) > limit {
-		children = children[:limit]
-	}
-	return children
 }
 
 func (t *Totals) add(other Totals) {

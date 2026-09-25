@@ -193,6 +193,7 @@ foal analyze --json C:\
 
 - Omit the path to measure the current directory.
 - Explicit local fixed/removable volume roots are accepted for Analyze only; Clean and Purge still reject dangerous roots.
+- Every direct child is measured independently with its own 100,000-descendant ceiling, so a huge child never hides its siblings. Each ranked child reports a `state` (`complete`, `partial`, `incomplete`, `skipped`); partial and incomplete sizes are lower bounds (`>=` in the human report).
 - Matching direct-child names may be labeled `project_artifact_clue` (TUI shows a compact `artifact` label). Nested matches are not classified during size walks.
 - When the measured root is a valid Purge root and a direct artifact clue is present, the human report may show copy-only `foal purge <root>` guidance. Analyze never launches Purge.
 - The interactive TUI is a read-only on-demand disk browser (local drives → ranked children → drill-down). It does not delete, open files, elevate, or write History.
