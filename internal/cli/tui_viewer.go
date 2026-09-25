@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CoreyLyn/Foal/internal/analyze"
+	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/history"
 	"github.com/CoreyLyn/Foal/internal/status"
 	"github.com/CoreyLyn/Foal/internal/uninstall"
@@ -346,8 +347,12 @@ func renderHistoryReport(result history.QueryResult) string {
 		// external disk reading, never a reclaimable or deletion total.
 		for _, op := range session.ServicingOperations {
 			if op.ObservedFreeBytes != nil && *op.ObservedFreeBytes > 0 {
-				builder.WriteString(fmt.Sprintf("    component store · observed free-space increase ≈ %s (approximate)\n",
-					cleanFormatBytes(*op.ObservedFreeBytes)))
+				label := "component store"
+				if op.Category == clean.CategorySupersededDisplayDrivers {
+					label = "superseded display drivers"
+				}
+				builder.WriteString(fmt.Sprintf("    %s · observed free-space increase ≈ %s (approximate)\n",
+					label, cleanFormatBytes(*op.ObservedFreeBytes)))
 			}
 		}
 	}

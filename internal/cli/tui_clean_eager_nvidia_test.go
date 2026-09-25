@@ -246,7 +246,7 @@ func TestEagerCleanNVIDIAInstallerCacheConfirmationFreezesExactRecycleHandoff(t 
 	var gotAllowServicing bool
 	var calls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, allowServicing bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent bool, allowServicing bool, _ clean.ProgressReporter, _ []string) clean.Result {
 		calls++
 		gotSelected = append([]string(nil), selected...)
 		gotAllowPermanent = allowPermanent
@@ -383,7 +383,7 @@ func TestEagerCleanNVIDIAInstallerCacheExecutionFailureFlowsToResult(t *testing.
 
 	var calls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ bool, _ clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _ bool, _ bool, _ clean.ProgressReporter, _ []string) clean.Result {
 		calls++
 		return clean.Result{
 			Status: "error",
@@ -452,7 +452,7 @@ func TestEagerCleanNVIDIAInstallerCacheExecutionFailureFlowsToResult(t *testing.
 func TestEagerCleanNVIDIAInstallerCacheCancellation(t *testing.T) {
 	var calls int
 	original := runExactCleanSelection
-	runExactCleanSelection = func(context.Context, []string, bool, bool, clean.ProgressReporter) clean.Result {
+	runExactCleanSelection = func(context.Context, []string, bool, bool, clean.ProgressReporter, []string) clean.Result {
 		calls++
 		return clean.Result{Status: "ok", Mode: "execute"}
 	}

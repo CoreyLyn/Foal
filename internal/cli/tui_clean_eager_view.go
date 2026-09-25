@@ -181,8 +181,8 @@ const (
 	confirmationServicingBytesLine         = "Windows servicing reclaims components measured in packages, not bytes; size is unknown."
 )
 
-// confirmationServicingDisclosureLines are the ordered servicing disclosures for
-// the confirmation footer.
+// confirmationServicingDisclosureLines are the ordered component-store
+// servicing disclosures for the confirmation footer.
 func confirmationServicingDisclosureLines() []string {
 	return []string{
 		confirmationServicingAuthorizationLine,
@@ -193,16 +193,63 @@ func confirmationServicingDisclosureLines() []string {
 	}
 }
 
+// Superseded display driver confirmation disclosure copy (ADR 0036).
+const (
+	confirmationDriverNonInterruptLine = "Driver removal cannot be canceled once started; Windows keeps any package a device uses."
+	confirmationDriverRollbackLine     = "Removed driver versions cannot be rolled back in Device Manager; download again if needed."
+)
+
+// confirmationServicingDisclosureLinesFor returns the servicing disclosures for
+// the selected servicing rows: the shared authorization and UAC lines, the
+// component-store lines when a component-store row is selected, and the driver
+// package lines when a superseded display driver row is selected. A
+// component-store-only selection yields exactly
+// confirmationServicingDisclosureLines.
+func confirmationServicingDisclosureLinesFor(rows []eagerCategoryRow) []string {
+	hasComponentStore, hasDrivers := false, false
+	for _, row := range rows {
+		if row.Identifier == clean.CategorySupersededDisplayDrivers {
+			hasDrivers = true
+		} else {
+			hasComponentStore = true
+		}
+	}
+	lines := []string{confirmationServicingAuthorizationLine, confirmationServicingUACLine}
+	if hasComponentStore {
+		lines = append(lines, confirmationServicingNoRestartLine, confirmationServicingNonInterruptLine, confirmationServicingBytesLine)
+	}
+	if hasDrivers {
+		lines = append(lines, confirmationDriverNonInterruptLine, confirmationDriverRollbackLine)
+	}
+	return lines
+}
+
 // confirmationServicingSummaryLine is the compact servicing action-group total
-// used at the top of the confirmation body. Package count is disclosed; bytes
-// are never estimated.
+// used at the top of the confirmation body. Package count is disclosed;
+// component-store bytes are never estimated, while superseded display driver
+// packages disclose their measured size.
 func confirmationServicingSummaryLine(rows []eagerCategoryRow) string {
 	cats := len(rows)
 	packages := 0
+	var driverBytes int64
+	hasComponentStore, hasDrivers := false, false
 	for _, row := range rows {
 		packages += row.ServicingReclaimablePackages
+		if row.Identifier == clean.CategorySupersededDisplayDrivers {
+			hasDrivers = true
+			driverBytes += row.ServicingPackageBytes
+		} else {
+			hasComponentStore = true
+		}
 	}
-	return fmt.Sprintf("Windows servicing · %d categories · %d reclaimable package(s) · size unknown", cats, packages)
+	switch {
+	case hasDrivers && hasComponentStore:
+		return fmt.Sprintf("Windows servicing · %d categories · %d package(s) · driver packages %s; component store size unknown", cats, packages, cleanFormatBytes(driverBytes))
+	case hasDrivers:
+		return fmt.Sprintf("Windows servicing · %d categories · %d package(s) · %s", cats, packages, cleanFormatBytes(driverBytes))
+	default:
+		return fmt.Sprintf("Windows servicing · %d categories · %d reclaimable package(s) · size unknown", cats, packages)
+	}
 }
 
 // confirmationGroupSummaryLine is the compact action-group total used at the
@@ -296,6 +343,24 @@ func appendServicingDetails(lines *[]eagerBodyLine, servicing []eagerCategoryRow
 		text: "Windows servicing", kind: lineKindSectionHeading, rowIndex: -1, outcomeIndex: -1,
 	})
 	for _, row := range servicing {
+		if row.Identifier == clean.CategorySupersededDisplayDrivers {
+			*lines = append(*lines, eagerBodyLine{
+				text: fmt.Sprintf("  - %s · %d package(s) · %s · %s",
+					row.Label, row.ServicingReclaimablePackages, cleanFormatBytes(row.ServicingPackageBytes), clean.PlannedActionLabel(row.PlannedAction)),
+				kind:              lineKindConfirmDetail,
+				rowIndex:          -1,
+				outcomeIndex:      -1,
+				magnitudeBytes:    row.ServicingPackageBytes,
+				hasMagnitudeBytes: true,
+			})
+			*lines = append(*lines, eagerBodyLine{
+				text:         "      Impact: administrator consent (UAC) required; removed versions cannot be rolled back and must be downloaded again if needed.",
+				kind:         lineKindConfirmImpact,
+				rowIndex:     -1,
+				outcomeIndex: -1,
+			})
+			continue
+		}
 		*lines = append(*lines, eagerBodyLine{
 			text: fmt.Sprintf("  - %s · %d reclaimable package(s) · size unknown · %s",
 				row.Label, row.ServicingReclaimablePackages, clean.PlannedActionLabel(row.PlannedAction)),
@@ -432,6 +497,9 @@ func eagerServicingRowLabel(row eagerCategoryRow) string {
 	case clean.ServicingRowAnalyzing:
 		return row.Label + " · analyzing…"
 	case clean.ServicingRowReady:
+		if row.Identifier == clean.CategorySupersededDisplayDrivers {
+			return fmt.Sprintf("%s · ready · %d package(s) · %s", row.Label, row.ServicingReclaimablePackages, cleanFormatBytes(row.ServicingPackageBytes))
+		}
 		return fmt.Sprintf("%s · ready · %d reclaimable package(s) · size unknown", row.Label, row.ServicingReclaimablePackages)
 	case clean.ServicingRowNoWork:
 		return row.Label + " · no cleanup needed"
@@ -447,6 +515,9 @@ func eagerServicingRowLabel(row eagerCategoryRow) string {
 // eagerServicingFocusedDetailBody is the path-free focused diagnostic for a
 // servicing row. Skipped and failed states surface their stable reason text.
 func eagerServicingFocusedDetailBody(row eagerCategoryRow) string {
+	if row.Identifier == clean.CategorySupersededDisplayDrivers {
+		return eagerDriverFocusedDetailBody(row)
+	}
 	switch row.ServicingState {
 	case clean.ServicingRowAnalysisRequired:
 		return "Analysis required · press a to analyze the component store (requests administrator consent)."
@@ -473,6 +544,34 @@ func eagerServicingFocusedDetailBody(row eagerCategoryRow) string {
 	}
 }
 
+// eagerDriverFocusedDetailBody is the path-free focused diagnostic for the
+// superseded display driver row. Inspection is read-only and never requests
+// administrator consent; only confirmed removal does.
+func eagerDriverFocusedDetailBody(row eagerCategoryRow) string {
+	switch row.ServicingState {
+	case clean.ServicingRowAnalysisRequired:
+		return "Inspection required · press a to inspect driver packages (read-only, no administrator consent)."
+	case clean.ServicingRowAnalyzing:
+		return "Inspecting the driver store… (read-only, no administrator consent)."
+	case clean.ServicingRowReady:
+		return fmt.Sprintf("Ready · %d superseded package(s) · %s · press space to select. Removal requests administrator consent; removed versions cannot be rolled back.",
+			row.ServicingReclaimablePackages, cleanFormatBytes(row.ServicingPackageBytes))
+	case clean.ServicingRowNoWork:
+		return "No superseded display driver packages found."
+	case clean.ServicingRowSkipped, clean.ServicingRowFailed:
+		body := "Skipped"
+		if row.ServicingState == clean.ServicingRowFailed {
+			body = "Failed"
+		}
+		if row.ServicingReasonCode != "" {
+			body += " · " + servicingReasonTextFor(row.Identifier, row.ServicingReasonCode)
+		}
+		return body + " · press a to inspect again."
+	default:
+		return "Unknown servicing state"
+	}
+}
+
 // eagerServicingExecutionRowLabel formats a servicing execution/result outcome
 // without a byte token. Servicing processes no file bytes; its lifecycle is
 // reported directly.
@@ -491,7 +590,7 @@ func eagerServicingExecutionRowLabel(outcome clean.CategoryExecutionOutcome) str
 	case clean.CategoryExecutionFailed:
 		line := outcome.Label + " · failed"
 		if outcome.ServicingReason != "" {
-			line += " · " + servicingReasonText(outcome.ServicingReason)
+			line += " · " + servicingReasonTextFor(outcome.Identifier, outcome.ServicingReason)
 		}
 		if hint := clean.ServicingCleanupExitHint(outcome.ServicingExitCode); hint != "" {
 			line += " · " + hint
@@ -502,6 +601,25 @@ func eagerServicingExecutionRowLabel(outcome clean.CategoryExecutionOutcome) str
 	default:
 		return outcome.Label
 	}
+}
+
+// servicingReasonTextFor adapts servicing reason text to the category: the
+// superseded display driver category words analysis and cleanup failures in
+// driver-store terms; everything else uses servicingReasonText.
+func servicingReasonTextFor(identifier, code string) string {
+	if identifier == clean.CategorySupersededDisplayDrivers {
+		switch code {
+		case clean.ServicingReasonAnalysisFailed:
+			return "driver store inspection failed"
+		case clean.ServicingReasonAnalysisOutputInvalid:
+			return "driver store inspection could not be interpreted"
+		case clean.ServicingReasonCleanupFailed:
+			return "one or more packages could not be removed"
+		case clean.ServicingReasonUnsupportedPlatform:
+			return "the driver store is unavailable"
+		}
+	}
+	return servicingReasonText(code)
 }
 
 // servicingReasonText maps a stable servicing reason code to short path-free

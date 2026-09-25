@@ -735,8 +735,12 @@ func renderCleanExecuteHumanSummary(result clean.Result) string {
 	// absent observation shows nothing. When present, a Mixed cleanup impact line
 	// sums Affected plus the observation, explicitly labeled approximate.
 	if observed, present := clean.ServicingObservedFreeBytes(result.ServicingOperations); present {
-		builder.WriteString(fmt.Sprintf("%s: observed free-space increase ≈ %s (approximate; not counted in Affected).\n",
-			"Windows component store", cleanFormatBytes(observed)))
+		for _, op := range result.ServicingOperations {
+			if op.ObservedFreeBytes != nil && *op.ObservedFreeBytes > 0 {
+				builder.WriteString(fmt.Sprintf("%s: observed free-space increase ≈ %s (approximate; not counted in Affected).\n",
+					clean.ServicingReportLabel(op.Category), cleanFormatBytes(*op.ObservedFreeBytes)))
+			}
+		}
 		builder.WriteString(fmt.Sprintf("Mixed cleanup impact ≈ %s (approximate: Affected plus observed servicing free-space).\n",
 			cleanFormatBytes(result.Totals.AffectedBytes+observed)))
 	}
@@ -761,12 +765,14 @@ func helpText() string {
 	builder.WriteString("                       Without it, permanent categories are skipped; Recycle Bin work continues.\n")
 	builder.WriteString("                       Permanent deletion is ordinary filesystem removal (not secure erasure)\n")
 	builder.WriteString("                       and is never used as a Recycle Bin fallback.\n")
-	builder.WriteString("  --allow-servicing    Per-run authorization for Windows component-store servicing (with\n")
-	builder.WriteString("                       --execute). Independent of --allow-permanent and never implied by it.\n")
-	builder.WriteString("                       Without it, a selected winsxs_component_store is skipped with\n")
+	builder.WriteString("  --allow-servicing    Per-run authorization for Windows servicing (with --execute).\n")
+	builder.WriteString("                       Independent of --allow-permanent and never implied by it.\n")
+	builder.WriteString("                       Without it, a selected servicing category is skipped with\n")
 	builder.WriteString("                       windows_servicing_not_authorized and no UAC prompt. When authorized,\n")
-	builder.WriteString("                       Foal runs a fresh DISM analysis and starts component cleanup through an\n")
-	builder.WriteString("                       elevated helper; it never deletes WinSxS files itself or forces a reboot.\n")
+	builder.WriteString("                       winsxs_component_store runs a fresh DISM analysis and starts component\n")
+	builder.WriteString("                       cleanup through an elevated helper (never deleting WinSxS files itself or\n")
+	builder.WriteString("                       forcing a reboot), and superseded-display-drivers asks Windows to remove\n")
+	builder.WriteString("                       unused, superseded display driver packages (never forced, never files).\n")
 	builder.WriteString("  --opt-in <name>      Include an opt-in category (repeatable).\n")
 	builder.WriteString("                       Group tokens: \"all\", \"dev-caches\", \"app-caches\", \"cli-agents\".\n")
 	builder.WriteString("                       \"app-caches\" expands non-editor Application cache categories under\n")
@@ -776,14 +782,17 @@ func helpText() string {
 	builder.WriteString("                       CLI-agent categories only; it is not a mega-category and does not\n")
 	builder.WriteString("                       imply all CLI-agent data is cache or safe to delete.\n")
 	builder.WriteString("                       Exact-selection-only (never in a group token or TUI Select All):\n")
-	builder.WriteString("                       winsxs_component_store, nvidia_installer_cache, lghub-cache,\n")
-	builder.WriteString("                       thunder-update-download, windows-temp, and\n")
-	builder.WriteString("                       windows-update-download-cache.\n")
+	builder.WriteString("                       winsxs_component_store, superseded-display-drivers,\n")
+	builder.WriteString("                       nvidia_installer_cache, lghub-cache, thunder-update-download,\n")
+	builder.WriteString("                       windows-temp, and windows-update-download-cache.\n")
 	builder.WriteString("                       An exact winsxs_component_store dry-run opt-in requests read-only\n")
 	builder.WriteString("                       Windows component-store analysis through an elevated helper (UAC)\n")
 	builder.WriteString("                       and never deletes files; default Dry-run and group tokens never\n")
-	builder.WriteString("                       analyze it. nvidia_installer_cache moves a verified completed\n")
-	builder.WriteString("                       driver download to the Recycle Bin and never needs --allow-permanent.\n")
+	builder.WriteString("                       analyze it. superseded-display-drivers dry-run inspects the driver\n")
+	builder.WriteString("                       store without UAC; removal keeps every in-use and newest package and\n")
+	builder.WriteString("                       removed versions can no longer be rolled back. nvidia_installer_cache\n")
+	builder.WriteString("                       moves a verified completed driver download to the Recycle Bin and\n")
+	builder.WriteString("                       never needs --allow-permanent.\n")
 	builder.WriteString("\nPurge options:\n")
 	builder.WriteString("  <root> [root...]     Required explicit project/workspace root(s) to scan (never implied).\n")
 	builder.WriteString("                       Multiple roots must each be valid; volume roots and system paths are rejected.\n")
@@ -819,6 +828,8 @@ func helpText() string {
 	builder.WriteString("  foal clean --dry-run --opt-in winsxs_component_store\n")
 	builder.WriteString("  foal clean --dry-run --opt-in winsxs_component_store --opt-in nvidia_installer_cache\n")
 	builder.WriteString("  foal clean --execute --opt-in winsxs_component_store --allow-servicing\n")
+	builder.WriteString("  foal clean --dry-run --opt-in superseded-display-drivers\n")
+	builder.WriteString("  foal clean --execute --opt-in superseded-display-drivers --allow-servicing\n")
 	builder.WriteString("  foal clean --execute --opt-in nvidia_installer_cache\n")
 	builder.WriteString("  foal purge .\\my-project\n")
 	builder.WriteString("  foal purge --json .\\proj-a .\\proj-b\n")
