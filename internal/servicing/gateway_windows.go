@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
+	"github.com/CoreyLyn/Foal/internal/driverstore"
 )
 
 // windowsGateway coordinates component-store analysis and the composite cleanup
@@ -50,16 +51,32 @@ func (windowsGateway) ExecuteComponentStoreCleanup(ctx context.Context, req clea
 	return coordinateCleanup(ctx)
 }
 
-// AnalyzeDriverStore is wired in a follow-up change; until then the driver
-// category fails closed without touching the driver store.
-func (windowsGateway) AnalyzeDriverStore(context.Context) clean.DriverStoreAnalysisResult {
-	return clean.DriverStoreAnalysisResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonUnsupportedPlatform}
+// AnalyzeDriverStore runs the superseded display driver inventory in-process
+// and non-elevated (ADR 0036): it never launches the helper or requests UAC.
+func (windowsGateway) AnalyzeDriverStore(ctx context.Context) clean.DriverStoreAnalysisResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return clean.DriverStoreAnalysisResult{Outcome: clean.ServicingOutcomeCanceled, Reason: clean.ServicingReasonContextCanceled}
+	}
+	return analyzeDriverStore(ctx)
 }
 
-// ExecuteDriverPackageCleanup is wired in a follow-up change; until then the
-// driver category fails closed without elevation.
-func (windowsGateway) ExecuteDriverPackageCleanup(context.Context, clean.DriverPackageCleanupRequest) clean.DriverPackageCleanupResult {
-	return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonUnsupportedPlatform}
+// ExecuteDriverPackageCleanup asks the elevated helper to remove a bounded,
+// validated set of published driver packages. The helper re-derives eligibility
+// itself and removes only the intersection.
+func (windowsGateway) ExecuteDriverPackageCleanup(ctx context.Context, req clean.DriverPackageCleanupRequest) clean.DriverPackageCleanupResult {
+	if req.Capability != clean.ServicingCapabilityExecuteDriverPackageCleanup {
+		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonHelperFailed}
+	}
+	if err := driverstore.ValidateRequest(req.Packages); err != nil {
+		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonHelperFailed}
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeCanceled, Reason: clean.ServicingReasonContextCanceled}
+	}
+	return coordinateDriverCleanup(ctx, req.Packages)
 }
 
 // helperSession holds an authenticated coordinator/helper connection ready for
@@ -190,13 +207,70 @@ func coordinateCleanup(ctx context.Context) clean.ServicingExecuteResult {
 		return canceledExecuteResult()
 	}
 
+	resp, cancelRequested, err := exchangeAwaitingOutcome(ctx, session, pipeRequest{
+		Version:    protocolVersion,
+		Nonce:      session.nonce,
+		Capability: wireCapabilityExecuteComponentStoreCleanup,
+	})
+	if err != nil {
+		res := failExecuteResult(clean.ServicingReasonHelperFailed)
+		res.CancelRequested = cancelRequested
+		return res
+	}
+	res := executeResultFromResponse(resp)
+	if cancelRequested {
+		res.CancelRequested = true
+	}
+	return res
+}
+
+// coordinateDriverCleanup performs the driver-package removal coordination with
+// the same cancellation semantics as coordinateCleanup: cancellation before the
+// request is sent removes nothing; afterwards it is recorded while the
+// coordinator waits for the helper's actual per-package outcomes.
+func coordinateDriverCleanup(ctx context.Context, packages []string) clean.DriverPackageCleanupResult {
+	session, reason, isSkip, ok := establishHelper()
+	if !ok {
+		outcome := clean.ServicingOutcomeFailed
+		if isSkip {
+			outcome = clean.ServicingOutcomeSkipped
+		}
+		return clean.DriverPackageCleanupResult{Outcome: outcome, Reason: reason}
+	}
+	defer session.release()
+	defer session.conn.Close()
+
+	if ctx != nil && ctx.Err() != nil {
+		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeCanceled, Reason: clean.ServicingReasonContextCanceled}
+	}
+
+	resp, cancelRequested, err := exchangeAwaitingOutcome(ctx, session, pipeRequest{
+		Version:    protocolVersion,
+		Nonce:      session.nonce,
+		Capability: wireCapabilityExecuteDriverPackageCleanup,
+		Packages:   append([]string(nil), packages...),
+	})
+	if err != nil {
+		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonHelperFailed, CancelRequested: cancelRequested}
+	}
+	res := driverCleanupResultFromResponse(resp)
+	if cancelRequested {
+		res.CancelRequested = true
+	}
+	return res
+}
+
+// exchangeAwaitingOutcome sends one request and waits for its response. Once
+// the request is sent mutation may already be underway, so a cancellation is
+// only recorded: the helper and any Windows tool it runs are never terminated.
+func exchangeAwaitingOutcome(ctx context.Context, session *helperSession, req pipeRequest) (pipeResponse, bool, error) {
 	type exchangeOutcome struct {
 		resp pipeResponse
 		err  error
 	}
 	ch := make(chan exchangeOutcome, 1)
 	go func() {
-		resp, err := serverExchange(session.conn, session.nonce, wireCapabilityExecuteComponentStoreCleanup)
+		resp, err := serverExchangeRequest(session.conn, req)
 		ch <- exchangeOutcome{resp: resp, err: err}
 	}()
 
@@ -206,26 +280,13 @@ func coordinateCleanup(ctx context.Context) clean.ServicingExecuteResult {
 		select {
 		case out = <-ch:
 		case <-done:
-			// Cleanup may already have started. Record that cancellation was
-			// requested but keep waiting for the actual outcome; never kill DISM,
-			// the helper, or TrustedInstaller.
 			cancelRequested = true
 			out = <-ch
 		}
 	} else {
 		out = <-ch
 	}
-
-	if out.err != nil {
-		res := failExecuteResult(clean.ServicingReasonHelperFailed)
-		res.CancelRequested = cancelRequested
-		return res
-	}
-	res := executeResultFromResponse(out.resp)
-	if cancelRequested {
-		res.CancelRequested = true
-	}
-	return res
+	return out.resp, cancelRequested, out.err
 }
 
 // ctxDoneChannel returns ctx.Done() or nil when ctx is nil, so a nil context

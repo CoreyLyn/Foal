@@ -54,21 +54,24 @@ func RunHelper(args []string) int {
 		return helperExitError
 	}
 
-	if err := helperExchange(conn, launchNonce, dispatchCapability); err != nil {
+	if err := helperExchangeRequest(conn, launchNonce, dispatchRequest); err != nil {
 		return helperExitError
 	}
 	return helperExitSuccess
 }
 
-// dispatchCapability runs the fixed built-in capability requested over the pipe.
-// Only the two known capabilities exist; validateRequest already rejected any
-// other value, so the default is defensive and runs no DISM.
-func dispatchCapability(capability wireCapability) pipeResponse {
-	switch capability {
+// dispatchRequest runs the fixed built-in capability requested over the pipe.
+// validateRequest already rejected unknown capabilities and any package list
+// outside the driver-package capability, so the default is defensive and runs
+// nothing.
+func dispatchRequest(req pipeRequest) pipeResponse {
+	switch req.Capability {
 	case wireCapabilityAnalyzeComponentStore:
 		return responseFromAnalysis(runComponentStoreAnalysis())
 	case wireCapabilityExecuteComponentStoreCleanup:
 		return responseFromExecute(runComponentStoreCleanup())
+	case wireCapabilityExecuteDriverPackageCleanup:
+		return responseFromDriverCleanup(runDriverPackageCleanup(req.Packages))
 	default:
 		return responseFromExecute(failExecuteResult(clean.ServicingReasonHelperFailed))
 	}

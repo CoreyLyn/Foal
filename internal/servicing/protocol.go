@@ -10,12 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/CoreyLyn/Foal/internal/driverstore"
 )
 
 // protocolVersion is the single supported coordinator/helper wire version. A
 // mismatch on either side fails closed: the helper never guesses intent from an
 // unknown protocol, and the coordinator never trusts an unknown response.
-const protocolVersion uint32 = 1
+// Version 2 adds the driver-package capability and its bounded package list
+// (ADR 0036).
+const protocolVersion uint32 = 2
 
 // maxMessageBytes bounds a single pipe message. One request and one response are
 // small, fixed-shape JSON objects; anything larger is rejected before parsing so
@@ -29,27 +33,41 @@ const nonceBytes = 32
 
 // wireCapability is the fixed built-in capability enum carried in a request. It
 // is the ONLY instruction the helper accepts: no executable, path, command
-// line, or DISM argument is ever transmitted. Exactly two capabilities exist:
-// read-only analysis and the composite execute (fresh analysis + guard +
-// StartComponentCleanup). There is no standalone start-cleanup capability.
+// line, or DISM argument is ever transmitted. The component-store capabilities
+// are read-only analysis and the composite execute (fresh analysis + guard +
+// StartComponentCleanup); there is no standalone start-cleanup capability. The
+// driver-package capability (ADR 0036) additionally carries a bounded list of
+// published INF names that the helper re-validates against its own fresh
+// inventory before removing anything.
 type wireCapability uint8
 
 const (
 	wireCapabilityAnalyzeComponentStore        wireCapability = 1
 	wireCapabilityExecuteComponentStoreCleanup wireCapability = 2
+	wireCapabilityExecuteDriverPackageCleanup  wireCapability = 3
 )
 
 func validWireCapability(c wireCapability) bool {
-	return c == wireCapabilityAnalyzeComponentStore || c == wireCapabilityExecuteComponentStoreCleanup
+	return c == wireCapabilityAnalyzeComponentStore || c == wireCapabilityExecuteComponentStoreCleanup ||
+		c == wireCapabilityExecuteDriverPackageCleanup
 }
 
 // pipeRequest is the one and only request the coordinator sends to the helper.
 // It carries the protocol version, the one-time nonce, and a fixed capability
-// enum — never a path, command line, or argument.
+// enum — never a path, command line, or argument. Packages is present only for
+// the driver-package capability: published INF names (oem<digits>.inf), never
+// paths.
 type pipeRequest struct {
 	Version    uint32         `json:"version"`
 	Nonce      string         `json:"nonce"`
 	Capability wireCapability `json:"capability"`
+	Packages   []string       `json:"packages,omitempty"`
+}
+
+// wireDriverPackage is one per-package removal outcome in a response.
+type wireDriverPackage struct {
+	PublishedName string `json:"published_name"`
+	Outcome       string `json:"outcome"`
 }
 
 // pipeResponse is the structured servicing result the helper returns. It is
@@ -76,6 +94,9 @@ type pipeResponse struct {
 	// "not measured"; ObservedFreeBytes carries the non-negative delta when set.
 	HasObservedFreeBytes bool  `json:"has_observed_free_bytes,omitempty"`
 	ObservedFreeBytes    int64 `json:"observed_free_bytes,omitempty"`
+	// DriverPackages carries per-package outcomes for the driver-package
+	// capability only.
+	DriverPackages []wireDriverPackage `json:"driver_packages,omitempty"`
 }
 
 // newNonce returns a fresh random one-time nonce as a hex string.
@@ -135,6 +156,13 @@ func validateRequest(req pipeRequest, expectedNonce string) error {
 	}
 	if !validWireCapability(req.Capability) {
 		return fmt.Errorf("servicing: unknown capability %d", req.Capability)
+	}
+	if req.Capability == wireCapabilityExecuteDriverPackageCleanup {
+		if err := driverstore.ValidateRequest(req.Packages); err != nil {
+			return err
+		}
+	} else if len(req.Packages) != 0 {
+		return errors.New("servicing: packages are accepted only by the driver package capability")
 	}
 	return nil
 }

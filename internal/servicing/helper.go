@@ -38,11 +38,16 @@ const helperEstablishTimeout = 2 * time.Minute
 // exactly one request for the given capability bound to nonce and reads exactly
 // one response, validating the protocol version. It performs no second request.
 func serverExchange(rw io.ReadWriter, nonce string, capability wireCapability) (pipeResponse, error) {
-	req := pipeRequest{
+	return serverExchangeRequest(rw, pipeRequest{
 		Version:    protocolVersion,
 		Nonce:      nonce,
 		Capability: capability,
-	}
+	})
+}
+
+// serverExchangeRequest sends one fully formed request (including an optional
+// package list) and reads exactly one validated response.
+func serverExchangeRequest(rw io.ReadWriter, req pipeRequest) (pipeResponse, error) {
 	if err := writeMessage(rw, req); err != nil {
 		return pipeResponse{}, err
 	}
@@ -62,6 +67,12 @@ func serverExchange(rw io.ReadWriter, nonce string, capability wireCapability) (
 // replayed or injected follow-up is ignored. A validation failure runs no work
 // and returns the error without responding.
 func helperExchange(rw io.ReadWriter, nonce string, run func(wireCapability) pipeResponse) error {
+	return helperExchangeRequest(rw, nonce, func(req pipeRequest) pipeResponse { return run(req.Capability) })
+}
+
+// helperExchangeRequest is helperExchange with access to the validated request,
+// so the driver-package capability can read its bounded package list.
+func helperExchangeRequest(rw io.ReadWriter, nonce string, run func(pipeRequest) pipeResponse) error {
 	var req pipeRequest
 	if err := readMessage(rw, &req); err != nil {
 		return err
@@ -69,7 +80,46 @@ func helperExchange(rw io.ReadWriter, nonce string, run func(wireCapability) pip
 	if err := validateRequest(req, nonce); err != nil {
 		return err
 	}
-	return writeMessage(rw, run(req.Capability))
+	return writeMessage(rw, run(req))
+}
+
+// responseFromDriverCleanup projects a driver-package removal result onto the
+// wire response: outcome, reason, per-package outcomes, cancellation state, and
+// the optional free-space observation. No path is carried.
+func responseFromDriverCleanup(res clean.DriverPackageCleanupResult) pipeResponse {
+	resp := pipeResponse{
+		Version:         protocolVersion,
+		Outcome:         string(res.Outcome),
+		Reason:          res.Reason,
+		CancelRequested: res.CancelRequested,
+	}
+	for _, pkg := range res.Packages {
+		resp.DriverPackages = append(resp.DriverPackages, wireDriverPackage{PublishedName: pkg.PublishedName, Outcome: pkg.Outcome})
+	}
+	if res.ObservedFreeBytes != nil {
+		resp.HasObservedFreeBytes = true
+		resp.ObservedFreeBytes = *res.ObservedFreeBytes
+	}
+	return resp
+}
+
+// driverCleanupResultFromResponse reconstructs a driver-package removal result.
+// The clean package re-checks outcomes fail-closed, so unknown values are never
+// read as success.
+func driverCleanupResultFromResponse(resp pipeResponse) clean.DriverPackageCleanupResult {
+	res := clean.DriverPackageCleanupResult{
+		Outcome:         clean.ServicingOutcome(resp.Outcome),
+		Reason:          resp.Reason,
+		CancelRequested: resp.CancelRequested,
+	}
+	for _, pkg := range resp.DriverPackages {
+		res.Packages = append(res.Packages, clean.ServicingDriverPackage{PublishedName: pkg.PublishedName, Outcome: pkg.Outcome})
+	}
+	if resp.HasObservedFreeBytes {
+		observed := resp.ObservedFreeBytes
+		res.ObservedFreeBytes = &observed
+	}
+	return res
 }
 
 // responseFromAnalysis projects a path-free analysis result onto the wire
