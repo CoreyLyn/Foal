@@ -643,7 +643,9 @@ func systemReportLines(model PreviewReadModel, opts PreviewReportCategoryOptions
 			lines = append(lines, incompleteInspectionLine(incomplete, opts))
 		}
 	}
-	if servicingLines := ServicingOperationLines(model.ServicingOperations); len(servicingLines) > 0 {
+	if servicingLines := ServicingOperationLinesWithBytes(model.ServicingOperations, func(bytes int64) string {
+		return reportFormatBytes(opts, bytes)
+	}); len(servicingLines) > 0 {
 		lines = append(lines, "  Windows servicing")
 		for _, servicingLine := range servicingLines {
 			lines = append(lines, "    "+servicingLine)

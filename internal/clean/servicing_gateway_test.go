@@ -9,7 +9,7 @@ import (
 )
 
 // fakeServicingGateway records calls and returns a canned analysis/execute
-// outcome so core tests never launch UAC or DISM.
+// outcome so core tests never launch UAC, DISM, or driver-store APIs.
 type fakeServicingGateway struct {
 	result      clean.ServicingAnalysisResult
 	calls       int
@@ -17,6 +17,12 @@ type fakeServicingGateway struct {
 	execResult  clean.ServicingExecuteResult
 	execCalls   int
 	lastExecReq clean.ServicingExecuteRequest
+
+	driverAnalysis     clean.DriverStoreAnalysisResult
+	driverAnalyzeCalls int
+	driverExecResult   clean.DriverPackageCleanupResult
+	driverExecCalls    int
+	lastDriverExecReq  clean.DriverPackageCleanupRequest
 }
 
 func (f *fakeServicingGateway) AnalyzeComponentStore(_ context.Context, req clean.ServicingAnalysisRequest) clean.ServicingAnalysisResult {
@@ -29,6 +35,17 @@ func (f *fakeServicingGateway) ExecuteComponentStoreCleanup(_ context.Context, r
 	f.execCalls++
 	f.lastExecReq = req
 	return f.execResult
+}
+
+func (f *fakeServicingGateway) AnalyzeDriverStore(context.Context) clean.DriverStoreAnalysisResult {
+	f.driverAnalyzeCalls++
+	return f.driverAnalysis
+}
+
+func (f *fakeServicingGateway) ExecuteDriverPackageCleanup(_ context.Context, req clean.DriverPackageCleanupRequest) clean.DriverPackageCleanupResult {
+	f.driverExecCalls++
+	f.lastDriverExecReq = req
+	return f.driverExecResult
 }
 
 func exactWinSxSPlan(t *testing.T) *clean.CategoryPlan {

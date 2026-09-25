@@ -50,6 +50,18 @@ func (windowsGateway) ExecuteComponentStoreCleanup(ctx context.Context, req clea
 	return coordinateCleanup(ctx)
 }
 
+// AnalyzeDriverStore is wired in a follow-up change; until then the driver
+// category fails closed without touching the driver store.
+func (windowsGateway) AnalyzeDriverStore(context.Context) clean.DriverStoreAnalysisResult {
+	return clean.DriverStoreAnalysisResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonUnsupportedPlatform}
+}
+
+// ExecuteDriverPackageCleanup is wired in a follow-up change; until then the
+// driver category fails closed without elevation.
+func (windowsGateway) ExecuteDriverPackageCleanup(context.Context, clean.DriverPackageCleanupRequest) clean.DriverPackageCleanupResult {
+	return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonUnsupportedPlatform}
+}
+
 // helperSession holds an authenticated coordinator/helper connection ready for
 // exactly one request. The caller owns closing conn and calling release.
 type helperSession struct {

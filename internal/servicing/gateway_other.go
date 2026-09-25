@@ -24,5 +24,13 @@ func (unsupportedGateway) ExecuteComponentStoreCleanup(context.Context, clean.Se
 	return skipExecuteResult(clean.ServicingReasonUnsupportedPlatform)
 }
 
+func (unsupportedGateway) AnalyzeDriverStore(context.Context) clean.DriverStoreAnalysisResult {
+	return clean.DriverStoreAnalysisResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonUnsupportedPlatform}
+}
+
+func (unsupportedGateway) ExecuteDriverPackageCleanup(context.Context, clean.DriverPackageCleanupRequest) clean.DriverPackageCleanupResult {
+	return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonUnsupportedPlatform}
+}
+
 // RunHelper is unsupported off Windows; the elevated helper only exists there.
 func RunHelper([]string) int { return helperExitUnsupported }

@@ -211,6 +211,21 @@ func servicingHistoryRecords(operations []ServicingOperation) []history.Servicin
 			observed := *op.ObservedFreeBytes
 			record.ObservedFreeBytes = &observed
 		}
+		if op.PackageBytes != nil {
+			packageBytes := *op.PackageBytes
+			record.PackageBytes = &packageBytes
+		}
+		for _, pkg := range op.DriverPackages {
+			record.DriverPackages = append(record.DriverPackages, history.ServicingDriverPackageRecord{
+				PublishedName: pkg.PublishedName,
+				OriginalName:  pkg.OriginalName,
+				Provider:      pkg.Provider,
+				DriverDate:    pkg.DriverDate,
+				DriverVersion: pkg.DriverVersion,
+				Bytes:         pkg.Bytes,
+				Outcome:       pkg.Outcome,
+			})
+		}
 		records = append(records, record)
 	}
 	return records

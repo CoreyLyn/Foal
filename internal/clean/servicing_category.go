@@ -9,6 +9,18 @@ import "context"
 // servicing stack through the injected ServicingGateway. See ADR 0029.
 const CategoryWinSxSComponentStore = "winsxs_component_store"
 
+// CategorySupersededDisplayDrivers is the exact-selection-only servicing
+// category that removes unused, superseded third-party Display-class driver
+// packages through Windows (ADR 0036). Analysis is non-elevated and in-process;
+// removal runs in the elevated helper via SetupUninstallOEMInfW without force.
+const CategorySupersededDisplayDrivers = "superseded-display-drivers"
+
+// isDriverPackageServicingCategory reports whether a servicing category is the
+// driver-store package category rather than component-store servicing.
+func isDriverPackageServicingCategory(identifier string) bool {
+	return identifier == CategorySupersededDisplayDrivers
+}
+
 // categoryResolverWindowsServicing marks a category whose work is a non-file
 // Windows servicing operation rather than filesystem deletion. Servicing
 // categories register an inert file resolver: candidate resolution, the eager

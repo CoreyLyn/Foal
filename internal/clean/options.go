@@ -243,6 +243,10 @@ type Options struct {
 	// fails servicing analysis closed with unsupported_platform and never opens
 	// UAC. It never applies to file deletion.
 	ServicingGateway ServicingGateway
+	// ConfirmedDriverPackages bounds superseded-display-drivers execution to the
+	// published names disclosed at TUI confirmation: fresh candidates outside the
+	// set are never removed. Nil (CLI) uses every fresh candidate.
+	ConfirmedDriverPackages []string
 
 	// --- discovery injects (tests + gated surfaces; production often nil) ---
 	UserTempDiscoveryOptions         UserTempDiscoveryOptions

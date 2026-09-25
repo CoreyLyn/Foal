@@ -32,6 +32,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"windows-temp",
 		"windows-update-download-cache",
 		"winsxs_component_store",
+		"superseded-display-drivers",
 		"browser_cache",
 		"vscode_cache",
 		"cursor_cache",
@@ -278,7 +279,8 @@ func TestCanonicalExecutableCategoriesDeclareExplicitPlannedActions(t *testing.T
 				t.Fatalf("executable category %q has unsupported planned_action %q", definition.Identifier, definition.PlannedAction)
 			}
 			if definition.PlannedAction == clean.PlannedActionInvokeWindowsServicing &&
-				definition.Identifier != clean.CategoryWinSxSComponentStore {
+				definition.Identifier != clean.CategoryWinSxSComponentStore &&
+				definition.Identifier != clean.CategorySupersededDisplayDrivers {
 				t.Fatalf("unexpected servicing category %q", definition.Identifier)
 			}
 		case clean.CategoryEligibilityPermissionBoundary, clean.CategoryEligibilityReviewOnly:

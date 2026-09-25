@@ -870,6 +870,12 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 	// TUI entry. See ADR 0029. Registered among the System report group so the
 	// eager preview keeps report-group order.
 	windowsServicingCategoryEntry(categoryDefinition(CategoryWinSxSComponentStore, "Windows component store", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionInvokeWindowsServicing)),
+	// Superseded display drivers: exact-selection-only servicing category that
+	// removes unused, superseded third-party Display-class driver packages via
+	// SetupUninstallOEMInfW without force in the elevated helper. Analysis is a
+	// non-elevated in-process inventory; it never yields file candidates and its
+	// package bytes never enter deletion totals. See ADR 0036.
+	windowsServicingCategoryEntry(categoryDefinition(CategorySupersededDisplayDrivers, "Superseded display drivers", ReportCategorySystem, CategoryEligibilityOptIn, RunningApplicationPolicyNotApplicable, PlannedActionInvokeWindowsServicing)),
 	withPreviewSafetyNote(browserCacheCategoryEntry(categoryDefinition(OpportunityCategoryBrowserCache, "Browser cache", ReportCategoryBrowsers, CategoryEligibilityOptIn, RunningApplicationPolicyBrowserIdleBeforeAfter, PlannedActionDeletePermanently)), staticPreviewSafetyNote(browserCacheOptInImpactNotice)),
 	withPreviewSafetyNote(applicationCacheCategoryEntry(
 		categoryDefinition(

@@ -108,36 +108,38 @@ func TestCatalogFailsClosedOnPlannedActionAndSelectionPolicy(t *testing.T) {
 	}
 }
 
-// TestProductionCatalogRegistersWinSxSServicingCategory verifies #306 registers
-// exactly the read-only WinSxS servicing category: an exact-selection-only
+// TestProductionCatalogRegistersServicingCategories verifies the production
+// servicing categories: the read-only WinSxS component store (#306) and
+// superseded display drivers (ADR 0036). Each is an exact-selection-only
 // invoke_windows_servicing opt-in under the System report group that never
-// starts selected. It supersedes the #305 boundary guard that forbade any
-// production servicing category.
-func TestProductionCatalogRegistersWinSxSServicingCategory(t *testing.T) {
+// starts selected.
+func TestProductionCatalogRegistersServicingCategories(t *testing.T) {
 	var servicing []clean.CleanupCategorySummary
 	for _, summary := range clean.CanonicalCleanupCategoryCatalog().Summaries() {
 		if summary.PlannedAction == clean.PlannedActionInvokeWindowsServicing {
 			servicing = append(servicing, summary)
 		}
 	}
-	if len(servicing) != 1 {
-		t.Fatalf("production servicing categories = %d, want exactly 1", len(servicing))
+	want := []string{clean.CategoryWinSxSComponentStore, clean.CategorySupersededDisplayDrivers}
+	if len(servicing) != len(want) {
+		t.Fatalf("production servicing categories = %d, want %d", len(servicing), len(want))
 	}
-	winsxs := servicing[0]
-	if winsxs.Identifier != clean.CategoryWinSxSComponentStore {
-		t.Fatalf("servicing category = %q, want %q", winsxs.Identifier, clean.CategoryWinSxSComponentStore)
-	}
-	if winsxs.Eligibility != clean.CategoryEligibilityOptIn {
-		t.Fatalf("servicing category eligibility = %q, want opt-in", winsxs.Eligibility)
-	}
-	if winsxs.ReportCategory != clean.ReportCategorySystem {
-		t.Fatalf("servicing category report = %q, want System", winsxs.ReportCategory)
-	}
-	if winsxs.SelectionPolicy != clean.CategorySelectionPolicyExactOnly {
-		t.Fatalf("servicing category selection policy = %q, want exact-selection-only", winsxs.SelectionPolicy)
-	}
-	if !clean.ExactSelectionOnlyCategory(winsxs) || clean.InitiallySelectedCategory(winsxs) {
-		t.Fatalf("servicing category must be exact-only and start unselected: %#v", winsxs)
+	for i, summary := range servicing {
+		if summary.Identifier != want[i] {
+			t.Fatalf("servicing category[%d] = %q, want %q", i, summary.Identifier, want[i])
+		}
+		if summary.Eligibility != clean.CategoryEligibilityOptIn {
+			t.Fatalf("%s eligibility = %q, want opt-in", summary.Identifier, summary.Eligibility)
+		}
+		if summary.ReportCategory != clean.ReportCategorySystem {
+			t.Fatalf("%s report = %q, want System", summary.Identifier, summary.ReportCategory)
+		}
+		if summary.SelectionPolicy != clean.CategorySelectionPolicyExactOnly {
+			t.Fatalf("%s selection policy = %q, want exact-selection-only", summary.Identifier, summary.SelectionPolicy)
+		}
+		if !clean.ExactSelectionOnlyCategory(summary) || clean.InitiallySelectedCategory(summary) {
+			t.Fatalf("%s must be exact-only and start unselected: %#v", summary.Identifier, summary)
+		}
 	}
 }
 

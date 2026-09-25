@@ -240,6 +240,15 @@ func (g *orderedServicingGateway) ExecuteComponentStoreCleanup(context.Context, 
 	return g.result
 }
 
+func (g *orderedServicingGateway) AnalyzeDriverStore(context.Context) clean.DriverStoreAnalysisResult {
+	return clean.DriverStoreAnalysisResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonHelperFailed}
+}
+
+func (g *orderedServicingGateway) ExecuteDriverPackageCleanup(context.Context, clean.DriverPackageCleanupRequest) clean.DriverPackageCleanupResult {
+	g.collab.calls = append(g.collab.calls, orderedCall{kind: "servicing"})
+	return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonHelperFailed}
+}
+
 // TestServicingExecuteRunsAfterRecycleBinAndPermanent proves the mixed execution
 // order is Recycle Bin, then Permanent deletion, then Windows servicing last.
 func TestServicingExecuteRunsAfterRecycleBinAndPermanent(t *testing.T) {
@@ -305,6 +314,14 @@ func (g *deletionWatchingServicingGateway) ExecuteComponentStoreCleanup(context.
 	}
 	g.collab.calls = append(g.collab.calls, orderedCall{kind: "servicing"})
 	return g.result
+}
+
+func (g *deletionWatchingServicingGateway) AnalyzeDriverStore(context.Context) clean.DriverStoreAnalysisResult {
+	return clean.DriverStoreAnalysisResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonHelperFailed}
+}
+
+func (g *deletionWatchingServicingGateway) ExecuteDriverPackageCleanup(context.Context, clean.DriverPackageCleanupRequest) clean.DriverPackageCleanupResult {
+	return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeSkipped, Reason: clean.ServicingReasonHelperFailed}
 }
 
 // TestServicingExecuteNoDeletionAfterServicingBegins proves the acceptance

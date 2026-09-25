@@ -81,6 +81,23 @@ type ServicingRecord struct {
 	// around a completed exit-0 StartComponentCleanup. Nil when not measured;
 	// omitempty keeps older records byte-identical.
 	ObservedFreeBytes *int64 `json:"observed_free_bytes,omitempty"`
+	// DriverPackages and PackageBytes record superseded display driver packages
+	// (ADR 0036): identifiers, DriverVer metadata, measured bytes, and per-package
+	// outcome only — never a driver-store path. Omitted for other servicing.
+	DriverPackages []ServicingDriverPackageRecord `json:"driver_packages,omitempty"`
+	PackageBytes   *int64                         `json:"package_bytes,omitempty"`
+}
+
+// ServicingDriverPackageRecord is one superseded display driver package in a
+// servicing record.
+type ServicingDriverPackageRecord struct {
+	PublishedName string `json:"published_name"`
+	OriginalName  string `json:"original_name"`
+	Provider      string `json:"provider"`
+	DriverDate    string `json:"driver_date"`
+	DriverVersion string `json:"driver_version"`
+	Bytes         int64  `json:"bytes"`
+	Outcome       string `json:"outcome"`
 }
 
 type ItemRecord struct {

@@ -19,7 +19,37 @@ type ServicingCapability string
 const (
 	ServicingCapabilityAnalyzeComponentStore        ServicingCapability = "analyze_component_store"
 	ServicingCapabilityExecuteComponentStoreCleanup ServicingCapability = "execute_component_store_cleanup"
+	// ServicingCapabilityAnalyzeDriverStore is the non-elevated, in-process
+	// inventory of superseded display driver packages (ADR 0036).
+	ServicingCapabilityAnalyzeDriverStore ServicingCapability = "analyze_driver_store"
+	// ServicingCapabilityExecuteDriverPackageCleanup removes a bounded set of
+	// confirmed superseded display driver packages through the elevated helper,
+	// which re-derives eligibility itself before each removal (ADR 0036).
+	ServicingCapabilityExecuteDriverPackageCleanup ServicingCapability = "execute_driver_package_cleanup"
 )
+
+// Per-package outcomes for superseded display driver packages.
+const (
+	DriverPackageOutcomeCandidate   = "candidate"
+	DriverPackageOutcomeRemoved     = "removed"
+	DriverPackageOutcomeInUse       = "in_use"
+	DriverPackageOutcomeNotEligible = "not_eligible"
+	DriverPackageOutcomeFailed      = "failed"
+)
+
+// ServicingDriverPackage is one superseded display driver package in a
+// servicing record. It carries package identifiers and DriverVer metadata only,
+// never a driver-store path. Bytes is the measured logical size of the package
+// directory: servicing evidence that never enters deletion byte totals.
+type ServicingDriverPackage struct {
+	PublishedName string `json:"published_name"`
+	OriginalName  string `json:"original_name"`
+	Provider      string `json:"provider"`
+	DriverDate    string `json:"driver_date"`
+	DriverVersion string `json:"driver_version"`
+	Bytes         int64  `json:"bytes"`
+	Outcome       string `json:"outcome"`
+}
 
 // ServicingOutcome is the stable outcome of a Windows servicing operation.
 // canceled applies only before mutation begins; after cleanup starts the record
@@ -81,6 +111,13 @@ type ServicingOperation struct {
 	// is an external observation, never a reclaimable estimate, and never enters
 	// affected, Recycle Bin, or Permanent deletion byte totals.
 	ObservedFreeBytes *int64 `json:"observed_free_bytes,omitempty"`
+	// DriverPackages lists superseded display driver packages for the
+	// superseded-display-drivers category: candidates after analysis, per-package
+	// outcomes after execution. Omitted for component-store servicing.
+	DriverPackages []ServicingDriverPackage `json:"driver_packages,omitempty"`
+	// PackageBytes is the measured logical size of the listed driver packages.
+	// It is servicing evidence only and never enters deletion byte totals.
+	PackageBytes *int64 `json:"package_bytes,omitempty"`
 }
 
 // ValidServicingOutcome reports whether outcome is a stable servicing outcome.
@@ -98,7 +135,8 @@ func ValidServicingOutcome(outcome ServicingOutcome) bool {
 // servicing capability.
 func ValidServicingCapability(capability ServicingCapability) bool {
 	switch capability {
-	case ServicingCapabilityAnalyzeComponentStore, ServicingCapabilityExecuteComponentStoreCleanup:
+	case ServicingCapabilityAnalyzeComponentStore, ServicingCapabilityExecuteComponentStoreCleanup,
+		ServicingCapabilityAnalyzeDriverStore, ServicingCapabilityExecuteDriverPackageCleanup:
 		return true
 	default:
 		return false

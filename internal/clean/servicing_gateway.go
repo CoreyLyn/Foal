@@ -79,18 +79,55 @@ type ServicingExecuteResult struct {
 	ObservedFreeBytes *int64
 }
 
-// ServicingGateway is the high-level seam for Windows component-store servicing.
-// Shared Clean depends only on this interface: production wires an isolated
-// elevated helper coordinator (nonce-bound named pipe + fixed DISM capability),
-// while tests inject canned outcomes so ordinary core tests never launch UAC or
-// DISM. AnalyzeComponentStore performs one read-only component-store analysis;
-// ExecuteComponentStoreCleanup performs the composite fresh-analysis-then-cleanup
-// transaction. Both return structured, path-free results and must never expose
-// raw tool output or run an arbitrary command. There is no standalone
+// DriverStoreAnalysisResult is a gateway's structured outcome of one
+// non-elevated superseded display driver inventory (ADR 0036). Packages are the
+// candidates (outcome candidate) when Outcome is ready. It never carries a
+// driver-store path.
+type DriverStoreAnalysisResult struct {
+	// Outcome is ready (candidates found), no_work, skipped, failed, or canceled.
+	Outcome  ServicingOutcome
+	Reason   string
+	Packages []ServicingDriverPackage
+}
+
+// DriverPackageCleanupRequest names the bounded set of published INF names the
+// coordinator asks the elevated helper to remove. The helper re-derives the
+// inventory and policy itself and removes only the intersection.
+type DriverPackageCleanupRequest struct {
+	Category   string
+	Capability ServicingCapability
+	Packages   []string
+}
+
+// DriverPackageCleanupResult is the helper's structured removal outcome:
+// per-package outcomes (published name + outcome), an optional observed
+// free-space delta, and the cancellation-request state.
+type DriverPackageCleanupResult struct {
+	// Outcome is completed, no_work, skipped, failed, or pre-mutation canceled.
+	Outcome           ServicingOutcome
+	Reason            string
+	Packages          []ServicingDriverPackage
+	ObservedFreeBytes *int64
+	CancelRequested   bool
+}
+
+// ServicingGateway is the high-level seam for Windows servicing. Shared Clean
+// depends only on this interface: production wires an isolated elevated helper
+// coordinator (nonce-bound named pipe + fixed capabilities) plus a non-elevated
+// driver-store inventory, while tests inject canned outcomes so ordinary core
+// tests never launch UAC, DISM, or driver-store APIs. AnalyzeComponentStore
+// performs one read-only component-store analysis; ExecuteComponentStoreCleanup
+// performs the composite fresh-analysis-then-cleanup transaction.
+// AnalyzeDriverStore inventories superseded display driver packages without
+// elevation; ExecuteDriverPackageCleanup removes a confirmed bounded set through
+// the elevated helper. All return structured, path-free results and must never
+// expose raw tool output or run an arbitrary command. There is no standalone
 // start-cleanup capability, so analysis can never be asserted across processes.
 type ServicingGateway interface {
 	AnalyzeComponentStore(ctx context.Context, req ServicingAnalysisRequest) ServicingAnalysisResult
 	ExecuteComponentStoreCleanup(ctx context.Context, req ServicingExecuteRequest) ServicingExecuteResult
+	AnalyzeDriverStore(ctx context.Context) DriverStoreAnalysisResult
+	ExecuteDriverPackageCleanup(ctx context.Context, req DriverPackageCleanupRequest) DriverPackageCleanupResult
 }
 
 // appendServicingAnalysis runs read-only component-store analysis for each
@@ -109,6 +146,9 @@ func appendServicingAnalysis(ctx context.Context, opts Options, servicingCategor
 }
 
 func analyzeServicingCategory(ctx context.Context, opts Options, category string) ServicingOperation {
+	if isDriverPackageServicingCategory(category) {
+		return analyzeDriverPackageCategory(ctx, opts, category)
+	}
 	op := ServicingOperation{
 		Category:      category,
 		PlannedAction: PlannedActionInvokeWindowsServicing,
@@ -186,6 +226,9 @@ func appendServicingExecution(ctx context.Context, opts Options, servicingCatego
 }
 
 func executeServicingCategory(ctx context.Context, opts Options, category string) ServicingOperation {
+	if isDriverPackageServicingCategory(category) {
+		return executeDriverPackageCategory(ctx, opts, category)
+	}
 	op := ServicingOperation{
 		Category:      category,
 		PlannedAction: PlannedActionInvokeWindowsServicing,
