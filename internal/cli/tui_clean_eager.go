@@ -102,10 +102,10 @@ type eagerCategoryRow struct {
 	// packages from a ready analysis (driver category only; component-store rows
 	// never report bytes).
 	ServicingPackageBytes int64
-	// ServicingDriverPackages are the published driver package names a ready
-	// analysis disclosed. Confirmation freezes them so execution never removes a
-	// package the user did not see.
-	ServicingDriverPackages []string
+	// ServicingDriverPackages are the superseded display driver packages a ready
+	// analysis disclosed, with their identities. Confirmation freezes them so
+	// execution never removes a package the user did not see.
+	ServicingDriverPackages []clean.ServicingDriverPackage
 	// ServicingReasonCode is the stable path-free reason for a skipped or failed
 	// analysis. Empty for analysis_required, analyzing, ready, and no_work.
 	ServicingReasonCode string
@@ -159,7 +159,7 @@ var buildEagerPreviewOptions = func() clean.Options {
 // selection disclosed permanent work, and reuses shared Clean Execute (fresh
 // resolution, protection, capacity, mixed actions). Tests replace it to assert
 // handoff without deletion. It never synthesizes CLI arguments.
-var runExactCleanSelection = func(ctx context.Context, selected []string, allowPermanent, allowServicing bool, reporter clean.ProgressReporter, confirmedDriverPackages []string) clean.Result {
+var runExactCleanSelection = func(ctx context.Context, selected []string, allowPermanent, allowServicing bool, reporter clean.ProgressReporter, confirmedDriverPackages []clean.ServicingDriverPackage) clean.Result {
 	plan, err := clean.CompileExactCategoryPlan(selected)
 	if err != nil {
 		return clean.Result{
@@ -188,8 +188,9 @@ var runExactCleanSelection = func(ctx context.Context, selected []string, allowP
 		// authorization; execution performs a fresh composite analysis.
 		AllowServicing:   allowServicing,
 		ServicingGateway: servicing.NewGateway(),
-		// Superseded display driver removal is bounded to the package set the
-		// confirmation disclosed; fresh candidates outside it are never removed.
+		// Superseded display driver removal is bound to the packages the
+		// confirmation disclosed; a fresh candidate outside them, or one whose
+		// identity changed, is never removed.
 		ConfirmedDriverPackages:   confirmedDriverPackages,
 		DetectRunningApplications: clean.DetectSupportedApplications,
 		ProgressReporter:          reporter,
@@ -207,9 +208,13 @@ func exactTUICommandParameters(categories []string) history.CommandParameters {
 	}
 }
 
-func executeExactCleanSelectionCmd(ctx context.Context, selected []string, allowPermanent, allowServicing bool, confirmedDriverPackages []string) tea.Cmd {
+func executeExactCleanSelectionCmd(ctx context.Context, selected []string, allowPermanent, allowServicing bool, confirmedDriverPackages []clean.ServicingDriverPackage) tea.Cmd {
 	selected = append([]string(nil), selected...)
-	confirmedDriverPackages = append([]string(nil), confirmedDriverPackages...)
+	// Copy without losing nil-ness: nil means no driver row was confirmed, while
+	// an empty non-nil set bounds driver removal to nothing.
+	if confirmedDriverPackages != nil {
+		confirmedDriverPackages = append([]clean.ServicingDriverPackage{}, confirmedDriverPackages...)
+	}
 	return func() tea.Msg {
 		// Larger buffer: Slice C emits per-category boundaries in addition to
 		// phase markers; a tiny buffer can stall the execute goroutine while
@@ -298,7 +303,7 @@ type eagerCleanModel struct {
 	frozenAllowServicing bool
 	// frozenDriverPackages is the superseded display driver package set the
 	// confirmation disclosed; execution never removes a package outside it.
-	frozenDriverPackages []string
+	frozenDriverPackages []clean.ServicingDriverPackage
 	executionStarted     bool
 	// executionStartedAt is wall-clock start of the confirmed execute path.
 	// Elapsed execution chrome uses this, never preview startedAt.
@@ -573,7 +578,7 @@ type eagerServicingAnalyzedMsg struct {
 	reclaimablePackages int
 	reason              string
 	packageBytes        int64
-	driverPackages      []string
+	driverPackages      []clean.ServicingDriverPackage
 }
 
 // requestServicingAnalysisCmd runs one read-only servicing analysis for a
@@ -592,9 +597,7 @@ func requestServicingAnalysisCmd(generation uint64, identifier string) tea.Cmd {
 		if op.PackageBytes != nil {
 			msg.packageBytes = *op.PackageBytes
 		}
-		for _, pkg := range op.DriverPackages {
-			msg.driverPackages = append(msg.driverPackages, pkg.PublishedName)
-		}
+		msg.driverPackages = append(msg.driverPackages, op.DriverPackages...)
 		return msg
 	}
 }
@@ -644,7 +647,7 @@ func (m *eagerCleanModel) applyServicingAnalyzed(msg eagerServicingAnalyzedMsg) 
 	row.ServicingReclaimablePackages = msg.reclaimablePackages
 	row.ServicingReasonCode = msg.reason
 	row.ServicingPackageBytes = msg.packageBytes
-	row.ServicingDriverPackages = append([]string(nil), msg.driverPackages...)
+	row.ServicingDriverPackages = append([]clean.ServicingDriverPackage(nil), msg.driverPackages...)
 	if !clean.ServicingRowSelectable(row.ServicingState) {
 		row.Selected = false
 	}
@@ -1011,11 +1014,11 @@ func (m eagerCleanModel) selectionIncludesServicing() bool {
 // selectedDriverPackages returns the superseded display driver packages the
 // selected driver row disclosed, or nil when that row is not selected. A
 // selected row always yields a non-nil (possibly empty) set so execution is
-// bounded to exactly what confirmation showed.
-func (m eagerCleanModel) selectedDriverPackages() []string {
+// bound to exactly what confirmation showed.
+func (m eagerCleanModel) selectedDriverPackages() []clean.ServicingDriverPackage {
 	for _, row := range m.rows {
 		if row.Selected && row.Identifier == clean.CategorySupersededDisplayDrivers {
-			return append([]string{}, row.ServicingDriverPackages...)
+			return append([]clean.ServicingDriverPackage{}, row.ServicingDriverPackages...)
 		}
 	}
 	return nil

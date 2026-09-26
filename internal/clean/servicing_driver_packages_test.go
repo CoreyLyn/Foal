@@ -3,6 +3,7 @@ package clean_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -53,7 +54,7 @@ func onlyDriverOp(t *testing.T, result clean.Result) clean.ServicingOperation {
 	return op
 }
 
-func executeDrivers(t *testing.T, gateway *fakeServicingGateway, allowServicing bool, confirmed []string) clean.Result {
+func executeDrivers(t *testing.T, gateway *fakeServicingGateway, allowServicing bool, confirmed []clean.ServicingDriverPackage) clean.Result {
 	t.Helper()
 	return clean.Execute(context.Background(), clean.Options{
 		Validator:               pathsafe.Validator{},
@@ -62,6 +63,31 @@ func executeDrivers(t *testing.T, gateway *fakeServicingGateway, allowServicing 
 		ServicingGateway:        gateway,
 		ConfirmedDriverPackages: confirmed,
 	})
+}
+
+// sentDriverResult is a helper response: the request reached the helper.
+func sentDriverResult(outcome clean.ServicingOutcome, reason string, reports ...clean.ServicingDriverPackage) clean.DriverPackageCleanupResult {
+	return clean.DriverPackageCleanupResult{Outcome: outcome, Reason: reason, Packages: reports, RequestSent: true}
+}
+
+func report(name, outcome string) clean.ServicingDriverPackage {
+	return clean.ServicingDriverPackage{PublishedName: name, Outcome: outcome}
+}
+
+func driverOutcomeList(op clean.ServicingOperation) string {
+	outcomes := make([]string, 0, len(op.DriverPackages))
+	for _, pkg := range op.DriverPackages {
+		outcomes = append(outcomes, pkg.PublishedName+"="+pkg.Outcome)
+	}
+	return strings.Join(outcomes, ",")
+}
+
+func requestNames(req clean.DriverPackageCleanupRequest) string {
+	names := make([]string, 0, len(req.Packages))
+	for _, pkg := range req.Packages {
+		names = append(names, pkg.PublishedName)
+	}
+	return strings.Join(names, ",")
 }
 
 func TestDriverPackagesDryRunAnalysisListsCandidatesWithoutElevation(t *testing.T) {
@@ -145,31 +171,30 @@ func TestDriverPackagesExecuteWithoutAllowServicingSkipsBeforeAnalysis(t *testin
 
 func TestDriverPackagesExecuteSendsFreshCandidatesAndMergesOutcomes(t *testing.T) {
 	observed := int64(4096)
+	result := sentDriverResult(clean.ServicingOutcomeCompleted, "",
+		report("oem10.inf", clean.DriverPackageOutcomeRemoved),
+		report("oem11.inf", clean.DriverPackageOutcomeInUse),
+		report("oem12.inf", clean.DriverPackageOutcomeRemoved))
+	result.ObservedFreeBytes = &observed
 	gateway := &fakeServicingGateway{
-		driverAnalysis: readyDriverAnalysis(driverCandidate("oem10.inf", 100), driverCandidate("oem11.inf", 200), driverCandidate("oem12.inf", 300)),
-		driverExecResult: clean.DriverPackageCleanupResult{
-			Outcome: clean.ServicingOutcomeCompleted,
-			Packages: []clean.ServicingDriverPackage{
-				{PublishedName: "oem10.inf", Outcome: clean.DriverPackageOutcomeRemoved},
-				{PublishedName: "oem11.inf", Outcome: clean.DriverPackageOutcomeInUse},
-				{PublishedName: "oem12.inf", Outcome: clean.DriverPackageOutcomeRemoved},
-			},
-			ObservedFreeBytes: &observed,
-		},
+		driverAnalysis:   readyDriverAnalysis(driverCandidate("oem10.inf", 100), driverCandidate("oem11.inf", 200), driverCandidate("oem12.inf", 300)),
+		driverExecResult: result,
 	}
 	op := onlyDriverOp(t, executeDrivers(t, gateway, true, nil))
 
 	req := gateway.lastDriverExecReq
 	if req.Category != clean.CategorySupersededDisplayDrivers || req.Capability != clean.ServicingCapabilityExecuteDriverPackageCleanup ||
-		strings.Join(req.Packages, ",") != "oem10.inf,oem11.inf,oem12.inf" {
+		requestNames(req) != "oem10.inf,oem11.inf,oem12.inf" {
 		t.Fatalf("request = %#v", req)
 	}
-	if op.Outcome != clean.ServicingOutcomeCompleted || op.Capability != clean.ServicingCapabilityExecuteDriverPackageCleanup {
+	if first := req.Packages[0]; first.OriginalName != "nv_dispi.inf" || first.Provider != "NVIDIA" || first.DriverVersion != "32.0.15.1000" || first.DriverDate != "01/01/2025" {
+		t.Fatalf("request is not identity-bound: %#v", first)
+	}
+	if op.Outcome != clean.ServicingOutcomeCompleted || op.Capability != clean.ServicingCapabilityExecuteDriverPackageCleanup || op.ReclaimablePackages != 3 {
 		t.Fatalf("op = %#v, want completed", op)
 	}
-	outcomes := []string{op.DriverPackages[0].Outcome, op.DriverPackages[1].Outcome, op.DriverPackages[2].Outcome}
-	if strings.Join(outcomes, ",") != "removed,in_use,removed" {
-		t.Fatalf("package outcomes = %v", outcomes)
+	if got := driverOutcomeList(op); got != "oem10.inf=removed,oem11.inf=in_use,oem12.inf=removed" {
+		t.Fatalf("package outcomes = %s", got)
 	}
 	if op.PackageBytes == nil || *op.PackageBytes != 400 {
 		t.Fatalf("package bytes = %v, want removed bytes 400", op.PackageBytes)
@@ -179,53 +204,158 @@ func TestDriverPackagesExecuteSendsFreshCandidatesAndMergesOutcomes(t *testing.T
 	}
 }
 
-func TestDriverPackagesExecuteBoundsFreshCandidatesToConfirmedSet(t *testing.T) {
+func TestDriverPackagesExecuteBindsCandidatesToConfirmedIdentities(t *testing.T) {
 	gateway := &fakeServicingGateway{
-		driverAnalysis: readyDriverAnalysis(driverCandidate("oem10.inf", 100), driverCandidate("oem12.inf", 300)),
-		driverExecResult: clean.DriverPackageCleanupResult{
-			Outcome:  clean.ServicingOutcomeCompleted,
-			Packages: []clean.ServicingDriverPackage{{PublishedName: "oem10.inf", Outcome: clean.DriverPackageOutcomeRemoved}},
-		},
+		driverAnalysis:   readyDriverAnalysis(driverCandidate("oem10.inf", 100), driverCandidate("oem12.inf", 300)),
+		driverExecResult: sentDriverResult(clean.ServicingOutcomeCompleted, "", report("oem10.inf", clean.DriverPackageOutcomeRemoved)),
 	}
-	op := onlyDriverOp(t, executeDrivers(t, gateway, true, []string{"OEM10.INF", "oem11.inf"}))
-	if got := strings.Join(gateway.lastDriverExecReq.Packages, ","); got != "oem10.inf" {
-		t.Fatalf("request packages = %q, want only the confirmed fresh candidate", got)
+	reused := driverCandidate("oem12.inf", 300)
+	reused.DriverVersion = "31.0.15.9999" // oem12.inf now names a different package
+	confirmed := []clean.ServicingDriverPackage{driverCandidate("OEM10.INF", 100), driverCandidate("oem11.inf", 200), reused}
+	op := onlyDriverOp(t, executeDrivers(t, gateway, true, confirmed))
+	if got := requestNames(gateway.lastDriverExecReq); got != "oem10.inf" {
+		t.Fatalf("request packages = %q, want only the confirmed identity", got)
 	}
-	if op.Outcome != clean.ServicingOutcomeCompleted || len(op.DriverPackages) != 1 {
+	if op.Outcome != clean.ServicingOutcomeCompleted {
 		t.Fatalf("op = %#v", op)
 	}
-}
-
-func TestDriverPackagesExecuteEmptyConfirmedIntersectionIsNoWork(t *testing.T) {
-	gateway := &fakeServicingGateway{driverAnalysis: readyDriverAnalysis(driverCandidate("oem10.inf", 100))}
-	op := onlyDriverOp(t, executeDrivers(t, gateway, true, []string{"oem99.inf"}))
-	if op.Outcome != clean.ServicingOutcomeNoWork || gateway.driverExecCalls != 0 {
-		t.Fatalf("op = %#v exec calls = %d, want no_work without helper", op, gateway.driverExecCalls)
+	if got := driverOutcomeList(op); got != "oem10.inf=removed,oem11.inf=not_eligible,oem12.inf=not_eligible" {
+		t.Fatalf("package outcomes = %s", got)
 	}
 }
 
-func TestDriverPackagesExecuteFailedOrUnreportedPackageFailsOperation(t *testing.T) {
+func TestDriverPackagesExecuteWithoutConfirmedMatchIsNoWork(t *testing.T) {
+	for name, confirmed := range map[string][]clean.ServicingDriverPackage{
+		"absent":    {driverCandidate("oem99.inf", 1)},
+		"empty set": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gateway := &fakeServicingGateway{driverAnalysis: readyDriverAnalysis(driverCandidate("oem10.inf", 100))}
+			op := onlyDriverOp(t, executeDrivers(t, gateway, true, confirmed))
+			if op.Outcome != clean.ServicingOutcomeNoWork || gateway.driverExecCalls != 0 {
+				t.Fatalf("op = %#v exec calls = %d, want no_work without helper", op, gateway.driverExecCalls)
+			}
+			if len(confirmed) > 0 && driverOutcomeList(op) != "oem99.inf=not_eligible" {
+				t.Fatalf("packages = %s, want the confirmed package recorded not_eligible", driverOutcomeList(op))
+			}
+		})
+	}
+}
+
+func TestDriverPackagesExecuteReportedFailureFailsOperation(t *testing.T) {
 	gateway := &fakeServicingGateway{
 		driverAnalysis: readyDriverAnalysis(driverCandidate("oem10.inf", 100), driverCandidate("oem11.inf", 200), driverCandidate("oem12.inf", 300)),
-		driverExecResult: clean.DriverPackageCleanupResult{
-			Outcome: clean.ServicingOutcomeCompleted,
-			Packages: []clean.ServicingDriverPackage{
-				{PublishedName: "oem10.inf", Outcome: clean.DriverPackageOutcomeRemoved},
-				{PublishedName: "oem11.inf", Outcome: clean.DriverPackageOutcomeFailed},
-				// oem12 missing from the helper response.
-			},
-		},
+		driverExecResult: sentDriverResult(clean.ServicingOutcomeFailed, clean.ServicingReasonCleanupFailed,
+			report("oem10.inf", clean.DriverPackageOutcomeRemoved),
+			report("oem11.inf", clean.DriverPackageOutcomeFailed),
+			report("oem12.inf", clean.DriverPackageOutcomeInUse)),
 	}
 	op := onlyDriverOp(t, executeDrivers(t, gateway, true, nil))
 	if op.Outcome != clean.ServicingOutcomeFailed || op.Reason != clean.ServicingReasonCleanupFailed {
 		t.Fatalf("op = %#v, want failed windows_servicing_cleanup_failed", op)
 	}
-	outcomes := []string{op.DriverPackages[0].Outcome, op.DriverPackages[1].Outcome, op.DriverPackages[2].Outcome}
-	if strings.Join(outcomes, ",") != "removed,failed,failed" {
-		t.Fatalf("package outcomes = %v", outcomes)
+	if got := driverOutcomeList(op); got != "oem10.inf=removed,oem11.inf=failed,oem12.inf=in_use" {
+		t.Fatalf("package outcomes = %s", got)
 	}
 	if op.PackageBytes == nil || *op.PackageBytes != 100 {
 		t.Fatalf("package bytes = %v, want the removed package only", op.PackageBytes)
+	}
+}
+
+func TestDriverPackagesExecuteRejectsInconsistentHelperReports(t *testing.T) {
+	negative := int64(-1)
+	zero := int64(0)
+	withObserved := func(res clean.DriverPackageCleanupResult, observed *int64) clean.DriverPackageCleanupResult {
+		res.ObservedFreeBytes = observed
+		return res
+	}
+	for name, tc := range map[string]struct {
+		result clean.DriverPackageCleanupResult
+		want   string
+	}{
+		"missing report": {
+			sentDriverResult(clean.ServicingOutcomeFailed, clean.ServicingReasonCleanupFailed, report("oem10.inf", clean.DriverPackageOutcomeRemoved)),
+			"oem10.inf=removed,oem11.inf=unknown",
+		},
+		"duplicate report": {
+			sentDriverResult(clean.ServicingOutcomeCompleted, "",
+				report("oem10.inf", clean.DriverPackageOutcomeRemoved), report("oem10.inf", clean.DriverPackageOutcomeFailed), report("oem11.inf", clean.DriverPackageOutcomeRemoved)),
+			"oem10.inf=removed,oem11.inf=removed",
+		},
+		"unrequested package": {
+			sentDriverResult(clean.ServicingOutcomeCompleted, "",
+				report("oem10.inf", clean.DriverPackageOutcomeRemoved), report("oem11.inf", clean.DriverPackageOutcomeRemoved), report("oem42.inf", clean.DriverPackageOutcomeRemoved)),
+			"oem10.inf=removed,oem11.inf=removed,oem42.inf=removed",
+		},
+		"unknown outcome value": {
+			sentDriverResult(clean.ServicingOutcomeCompleted, "",
+				report("oem10.inf", "deleted"), report("oem11.inf", clean.DriverPackageOutcomeRemoved)),
+			"oem10.inf=unknown,oem11.inf=removed",
+		},
+		"outcome contradicts reports": {
+			sentDriverResult(clean.ServicingOutcomeCompleted, "",
+				report("oem10.inf", clean.DriverPackageOutcomeRemoved), report("oem11.inf", clean.DriverPackageOutcomeFailed)),
+			"oem10.inf=removed,oem11.inf=failed",
+		},
+		"skipped after the request was sent": {
+			sentDriverResult(clean.ServicingOutcomeSkipped, clean.ServicingReasonElevationDenied),
+			"oem10.inf=unknown,oem11.inf=unknown",
+		},
+		"negative observation": {
+			withObserved(sentDriverResult(clean.ServicingOutcomeCompleted, "",
+				report("oem10.inf", clean.DriverPackageOutcomeRemoved), report("oem11.inf", clean.DriverPackageOutcomeRemoved)), &negative),
+			"oem10.inf=removed,oem11.inf=removed",
+		},
+		"observation without removal": {
+			withObserved(sentDriverResult(clean.ServicingOutcomeNoWork, "",
+				report("oem10.inf", clean.DriverPackageOutcomeNotEligible), report("oem11.inf", clean.DriverPackageOutcomeInUse)), &zero),
+			"oem10.inf=not_eligible,oem11.inf=in_use",
+		},
+		"exchange failed after send": {
+			sentDriverResult(clean.ServicingOutcomeFailed, clean.ServicingReasonHelperFailed,
+				report("oem10.inf", clean.DriverPackageOutcomeUnknown), report("oem11.inf", clean.DriverPackageOutcomeUnknown)),
+			"oem10.inf=unknown,oem11.inf=unknown",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gateway := &fakeServicingGateway{
+				driverAnalysis:   readyDriverAnalysis(driverCandidate("oem10.inf", 100), driverCandidate("oem11.inf", 200)),
+				driverExecResult: tc.result,
+			}
+			op := onlyDriverOp(t, executeDrivers(t, gateway, true, nil))
+			if op.Outcome != clean.ServicingOutcomeFailed || op.Reason != clean.ServicingReasonHelperFailed {
+				t.Fatalf("op = %#v, want failed windows_servicing_helper_failed", op)
+			}
+			if got := driverOutcomeList(op); got != tc.want {
+				t.Fatalf("package outcomes = %s, want %s", got, tc.want)
+			}
+			if op.ObservedFreeBytes != nil {
+				t.Fatalf("observed free bytes kept from an inconsistent report: %d", *op.ObservedFreeBytes)
+			}
+		})
+	}
+}
+
+func TestDriverPackagesExecuteBoundsRequestSize(t *testing.T) {
+	var candidates, reports []clean.ServicingDriverPackage
+	for i := 1; i <= 300; i++ {
+		name := fmt.Sprintf("oem%d.inf", i)
+		candidates = append(candidates, driverCandidate(name, 1))
+		if i <= 256 {
+			reports = append(reports, report(name, clean.DriverPackageOutcomeRemoved))
+		}
+	}
+	gateway := &fakeServicingGateway{
+		driverAnalysis:   readyDriverAnalysis(candidates...),
+		driverExecResult: sentDriverResult(clean.ServicingOutcomeCompleted, "", reports...),
+	}
+	op := onlyDriverOp(t, executeDrivers(t, gateway, true, nil))
+	if len(gateway.lastDriverExecReq.Packages) != 256 || op.Outcome != clean.ServicingOutcomeCompleted || op.ReclaimablePackages != 300 {
+		t.Fatalf("request size = %d op = %s/%s reclaimable = %d", len(gateway.lastDriverExecReq.Packages), op.Outcome, op.Reason, op.ReclaimablePackages)
+	}
+	if len(op.DriverPackages) != 300 || op.DriverPackages[255].Outcome != clean.DriverPackageOutcomeRemoved ||
+		op.DriverPackages[256].Outcome != clean.DriverPackageOutcomeCandidate {
+		t.Fatalf("packages beyond the request limit must stay unattempted candidates: %#v", op.DriverPackages[254:258])
 	}
 }
 
@@ -257,11 +387,8 @@ func TestDriverPackagesExecuteFreshAnalysisFailureStopsBeforeHelper(t *testing.T
 func TestDriverPackagesHistoryRecordsPackagesWithoutPaths(t *testing.T) {
 	recorder := &recordingHistoryRecorder{}
 	gateway := &fakeServicingGateway{
-		driverAnalysis: readyDriverAnalysis(driverCandidate("oem10.inf", 100)),
-		driverExecResult: clean.DriverPackageCleanupResult{
-			Outcome:  clean.ServicingOutcomeCompleted,
-			Packages: []clean.ServicingDriverPackage{{PublishedName: "oem10.inf", Outcome: clean.DriverPackageOutcomeRemoved}},
-		},
+		driverAnalysis:   readyDriverAnalysis(driverCandidate("oem10.inf", 100)),
+		driverExecResult: sentDriverResult(clean.ServicingOutcomeCompleted, "", report("oem10.inf", clean.DriverPackageOutcomeRemoved)),
 	}
 	clean.Execute(context.Background(), clean.Options{
 		Validator:        pathsafe.Validator{},

@@ -64,20 +64,35 @@ func (windowsGateway) AnalyzeDriverStore(ctx context.Context) clean.DriverStoreA
 }
 
 // ExecuteDriverPackageCleanup asks the elevated helper to remove a bounded,
-// validated set of published driver packages. The helper re-derives eligibility
-// itself and removes only the intersection.
+// validated set of identity-bound driver packages. The helper re-derives the
+// inventory itself and removes a package only while it still has exactly the
+// requested identity as a superseded candidate.
 func (windowsGateway) ExecuteDriverPackageCleanup(ctx context.Context, req clean.DriverPackageCleanupRequest) clean.DriverPackageCleanupResult {
 	if req.Capability != clean.ServicingCapabilityExecuteDriverPackageCleanup {
 		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonHelperFailed}
 	}
-	if err := driverstore.ValidateRequest(req.Packages); err != nil {
+	identities := make([]driverstore.Identity, 0, len(req.Packages))
+	for _, pkg := range req.Packages {
+		identities = append(identities, driverstore.Identity{
+			PublishedName: pkg.PublishedName,
+			OriginalName:  pkg.OriginalName,
+			Provider:      pkg.Provider,
+			DriverDate:    pkg.DriverDate,
+			DriverVersion: pkg.DriverVersion,
+		})
+	}
+	if err := driverstore.ValidateIdentities(identities); err != nil {
 		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonHelperFailed}
 	}
 	if ctx != nil && ctx.Err() != nil {
 		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeCanceled, Reason: clean.ServicingReasonContextCanceled}
 	}
-	return coordinateDriverCleanup(ctx, req.Packages)
+	return coordinateDriverCleanup(ctx, identities)
 }
+
+// establishHelperSession launches and authenticates the elevated helper.
+// Tests replace it so they never request UAC or start a helper.
+var establishHelperSession = establishHelper
 
 // helperSession holds an authenticated coordinator/helper connection ready for
 // exactly one request. The caller owns closing conn and calling release.
@@ -168,7 +183,7 @@ func establishHelper() (session *helperSession, reason string, isSkip bool, ok b
 // coordinateAnalysis performs the full non-elevated coordination for read-only
 // analysis: establish the authenticated helper and relay one analysis request.
 func coordinateAnalysis() clean.ServicingAnalysisResult {
-	session, reason, isSkip, ok := establishHelper()
+	session, reason, isSkip, ok := establishHelperSession()
 	if !ok {
 		if isSkip {
 			return skipResult(reason)
@@ -190,7 +205,7 @@ func coordinateAnalysis() clean.ServicingAnalysisResult {
 // recorded but DISM, the helper, and TrustedInstaller are never terminated, and
 // the coordinator waits for the actual exit outcome.
 func coordinateCleanup(ctx context.Context) clean.ServicingExecuteResult {
-	session, reason, isSkip, ok := establishHelper()
+	session, reason, isSkip, ok := establishHelperSession()
 	if !ok {
 		if isSkip {
 			return skipExecuteResult(reason)
@@ -207,7 +222,7 @@ func coordinateCleanup(ctx context.Context) clean.ServicingExecuteResult {
 		return canceledExecuteResult()
 	}
 
-	resp, cancelRequested, err := exchangeAwaitingOutcome(ctx, session, pipeRequest{
+	resp, _, cancelRequested, err := exchangeAwaitingOutcome(ctx, session, pipeRequest{
 		Version:    protocolVersion,
 		Nonce:      session.nonce,
 		Capability: wireCapabilityExecuteComponentStoreCleanup,
@@ -227,9 +242,11 @@ func coordinateCleanup(ctx context.Context) clean.ServicingExecuteResult {
 // coordinateDriverCleanup performs the driver-package removal coordination with
 // the same cancellation semantics as coordinateCleanup: cancellation before the
 // request is sent removes nothing; afterwards it is recorded while the
-// coordinator waits for the helper's actual per-package outcomes.
-func coordinateDriverCleanup(ctx context.Context, packages []string) clean.DriverPackageCleanupResult {
-	session, reason, isSkip, ok := establishHelper()
+// coordinator waits for the helper's actual per-package outcomes. When the
+// exchange fails after the request was sent, removal may have begun, so every
+// requested package is reported as unknown.
+func coordinateDriverCleanup(ctx context.Context, identities []driverstore.Identity) clean.DriverPackageCleanupResult {
+	session, reason, isSkip, ok := establishHelperSession()
 	if !ok {
 		outcome := clean.ServicingOutcomeFailed
 		if isSkip {
@@ -244,18 +261,37 @@ func coordinateDriverCleanup(ctx context.Context, packages []string) clean.Drive
 		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeCanceled, Reason: clean.ServicingReasonContextCanceled}
 	}
 
-	resp, cancelRequested, err := exchangeAwaitingOutcome(ctx, session, pipeRequest{
+	resp, sent, cancelRequested, err := exchangeAwaitingOutcome(ctx, session, pipeRequest{
 		Version:    protocolVersion,
 		Nonce:      session.nonce,
 		Capability: wireCapabilityExecuteDriverPackageCleanup,
-		Packages:   append([]string(nil), packages...),
+		Packages:   wireIdentities(identities),
 	})
 	if err != nil {
-		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonHelperFailed, CancelRequested: cancelRequested}
+		return driverExchangeFailure(identities, sent, cancelRequested)
 	}
 	res := driverCleanupResultFromResponse(resp)
+	res.RequestSent = true
 	if cancelRequested {
 		res.CancelRequested = true
+	}
+	return res
+}
+
+// driverExchangeFailure is the result of a failed driver-package exchange.
+// Before the request was sent nothing was attempted; afterwards the helper may
+// have removed packages, so each requested package's outcome is unknown.
+func driverExchangeFailure(identities []driverstore.Identity, sent, cancelRequested bool) clean.DriverPackageCleanupResult {
+	res := clean.DriverPackageCleanupResult{
+		Outcome:         clean.ServicingOutcomeFailed,
+		Reason:          clean.ServicingReasonHelperFailed,
+		CancelRequested: cancelRequested,
+		RequestSent:     sent,
+	}
+	if sent {
+		for _, id := range identities {
+			res.Packages = append(res.Packages, clean.ServicingDriverPackage{PublishedName: id.PublishedName, Outcome: clean.DriverPackageOutcomeUnknown})
+		}
 	}
 	return res
 }
@@ -263,18 +299,19 @@ func coordinateDriverCleanup(ctx context.Context, packages []string) clean.Drive
 // exchangeAwaitingOutcome sends one request and waits for its response. Once
 // the request is sent mutation may already be underway, so a cancellation is
 // only recorded: the helper and any Windows tool it runs are never terminated.
-func exchangeAwaitingOutcome(ctx context.Context, session *helperSession, req pipeRequest) (pipeResponse, bool, error) {
+// sent reports that the request was written.
+func exchangeAwaitingOutcome(ctx context.Context, session *helperSession, req pipeRequest) (resp pipeResponse, sent, cancelRequested bool, err error) {
 	type exchangeOutcome struct {
 		resp pipeResponse
+		sent bool
 		err  error
 	}
 	ch := make(chan exchangeOutcome, 1)
 	go func() {
-		resp, err := serverExchangeRequest(session.conn, req)
-		ch <- exchangeOutcome{resp: resp, err: err}
+		resp, sent, err := serverExchangeRequest(session.conn, req)
+		ch <- exchangeOutcome{resp: resp, sent: sent, err: err}
 	}()
 
-	cancelRequested := false
 	var out exchangeOutcome
 	if done := ctxDoneChannel(ctx); done != nil {
 		select {
@@ -286,7 +323,7 @@ func exchangeAwaitingOutcome(ctx context.Context, session *helperSession, req pi
 	} else {
 		out = <-ch
 	}
-	return out.resp, cancelRequested, out.err
+	return out.resp, out.sent, cancelRequested, out.err
 }
 
 // ctxDoneChannel returns ctx.Done() or nil when ctx is nil, so a nil context

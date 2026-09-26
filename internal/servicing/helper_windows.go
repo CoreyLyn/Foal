@@ -71,7 +71,7 @@ func dispatchRequest(req pipeRequest) pipeResponse {
 	case wireCapabilityExecuteComponentStoreCleanup:
 		return responseFromExecute(runComponentStoreCleanup())
 	case wireCapabilityExecuteDriverPackageCleanup:
-		return responseFromDriverCleanup(runDriverPackageCleanup(req.Packages))
+		return responseFromDriverCleanup(runDriverPackageCleanup(identitiesFromWire(req.Packages)))
 	default:
 		return responseFromExecute(failExecuteResult(clean.ServicingReasonHelperFailed))
 	}

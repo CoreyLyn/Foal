@@ -183,3 +183,45 @@ func TestValidateRequest(t *testing.T) {
 		t.Fatalf("request at the limit rejected: %v", err)
 	}
 }
+
+func TestIdentityMatchesExactPackage(t *testing.T) {
+	pkg := Package{PublishedName: "oem10.inf", OriginalName: "nv_dispi.inf", Provider: "NVIDIA", DriverDate: "01/02/2025", DriverVersion: "32.0.15.1000"}
+	id := IdentityOf(pkg)
+	if !id.Matches(Package{PublishedName: "OEM10.INF", OriginalName: " NV_DISPI.INF", Provider: "nvidia", DriverDate: "01/02/2025", DriverVersion: "32.0.15.1000"}) {
+		t.Fatal("identity should match case-insensitively after trimming")
+	}
+	for name, other := range map[string]Package{
+		"reused name":   {PublishedName: "oem10.inf", OriginalName: "u0123456.inf", Provider: "Advanced Micro Devices, Inc.", DriverDate: "01/02/2025", DriverVersion: "32.0.15.1000"},
+		"other version": {PublishedName: "oem10.inf", OriginalName: "nv_dispi.inf", Provider: "NVIDIA", DriverDate: "01/02/2025", DriverVersion: "32.0.15.2000"},
+		"other date":    {PublishedName: "oem10.inf", OriginalName: "nv_dispi.inf", Provider: "NVIDIA", DriverDate: "02/02/2025", DriverVersion: "32.0.15.1000"},
+		"other name":    {PublishedName: "oem11.inf", OriginalName: "nv_dispi.inf", Provider: "NVIDIA", DriverDate: "01/02/2025", DriverVersion: "32.0.15.1000"},
+	} {
+		if id.Matches(other) {
+			t.Fatalf("%s matched: %#v", name, other)
+		}
+	}
+}
+
+func TestValidateIdentities(t *testing.T) {
+	valid := Identity{PublishedName: "oem10.inf", OriginalName: "nv_dispi.inf", Provider: "NVIDIA", DriverDate: "01/02/2025", DriverVersion: "32.0.15.1000"}
+	if err := ValidateIdentities([]Identity{valid}); err != nil {
+		t.Fatalf("valid identity rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*Identity){
+		"bad name":         func(id *Identity) { id.PublishedName = `..\oem10.inf` },
+		"missing original": func(id *Identity) { id.OriginalName = " " },
+		"path original":    func(id *Identity) { id.OriginalName = `C:\Windows\INF\nv_dispi.inf` },
+		"missing date":     func(id *Identity) { id.DriverDate = "" },
+		"missing version":  func(id *Identity) { id.DriverVersion = "" },
+		"long provider":    func(id *Identity) { id.Provider = strings.Repeat("x", maxIdentityFieldLength+1) },
+	} {
+		id := valid
+		mutate(&id)
+		if err := ValidateIdentities([]Identity{id}); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+	if err := ValidateIdentities([]Identity{valid, valid}); err == nil {
+		t.Fatal("duplicate identity accepted")
+	}
+}

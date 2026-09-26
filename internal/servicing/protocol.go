@@ -37,8 +37,8 @@ const nonceBytes = 32
 // are read-only analysis and the composite execute (fresh analysis + guard +
 // StartComponentCleanup); there is no standalone start-cleanup capability. The
 // driver-package capability (ADR 0036) additionally carries a bounded list of
-// published INF names that the helper re-validates against its own fresh
-// inventory before removing anything.
+// package identities that the helper re-validates against its own fresh
+// inventory immediately before removing each package.
 type wireCapability uint8
 
 const (
@@ -55,13 +55,39 @@ func validWireCapability(c wireCapability) bool {
 // pipeRequest is the one and only request the coordinator sends to the helper.
 // It carries the protocol version, the one-time nonce, and a fixed capability
 // enum — never a path, command line, or argument. Packages is present only for
-// the driver-package capability: published INF names (oem<digits>.inf), never
-// paths.
+// the driver-package capability: package identities (published oem<digits>.inf
+// name, original INF name, provider, DriverVer), never paths.
 type pipeRequest struct {
-	Version    uint32         `json:"version"`
-	Nonce      string         `json:"nonce"`
-	Capability wireCapability `json:"capability"`
-	Packages   []string       `json:"packages,omitempty"`
+	Version    uint32                `json:"version"`
+	Nonce      string                `json:"nonce"`
+	Capability wireCapability        `json:"capability"`
+	Packages   []wirePackageIdentity `json:"packages,omitempty"`
+}
+
+// wirePackageIdentity is one package a driver removal request names, bound to
+// the identity the coordinator's fresh analysis reported.
+type wirePackageIdentity struct {
+	PublishedName string `json:"published_name"`
+	OriginalName  string `json:"original_name"`
+	Provider      string `json:"provider"`
+	DriverDate    string `json:"driver_date"`
+	DriverVersion string `json:"driver_version"`
+}
+
+func wireIdentities(ids []driverstore.Identity) []wirePackageIdentity {
+	packages := make([]wirePackageIdentity, 0, len(ids))
+	for _, id := range ids {
+		packages = append(packages, wirePackageIdentity(id))
+	}
+	return packages
+}
+
+func identitiesFromWire(packages []wirePackageIdentity) []driverstore.Identity {
+	ids := make([]driverstore.Identity, 0, len(packages))
+	for _, pkg := range packages {
+		ids = append(ids, driverstore.Identity(pkg))
+	}
+	return ids
 }
 
 // wireDriverPackage is one per-package removal outcome in a response.
@@ -71,13 +97,13 @@ type wireDriverPackage struct {
 }
 
 // pipeResponse is the structured servicing result the helper returns. It is
-// path-free: only the parsed English analysis fields, a stable Foal-owned
-// outcome and reason, an optional DISM exit code, the mutation
-// restart-required/cancellation-request state, and an optional post-mutation
-// free-space observation. It never carries raw DISM output, OS error text, or a
-// package identifier. The observation is the single permitted byte value: an
-// approximate external disk reading around a completed exit-0 cleanup, never a
-// reclaimable estimate.
+// path-free: the parsed English analysis fields, a stable Foal-owned outcome
+// and reason, an optional DISM exit code, the mutation
+// restart-required/cancellation-request state, an optional post-mutation
+// free-space observation, and — for the driver-package capability only —
+// published INF names with per-package outcomes. It never carries raw DISM
+// output or OS error text. The observation is an approximate external disk
+// reading around a completed mutation, never a reclaimable estimate.
 type pipeResponse struct {
 	Version             uint32 `json:"version"`
 	Outcome             string `json:"outcome"`
@@ -158,7 +184,7 @@ func validateRequest(req pipeRequest, expectedNonce string) error {
 		return fmt.Errorf("servicing: unknown capability %d", req.Capability)
 	}
 	if req.Capability == wireCapabilityExecuteDriverPackageCleanup {
-		if err := driverstore.ValidateRequest(req.Packages); err != nil {
+		if err := driverstore.ValidateIdentities(identitiesFromWire(req.Packages)); err != nil {
 			return err
 		}
 	} else if len(req.Packages) != 0 {

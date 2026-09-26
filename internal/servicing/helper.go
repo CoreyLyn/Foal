@@ -38,27 +38,29 @@ const helperEstablishTimeout = 2 * time.Minute
 // exactly one request for the given capability bound to nonce and reads exactly
 // one response, validating the protocol version. It performs no second request.
 func serverExchange(rw io.ReadWriter, nonce string, capability wireCapability) (pipeResponse, error) {
-	return serverExchangeRequest(rw, pipeRequest{
+	resp, _, err := serverExchangeRequest(rw, pipeRequest{
 		Version:    protocolVersion,
 		Nonce:      nonce,
 		Capability: capability,
 	})
+	return resp, err
 }
 
 // serverExchangeRequest sends one fully formed request (including an optional
-// package list) and reads exactly one validated response.
-func serverExchangeRequest(rw io.ReadWriter, req pipeRequest) (pipeResponse, error) {
+// package list) and reads exactly one validated response. sent reports that
+// the request was written, after which the helper may have begun acting on it
+// even if no valid response arrives.
+func serverExchangeRequest(rw io.ReadWriter, req pipeRequest) (resp pipeResponse, sent bool, err error) {
 	if err := writeMessage(rw, req); err != nil {
-		return pipeResponse{}, err
+		return pipeResponse{}, false, err
 	}
-	var resp pipeResponse
 	if err := readMessage(rw, &resp); err != nil {
-		return pipeResponse{}, err
+		return pipeResponse{}, true, err
 	}
 	if err := validateResponse(resp); err != nil {
-		return pipeResponse{}, err
+		return pipeResponse{}, true, err
 	}
-	return resp, nil
+	return resp, true, nil
 }
 
 // helperExchange is the helper side of the one-request protocol. It reads and

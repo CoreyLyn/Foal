@@ -90,13 +90,16 @@ type DriverStoreAnalysisResult struct {
 	Packages []ServicingDriverPackage
 }
 
-// DriverPackageCleanupRequest names the bounded set of published INF names the
-// coordinator asks the elevated helper to remove. The helper re-derives the
-// inventory and policy itself and removes only the intersection.
+// DriverPackageCleanupRequest names the bounded set of packages the coordinator
+// asks the elevated helper to remove. Each entry carries the identity the fresh
+// analysis reported (published name, original INF name, provider, DriverVer);
+// the helper removes a package only while its own fresh inventory reports
+// exactly that identity as a superseded candidate. Bytes and Outcome are
+// ignored.
 type DriverPackageCleanupRequest struct {
 	Category   string
 	Capability ServicingCapability
-	Packages   []string
+	Packages   []ServicingDriverPackage
 }
 
 // DriverPackageCleanupResult is the helper's structured removal outcome:
@@ -109,6 +112,9 @@ type DriverPackageCleanupResult struct {
 	Packages          []ServicingDriverPackage
 	ObservedFreeBytes *int64
 	CancelRequested   bool
+	// RequestSent reports that the removal request reached the helper, so
+	// removal may have begun. False means no package was attempted.
+	RequestSent bool
 }
 
 // ServicingGateway is the high-level seam for Windows servicing. Shared Clean

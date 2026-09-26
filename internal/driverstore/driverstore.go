@@ -87,6 +87,72 @@ func ValidateRequest(names []string) error {
 	return nil
 }
 
+// Identity is the confirmed identity of one package a removal request names:
+// the published name plus the original INF name, provider, and DriverVer that
+// were disclosed. A package is removed only while a fresh inventory still
+// reports exactly this identity as a superseded candidate, so a reused
+// published name never redirects removal to a different package.
+type Identity struct {
+	PublishedName string
+	OriginalName  string
+	Provider      string
+	DriverDate    string
+	DriverVersion string
+}
+
+// maxIdentityFieldLength bounds each identity string in a removal request.
+const maxIdentityFieldLength = 128
+
+// IdentityOf returns the identity of an inventory package.
+func IdentityOf(pkg Package) Identity {
+	return Identity{
+		PublishedName: pkg.PublishedName,
+		OriginalName:  pkg.OriginalName,
+		Provider:      pkg.Provider,
+		DriverDate:    pkg.DriverDate,
+		DriverVersion: pkg.DriverVersion,
+	}
+}
+
+// Matches reports whether pkg has exactly this identity, comparing trimmed
+// fields case-insensitively.
+func (id Identity) Matches(pkg Package) bool {
+	return sameField(id.PublishedName, pkg.PublishedName) &&
+		sameField(id.OriginalName, pkg.OriginalName) &&
+		sameField(id.Provider, pkg.Provider) &&
+		sameField(id.DriverDate, pkg.DriverDate) &&
+		sameField(id.DriverVersion, pkg.DriverVersion)
+}
+
+func sameField(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+// ValidateIdentities checks an identity-bound removal request: the published
+// names pass ValidateRequest, every identity names a bare original INF and a
+// DriverVer, and every field is bounded.
+func ValidateIdentities(ids []Identity) error {
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		names = append(names, id.PublishedName)
+	}
+	if err := ValidateRequest(names); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if strings.TrimSpace(id.OriginalName) == "" || strings.ContainsAny(id.OriginalName, `\/:`) ||
+			strings.TrimSpace(id.DriverDate) == "" || strings.TrimSpace(id.DriverVersion) == "" {
+			return fmt.Errorf("driverstore: %q has an incomplete identity", id.PublishedName)
+		}
+		for _, field := range []string{id.OriginalName, id.Provider, id.DriverDate, id.DriverVersion} {
+			if len(field) > maxIdentityFieldLength {
+				return fmt.Errorf("driverstore: %q identity field exceeds %d bytes", id.PublishedName, maxIdentityFieldLength)
+			}
+		}
+	}
+	return nil
+}
+
 // driverRank orders packages in one family: DriverVer date first (Windows
 // prefers the more recent date), then version, then published number.
 type driverRank struct {

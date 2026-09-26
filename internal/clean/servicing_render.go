@@ -114,6 +114,9 @@ func driverPackageOperationLines(op ServicingOperation, formatBytes func(int64) 
 		if removed := countDriverOutcome(op.DriverPackages, DriverPackageOutcomeRemoved); removed > 0 {
 			head += fmt.Sprintf(" %d package(s) were removed before the failure.", removed)
 		}
+		if unknown := countDriverOutcome(op.DriverPackages, DriverPackageOutcomeUnknown); unknown > 0 {
+			head += fmt.Sprintf(" The outcome of %d package(s) is unknown; preview again to see what remains.", unknown)
+		}
 	case ServicingOutcomeCanceled:
 		head = fmt.Sprintf("%s: canceled before removal started.", label)
 	default:
@@ -157,6 +160,8 @@ func driverPackageOutcomeText(outcome string) string {
 		return "kept (no longer eligible)"
 	case DriverPackageOutcomeFailed:
 		return "removal failed"
+	case DriverPackageOutcomeUnknown:
+		return "outcome unknown"
 	case DriverPackageOutcomeCandidate:
 		return "not attempted"
 	default:

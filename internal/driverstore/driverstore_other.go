@@ -9,6 +9,11 @@ func InspectDisplayPackages(context.Context) (Inventory, error) {
 	return Inventory{}, ErrUnsupported
 }
 
+// InspectDisplayPackageIdentities is unsupported off Windows.
+func InspectDisplayPackageIdentities(context.Context) (Inventory, error) {
+	return Inventory{}, ErrUnsupported
+}
+
 // RemovePackage is unsupported off Windows.
 func RemovePackage(string) RemoveOutcome {
 	return RemoveOutcomeFailed

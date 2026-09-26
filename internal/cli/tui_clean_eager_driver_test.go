@@ -61,6 +61,14 @@ func readyDriverOperation() clean.ServicingOperation {
 	}
 }
 
+func driverPackageNames(packages []clean.ServicingDriverPackage) []string {
+	names := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		names = append(names, pkg.PublishedName)
+	}
+	return names
+}
+
 func TestDriverRowInspectionIsReadOnlyAndDisclosesSize(t *testing.T) {
 	model := newDriverWorkflowModel(t)
 	idx := servicingRowIndex(t, model)
@@ -74,8 +82,9 @@ func TestDriverRowInspectionIsReadOnlyAndDisclosesSize(t *testing.T) {
 	if row.ServicingState != clean.ServicingRowReady || row.ServicingPackageBytes != 3<<30 {
 		t.Fatalf("row = %#v, want ready with measured bytes", row)
 	}
-	if !stringSlicesEqual(row.ServicingDriverPackages, []string{"oem10.inf", "oem11.inf"}) {
-		t.Fatalf("row packages = %#v", row.ServicingDriverPackages)
+	if !stringSlicesEqual(driverPackageNames(row.ServicingDriverPackages), []string{"oem10.inf", "oem11.inf"}) ||
+		row.ServicingDriverPackages[0].OriginalName != "nv_dispi.inf" {
+		t.Fatalf("row packages = %#v, want the disclosed identities", row.ServicingDriverPackages)
 	}
 	if label := eagerServicingRowLabel(row); !strings.Contains(label, "2 package(s)") || !strings.Contains(label, cleanFormatBytes(3<<30)) {
 		t.Fatalf("ready label = %q, want package count and size", label)
@@ -125,12 +134,12 @@ func TestDriverExecutionFreezesDisclosedPackageSet(t *testing.T) {
 	model.cursor = idx
 	model.toggleFocusedSelection()
 
-	var gotPackages []string
+	var gotPackages []clean.ServicingDriverPackage
 	var gotServicing bool
 	orig := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _, allowServicing bool, _ clean.ProgressReporter, confirmed []string) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _, allowServicing bool, _ clean.ProgressReporter, confirmed []clean.ServicingDriverPackage) clean.Result {
 		gotServicing = allowServicing
-		gotPackages = append([]string(nil), confirmed...)
+		gotPackages = append([]clean.ServicingDriverPackage(nil), confirmed...)
 		observed := int64(2 << 30)
 		return clean.Result{Status: "ok", Mode: "execute", ServicingOperations: []clean.ServicingOperation{{
 			Category:          clean.CategorySupersededDisplayDrivers,
@@ -147,16 +156,46 @@ func TestDriverExecutionFreezesDisclosedPackageSet(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("second enter should hand off execution")
 	}
-	if !stringSlicesEqual(model.frozenDriverPackages, []string{"oem10.inf", "oem11.inf"}) {
+	if !stringSlicesEqual(driverPackageNames(model.frozenDriverPackages), []string{"oem10.inf", "oem11.inf"}) {
 		t.Fatalf("frozen driver packages = %#v", model.frozenDriverPackages)
 	}
 	driveExecutionToResult(t, model, cmd)
-	if !gotServicing || !stringSlicesEqual(gotPackages, []string{"oem10.inf", "oem11.inf"}) {
+	if !gotServicing || !stringSlicesEqual(driverPackageNames(gotPackages), []string{"oem10.inf", "oem11.inf"}) ||
+		gotPackages[1].Provider != "NVIDIA" {
 		t.Fatalf("handoff servicing=%v packages=%#v", gotServicing, gotPackages)
 	}
 	content := model.content()
 	if !strings.Contains(content, "Superseded display drivers: observed free-space increase ≈ "+cleanFormatBytes(2<<30)) {
 		t.Fatalf("result must label the driver observation:\n%s", content)
+	}
+}
+
+func TestExecuteExactCleanSelectionCmdPreservesConfirmedSetNilness(t *testing.T) {
+	var received []clean.ServicingDriverPackage
+	orig := runExactCleanSelection
+	runExactCleanSelection = func(_ context.Context, _ []string, _, _ bool, _ clean.ProgressReporter, confirmed []clean.ServicingDriverPackage) clean.Result {
+		received = confirmed
+		return clean.Result{Status: "ok", Mode: "execute"}
+	}
+	t.Cleanup(func() { runExactCleanSelection = orig })
+
+	for _, tc := range []struct {
+		name      string
+		confirmed []clean.ServicingDriverPackage
+	}{
+		{"no driver row", nil},
+		{"empty confirmed set", []clean.ServicingDriverPackage{}},
+	} {
+		msg := executeExactCleanSelectionCmd(context.Background(), []string{clean.CategorySupersededDisplayDrivers}, false, true, tc.confirmed)()
+		started, ok := msg.(eagerExactExecutionStartedMsg)
+		if !ok {
+			t.Fatalf("%s: message = %T", tc.name, msg)
+		}
+		<-started.stream.result
+		if (received == nil) != (tc.confirmed == nil) {
+			t.Fatalf("%s: handoff nil=%v, want nil=%v; an empty confirmed set must never widen to every fresh candidate",
+				tc.name, received == nil, tc.confirmed == nil)
+		}
 	}
 }
 

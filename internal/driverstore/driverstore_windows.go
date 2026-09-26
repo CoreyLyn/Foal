@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -59,6 +60,17 @@ type versionSection struct {
 // Any failure to enumerate devices, read an oem INF, or resolve a Display
 // package's driver-store directory fails the whole inventory closed.
 func InspectDisplayPackages(ctx context.Context) (Inventory, error) {
+	return inspectDisplayPackages(ctx, true)
+}
+
+// InspectDisplayPackageIdentities is InspectDisplayPackages without measuring
+// package sizes (Bytes stays zero). The elevated helper uses it to revalidate
+// each package immediately before removal.
+func InspectDisplayPackageIdentities(ctx context.Context) (Inventory, error) {
+	return inspectDisplayPackages(ctx, false)
+}
+
+func inspectDisplayPackages(ctx context.Context, measure bool) (Inventory, error) {
 	windowsDir, err := windows.GetWindowsDirectory()
 	if err != nil {
 		return Inventory{}, fmt.Errorf("driverstore: windows directory: %w", err)
@@ -104,9 +116,12 @@ func InspectDisplayPackages(ctx context.Context) (Inventory, error) {
 		if !strings.EqualFold(filepath.Dir(storeDir), repository) {
 			return Inventory{}, fmt.Errorf("driverstore: %s resolves outside the driver repository", name)
 		}
-		bytes, err := measurePackageDir(ctx, storeDir)
-		if err != nil {
-			return Inventory{}, fmt.Errorf("driverstore: measure %s: %w", name, err)
+		var bytes int64
+		if measure {
+			bytes, err = measurePackageDir(ctx, storeDir)
+			if err != nil {
+				return Inventory{}, fmt.Errorf("driverstore: measure %s: %w", name, err)
+			}
 		}
 		inventory.Packages = append(inventory.Packages, Package{
 			PublishedName: name,
@@ -134,14 +149,21 @@ func RemovePackage(name string) RemoveOutcome {
 	if err != nil {
 		return RemoveOutcomeFailed
 	}
-	ok, _, callErr := procSetupUninstallOEMInfW.Call(uintptr(unsafe.Pointer(ptr)), 0, 0)
-	if ok != 0 {
+	removed, callErr := uninstallOEMInf(ptr)
+	if removed {
 		return RemoveOutcomeRemoved
 	}
 	if errors.Is(callErr, windows.ERROR_INF_IN_USE_BY_DEVICES) {
 		return RemoveOutcomeInUse
 	}
 	return RemoveOutcomeFailed
+}
+
+// uninstallOEMInf calls SetupUninstallOEMInfW(name, 0, NULL): Flags 0, never
+// SUOI_FORCEDELETE. Tests replace it so they never reach the real API.
+var uninstallOEMInf = func(name *uint16) (bool, error) {
+	ok, _, callErr := procSetupUninstallOEMInfW.Call(uintptr(unsafe.Pointer(name)), 0, 0)
+	return ok != 0, callErr
 }
 
 // driverInfNamesInUse enumerates every device node of every class, present or
@@ -289,7 +311,9 @@ func measurePackageDir(ctx context.Context, dir string) (int64, error) {
 	return total, err
 }
 
+// isReparse reports FILE_ATTRIBUTE_REPARSE_POINT. os.FileInfo.Sys() on Windows
+// is the syscall package's Win32FileAttributeData, not the x/sys type.
 func isReparse(info os.FileInfo) bool {
-	data, ok := info.Sys().(*windows.Win32FileAttributeData)
-	return ok && data.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
+	data, ok := info.Sys().(*syscall.Win32FileAttributeData)
+	return ok && data.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0
 }

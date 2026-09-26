@@ -247,9 +247,12 @@ type Options struct {
 	// UAC. It never applies to file deletion.
 	ServicingGateway ServicingGateway
 	// ConfirmedDriverPackages bounds superseded-display-drivers execution to the
-	// published names disclosed at TUI confirmation: fresh candidates outside the
-	// set are never removed. Nil (CLI) uses every fresh candidate.
-	ConfirmedDriverPackages []string
+	// packages disclosed at TUI confirmation: a fresh candidate is removed only
+	// when a confirmed entry has the same published name and identity (original
+	// INF name, provider, DriverVer); confirmed packages that are no longer such
+	// a candidate are recorded as not_eligible. Nil (CLI) uses every fresh
+	// candidate; a non-nil empty set removes nothing.
+	ConfirmedDriverPackages []ServicingDriverPackage
 
 	// --- discovery injects (tests + gated surfaces; production often nil) ---
 	UserTempDiscoveryOptions         UserTempDiscoveryOptions

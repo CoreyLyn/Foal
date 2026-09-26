@@ -340,7 +340,7 @@ func TestServicingExecutionFreezesSelectionAndAuthorizes(t *testing.T) {
 	var gotServicing, gotPermanent bool
 	calls := 0
 	orig := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent, allowServicing bool, _ clean.ProgressReporter, _ []string) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, allowPermanent, allowServicing bool, _ clean.ProgressReporter, _ []clean.ServicingDriverPackage) clean.Result {
 		calls++
 		gotSelected = append([]string(nil), selected...)
 		gotServicing = allowServicing
@@ -572,7 +572,7 @@ func servicingResultContent(t *testing.T, op clean.ServicingOperation) string {
 	selectReadyServicing(t, model, 4)
 
 	orig := runExactCleanSelection
-	runExactCleanSelection = func(_ context.Context, selected []string, _, _ bool, _ clean.ProgressReporter, _ []string) clean.Result {
+	runExactCleanSelection = func(_ context.Context, selected []string, _, _ bool, _ clean.ProgressReporter, _ []clean.ServicingDriverPackage) clean.Result {
 		return clean.Result{Status: "ok", Mode: "execute", ServicingOperations: []clean.ServicingOperation{op}}
 	}
 	t.Cleanup(func() { runExactCleanSelection = orig })

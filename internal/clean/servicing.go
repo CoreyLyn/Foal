@@ -1,15 +1,13 @@
 package clean
 
-// Windows servicing contract (ADR 0029). This file defines the action-neutral,
-// path-free servicing operation record shared by Result and History. It carries
-// no filesystem path, raw DISM output, package identifier, or guessed byte
-// estimate. The single permitted byte value is an optional post-mutation
-// free-space observation measured only around a completed exit-0
-// StartComponentCleanup; it is an approximate external disk reading, never a
-// reclaimable estimate, and never enters any deletion byte total. Actual Windows
-// servicing invocation is intentionally out of scope for this contract: no
-// production category registers invoke_windows_servicing yet, and this package
-// never launches DISM here.
+// Windows servicing contract (ADR 0029, ADR 0036). This file defines the
+// action-neutral, path-free servicing operation record shared by Result and
+// History. It never carries a filesystem path, raw DISM output, or a guessed
+// reclaimable-byte estimate. Component-store records carry parsed analysis
+// evidence only; superseded display driver records additionally carry package
+// identifiers, DriverVer metadata, and measured package sizes. Byte values are
+// servicing evidence and observations only and never enter any deletion byte
+// total.
 
 // ServicingCapability is the fixed built-in helper capability a servicing
 // operation used. There is no standalone start-cleanup capability: the composite
@@ -28,13 +26,17 @@ const (
 	ServicingCapabilityExecuteDriverPackageCleanup ServicingCapability = "execute_driver_package_cleanup"
 )
 
-// Per-package outcomes for superseded display driver packages.
+// Per-package outcomes for superseded display driver packages. candidate after
+// execution means the package was not attempted. unknown means the removal
+// request reached the helper but no trustworthy outcome came back, so the
+// package may or may not have been removed.
 const (
 	DriverPackageOutcomeCandidate   = "candidate"
 	DriverPackageOutcomeRemoved     = "removed"
 	DriverPackageOutcomeInUse       = "in_use"
 	DriverPackageOutcomeNotEligible = "not_eligible"
 	DriverPackageOutcomeFailed      = "failed"
+	DriverPackageOutcomeUnknown     = "unknown"
 )
 
 // ServicingDriverPackage is one superseded display driver package in a
@@ -84,12 +86,12 @@ const (
 // ServicingOperation is the path-free record of one Windows servicing
 // operation. It never enters file candidates, deleted/failed/skipped file items,
 // detailed path lists, or path History, and never contributes candidate,
-// affected, Recycle Bin, or Permanent deletion bytes. It carries only parsed
-// analysis evidence (a reclaimable package count and cleanup recommendation),
-// the outcome, cancellation-request state, an optional stable reason, an
-// optional DISM exit code (present only when DISM actually ran), the
-// restart-required state derived from DISM exit semantics, and an optional
-// post-mutation free-space observation.
+// affected, Recycle Bin, or Permanent deletion bytes. It carries parsed analysis
+// evidence (a reclaimable package count and cleanup recommendation), the
+// outcome, cancellation-request state, an optional stable reason, an optional
+// DISM exit code (present only when DISM actually ran), the restart-required
+// state derived from DISM exit semantics, an optional post-mutation free-space
+// observation, and — for superseded display drivers — the packages involved.
 type ServicingOperation struct {
 	Category            string              `json:"category"`
 	PlannedAction       PlannedAction       `json:"planned_action"`
@@ -104,19 +106,23 @@ type ServicingOperation struct {
 	ExitCode        *int `json:"exit_code,omitempty"`
 	RestartRequired bool `json:"restart_required"`
 	// ObservedFreeBytes is the approximate non-negative free-space increase on the
-	// Windows volume measured only around a completed exit-0 StartComponentCleanup
-	// (after minus before). It is nil when not measured — non-completed outcomes,
-	// a restart-required (3010) success whose reclaim happens after reboot, or a
-	// negative delta. A measured zero is a legitimate value distinct from nil. It
-	// is an external observation, never a reclaimable estimate, and never enters
-	// affected, Recycle Bin, or Permanent deletion byte totals.
+	// Windows volume, measured around a completed exit-0 StartComponentCleanup, or
+	// around superseded display driver removals when at least one package was
+	// removed (even if another failed). It is nil when not measured — no
+	// completed mutation, a restart-required (3010) success whose reclaim happens
+	// after reboot, or a negative delta. A measured zero is a legitimate value
+	// distinct from nil. It is an external observation, never a reclaimable
+	// estimate, and never enters affected, Recycle Bin, or Permanent deletion
+	// byte totals.
 	ObservedFreeBytes *int64 `json:"observed_free_bytes,omitempty"`
 	// DriverPackages lists superseded display driver packages for the
 	// superseded-display-drivers category: candidates after analysis, per-package
 	// outcomes after execution. Omitted for component-store servicing.
 	DriverPackages []ServicingDriverPackage `json:"driver_packages,omitempty"`
-	// PackageBytes is the measured logical size of the listed driver packages.
-	// It is servicing evidence only and never enters deletion byte totals.
+	// PackageBytes is servicing evidence that never enters deletion byte totals:
+	// after analyze_driver_store, the measured size of the candidate packages;
+	// after execute_driver_package_cleanup, the measured size of the packages
+	// Windows removed.
 	PackageBytes *int64 `json:"package_bytes,omitempty"`
 }
 

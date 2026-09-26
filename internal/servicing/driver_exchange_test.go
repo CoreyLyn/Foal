@@ -3,29 +3,39 @@ package servicing
 import (
 	"fmt"
 	"net"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 )
 
+func wirePackage(published string) wirePackageIdentity {
+	return wirePackageIdentity{PublishedName: published, OriginalName: "nv_dispi.inf", Provider: "NVIDIA", DriverDate: "01/01/2025", DriverVersion: "32.0.15.1000"}
+}
+
 func TestValidateRequestDriverPackageCapability(t *testing.T) {
-	valid := pipeRequest{Version: protocolVersion, Nonce: "n", Capability: wireCapabilityExecuteDriverPackageCleanup, Packages: []string{"oem10.inf", "oem11.inf"}}
+	valid := pipeRequest{Version: protocolVersion, Nonce: "n", Capability: wireCapabilityExecuteDriverPackageCleanup,
+		Packages: []wirePackageIdentity{wirePackage("oem10.inf"), wirePackage("oem11.inf")}}
 	if err := validateRequest(valid, "n"); err != nil {
 		t.Fatalf("valid driver request rejected: %v", err)
 	}
-	tooMany := make([]string, 257)
+	tooMany := make([]wirePackageIdentity, 257)
 	for i := range tooMany {
-		tooMany[i] = fmt.Sprintf("oem%d.inf", i+1)
+		tooMany[i] = wirePackage(fmt.Sprintf("oem%d.inf", i+1))
 	}
-	for name, packages := range map[string][]string{
-		"empty":     nil,
-		"path":      {`C:\Windows\INF\oem10.inf`},
-		"traversal": {`..\oem10.inf`},
-		"inbox":     {"display.inf"},
-		"duplicate": {"oem10.inf", "OEM10.INF"},
-		"too many":  tooMany,
+	noIdentity := wirePackage("oem10.inf")
+	noIdentity.DriverVersion = ""
+	pathOriginal := wirePackage("oem10.inf")
+	pathOriginal.OriginalName = `C:\Windows\INF\nv_dispi.inf`
+	for name, packages := range map[string][]wirePackageIdentity{
+		"empty":         nil,
+		"path":          {wirePackage(`C:\Windows\INF\oem10.inf`)},
+		"traversal":     {wirePackage(`..\oem10.inf`)},
+		"inbox":         {wirePackage("display.inf")},
+		"duplicate":     {wirePackage("oem10.inf"), wirePackage("OEM10.INF")},
+		"too many":      tooMany,
+		"no identity":   {noIdentity},
+		"path original": {pathOriginal},
 	} {
 		req := valid
 		req.Packages = packages
@@ -33,7 +43,8 @@ func TestValidateRequestDriverPackageCapability(t *testing.T) {
 			t.Fatalf("%s driver request accepted", name)
 		}
 	}
-	componentWithPackages := pipeRequest{Version: protocolVersion, Nonce: "n", Capability: wireCapabilityExecuteComponentStoreCleanup, Packages: []string{"oem10.inf"}}
+	componentWithPackages := pipeRequest{Version: protocolVersion, Nonce: "n", Capability: wireCapabilityExecuteComponentStoreCleanup,
+		Packages: []wirePackageIdentity{wirePackage("oem10.inf")}}
 	if err := validateRequest(componentWithPackages, "n"); err == nil {
 		t.Fatal("component-store request carrying packages accepted")
 	}
@@ -44,11 +55,11 @@ func TestDriverPackageExchangeRoundTrip(t *testing.T) {
 	defer serverConn.Close()
 	defer helperConn.Close()
 
-	var received []string
+	var received []wirePackageIdentity
 	helperErr := make(chan error, 1)
 	go func() {
 		helperErr <- helperExchangeRequest(helperConn, "n", func(req pipeRequest) pipeResponse {
-			received = append([]string(nil), req.Packages...)
+			received = append([]wirePackageIdentity(nil), req.Packages...)
 			observed := int64(2048)
 			return responseFromDriverCleanup(clean.DriverPackageCleanupResult{
 				Outcome: clean.ServicingOutcomeCompleted,
@@ -62,18 +73,23 @@ func TestDriverPackageExchangeRoundTrip(t *testing.T) {
 	}()
 
 	_ = serverConn.SetDeadline(time.Now().Add(5 * time.Second))
-	resp, err := serverExchangeRequest(serverConn, pipeRequest{
+	sentPackages := []wirePackageIdentity{wirePackage("oem10.inf"), wirePackage("oem11.inf")}
+	resp, sent, err := serverExchangeRequest(serverConn, pipeRequest{
 		Version: protocolVersion, Nonce: "n", Capability: wireCapabilityExecuteDriverPackageCleanup,
-		Packages: []string{"oem10.inf", "oem11.inf"},
+		Packages: sentPackages,
 	})
-	if err != nil {
-		t.Fatalf("exchange: %v", err)
+	if err != nil || !sent {
+		t.Fatalf("exchange: sent=%v err=%v", sent, err)
 	}
 	if err := <-helperErr; err != nil {
 		t.Fatalf("helper: %v", err)
 	}
-	if strings.Join(received, ",") != "oem10.inf,oem11.inf" {
-		t.Fatalf("helper received %v", received)
+	if len(received) != 2 || received[0] != sentPackages[0] || received[1] != sentPackages[1] {
+		t.Fatalf("helper received %#v", received)
+	}
+	ids := identitiesFromWire(received)
+	if ids[0].PublishedName != "oem10.inf" || ids[0].DriverVersion != "32.0.15.1000" || ids[0].OriginalName != "nv_dispi.inf" {
+		t.Fatalf("identities = %#v", ids)
 	}
 	res := driverCleanupResultFromResponse(resp)
 	if res.Outcome != clean.ServicingOutcomeCompleted || len(res.Packages) != 2 ||
@@ -101,7 +117,7 @@ func TestDriverPackageExchangeInvalidRequestRunsNothing(t *testing.T) {
 	_ = serverConn.SetDeadline(time.Now().Add(5 * time.Second))
 	if err := writeMessage(serverConn, pipeRequest{
 		Version: protocolVersion, Nonce: "n", Capability: wireCapabilityExecuteDriverPackageCleanup,
-		Packages: []string{`..\evil.inf`},
+		Packages: []wirePackageIdentity{wirePackage(`..\evil.inf`)},
 	}); err != nil {
 		t.Fatalf("write: %v", err)
 	}

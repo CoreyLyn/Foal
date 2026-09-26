@@ -4,7 +4,8 @@ package servicing
 
 import (
 	"context"
-	"strings"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/CoreyLyn/Foal/internal/clean"
 	"github.com/CoreyLyn/Foal/internal/driverstore"
@@ -39,44 +40,78 @@ func analyzeDriverStore(ctx context.Context) clean.DriverStoreAnalysisResult {
 	return clean.DriverStoreAnalysisResult{Outcome: clean.ServicingOutcomeReady, Packages: packages}
 }
 
-// runDriverPackageCleanup runs inside the elevated helper. It re-derives the
-// inventory and superseded policy itself and removes only requested packages
-// that are still eligible, one at a time, through SetupUninstallOEMInfW without
-// force. Requested packages that are no longer eligible are reported and kept.
-// Free space is sampled only around the removals.
-func runDriverPackageCleanup(requested []string) clean.DriverPackageCleanupResult {
-	if err := driverstore.ValidateRequest(requested); err != nil {
+// driverCleanupDeps are the helper's collaborators for driver-package removal.
+// Tests substitute fakes so they never inventory or modify the real driver
+// store.
+type driverCleanupDeps struct {
+	elevated  func() bool
+	inventory func(context.Context) (driverstore.Inventory, error)
+	remove    func(string) driverstore.RemoveOutcome
+	freeBytes func() (uint64, bool)
+}
+
+var productionDriverCleanupDeps = driverCleanupDeps{
+	elevated:  func() bool { return windows.GetCurrentProcessToken().IsElevated() },
+	inventory: driverstore.InspectDisplayPackageIdentities,
+	remove:    driverstore.RemovePackage,
+	freeBytes: volumeFreeBytes,
+}
+
+// runDriverPackageCleanup runs inside the elevated helper with the production
+// driver store.
+func runDriverPackageCleanup(requested []driverstore.Identity) clean.DriverPackageCleanupResult {
+	return runDriverPackageCleanupWith(productionDriverCleanupDeps, requested)
+}
+
+// runDriverPackageCleanupWith removes requested packages one at a time. It
+// refuses to run without an elevated token. Immediately before each removal it
+// takes a fresh inventory and removes the package only while the superseded
+// policy still selects it with exactly the requested identity (so a reused
+// published name never redirects removal); otherwise the package is reported
+// not_eligible and kept. When a fresh inventory fails, that package and every
+// later one are reported as not attempted (candidate). Removal goes through
+// SetupUninstallOEMInfW without force. Free space is sampled only around the
+// removals.
+func runDriverPackageCleanupWith(deps driverCleanupDeps, requested []driverstore.Identity) clean.DriverPackageCleanupResult {
+	if err := driverstore.ValidateIdentities(requested); err != nil {
 		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonHelperFailed}
 	}
-	inventory, err := driverstore.InspectDisplayPackages(context.Background())
-	if err != nil {
-		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonAnalysisFailed}
-	}
-	eligible := map[string]bool{}
-	for _, pkg := range driverstore.SelectSuperseded(inventory) {
-		eligible[strings.ToLower(pkg.PublishedName)] = true
+	if !deps.elevated() {
+		return clean.DriverPackageCleanupResult{Outcome: clean.ServicingOutcomeFailed, Reason: clean.ServicingReasonElevationFailed}
 	}
 
-	beforeFree, beforeOK := volumeFreeBytes()
+	beforeFree, beforeOK := deps.freeBytes()
 	result := clean.DriverPackageCleanupResult{}
-	removed, failed := 0, 0
-	for _, name := range requested {
-		outcome := clean.DriverPackageOutcomeNotEligible
-		if eligible[strings.ToLower(name)] {
-			switch driverstore.RemovePackage(name) {
-			case driverstore.RemoveOutcomeRemoved:
-				outcome = clean.DriverPackageOutcomeRemoved
-				removed++
-			case driverstore.RemoveOutcomeInUse:
-				outcome = clean.DriverPackageOutcomeInUse
-			default:
-				outcome = clean.DriverPackageOutcomeFailed
-				failed++
+	removed, failed, unattempted := 0, 0, 0
+	inventoryFailed := false
+	for _, id := range requested {
+		outcome := clean.DriverPackageOutcomeCandidate
+		if !inventoryFailed {
+			inventory, err := deps.inventory(context.Background())
+			if err != nil {
+				inventoryFailed = true
+			} else {
+				outcome = clean.DriverPackageOutcomeNotEligible
+				if stillSuperseded(inventory, id) {
+					switch deps.remove(id.PublishedName) {
+					case driverstore.RemoveOutcomeRemoved:
+						outcome = clean.DriverPackageOutcomeRemoved
+						removed++
+					case driverstore.RemoveOutcomeInUse:
+						outcome = clean.DriverPackageOutcomeInUse
+					default:
+						outcome = clean.DriverPackageOutcomeFailed
+						failed++
+					}
+				}
 			}
 		}
-		result.Packages = append(result.Packages, clean.ServicingDriverPackage{PublishedName: name, Outcome: outcome})
+		if outcome == clean.DriverPackageOutcomeCandidate {
+			unattempted++
+		}
+		result.Packages = append(result.Packages, clean.ServicingDriverPackage{PublishedName: id.PublishedName, Outcome: outcome})
 	}
-	afterFree, afterOK := volumeFreeBytes()
+	afterFree, afterOK := deps.freeBytes()
 	if removed > 0 && beforeOK && afterOK && afterFree >= beforeFree {
 		delta := int64(afterFree - beforeFree)
 		result.ObservedFreeBytes = &delta
@@ -85,10 +120,24 @@ func runDriverPackageCleanup(requested []string) clean.DriverPackageCleanupResul
 	case failed > 0:
 		result.Outcome = clean.ServicingOutcomeFailed
 		result.Reason = clean.ServicingReasonCleanupFailed
+	case unattempted > 0:
+		result.Outcome = clean.ServicingOutcomeFailed
+		result.Reason = clean.ServicingReasonAnalysisFailed
 	case removed > 0:
 		result.Outcome = clean.ServicingOutcomeCompleted
 	default:
 		result.Outcome = clean.ServicingOutcomeNoWork
 	}
 	return result
+}
+
+// stillSuperseded reports whether the superseded policy selects a package with
+// exactly this identity in the inventory.
+func stillSuperseded(inventory driverstore.Inventory, id driverstore.Identity) bool {
+	for _, pkg := range driverstore.SelectSuperseded(inventory) {
+		if id.Matches(pkg) {
+			return true
+		}
+	}
+	return false
 }
