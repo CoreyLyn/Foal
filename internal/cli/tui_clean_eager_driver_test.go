@@ -55,8 +55,8 @@ func readyDriverOperation() clean.ServicingOperation {
 		CleanupRecommended:  true,
 		PackageBytes:        &bytes,
 		DriverPackages: []clean.ServicingDriverPackage{
-			{PublishedName: "oem10.inf", OriginalName: "nv_dispi.inf", Provider: "NVIDIA", Bytes: 1 << 30, Outcome: clean.DriverPackageOutcomeCandidate},
-			{PublishedName: "oem11.inf", OriginalName: "nv_dispi.inf", Provider: "NVIDIA", Bytes: 2 << 30, Outcome: clean.DriverPackageOutcomeCandidate},
+			{PublishedName: "oem10.inf", OriginalName: "nv_dispi.inf", Provider: "NVIDIA", DriverDate: "01/01/2024", DriverVersion: "31.0.15.1000", Bytes: 1 << 30, Outcome: clean.DriverPackageOutcomeCandidate},
+			{PublishedName: "oem11.inf", OriginalName: "nv_dispi.inf", Provider: "NVIDIA", DriverDate: "01/01/2025", DriverVersion: "32.0.15.1000", Bytes: 2 << 30, Outcome: clean.DriverPackageOutcomeCandidate},
 		},
 	}
 }
@@ -115,6 +115,8 @@ func TestDriverConfirmationDisclosesRollbackNotComponentStore(t *testing.T) {
 		confirmationServicingUACLine,
 		confirmationDriverNonInterruptLine,
 		confirmationDriverRollbackLine,
+		"oem10.inf · nv_dispi.inf · NVIDIA · 31.0.15.1000 (01/01/2024) · " + cleanFormatBytes(1<<30),
+		"oem11.inf · nv_dispi.inf · NVIDIA · 32.0.15.1000 (01/01/2025) · " + cleanFormatBytes(2<<30),
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("confirmation missing %q:\n%s", want, content)
@@ -204,6 +206,50 @@ func TestSelectedDriverPackagesNilWhenDriverRowUnselected(t *testing.T) {
 	runServicingAnalysis(t, model, readyDriverOperation())
 	if got := model.selectedDriverPackages(); got != nil {
 		t.Fatalf("unselected driver row packages = %#v, want nil", got)
+	}
+}
+
+func TestDriverResultRowExplainsPackageOutcomes(t *testing.T) {
+	outcomes := clean.ProjectCategoryExecutionOutcomes([]string{clean.CategorySupersededDisplayDrivers}, clean.Result{
+		Status: "ok", Mode: "execute",
+		ServicingOperations: []clean.ServicingOperation{{
+			Category:   clean.CategorySupersededDisplayDrivers,
+			Capability: clean.ServicingCapabilityExecuteDriverPackageCleanup,
+			Outcome:    clean.ServicingOutcomeFailed,
+			Reason:     clean.ServicingReasonCleanupFailed,
+			DriverPackages: []clean.ServicingDriverPackage{
+				{PublishedName: "oem10.inf", Outcome: clean.DriverPackageOutcomeRemoved},
+				{PublishedName: "oem11.inf", Outcome: clean.DriverPackageOutcomeInUse},
+				{PublishedName: "oem12.inf", Outcome: clean.DriverPackageOutcomeNotEligible},
+				{PublishedName: "oem13.inf", Outcome: clean.DriverPackageOutcomeFailed},
+				{PublishedName: "oem14.inf", Outcome: clean.DriverPackageOutcomeUnknown},
+			},
+		}},
+	})
+	label := eagerServicingExecutionRowLabel(outcomes[0])
+	for _, want := range []string{"failed", "1 removed · 2 kept · 1 failed · 1 outcome unknown"} {
+		if !strings.Contains(label, want) {
+			t.Fatalf("result label %q missing %q", label, want)
+		}
+	}
+
+	kept := eagerServicingExecutionRowLabel(clean.CategoryExecutionOutcome{
+		Identifier: clean.CategorySupersededDisplayDrivers, Label: "Superseded display drivers", State: clean.CategoryExecutionEmpty,
+		ServicingDriverPackages: clean.DriverPackageOutcomeCounts{Kept: 2},
+	})
+	if kept != "Superseded display drivers · no package removed · 2 kept" {
+		t.Fatalf("all-kept label = %q", kept)
+	}
+}
+
+func TestServicingSummarySeparatesDriverAndComponentStorePackages(t *testing.T) {
+	line := confirmationServicingSummaryLine([]eagerCategoryRow{
+		{Identifier: clean.CategoryWinSxSComponentStore, ServicingReclaimablePackages: 5},
+		{Identifier: clean.CategorySupersededDisplayDrivers, ServicingReclaimablePackages: 2, ServicingPackageBytes: 3 << 30},
+	})
+	want := "Windows servicing · 2 categories · 2 driver package(s) · " + cleanFormatBytes(3<<30) + "; 5 component-store package(s) · size unknown"
+	if line != want {
+		t.Fatalf("summary = %q, want %q", line, want)
 	}
 }
 

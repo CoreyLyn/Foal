@@ -230,25 +230,26 @@ func confirmationServicingDisclosureLinesFor(rows []eagerCategoryRow) []string {
 // packages disclose their measured size.
 func confirmationServicingSummaryLine(rows []eagerCategoryRow) string {
 	cats := len(rows)
-	packages := 0
+	driverPackages, componentPackages := 0, 0
 	var driverBytes int64
 	hasComponentStore, hasDrivers := false, false
 	for _, row := range rows {
-		packages += row.ServicingReclaimablePackages
 		if row.Identifier == clean.CategorySupersededDisplayDrivers {
 			hasDrivers = true
+			driverPackages += row.ServicingReclaimablePackages
 			driverBytes += row.ServicingPackageBytes
 		} else {
 			hasComponentStore = true
+			componentPackages += row.ServicingReclaimablePackages
 		}
 	}
 	switch {
 	case hasDrivers && hasComponentStore:
-		return fmt.Sprintf("Windows servicing · %d categories · %d package(s) · driver packages %s; component store size unknown", cats, packages, cleanFormatBytes(driverBytes))
+		return fmt.Sprintf("Windows servicing · %d categories · %d driver package(s) · %s; %d component-store package(s) · size unknown", cats, driverPackages, cleanFormatBytes(driverBytes), componentPackages)
 	case hasDrivers:
-		return fmt.Sprintf("Windows servicing · %d categories · %d package(s) · %s", cats, packages, cleanFormatBytes(driverBytes))
+		return fmt.Sprintf("Windows servicing · %d categories · %d package(s) · %s", cats, driverPackages, cleanFormatBytes(driverBytes))
 	default:
-		return fmt.Sprintf("Windows servicing · %d categories · %d reclaimable package(s) · size unknown", cats, packages)
+		return fmt.Sprintf("Windows servicing · %d categories · %d reclaimable package(s) · size unknown", cats, componentPackages)
 	}
 }
 
@@ -359,6 +360,17 @@ func appendServicingDetails(lines *[]eagerBodyLine, servicing []eagerCategoryRow
 				rowIndex:     -1,
 				outcomeIndex: -1,
 			})
+			// Every package the confirmation freezes is listed, so execution never
+			// removes a package the user did not see.
+			for _, pkg := range row.ServicingDriverPackages {
+				*lines = append(*lines, eagerBodyLine{
+					text: fmt.Sprintf("      %s · %s · %s · %s (%s) · %s",
+						pkg.PublishedName, pkg.OriginalName, pkg.Provider, pkg.DriverVersion, pkg.DriverDate, cleanFormatBytes(pkg.Bytes)),
+					kind:         lineKindConfirmImpact,
+					rowIndex:     -1,
+					outcomeIndex: -1,
+				})
+			}
 			continue
 		}
 		*lines = append(*lines, eagerBodyLine{
@@ -574,16 +586,27 @@ func eagerDriverFocusedDetailBody(row eagerCategoryRow) string {
 
 // eagerServicingExecutionRowLabel formats a servicing execution/result outcome
 // without a byte token. Servicing processes no file bytes; its lifecycle is
-// reported directly.
+// reported directly. Superseded display driver outcomes add their per-package
+// counts so a partial result is explained.
 func eagerServicingExecutionRowLabel(outcome clean.CategoryExecutionOutcome) string {
+	counts := driverPackageCountsText(outcome.ServicingDriverPackages)
+	withCounts := func(line string) string {
+		if counts == "" {
+			return line
+		}
+		return line + " · " + counts
+	}
 	switch outcome.State {
 	case clean.CategoryExecutionWaiting:
 		return outcome.Label + " · waiting"
 	case clean.CategoryExecutionRechecking, clean.CategoryExecutionReady, clean.CategoryExecutionCleaning:
 		return outcome.Label + " · servicing…"
 	case clean.CategoryExecutionCleaned:
-		return outcome.Label + " · servicing completed"
+		return withCounts(outcome.Label + " · servicing completed")
 	case clean.CategoryExecutionEmpty:
+		if counts != "" {
+			return outcome.Label + " · no package removed · " + counts
+		}
 		return outcome.Label + " · no cleanup needed"
 	case clean.CategoryExecutionSkipped:
 		return outcome.Label + " · skipped"
@@ -595,12 +618,28 @@ func eagerServicingExecutionRowLabel(outcome clean.CategoryExecutionOutcome) str
 		if hint := clean.ServicingCleanupExitHint(outcome.ServicingExitCode); hint != "" {
 			line += " · " + hint
 		}
-		return line
+		return withCounts(line)
 	case clean.CategoryExecutionCanceled:
 		return outcome.Label + " · canceled"
 	default:
 		return outcome.Label
 	}
+}
+
+// driverPackageCountsText renders non-zero per-package driver outcome counts.
+func driverPackageCountsText(counts clean.DriverPackageOutcomeCounts) string {
+	var parts []string
+	add := func(n int, label string) {
+		if n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, label))
+		}
+	}
+	add(counts.Removed, "removed")
+	add(counts.Kept, "kept")
+	add(counts.Failed, "failed")
+	add(counts.Unknown, "outcome unknown")
+	add(counts.NotAttempted, "not attempted")
+	return strings.Join(parts, " · ")
 }
 
 // servicingReasonTextFor adapts servicing reason text to the category: the

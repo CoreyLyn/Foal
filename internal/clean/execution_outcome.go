@@ -60,6 +60,42 @@ type CategoryExecutionOutcome struct {
 	// execution outcome, present only when DISM ran to exit. Nil for
 	// non-servicing categories and authorization skips.
 	ServicingExitCode *int
+	// ServicingDriverPackages counts per-package outcomes of a superseded display
+	// driver execution so surfaces can explain partial results. Zero for every
+	// other category.
+	ServicingDriverPackages DriverPackageOutcomeCounts
+}
+
+// DriverPackageOutcomeCounts summarizes per-package driver removal outcomes.
+type DriverPackageOutcomeCounts struct {
+	Removed int
+	// Kept counts packages Windows or Foal kept: in use by a device, or no
+	// longer eligible.
+	Kept         int
+	Failed       int
+	Unknown      int
+	NotAttempted int
+}
+
+// CountDriverPackageOutcomes counts the per-package outcomes of a driver
+// servicing record.
+func CountDriverPackageOutcomes(packages []ServicingDriverPackage) DriverPackageOutcomeCounts {
+	var counts DriverPackageOutcomeCounts
+	for _, pkg := range packages {
+		switch pkg.Outcome {
+		case DriverPackageOutcomeRemoved:
+			counts.Removed++
+		case DriverPackageOutcomeInUse, DriverPackageOutcomeNotEligible:
+			counts.Kept++
+		case DriverPackageOutcomeFailed:
+			counts.Failed++
+		case DriverPackageOutcomeUnknown:
+			counts.Unknown++
+		default:
+			counts.NotAttempted++
+		}
+	}
+	return counts
 }
 
 // IsTerminalExecutionState reports whether state is a final category outcome.
@@ -344,15 +380,19 @@ func projectServicingExecutionOutcome(catalog CleanupCategoryCatalog, id string,
 	state := CategoryExecutionSkipped
 	var reason string
 	var exitCode *int
+	var driverPackages DriverPackageOutcomeCounts
 	for _, op := range result.ServicingOperations {
 		if op.Category == id {
 			state = ServicingExecutionState(op.Outcome)
 			reason = op.Reason
 			exitCode = op.ExitCode
+			if op.Capability == ServicingCapabilityExecuteDriverPackageCleanup {
+				driverPackages = CountDriverPackageOutcomes(op.DriverPackages)
+			}
 			break
 		}
 	}
-	return CategoryExecutionOutcome{Identifier: id, Label: label, State: state, ServicingReason: reason, ServicingExitCode: exitCode}
+	return CategoryExecutionOutcome{Identifier: id, Label: label, State: state, ServicingReason: reason, ServicingExitCode: exitCode, ServicingDriverPackages: driverPackages}
 }
 
 // CountTerminalExecutionOutcomes returns how many projected outcomes are terminal.
