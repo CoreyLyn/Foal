@@ -40,14 +40,17 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 			clean.OpportunityCategoryVSCodiumCache,
 			clean.OpportunityCategoryWindsurfCache,
 			clean.OpportunityCategoryTraeCache,
+			clean.CategoryUnityPackageCache,
+			clean.CategoryEspressifToolArchives,
+			clean.CategoryVSCodeOutdatedExtensions,
 		}
 		for _, cat := range expectedDevCaches {
 			if !enabled[cat] {
 				t.Fatalf("expected %q to be enabled by \"dev-caches\"", cat)
 			}
 		}
-		if len(enabled) != 23 {
-			t.Fatalf("expected 23 enabled developer-tools categories, got %d", len(enabled))
+		if len(enabled) != 26 {
+			t.Fatalf("expected 26 enabled developer-tools categories, got %d", len(enabled))
 		}
 		// Updater residue is Developer tools but not a cache; exclude from dev-caches.
 		if enabled[clean.CategoryGrokBuildUpdateResidue] {
@@ -139,9 +142,10 @@ func TestNormalizedOptInSet_DevCaches(t *testing.T) {
 		if !enabled[clean.CategoryGrokBuildUpdateResidue] {
 			t.Fatal("expected grok-build-update-residue to be enabled by \"all\"")
 		}
-		// 19 opportunity + 17 developer-cache + 1 CLI-agent residue + 1 electron-updater-residue = 38
-		if len(enabled) != 19+17+1+1 {
-			t.Fatalf("expected 38 enabled categories (19+17+1+1), got %d", len(enabled))
+		// 19 opportunity + 17 developer-cache + 3 exact-candidate developer-tool
+		// + 1 CLI-agent residue + 1 electron-updater-residue = 41
+		if len(enabled) != 19+17+3+1+1 {
+			t.Fatalf("expected 41 enabled categories (19+17+3+1+1), got %d", len(enabled))
 		}
 	})
 

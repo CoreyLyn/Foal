@@ -107,8 +107,9 @@ func TestEagerCleanModelQueueIsCatalogDerived(t *testing.T) {
 }
 
 func TestEagerCleanModelStartRendersFullQueueImmediately(t *testing.T) {
-	// Height must fit all executable rows + group headers after matrix growth.
-	model := newEagerCleanModel(120, 64)
+	// Height fits every catalog row plus header, group headings, and the focused
+	// panel; derived from the catalog so matrix growth never truncates the render.
+	model := newEagerCleanModel(120, len(clean.EagerPreviewQueue())+24)
 	fixed := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	model.now = func() time.Time { return fixed }
 

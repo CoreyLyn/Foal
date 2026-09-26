@@ -2403,10 +2403,16 @@ func TestCleanOptInAllDryRun(t *testing.T) {
 		clean.DevCacheCategoryJetBrainsIDECaches,
 		clean.DevCacheCategoryVisualStudioCaches,
 	}
-	// Catalog order: opportunities + developer caches + CLI-agent residue +
-	// Applications application caches (obsidian_cache then vrchat_cache, both
-	// registered after grok) + electron-updater-residue.
+	// Catalog order: opportunities + developer caches + exact-candidate
+	// developer-tool categories + CLI-agent residue + Applications application
+	// caches (obsidian_cache then vrchat_cache, both registered after grok) +
+	// electron-updater-residue.
 	want := append(append([]string{}, expectedOpportunities...), expectedDevCaches...)
+	want = append(want,
+		clean.CategoryUnityPackageCache,
+		clean.CategoryEspressifToolArchives,
+		clean.CategoryVSCodeOutdatedExtensions,
+	)
 	want = append(want, clean.CategoryGrokBuildUpdateResidue)
 	want = append(want, clean.OpportunityCategoryObsidianCache)
 	want = append(want, clean.OpportunityCategoryVRChatCache)
@@ -2473,6 +2479,9 @@ func TestCleanOptInInvalidName(t *testing.T) {
 		"electron-cache",
 		"jetbrains-ide-caches",
 		"visual-studio-caches",
+		"unity-package-cache",
+		"espressif-tool-archives",
+		"vscode-outdated-extensions",
 		"grok-build-update-residue",
 		"dev-caches",
 		"cli-agents",

@@ -415,6 +415,12 @@ var developerApplicationDefinitions = []supportedApplicationDefinition{
 	// Full Visual Studio IDE (not VS Code / Cursor). devenv.exe is the
 	// distinctive process Microsoft cache-clear guidance requires idle.
 	{id: ApplicationVisualStudio, displayName: "Visual Studio", executables: []string{"devenv.exe"}},
+	// Unity Editor, Unity Hub, and the Package Manager server are one logical
+	// identity for the Unity package cache gate. UnityPackageManager.exe is a
+	// best-effort name; an extra name only makes the gate stricter.
+	{id: ApplicationUnity, displayName: "Unity", executables: []string{"Unity.exe", "Unity Hub.exe", "UnityPackageManager.exe"}},
+	// ESP-IDF Installation Manager: one executable serves its GUI and CLI.
+	{id: ApplicationESPIDFInstallationManager, displayName: "ESP-IDF Installation Manager", executables: []string{"eim.exe"}},
 	// Grok Build CLI agent: one logical identity covering both updater-managed
 	// Windows executables (grok.exe and agent.exe).
 	{id: ApplicationGrokBuild, displayName: "Grok Build", executables: []string{"grok.exe", "agent.exe"}},
@@ -543,6 +549,9 @@ type categoryCatalogEntry struct {
 	// applicationCachePolicyID selects a private applicationCachePolicy for
 	// application-cache opportunity categories. Required when applicationCache.
 	applicationCachePolicyID string
+	// exactCandidates is the private discovery policy for exact-candidate
+	// categories. Required for, and only allowed on, that resolver kind.
+	exactCandidates *exactCandidatePolicy
 }
 
 func defaultCategoryEntry(definition CleanupCategoryDefinition) categoryCatalogEntry {
@@ -675,12 +684,15 @@ func developerCacheEntryWithProductScopedChildren(
 // Adding a cleanup category:
 //
 //  1. Prefer an existing engine: existence-opportunity, application-cache,
-//     developer-cache, or fixed-root. A layout none of those can express needs
-//     its own resolver kind and a case in validateSelectionGroup.
+//     developer-cache, fixed-root, or exact-candidates (exact product-owned
+//     files or directories re-discovered before permanent removal). A layout
+//     none of those can express needs its own resolver kind and a case in
+//     validateSelectionGroup.
 //  2. Declare planned action, selection policy, and selection group on the
 //     definition. Group tokens expand SelectionGroup only. Exact-selection-only
 //     categories leave the group empty. The developer-cache, application-cache,
-//     electron-updater, and CLI-agent constructors fill an empty group.
+//     electron-updater, exact-candidate, and CLI-agent constructors fill an
+//     empty group.
 //  3. Fixed-root policies set identityValidator. Registration panics without
 //     one and installs it before catalog init.
 //  4. Add tests for the allowlist, gates, and pre-mutation identity. Do not add
@@ -1086,6 +1098,32 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		nil,
 		ApplicationVisualStudio,
 	), staticPreviewSafetyNote(visualStudioCachesOptInImpactNotice)),
+	// Unity Package Manager global cache: exact documented children of
+	// %LOCALAPPDATA%\Unity\cache (npm and packages for Unity 2022.3-2023.1;
+	// upm\db for Unity 2023.2+; upm\packages for Unity 2023.2). Unity
+	// Editor/Hub/Package Manager must be idle before and after.
+	// Evidence: docs/research/unity-package-manager-global-cache.md.
+	withPreviewSafetyNote(exactCandidateCategoryEntry(
+		categoryDefinition(CategoryUnityPackageCache, "Unity package cache", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
+		unityPackageCachePolicy,
+	), staticPreviewSafetyNote(unityPackageCacheOptInImpactNotice)),
+	// ESP-IDF tool archives: direct ordinary archive files quiet for 24 hours in
+	// the documented dist download folder of a marked ESP-IDF tools directory.
+	// The ESP-IDF Installation Manager must be idle before and after; idf.py and
+	// idf_tools.py run under a shared Python runtime Foal cannot attribute.
+	// Evidence: docs/research/espressif-idf-tool-archives.md.
+	withPreviewSafetyNote(exactCandidateCategoryEntry(
+		categoryDefinition(CategoryEspressifToolArchives, "ESP-IDF tool archives", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
+		espressifToolArchivesPolicy,
+	), staticPreviewSafetyNote(espressifToolArchivesOptInImpactNotice)),
+	// VS Code outdated extensions: extension versions VS Code marked for removal
+	// in .obsolete while another version of the same extension stays installed.
+	// VS Code and VS Code Insiders must both be idle before and after.
+	// Evidence: docs/research/vscode-outdated-extensions.md.
+	withPreviewSafetyNote(exactCandidateCategoryEntry(
+		categoryDefinition(CategoryVSCodeOutdatedExtensions, "VS Code outdated extensions", ReportCategoryDeveloperTools, CategoryEligibilityOptIn, RunningApplicationPolicyDistinctiveProcessIdle, PlannedActionDeletePermanently),
+		vscodeOutdatedExtensionsPolicy,
+	), staticPreviewSafetyNote(vscodeOutdatedExtensionsOptInImpactNotice)),
 	// Grok Build updater residue: exact ordinary .old backups under $GROK_HOME\bin.
 	// Product-scoped dedicated resolver (not developer-cache / not dev-caches).
 	// Distinctive-process idle on grok.exe|agent.exe; permanent; witnesses never candidates.
@@ -1220,9 +1258,25 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 		case categoryResolverExistenceOpportunity, categoryResolverBrowserCache,
 			categoryResolverApplicationCache, categoryResolverDeveloperCache,
 			categoryResolverGrokBuildUpdateResidue, categoryResolverNVIDIAInstallerCache,
-			categoryResolverElectronUpdaterResidue:
+			categoryResolverElectronUpdaterResidue, categoryResolverExactCandidates:
 			if entry.definition.Eligibility != CategoryEligibilityOptIn {
 				return fmt.Errorf("opt-in resolver category %q must use opt-in eligibility", id)
+			}
+			if (entry.resolverKind == categoryResolverExactCandidates) != (entry.exactCandidates != nil) {
+				return fmt.Errorf("category %q must register an exact-candidate policy only with the exact-candidate resolver", id)
+			}
+			if entry.resolverKind == categoryResolverExactCandidates {
+				// Exact-candidate categories are proven regenerable developer-tool
+				// artifacts revalidated by re-discovery before permanent removal.
+				if entry.definition.PlannedAction != PlannedActionDeletePermanently {
+					return fmt.Errorf("exact-candidate category %q must declare delete_permanently", id)
+				}
+				if entry.exactCandidates.resolveRoots == nil || entry.exactCandidates.discover == nil {
+					return fmt.Errorf("exact-candidate category %q is missing root or discovery policy", id)
+				}
+				if (entry.definition.RunningApplicationPolicy == RunningApplicationPolicyDistinctiveProcessIdle) != (len(entry.runningApplications) > 0) {
+					return fmt.Errorf("exact-candidate category %q must gate distinctive processes exactly when it lists applications", id)
+				}
 			}
 			if entry.resolverKind == categoryResolverNVIDIAInstallerCache {
 				// NVIDIA installer cache is a Not-proven, exact-selection-only Recycle
@@ -1304,7 +1358,7 @@ func validateSelectionGroup(entry categoryCatalogEntry) error {
 		return fmt.Errorf("non-executable category %q must not join a selection group", id)
 	}
 	switch entry.resolverKind {
-	case categoryResolverDeveloperCache:
+	case categoryResolverDeveloperCache, categoryResolverExactCandidates:
 		if group != CategorySelectionGroupDevCaches || entry.definition.ReportCategory != ReportCategoryDeveloperTools {
 			return fmt.Errorf("developer-cache category %q must join %s under Developer tools", id, CategorySelectionGroupDevCaches)
 		}

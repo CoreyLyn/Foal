@@ -1042,6 +1042,9 @@ func TestOptInAllResolvesToAllCategories(t *testing.T) {
 	expectedOtherOptIn := []string{
 		clean.CategoryGrokBuildUpdateResidue,
 		clean.CategoryElectronUpdaterResidue,
+		clean.CategoryUnityPackageCache,
+		clean.CategoryEspressifToolArchives,
+		clean.CategoryVSCodeOutdatedExtensions,
 	}
 	for _, cat := range expectedOpportunities {
 		if !enabled[cat] {

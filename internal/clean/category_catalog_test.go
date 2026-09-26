@@ -57,6 +57,9 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"electron-cache",
 		"jetbrains-ide-caches",
 		"visual-studio-caches",
+		"unity-package-cache",
+		"espressif-tool-archives",
+		"vscode-outdated-extensions",
 		"grok-build-update-residue",
 		"obsidian_cache",
 		"vrchat_cache",
@@ -570,7 +573,12 @@ func TestDeveloperCacheRegistryConsistency(t *testing.T) {
 		},
 		wantDevCaches...,
 	)
-	wantDeveloperToolsOptIn = append(wantDeveloperToolsOptIn, clean.CategoryGrokBuildUpdateResidue)
+	wantDeveloperToolsOptIn = append(wantDeveloperToolsOptIn,
+		clean.CategoryUnityPackageCache,
+		clean.CategoryEspressifToolArchives,
+		clean.CategoryVSCodeOutdatedExtensions,
+		clean.CategoryGrokBuildUpdateResidue,
+	)
 
 	catalog := clean.CanonicalCleanupCategoryCatalog()
 	summaries := catalog.Summaries()

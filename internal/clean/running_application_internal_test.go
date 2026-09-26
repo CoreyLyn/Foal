@@ -139,6 +139,8 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 		ApplicationWriterside,
 		ApplicationRider,
 		ApplicationVisualStudio,
+		ApplicationUnity,
+		ApplicationESPIDFInstallationManager,
 		ApplicationGrokBuild,
 		ApplicationVisualStudioCode,
 		ApplicationCursor,

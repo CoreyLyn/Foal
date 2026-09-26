@@ -99,6 +99,9 @@ type PermanentIdentityCandidate struct {
 	// residueDiscovery carries optional env/clock injects for residue
 	// revalidation (package-internal; set by shared Execute from Options).
 	residueDiscovery GrokBuildResidueDiscoveryOptions
+	// exactDiscovery carries env/clock injects for exact-candidate
+	// re-discovery (package-internal; set by shared Execute from Options).
+	exactDiscovery ExactCandidateDiscoveryOptions
 }
 
 // PermanentIdentityValidator re-checks that a permanent candidate still has the
@@ -285,6 +288,9 @@ type Options struct {
 	// value so LOCALAPPDATA and time.Now() are used. Tests must use isolated roots
 	// and never read or mutate the real user LOCALAPPDATA tree.
 	ElectronUpdaterResidueDiscoveryOptions ElectronUpdaterResidueDiscoveryOptions
+	// ExactCandidateDiscoveryOptions injects env/home/clock seams for the
+	// exact-candidate developer-tool categories. Production leaves the zero value.
+	ExactCandidateDiscoveryOptions ExactCandidateDiscoveryOptions
 }
 
 type Rule struct {

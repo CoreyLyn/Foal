@@ -641,6 +641,7 @@ func composePermanentPreMutation(opts Options, byPath map[string]actionExecution
 			Bytes:            candidate.Bytes,
 			Category:         meta.rule,
 			residueDiscovery: opts.GrokBuildResidueDiscoveryOptions,
+			exactDiscovery:   opts.ExactCandidateDiscoveryOptions,
 		})
 	}
 }
