@@ -147,7 +147,7 @@ func TestExecuteCategoryOwnedRejectionIsolatesValidSiblings(t *testing.T) {
 	root := t.TempDir()
 	reject := writeTestFile(t, root, "reject.tmp", "aaaa")
 	keep := writeTestFile(t, root, "keep.tmp", "bbbb")
-	permanent := &recordingPermanentRemover{}
+	permanent := &fixturePermanentRemover{t: t, roots: []string{root}}
 	result := clean.Execute(context.Background(), clean.Options{
 		AllowPermanentDeletion: true,
 		CategoryPlannedActions: map[string]clean.PlannedAction{

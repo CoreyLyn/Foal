@@ -299,7 +299,7 @@ func TestPackageBuildNineCategoriesExecutePermanentlyWhenAuthorized(t *testing.T
 				t.Fatal(err)
 			}
 
-			permanent := &recordingPermanentRemover{}
+			permanent := &fixturePermanentRemover{t: t, roots: []string{root}}
 			recycle := &recordingRecycleBinAdapter{}
 			result := executeCleanWithSafeCapacity(context.Background(), clean.Options{
 				AllowPermanentDeletion: true,

@@ -21,13 +21,37 @@ const (
 	testPermanentRule = "test_permanent_rule"
 )
 
+// recordingPermanentRemover records authorized permanent removals and never
+// touches the filesystem, so a candidate resolved outside a test fixture can
+// never be destroyed. Tests that must observe real removal use
+// fixturePermanentRemover on fixtures they created.
 type recordingPermanentRemover struct {
 	paths []string
 }
 
 func (r *recordingPermanentRemover) Remove(_ context.Context, path string) error {
 	r.paths = append(r.paths, path)
-	return delete.FilesystemPermanentRemover{}.Remove(context.Background(), path)
+	return nil
+}
+
+// fixturePermanentRemover really removes paths, but only inside the fixture
+// roots a test created; anything else fails the test without mutation.
+type fixturePermanentRemover struct {
+	t     *testing.T
+	roots []string
+	paths []string
+}
+
+func (r *fixturePermanentRemover) Remove(ctx context.Context, path string) error {
+	r.t.Helper()
+	for _, root := range r.roots {
+		if rel, err := filepath.Rel(root, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
+			r.paths = append(r.paths, path)
+			return delete.FilesystemPermanentRemover{}.Remove(ctx, path)
+		}
+	}
+	r.t.Errorf("permanent removal of %q outside the test fixtures %v", path, r.roots)
+	return errors.New("refusing to remove a path outside the test fixtures")
 }
 
 type orderedCall struct {
