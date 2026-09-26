@@ -116,7 +116,7 @@ Every executable Clean category declares exactly one action:
 
 - `move_to_recycle_bin` for recoverable cleanup.
 - `delete_permanently` for narrowly proven regenerable or re-downloadable content.
-- `invoke_windows_servicing` for the Windows component store, which Foal never treats as deletion candidates (see below).
+- `invoke_windows_servicing` for Windows-owned system work — the component store and superseded display driver packages — which Foal never treats as deletion candidates (see below).
 
 Permanent deletion is never a fallback when a Recycle Bin operation fails. The CLI requires both `--execute` and `--allow-permanent` for permanent work; without authorization, those candidates are skipped while eligible Recycle Bin work can continue. The TUI presents the same actions in one strengthened confirmation.
 
@@ -126,12 +126,12 @@ Available opt-in groups:
 
 | Group | Includes |
 | --- | --- |
-| `dev-caches` | Supported package-manager, build-tool, browser-runtime, IDE, and editor caches. |
+| `dev-caches` | Supported package-manager, build-tool, browser-runtime, IDE, and editor caches, plus the Unity package cache, ESP-IDF tool archives, and outdated VS Code extension versions. |
 | `app-caches` | Supported non-editor application caches (currently Obsidian and VRChat), plus the `electron-updater-residue` opt-in. |
 | `cli-agents` | Independently approved product-scoped CLI-agent residue, currently Grok Build updater backups. |
 | `all` | Every standard-selection executable opt-in category; exact-selection-only categories stay excluded. Safety gates and action-specific authorization still apply. |
 
-The six exact-selection-only categories are `nvidia_installer_cache`, `lghub-cache`, `thunder-update-download`, `windows-temp`, `windows-update-download-cache`, and `winsxs_component_store`. They are deliberately excluded from `all`, every group token, and TUI Select All. Name one exactly to include it.
+The seven exact-selection-only categories are `nvidia_installer_cache`, `lghub-cache`, `thunder-update-download`, `windows-temp`, `windows-update-download-cache`, `winsxs_component_store`, and `superseded-display-drivers`. They are deliberately excluded from `all`, every group token, and TUI Select All. Name one exactly to include it.
 
 Use an exact category name when you want the narrowest scope:
 
@@ -159,6 +159,24 @@ foal clean --execute --opt-in winsxs_component_store --allow-servicing
 Missing `--allow-servicing` skips the category with `windows_servicing_not_authorized` and never opens UAC. When authorized, the elevated helper runs a fresh analysis and starts `DISM /Online /Cleanup-Image /StartComponentCleanup /English /NoRestart` in the same session, only when the reclaimable package count is positive and cleanup is recommended. Servicing is always the final action group, after Recycle Bin and permanent-delete work. Foal never runs `/ResetBase`, `/SPSuperseded`, `/Remove-Package`, or custom DISM arguments, never deletes `WinSxS` files itself, and never forces a reboot: exit `0` is completed, `3010` is completed with a restart required, `3017` is failed with a restart required, and any other non-zero exit is failed. Once cleanup starts, cancellation is recorded but DISM, the helper, and TrustedInstaller are never killed — Foal waits for the actual outcome.
 
 Off Windows there is no component store, so the category fails closed with `unsupported_platform` and never opens a prompt or touches the filesystem.
+
+### Superseded display driver packages
+
+`superseded-display-drivers` is an exact-selection-only category with the planned action `invoke_windows_servicing`. Every display driver update leaves the previous package in the Windows driver store; Foal lists the unused, superseded third-party Display packages and asks Windows to remove them:
+
+```powershell
+foal clean --dry-run --opt-in superseded-display-drivers
+```
+
+The inventory runs in-process through SetupAPI and never requests administrator consent. Packages are grouped by original INF name, provider, and device class. Every package a device (present or not) uses and the newest package of each group are kept; a group with an unparseable DriverVer is kept whole. The preview lists each candidate's published name, original INF, provider, DriverVer, and measured size. Sizes are evidence only and never enter Foal's deletion totals.
+
+Removal requires `--execute`, the exact category, the same per-run `--allow-servicing` authorization, and a disclosed UAC prompt:
+
+```powershell
+foal clean --execute --opt-in superseded-display-drivers --allow-servicing
+```
+
+An isolated elevated helper takes a fresh inventory immediately before each removal and calls `SetupUninstallOEMInfW` without force only while the package is still a superseded candidate with the identity that was disclosed; Windows additionally refuses any package a device was installed with. The TUI lists every package at confirmation and never removes a package outside that list. Foal never uses PnPUtil, `DiUninstallDriver`, device uninstall, or direct deletion under `DriverStore`. Removed versions can no longer be restored with Device Manager's Roll Back Driver and must be downloaded again if needed.
 
 ### NVIDIA installer cache
 
@@ -247,7 +265,7 @@ Set `FOAL_PROTECTION_FILE` to use a different file. Rules are deny-only: they ca
 Foal deliberately does not:
 
 - empty the Recycle Bin;
-- silently elevate or stop applications (component-store servicing and eligible Uninstall work may request disclosed UAC; process stopping requires `--allow-stop-processes` and is off by default);
+- silently elevate or stop applications (Windows servicing — component store and superseded display driver removal — and eligible Uninstall work may request disclosed UAC; process stopping requires `--allow-stop-processes` and is off by default);
 - treat browser history, cookies, credentials, sessions, or user-authored data as cache;
 - claim secure erasure or guaranteed physical-space recovery;
 - delete unconfirmed, shared-state, or orphaned application residue; a failed or canceled uninstaller never deletes confirmed leftovers;

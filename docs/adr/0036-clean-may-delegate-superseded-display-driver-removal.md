@@ -20,3 +20,14 @@ A real C: audit found 21 unused, superseded NVIDIA display driver packages (~46 
 - AGENTS.md's elevation boundary lists three designed exceptions: WinSxS servicing, superseded display driver removal, and Uninstall.
 - Users lose Device Manager rollback to removed versions and must download them again if needed; confirmation and help disclose this.
 - Other driver classes, printer/audio/network packages, and Windows Update driver cleanup remain out of scope and need their own decisions.
+
+## Amendment (2026-09-27): identity-bound removal
+
+A security review of the first implementation tightened the execution contract:
+
+- Requests carry package identities, not bare published names: the published `oem<digits>.inf` name plus the original INF name, provider, and DriverVer date and version. The TUI freezes these identities at confirmation; the coordinator keeps a fresh candidate only when a confirmed identity matches and records other confirmed packages as `not_eligible`.
+- The elevated helper refuses to run without an elevated token (`windows_servicing_elevation_failed`), takes a fresh inventory immediately before each removal, and removes a package only while the superseded policy still selects exactly the requested identity, so a reused published name never redirects removal. If a fresh inventory fails, that package and every later one are reported as not attempted.
+- The coordinator fails closed on inconsistent helper reports (`windows_servicing_helper_failed`) while keeping any reported removal on the record, and records `unknown` for packages whose request was sent but whose outcome never arrived.
+- A run requests at most 256 packages; further candidates stay candidates for a later run.
+
+The first real read-only analysis found 22 candidates (21 NVIDIA packages and one GameViewer package, 52.3 GB logical size); the in-use NVIDIA and GameViewer packages were kept.
