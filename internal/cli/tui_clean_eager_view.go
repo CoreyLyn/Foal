@@ -613,7 +613,11 @@ func eagerServicingExecutionRowLabel(outcome clean.CategoryExecutionOutcome) str
 		}
 		return outcome.Label + " · no cleanup needed"
 	case clean.CategoryExecutionSkipped:
-		return outcome.Label + " · skipped"
+		line := outcome.Label + " · skipped"
+		if outcome.ServicingReason != "" {
+			line += " · " + servicingReasonTextFor(outcome.Identifier, outcome.ServicingReason)
+		}
+		return withCounts(line)
 	case clean.CategoryExecutionFailed:
 		line := outcome.Label + " · failed"
 		if outcome.ServicingReason != "" {

@@ -214,20 +214,23 @@ func applyServicingAnalysisResult(op ServicingOperation, res ServicingAnalysisRe
 	return op
 }
 
-// appendServicingExecution runs the composite execute_component_store_cleanup
-// capability for each opted-in servicing category and appends a path-free
-// ServicingOperation to the result. It is the final mutation phase of Execute
-// (ADR 0029): it runs only after Recycle Bin and Permanent deletion work, and
-// once a servicing operation starts no later action begins. Missing servicing
-// authorization skips with windows_servicing_not_authorized and never opens
-// UAC; a run canceled before servicing starts records a pre-mutation cancel.
-func appendServicingExecution(ctx context.Context, opts Options, servicingCategories []string, result *Result) {
+// appendServicingExecution runs servicing for each opted-in category and appends
+// a path-free ServicingOperation to the result. It is the final mutation phase
+// of Execute (ADR 0029): it runs only after Recycle Bin and Permanent deletion
+// work, and once a servicing operation starts no later action begins. Missing
+// servicing authorization skips with windows_servicing_not_authorized and never
+// opens UAC; a run canceled before servicing starts records a pre-mutation
+// cancel. The category stays in progress from the phase report until the
+// gateway returns; only then is its real outcome reported. completed suppresses
+// a second completion for the same id.
+func appendServicingExecution(ctx context.Context, opts Options, servicingCategories []string, result *Result, completed map[string]bool) {
 	if result == nil {
 		return
 	}
 	for _, category := range servicingCategories {
 		reportExecutionProgress(opts.ProgressReporter, ExecutionPhaseServicingOperations, category)
 		result.ServicingOperations = append(result.ServicingOperations, executeServicingCategory(ctx, opts, category))
+		reportCategoryCompletion(opts.ProgressReporter, ExecutionPhaseServicingOperations, ProjectProvisionalCategoryOutcome(category, *result), completed)
 	}
 }
 

@@ -252,6 +252,14 @@ func TestDriverResultRowExplainsPackageOutcomes(t *testing.T) {
 	if kept != "Superseded display drivers · no package removed · 2 kept" {
 		t.Fatalf("all-kept label = %q", kept)
 	}
+
+	skipped := eagerServicingExecutionRowLabel(clean.CategoryExecutionOutcome{
+		Identifier: clean.CategorySupersededDisplayDrivers, Label: "Superseded display drivers",
+		State: clean.CategoryExecutionSkipped, ServicingReason: clean.ServicingReasonElevationDenied,
+	})
+	if skipped != "Superseded display drivers · skipped · administrator consent was declined" {
+		t.Fatalf("skipped label = %q", skipped)
+	}
 }
 
 func TestServicingSummarySeparatesDriverAndComponentStorePackages(t *testing.T) {

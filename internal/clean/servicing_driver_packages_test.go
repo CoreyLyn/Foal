@@ -445,3 +445,86 @@ func TestDriverPackageOperationLinesDiscloseImpactAndPackages(t *testing.T) {
 		}
 	}
 }
+
+// observingDriverGateway records the progress stream at the moments the
+// non-elevated analysis and the elevated removal actually run.
+type observingDriverGateway struct {
+	fakeServicingGateway
+	onAnalyze func()
+	onExec    func()
+}
+
+func (g *observingDriverGateway) AnalyzeDriverStore(ctx context.Context) clean.DriverStoreAnalysisResult {
+	if g.onAnalyze != nil {
+		g.onAnalyze()
+	}
+	return g.fakeServicingGateway.AnalyzeDriverStore(ctx)
+}
+
+func (g *observingDriverGateway) ExecuteDriverPackageCleanup(ctx context.Context, req clean.DriverPackageCleanupRequest) clean.DriverPackageCleanupResult {
+	if g.onExec != nil {
+		g.onExec()
+	}
+	return g.fakeServicingGateway.ExecuteDriverPackageCleanup(ctx, req)
+}
+
+// TestDriverServicingStaysOpenUntilHelperReturns proves a superseded display
+// driver category is not projected as skipped just because resolve queued no
+// file candidates. The row stays open through analysis and removal; the real
+// outcome is reported only after the helper returns, and before the run's
+// completion marker.
+func TestDriverServicingStaysOpenUntilHelperReturns(t *testing.T) {
+	var events []clean.ExecutionProgress
+	gateway := &observingDriverGateway{}
+	gateway.driverAnalysis = readyDriverAnalysis(driverCandidate("oem10.inf", 100))
+	gateway.driverExecResult = sentDriverResult(clean.ServicingOutcomeCompleted, "", report("oem10.inf", clean.DriverPackageOutcomeRemoved))
+	assertStillOpen := func(when string) {
+		t.Helper()
+		for _, event := range events {
+			if event.CompletedCategory == clean.CategorySupersededDisplayDrivers {
+				t.Fatalf("driver category completed %s; events=%#v", when, events)
+			}
+		}
+	}
+	gateway.onAnalyze = func() { assertStillOpen("before analysis") }
+	gateway.onExec = func() { assertStillOpen("before removal") }
+
+	result := clean.Execute(context.Background(), clean.Options{
+		Validator:        pathsafe.Validator{},
+		Plan:             exactDriverPlan(t),
+		AllowServicing:   true,
+		ServicingGateway: gateway,
+		ProgressReporter: func(event clean.ExecutionProgress) { events = append(events, event) },
+	})
+	if op := onlyDriverOp(t, result); op.Outcome != clean.ServicingOutcomeCompleted {
+		t.Fatalf("op = %#v, want completed", op)
+	}
+
+	active, completed, completePhase := -1, -1, -1
+	for i, event := range events {
+		if event.Phase == clean.ExecutionPhaseComplete && completePhase < 0 {
+			completePhase = i
+		}
+		if event.Phase == clean.ExecutionPhaseServicingOperations &&
+			event.ActiveCategory == clean.CategorySupersededDisplayDrivers &&
+			event.CompletedCategory == "" && active < 0 {
+			active = i
+		}
+		if event.CompletedCategory != clean.CategorySupersededDisplayDrivers {
+			continue
+		}
+		if completed >= 0 {
+			t.Fatalf("duplicate driver completion: %#v", events)
+		}
+		completed = i
+		if event.CompletedState != clean.CategoryExecutionCleaned {
+			t.Fatalf("completion state = %q, want cleaned", event.CompletedState)
+		}
+		if event.Phase != clean.ExecutionPhaseServicingOperations {
+			t.Fatalf("completion phase = %q, want windows servicing", event.Phase)
+		}
+	}
+	if active < 0 || completed < 0 || completePhase < 0 || active >= completed || completed >= completePhase {
+		t.Fatalf("progress order active=%d completed=%d complete=%d events=%#v", active, completed, completePhase, events)
+	}
+}

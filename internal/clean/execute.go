@@ -49,9 +49,10 @@ func runExecute(ctx context.Context, opts Options) Result {
 	// Phase 2: fresh resolve defaults + selected opt-ins
 	executionCandidates := resolveExecuteCandidates(ctx, opts, categoryPlan, &result)
 
-	// Categories with no queued candidates are provisionally terminal after
+	// Categories with no queued file candidates are provisionally terminal after
 	// resolve (empty / skipped / failed from evidence already on result).
-	// Mutation phases never see them again.
+	// Servicing categories never queue file candidates; their work starts in
+	// appendServicingExecution, so they stay open here.
 	completedCategories := reportResolvedCategoryCompletions(opts, categoryPlan, executionCandidates, &result)
 
 	// Phase 3: partition Recycle Bin vs permanent
@@ -81,7 +82,7 @@ func runExecute(ctx context.Context, opts Options) Result {
 	// windows_servicing_not_authorized and never opens UAC; when authorized the
 	// composite gateway performs a fresh analysis, enforces the guard, and starts
 	// component cleanup within one authenticated helper session.
-	appendServicingExecution(ctx, opts, planServicingCategories(categoryPlan), &result)
+	appendServicingExecution(ctx, opts, planServicingCategories(categoryPlan), &result, completedCategories)
 
 	// Phase 7: history + completion
 	result.ElapsedMS = time.Since(start).Milliseconds()
@@ -210,7 +211,10 @@ func reportResolvedCategoryCompletions(opts Options, plan CategoryPlan, candidat
 		}
 	}
 	for _, id := range plan.Categories {
-		if id == "" || hasCandidate[id] {
+		// No ServicingOperation exists yet. Projecting that absence is a skip,
+		// which would mark the row finished while the elevated helper is still
+		// running. Servicing completion is reported after the gateway returns.
+		if id == "" || hasCandidate[id] || isServicingCategory(id) {
 			continue
 		}
 		outcome := ProjectProvisionalCategoryOutcome(id, *result)
