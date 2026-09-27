@@ -72,8 +72,9 @@ func eagerSelectedCategoryIDs(rows []eagerCategoryRow) []string {
 // eagerSelectionTotals returns selected category count, safely measured bytes
 // for complete/partial selected rows, and selected waiting/scanning pending
 // count. Unfinished, empty, skipped, incomplete, and failed work contributes
-// no bytes. Servicing rows contribute a category count only (no bytes, never
-// pending): servicing has no reclaimable-byte measurement.
+// no bytes. Servicing rows are never pending; the component store has no
+// byte measurement, while a ready superseded display driver row contributes
+// its measured package size.
 func eagerSelectionTotals(rows []eagerCategoryRow) (categories int, measuredBytes int64, pending int) {
 	for _, row := range rows {
 		if !row.Selected {
@@ -81,6 +82,9 @@ func eagerSelectionTotals(rows []eagerCategoryRow) (categories int, measuredByte
 		}
 		categories++
 		if row.Servicing {
+			if row.Identifier == clean.CategorySupersededDisplayDrivers && row.ServicingState == clean.ServicingRowReady {
+				measuredBytes += row.ServicingPackageBytes
+			}
 			continue
 		}
 		switch row.State {

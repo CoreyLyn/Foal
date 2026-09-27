@@ -201,6 +201,18 @@ func TestExecuteExactCleanSelectionCmdPreservesConfirmedSetNilness(t *testing.T)
 	}
 }
 
+func TestSelectionTotalsIncludeReadyDriverPackageBytes(t *testing.T) {
+	rows := []eagerCategoryRow{
+		{Identifier: clean.OpportunityCategoryUserTemp, Selected: true, State: clean.CategoryPreviewComplete, Bytes: 100},
+		{Identifier: clean.CategorySupersededDisplayDrivers, Selected: true, Servicing: true, ServicingState: clean.ServicingRowReady, ServicingPackageBytes: 3 << 30},
+		{Identifier: clean.CategoryWinSxSComponentStore, Selected: true, Servicing: true, ServicingState: clean.ServicingRowReady, ServicingReclaimablePackages: 5},
+	}
+	categories, bytes, pending := eagerSelectionTotals(rows)
+	if categories != 3 || bytes != 100+3<<30 || pending != 0 {
+		t.Fatalf("totals = %d %d %d", categories, bytes, pending)
+	}
+}
+
 func TestSelectedDriverPackagesNilWhenDriverRowUnselected(t *testing.T) {
 	model := newDriverWorkflowModel(t)
 	runServicingAnalysis(t, model, readyDriverOperation())
