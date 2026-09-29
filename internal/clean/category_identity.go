@@ -25,6 +25,7 @@ type CategoryIdentityCandidate struct {
 	nvidiaDiscovery                 NVIDIAInstallerCacheDiscoveryOptions
 	fixedRootDiscovery              FixedRootDiscoveryOptions
 	electronUpdaterResidueDiscovery ElectronUpdaterResidueDiscoveryOptions
+	exactDiscovery                  ExactCandidateDiscoveryOptions
 	validator                       pathsafe.Validator
 }
 

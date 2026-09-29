@@ -168,7 +168,7 @@ func resolveDeveloperCacheCategory(ctx context.Context, opts Options, category s
 		// Whole-root mode: the resolved root is the single candidate.
 		if applyGate {
 			outcome := devCacheGate.gateDevCacheApplications(ctx, category, path, apps, true, devCachePreStates, func() (int64, error) {
-				return measureBytes(ctx, path)
+				return measureExclusiveBytes(ctx, path)
 			})
 			// Product-scoped gates report only their logical application
 			// identities; category-wide distinctive-process gates keep skip
@@ -205,7 +205,7 @@ func resolveDeveloperCacheCategory(ctx context.Context, opts Options, category s
 			continue
 		}
 
-		bytes, err := measureBytes(ctx, path)
+		bytes, err := measureExclusiveBytes(ctx, path)
 		if err != nil {
 			// Failed or canceled measurement yields no candidate; non-canceled
 			// unrelated roots continue. Cancellation shows as recoverable diagnostic.

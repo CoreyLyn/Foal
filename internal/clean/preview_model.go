@@ -126,7 +126,7 @@ const administratorOnlyCacheBoundaryNotice = "Permission boundary: administrator
 // rebuilds disposable tool environments and re-downloads dependencies after a
 // cache reclaim; Foal must not present this as zero-impact cleanup. Upstream
 // also advises against modifying the cache directory directly.
-const uvCacheOptInImpactNotice = "Opt-in uv cache cleanup may require re-downloading dependencies and rebuilding disposable tool environments. It is not zero-impact."
+const uvCacheOptInImpactNotice = "Opt-in uv cache cleanup may require re-downloading dependencies and rebuilding disposable tool environments. It is not zero-impact. Hardlinks and filesystem allocation may reduce actual free-space gain below the preview estimate."
 
 // nugetGlobalPackagesOptInImpactNotice is a high-impact warning for
 // nuget-global-packages. Packages may restore on the next build, but offline,

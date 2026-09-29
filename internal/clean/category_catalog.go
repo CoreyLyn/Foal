@@ -438,6 +438,9 @@ var applicationCacheApplicationDefinitions = []supportedApplicationDefinition{
 	{id: ApplicationWindsurf, displayName: "Windsurf", executables: []string{"Windsurf.exe"}},
 	{id: ApplicationTrae, displayName: "Trae", executables: []string{"Trae.exe"}},
 	{id: ApplicationObsidian, displayName: "Obsidian", executables: []string{"Obsidian.exe"}},
+	{id: ApplicationLark, displayName: "Lark / Feishu", executables: []string{"Lark.exe", "Feishu.exe", "LarkShell.exe"}},
+	{id: ApplicationNotion, displayName: "Notion", executables: []string{"Notion.exe"}},
+	{id: ApplicationTraeSolo, displayName: "TRAE SOLO CN", executables: []string{"TRAE SOLO CN.exe", "Trae Solo.exe"}},
 	{id: ApplicationVRChat, displayName: "VRChat", executables: []string{"VRChat.exe"}},
 }
 
@@ -873,6 +876,9 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 			SelectionPolicy:          CategorySelectionPolicyExactOnly,
 		},
 	), staticPreviewSafetyNote(windowsUpdateDownloadCacheOptInImpactNotice)),
+	// Historical per-user Remote Desktop diagnostic traces; never the active
+	// rotating files or MSRDCEventProcessor logs. Requires exact selection.
+	withPreviewSafetyNote(exactCandidateCategoryEntry(exactOnlyCategoryDefinition(CategoryRDPClientOldTraces, "Old Remote Desktop traces", ReportCategorySystem, RunningApplicationPolicyNotApplicable), rdpClientOldTracesPolicy), staticPreviewSafetyNote(rdpClientOldTracesImpactNotice)),
 	// Windows component store (WinSxS): exact-selection-only servicing category
 	// with planned action invoke_windows_servicing. It never yields a file
 	// candidate or byte estimate; read-only component-store analysis is delegated
@@ -1177,6 +1183,12 @@ var canonicalCategoryEntries = []categoryCatalogEntry{
 		applicationCachePolicyVRChat,
 		ApplicationVRChat,
 	), applicationCachePreviewSafetyNote),
+	// All four machine-specific opportunities are exact-selection-only. Lark
+	// and Notion Service Worker storage can contain offline content; RDP logs
+	// are diagnostics; the TRAE archive may be needed for offline repair.
+	withPreviewSafetyNote(exactCandidateCategoryEntry(exactOnlyCategoryDefinition(CategoryLarkProfileCache, "Lark profile cache", ReportCategoryApplications, RunningApplicationPolicyDistinctiveProcessIdle), larkProfileCachePolicy), staticPreviewSafetyNote(larkProfileCacheImpactNotice)),
+	withPreviewSafetyNote(exactCandidateCategoryEntry(exactOnlyCategoryDefinition(CategoryNotionPartitionCache, "Notion partition cache", ReportCategoryApplications, RunningApplicationPolicyDistinctiveProcessIdle), notionPartitionCachePolicy), staticPreviewSafetyNote(notionPartitionCacheImpactNotice)),
+	withPreviewSafetyNote(exactCandidateCategoryEntry(exactOnlyCategoryDefinition(CategoryTraeSoloToolsStaging, "TRAE SOLO tools staging", ReportCategoryApplications, RunningApplicationPolicyDistinctiveProcessIdle), traeSoloToolsStagingPolicy), staticPreviewSafetyNote(traeSoloToolsStagingImpactNotice)),
 	// Electron updater residue: opt-in Recycle Bin cleanup for stale electron-builder
 	// updater payloads under per-application directories in LOCALAPPDATA whose
 	// names end with "-updater". Uses standard selection policy: included in `all`,
@@ -1266,10 +1278,10 @@ func validateCategoryResolverRegistry(entries []categoryCatalogEntry) error {
 				return fmt.Errorf("category %q must register an exact-candidate policy only with the exact-candidate resolver", id)
 			}
 			if entry.resolverKind == categoryResolverExactCandidates {
-				// Exact-candidate categories are proven regenerable developer-tool
-				// artifacts revalidated by re-discovery before permanent removal.
-				if entry.definition.PlannedAction != PlannedActionDeletePermanently {
-					return fmt.Errorf("exact-candidate category %q must declare delete_permanently", id)
+				// Exact candidates are re-discovered before mutation. Unproven
+				// application state and diagnostic evidence must use the Recycle Bin.
+				if entry.definition.PlannedAction != PlannedActionDeletePermanently && entry.definition.PlannedAction != PlannedActionMoveToRecycleBin {
+					return fmt.Errorf("exact-candidate category %q must declare a file action", id)
 				}
 				if entry.exactCandidates.resolveRoots == nil || entry.exactCandidates.discover == nil {
 					return fmt.Errorf("exact-candidate category %q is missing root or discovery policy", id)
@@ -1358,9 +1370,17 @@ func validateSelectionGroup(entry categoryCatalogEntry) error {
 		return fmt.Errorf("non-executable category %q must not join a selection group", id)
 	}
 	switch entry.resolverKind {
-	case categoryResolverDeveloperCache, categoryResolverExactCandidates:
+	case categoryResolverDeveloperCache:
 		if group != CategorySelectionGroupDevCaches || entry.definition.ReportCategory != ReportCategoryDeveloperTools {
 			return fmt.Errorf("developer-cache category %q must join %s under Developer tools", id, CategorySelectionGroupDevCaches)
+		}
+	case categoryResolverExactCandidates:
+		if entry.definition.SelectionPolicy == CategorySelectionPolicyExactOnly {
+			if group != "" {
+				return fmt.Errorf("exact-only category %q cannot join a selection group", id)
+			}
+		} else if group != CategorySelectionGroupDevCaches || entry.definition.ReportCategory != ReportCategoryDeveloperTools {
+			return fmt.Errorf("developer exact-candidate category %q must join %s under Developer tools", id, CategorySelectionGroupDevCaches)
 		}
 	case categoryResolverApplicationCache:
 		switch entry.definition.ReportCategory {

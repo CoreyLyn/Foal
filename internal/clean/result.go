@@ -6,7 +6,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
@@ -233,15 +235,122 @@ func protectionRules(validator pathsafe.Validator) []ProtectionRule {
 	return rules
 }
 
+// measureBytes is the logical content size used by Recycle Bin capacity checks.
+// Hardlinked names still occupy separate Recycle Bin entries, so this must not
+// use the exclusive-space estimate below.
 func measureBytes(ctx context.Context, path string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(path, func(current string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink == 0 && !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// measureExclusiveBytes estimates the logical bytes that an ordinary
+// permanent-removal candidate can free, excluding hardlinks outside it.
+func measureExclusiveBytes(ctx context.Context, path string) (int64, error) {
+	// A directory may contain several names for the same file, or names whose
+	// other links live outside the candidate. Count only files whose every link
+	// is inside this candidate, once per file identity. This is a conservative
+	// logical-byte estimate, not a promise about allocated disk clusters.
+	type fileToMeasure struct {
+		path string
+		info os.FileInfo
+	}
+	type measuredFile struct {
+		identity hardlinkIdentity
+		links    uint64
+		bytes    int64
+		err      error
+	}
+	type linkedFile struct {
+		bytes int64
+		links uint64
+		seen  uint64
+	}
+	// File identity needs a Windows handle per path. Bound concurrency so large
+	// hardlink stores do not make the Clean TUI preview needlessly serial.
+	workerCount := runtime.GOMAXPROCS(0)
+	if workerCount > 8 {
+		workerCount = 8
+	}
+	jobs := make(chan fileToMeasure, workerCount*4)
+	results := make(chan measuredFile, workerCount*4)
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var workers sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for job := range jobs {
+				if workerCtx.Err() != nil {
+					continue
+				}
+				identity, links, err := fileHardlinkIdentity(job.path, job.info)
+				result := measuredFile{identity: identity, links: links, bytes: job.info.Size(), err: err}
+				select {
+				case results <- result:
+				case <-workerCtx.Done():
+				}
+			}
+		}()
+	}
+	var total int64
+	var measureErr error
+	linked := map[hardlinkIdentity]linkedFile{}
+	collected := make(chan struct{})
+	go func() {
+		defer close(collected)
+		for result := range results {
+			if result.err != nil {
+				if measureErr == nil {
+					measureErr = result.err
+					cancel()
+				}
+				continue
+			}
+			if result.links == 0 {
+				if measureErr == nil {
+					measureErr = errors.New("hardlink count unavailable")
+					cancel()
+				}
+				continue
+			}
+			if result.links <= 1 {
+				total += result.bytes
+			} else {
+				file := linked[result.identity]
+				file.bytes = result.bytes
+				file.links = result.links
+				file.seen++
+				linked[result.identity] = file
+			}
+		}
+	}()
+	err := filepath.WalkDir(path, func(current string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-workerCtx.Done():
+			return workerCtx.Err()
 		default:
 		}
 		info, err := entry.Info()
@@ -252,12 +361,28 @@ func measureBytes(ctx context.Context, path string) (int64, error) {
 			return nil
 		}
 		if !info.IsDir() {
-			total += info.Size()
+			select {
+			case jobs <- fileToMeasure{path: current, info: info}:
+			case <-workerCtx.Done():
+				return workerCtx.Err()
+			}
 		}
 		return nil
 	})
+	close(jobs)
+	workers.Wait()
+	close(results)
+	<-collected
+	if measureErr != nil {
+		return 0, measureErr
+	}
 	if err != nil {
 		return 0, err
+	}
+	for _, file := range linked {
+		if file.seen == file.links {
+			total += file.bytes
+		}
 	}
 	return total, nil
 }

@@ -149,6 +149,9 @@ func TestDetectSupportedApplicationsUsesRegisteredDeveloperTools(t *testing.T) {
 		ApplicationWindsurf,
 		ApplicationTrae,
 		ApplicationObsidian,
+		ApplicationLark,
+		ApplicationNotion,
+		ApplicationTraeSolo,
 		ApplicationVRChat,
 	}
 	if len(states) != len(wantOrder) {

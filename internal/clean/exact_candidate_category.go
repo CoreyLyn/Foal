@@ -12,12 +12,12 @@ import (
 	"github.com/CoreyLyn/Foal/internal/core/pathsafe"
 )
 
-// categoryResolverExactCandidates is the resolver kind for developer-tool
-// categories whose candidates are exact, product-owned paths (files or
+// categoryResolverExactCandidates is the resolver kind for categories whose
+// candidates are exact, product-owned paths (files or
 // directories) found by a private discovery policy under resolved roots. Each
 // root is gated on its product being idle before discovery and again after
-// measurement, and every candidate is re-discovered immediately before permanent
-// removal: a path is removed only while the same policy still selects it.
+// measurement, and every candidate is re-discovered immediately before
+// mutation: a path is acted on only while the same policy still selects it.
 const categoryResolverExactCandidates categoryResolverKind = "exact-candidates"
 
 // ExactCandidateDiscoveryOptions injects environment, home, and clock seams for
@@ -96,6 +96,9 @@ type exactCandidatePolicy struct {
 	// applications are the category-wide idle identities used when a root names
 	// none. Empty means no process gate (shared-runtime policies).
 	applications []string
+	// requireIdleDetection makes a missing detector an unsafe state for
+	// application-owned content rather than silently omitting its idle gate.
+	requireIdleDetection bool
 }
 
 type exactCandidateResolver struct{}
@@ -104,8 +107,8 @@ func (exactCandidateResolver) resolve(ctx context.Context, opts Options, categor
 	resolveExactCandidateCategory(ctx, opts, category, core)
 }
 
-// exactCandidateCategoryEntry registers an exact-candidate developer-tool
-// category in the dev-caches selection group.
+// exactCandidateCategoryEntry registers an exact-candidate category. Standard
+// developer-tool categories join dev-caches; exact-only categories stay ungrouped.
 func exactCandidateCategoryEntry(definition CleanupCategoryDefinition, policy exactCandidatePolicy) categoryCatalogEntry {
 	definition = withSelectionGroup(definition, CategorySelectionGroupDevCaches)
 	return categoryCatalogEntry{
@@ -120,7 +123,12 @@ func exactCandidateCategoryEntry(definition CleanupCategoryDefinition, policy ex
 func init() {
 	for _, entry := range canonicalCategoryEntries {
 		if entry.resolverKind == categoryResolverExactCandidates {
-			registerPermanentIdentityValidator(entry.definition.Identifier, validateExactCandidateIdentity)
+			switch entry.definition.PlannedAction {
+			case PlannedActionDeletePermanently:
+				registerPermanentIdentityValidator(entry.definition.Identifier, validateExactCandidateIdentity)
+			case PlannedActionMoveToRecycleBin:
+				registerCategoryIdentityValidator(entry.definition.Identifier, validateExactCandidateRecycleIdentity)
+			}
 		}
 	}
 }
@@ -213,6 +221,13 @@ func resolveExactCandidateCategory(ctx context.Context, opts Options, category s
 		}
 
 		apps := root.gateApplications(policy)
+		if policy.requireIdleDetection && len(apps) > 0 && opts.DetectRunningApplications == nil {
+			core.Skipped = append(core.Skipped, SkippedItem{
+				Path: root.path, Rule: category, PlannedAction: planned,
+				Reason: issue(runningApplicationDetectionIssueCode, "application idle state is unavailable", true, root.path, category),
+			})
+			continue
+		}
 		gate := opts.DetectRunningApplications != nil && len(apps) > 0
 		if gate && !exactCandidateAppsIdle(ctx, opts, apps, root.path, category, planned, core) {
 			continue
@@ -303,22 +318,30 @@ func measureExactCandidate(ctx context.Context, category, path string, core *cat
 // the same policy re-discovers under a freshly resolved root. It never mutates
 // or expands candidates.
 func validateExactCandidateIdentity(candidate PermanentIdentityCandidate) (pathsafe.Reason, bool) {
+	return exactCandidateStillSelected(candidate.Category, candidate.Path, candidate.exactDiscovery)
+}
+
+func validateExactCandidateRecycleIdentity(candidate CategoryIdentityCandidate) (pathsafe.Reason, bool) {
+	return exactCandidateStillSelected(candidate.Category, candidate.Path, candidate.exactDiscovery)
+}
+
+func exactCandidateStillSelected(category, selectedPath string, discovery ExactCandidateDiscoveryOptions) (pathsafe.Reason, bool) {
 	mismatch := pathsafe.Reason{Code: "identity_mismatch", Message: "candidate is no longer selected by its category policy"}
-	policy, ok := exactCandidatePolicyFor(candidate.Category)
-	if !ok || strings.TrimSpace(candidate.Path) == "" {
+	policy, ok := exactCandidatePolicyFor(category)
+	if !ok || strings.TrimSpace(selectedPath) == "" {
 		return mismatch, false
 	}
-	info, err := os.Lstat(candidate.Path)
+	info, err := os.Lstat(selectedPath)
 	if err != nil || !(isOrdinaryFileInfo(info) || isRealDirectoryInfo(info)) {
 		return mismatch, false
 	}
-	deps := productionExactCandidateDeps(candidate.exactDiscovery)
+	deps := productionExactCandidateDeps(discovery)
 	for _, root := range resolveExactCandidateRoots(policy, deps) {
-		if !isStrictDescendantPath(root.path, candidate.Path) || !isRealDirectory(root.path) {
+		if !isStrictDescendantPath(root.path, selectedPath) || !isRealDirectory(root.path) {
 			continue
 		}
-		for _, path := range policy.discover(context.Background(), deps, root.path) {
-			if pathIdentityEqual(path, candidate.Path) {
+		for _, discoveredPath := range policy.discover(context.Background(), deps, root.path) {
+			if pathIdentityEqual(discoveredPath, selectedPath) {
 				return pathsafe.Reason{}, true
 			}
 		}

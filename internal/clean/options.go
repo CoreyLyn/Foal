@@ -428,6 +428,9 @@ const (
 	// non-editor Electron application. Independent idle gate; never authorizes
 	// or suppresses an editor or Trae, and vice versa.
 	ApplicationObsidian = "obsidian"
+	ApplicationLark     = "lark"
+	ApplicationNotion   = "notion"
+	ApplicationTraeSolo = "trae_solo"
 	// ApplicationVRChat is the VRChat social VR app (VRChat.exe). Independent
 	// idle gate; never authorizes or suppresses other applications.
 	ApplicationVRChat = "vrchat"

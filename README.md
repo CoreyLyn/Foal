@@ -131,13 +131,15 @@ Available opt-in groups:
 | `cli-agents` | Independently approved product-scoped CLI-agent residue, currently Grok Build updater backups. |
 | `all` | Every standard-selection executable opt-in category; exact-selection-only categories stay excluded. Safety gates and action-specific authorization still apply. |
 
-The seven exact-selection-only categories are `nvidia_installer_cache`, `lghub-cache`, `thunder-update-download`, `windows-temp`, `windows-update-download-cache`, `winsxs_component_store`, and `superseded-display-drivers`. They are deliberately excluded from `all`, every group token, and TUI Select All. Name one exactly to include it.
+The eleven exact-selection-only categories are `nvidia_installer_cache`, `lghub-cache`, `thunder-update-download`, `windows-temp`, `windows-update-download-cache`, `winsxs_component_store`, `superseded-display-drivers`, `lark-profile-cache`, `rdp-client-old-traces`, `notion-partition-cache`, and `trae-solo-tools-staging`. They are deliberately excluded from `all`, every group token, and TUI Select All. Name one exactly to include it. The four application/diagnostic categories move only exact candidates to the Recycle Bin; Lark and Notion Service Worker cache content can affect offline use, so confirm synchronization first. RDP traces must be quiet for 48 hours and TRAE SOLO staged tool archives for 30 days.
 
 Use an exact category name when you want the narrowest scope:
 
 ```powershell
 foal clean --dry-run --opt-in vscode_cache
 foal clean --execute --opt-in vscode_cache --allow-permanent
+foal clean --dry-run --opt-in lark-profile-cache
+foal clean --execute --opt-in lark-profile-cache
 ```
 
 ### Windows component store (WinSxS) analysis and cleanup

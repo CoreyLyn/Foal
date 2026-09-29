@@ -691,6 +691,7 @@ func composeRecycleBinPreMutation(opts Options, byPath map[string]actionExecutio
 			nvidiaDiscovery:                 opts.NVIDIAInstallerCacheDiscoveryOptions,
 			fixedRootDiscovery:              opts.FixedRootDiscoveryOptions,
 			electronUpdaterResidueDiscovery: opts.ElectronUpdaterResidueDiscoveryOptions,
+			exactDiscovery:                  opts.ExactCandidateDiscoveryOptions,
 			validator:                       opts.Validator,
 		})
 	}

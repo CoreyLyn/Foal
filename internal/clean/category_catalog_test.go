@@ -31,6 +31,7 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"thunder-update-download",
 		"windows-temp",
 		"windows-update-download-cache",
+		"rdp-client-old-traces",
 		"winsxs_component_store",
 		"superseded-display-drivers",
 		"browser_cache",
@@ -63,6 +64,9 @@ func TestCanonicalCleanupCategoryCatalogProvidesStableCompleteSummaries(t *testi
 		"grok-build-update-residue",
 		"obsidian_cache",
 		"vrchat_cache",
+		"lark-profile-cache",
+		"notion-partition-cache",
+		"trae-solo-tools-staging",
 		"electron-updater-residue",
 		"administrator_only_caches",
 	}

@@ -257,7 +257,7 @@ func resolveGrokBuildUpdateResidueCategory(ctx context.Context, opts Options, ca
 		if !isGrokSafeOrdinaryFile(deps, path) {
 			continue
 		}
-		bytes, err := measureBytes(ctx, path)
+		bytes, err := measureExclusiveBytes(ctx, path)
 		if err != nil {
 			if ctx.Err() != nil {
 				core.Diagnostics = append(core.Diagnostics, issue("context_canceled", ctx.Err().Error(), true, path, category))
